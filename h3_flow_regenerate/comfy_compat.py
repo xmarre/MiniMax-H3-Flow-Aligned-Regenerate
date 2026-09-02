@@ -70,6 +70,7 @@ def patch_flow_model(
     guidance: GuidanceConfig | None = None,
     progressive: ProgressiveHandoffConfig | None = None,
     attention: AttentionConfig | None = None,
+    capture_enabled: bool | None = None,
     capture_forecasts: bool | None = None,
     metrics: H3FlowMetrics | None = None,
 ) -> tuple[Any, FlowBinding]:
@@ -83,6 +84,9 @@ def patch_flow_model(
         trajectory=trajectory if trajectory is not None else (prior.trajectory if prior else None),
         guidance=guidance if guidance is not None else (prior.guidance if prior else None),
         metrics=metrics or (prior.metrics if prior else H3FlowMetrics()),
+        capture_enabled=(
+            prior.capture_enabled if capture_enabled is None and prior is not None else bool(capture_enabled)
+        ),
         capture_forecasts=(
             prior.capture_forecasts if capture_forecasts is None and prior is not None else bool(capture_forecasts)
         ),
@@ -155,7 +159,7 @@ def _install_layout_metrics(model: Any, metrics: H3FlowMetrics) -> None:
 
 
 def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
-    allowed = {"trajectory", "guidance", "capture_forecasts"}
+    allowed = {"trajectory", "guidance", "capture_enabled", "capture_forecasts"}
     unknown = set(changes) - allowed
     if unknown:
         raise TypeError(f"unknown binding fields: {sorted(unknown)}")
@@ -163,6 +167,7 @@ def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
         "trajectory": binding.trajectory,
         "guidance": binding.guidance,
         "metrics": binding.metrics,
+        "capture_enabled": binding.capture_enabled,
         "capture_forecasts": binding.capture_forecasts,
     }
     values.update(changes)
