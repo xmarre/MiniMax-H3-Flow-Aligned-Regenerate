@@ -148,9 +148,13 @@ def make_attention_override(
         layer = int(context["layer"])
         layout = context["layout"]
         if layer not in config.layers or q.shape[-2] != int(layout.seq_len):
+            if previous_override is not None:
+                return previous_override(backend, q, k, v, heads, mask=mask, skip_reshape=True, **kwargs)
             return backend(q, k, v, heads, mask=mask, skip_reshape=True, **kwargs)
         if config.mode == "diagnostic":
             _record_attention_diagnostic(q, k, layout, layer, config, metrics)
+            if previous_override is not None:
+                return previous_override(backend, q, k, v, heads, mask=mask, skip_reshape=True, **kwargs)
             return backend(q, k, v, heads, mask=mask, skip_reshape=True, **kwargs)
         if config.mode != "experimental_sparse":
             return backend(q, k, v, heads, mask=mask, skip_reshape=True, **kwargs)
