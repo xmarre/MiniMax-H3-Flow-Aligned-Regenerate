@@ -298,6 +298,7 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
         mutable_shapes,
     )
     assert [call[0] for call in calls] == ["sample_sa_solver_pece", "_h3_flow_exact_probe", "sample_sa_solver_pece"]
+    assert calls[1][2]["h3_refinement"]["sigma_reference"] == 1.0
     assert calls[-1][2]["h3_refinement"]["min_actual_prefix_steps"] == 1
     assert [call[4] for call in calls] == [False, False, False]
     assert mutable_shapes[0] == (1, 24, 1, 8, 6)
