@@ -495,7 +495,10 @@ def _run_progressive(
     if not isinstance(transformer, dict):
         raise RuntimeError("progressive handoff requires mutable transformer options")
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
-    target_h, target_w = config.resolve_target(source_shapes[0][-2], source_shapes[0][-1])
+    source_h, source_w = source_shapes[0][-2:]
+    target_h, target_w = config.resolve_target(source_h, source_w)
+    if target_h * target_w <= source_h * source_w:
+        raise ValueError("progressive handoff target must increase the video latent area")
     selected_coordinate = config.resolve_coordinate(
         source_shapes[0][-2],
         source_shapes[0][-1],
