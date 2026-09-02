@@ -205,6 +205,20 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
 
 
+def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    first, first_binding = patch_flow_model(FakePatcher(), capture_enabled=True)
+    assert first_binding.capture_enabled
+    _, second_binding = patch_flow_model(first, capture_enabled=False)
+    assert not second_binding.capture_enabled
+
+
 def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
