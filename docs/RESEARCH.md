@@ -4,7 +4,7 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 
 | Source | Useful transfer | Boundary for H3 |
 |---|---|---|
-| [HiFlow](https://arxiv.org/abs/2504.06232) | A low-resolution flow trajectory contains time-varying structure; initialization, direction, and bounded acceleration alignment motivate clean-state guidance. | Published experiments are image models. H3 guidance operates on video denoised estimates and preserves packed audio. |
+| [HiFlow](https://arxiv.org/abs/2504.06232) | A low-resolution flow trajectory contains time-varying structure; initialization and time-matched direction guidance motivate clean-state guidance, and its acceleration analysis motivates a separately labeled experiment. | Published experiments are image models. H3 guidance operates on video denoised estimates and preserves packed audio. The current acceleration option is a first-difference proxy, not HiFlow's acceleration equation. |
 | [FrescoDiffusion](https://arxiv.org/abs/2603.17555) | Video high-resolution generation benefits from a global low-resolution prior and separately testable consistency constraints. | Its tiled/posterior mechanics are not copied into H3's packed transformer. |
 | [RALU](https://arxiv.org/abs/2507.08422) | Naively resizing noisy state causes distribution/timestep mismatch; transitions need explicit noise semantics. | Its correlated-noise/JSD result assumes a particular upsampler and schedule. H3 uses a conditional RF state plus native exact probe. |
 | [CineScale](https://arxiv.org/abs/2508.15774) | Self-cascade video regeneration and high-resolution attention/position degradation are relevant hypotheses. | Wan-specific position methods are not transferred to H3 MM-RoPE. |
@@ -38,9 +38,12 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 
 ## Validated source revisions
 
-CI checks the executable contracts at ComfyUI `13d2580501bc0aa65e2fcf6d18fa6a156697bc74`,
+CI checks the executable contracts at ComfyUI `567275141678c9fd65bafef6aa9dcb4ac9bd70e3`,
 Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`, Continuum
 `bf25353d8bec44afea22c89717c4301ce13c2036`, DiffAid
-`ba9d9efbcf7e64c755e068cb76547d8cc85481eb`, and RefDelta
-`034e4c4c14c56bf76813cee4765e7164b0c7e0db`. Updating a pin requires re-running the
-source audit and decoded-media compatibility matrix.
+`ba9d9efbcf7e64c755e068cb76547d8cc85481eb`, RefDelta
+`034e4c4c14c56bf76813cee4765e7164b0c7e0db`, and Untwisting RoPE
+`299d4c56a3f057a97b3140d2136189bcd1e7d6bb`. The audit also inspected current MiniMax-H3 main
+`d21241f0a4b3acbb34c97dae47fa417b7065e438`. Spectrum PR #98 and its companion Untwist PR #5
+were reviewed as open compatibility work; this package does not make either unmerged PR a dependency.
+Updating a pin requires re-running the source audit and decoded-media compatibility matrix.
