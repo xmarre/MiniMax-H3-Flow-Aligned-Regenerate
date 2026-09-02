@@ -81,6 +81,26 @@ def test_zero_weight_is_exact_baseline_parity():
     assert torch.equal(apply_guidance(high, run=run(), coordinate=0.5, config=config, state=GuidanceState()), high)
 
 
+def test_direction_schedule_is_normalized_to_refine_start_coordinate():
+    high = torch.full((1, 24, 1, 4, 4), 0.2)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction",
+        direction_weight=1.0,
+        cutoff=1.0,
+        max_correction_rms_ratio=10.0,
+    )
+    trajectory = run(values=(1.0, 0.0), coords=(0.8, 0.2))
+
+    first = apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+    assert torch.allclose(first, torch.full_like(first, 0.5))
+
+    second = apply_guidance(high, run=trajectory, coordinate=0.25, config=config, state=state)
+    reference = torch.full_like(second, (0.25 - 0.2) / (0.8 - 0.2))
+    expected = high + 0.5 * (reference - high)
+    assert torch.allclose(second, expected)
+
+
 def test_low_frequency_projection_does_not_change_constant():
     constant = torch.ones(1, 24, 1, 8, 8)
     assert torch.allclose(low_frequency_projection(constant, 0.25), constant)
