@@ -51,12 +51,16 @@ audio shape, layout and conditioning signatures, storage policy, timestamps, and
 sample records unshifted coordinate, both stream sigmas, outer/call index, phase, actual/forecast
 provenance, and video denoised estimate.
 
-Capture wraps ComfyUI `PREDICT_NOISE`; the returned value there is the calculated denoised estimate,
-not raw H3 velocity. Failed outer sampling aborts the pending transaction. Only committed runs are
+Capture wraps ComfyUI `PREDICT_NOISE`; current ComfyUI's sampling function returns the CFG-combined
+denoised estimate at that wrapper point, not raw H3 velocity. The flow PREDICT wrapper is deliberately
+inside Spectrum's PREDICT wrapper, so Spectrum's call-local copied model options carrying
+`spectrum_h3_actual`, solver phase, and outer-step identity reach capture before Spectrum finalizes the
+step. Failed outer sampling records a bounded incomplete diagnostic run. Only complete runs are
 selectable. CPU storage detaches, copies as fp32, and pins when CUDA is available; VRAM storage clones.
 
-Spectrum's `spectrum_h3_actual` metadata controls provenance. Forecast calls advance topology but are
-stored only when requested. Exact anchors drive guidance. PECE predicted/corrected calls are distinct.
+Forecast calls advance topology but are stored only when explicitly requested. Exact anchors drive
+guidance. At duplicate SA-Solver-PECE coordinates, corrected exact endpoints take precedence over
+predicted endpoints; a dedicated handoff probe takes precedence at the split coordinate.
 
 ## Two-pass flow guidance
 
@@ -69,8 +73,10 @@ map `U` transfers the reference. The conservative direction update is
 \]
 
 where `L` is an explicit average-pool low-frequency projection. A per-sample RMS bound limits the
-correction. Acceleration compares adjacent low/high denoised-estimate changes and stays inactive
-until prior exact state exists. Downsample consistency forms the low-grid residual before lifting it.
+correction. The optional acceleration term compares adjacent low/high denoised-estimate changes and
+stays inactive until prior exact state exists. This is an experimental first-difference proxy; it does
+not reproduce HiFlow's acceleration formulation, which is derived from changes in the reference-flow
+velocity field. Downsample consistency forms the low-grid residual before lifting it.
 
 ## Progressive handoff law
 
@@ -97,7 +103,10 @@ It is a training-free conditional state, not RALU's nearest-neighbor correlated-
 specific assumptions do not transfer unchanged to arbitrary H3 geometry and packed AV state.
 
 Audio's packed sampler slice is copied exactly. Target shape metadata is mutated in place so ComfyUI's
-final unpack/callback uses new geometry. H3 rebuilds layout and MM-RoPE when the signature changes.
+final unpack/callback uses new geometry. Before each independent low/probe/high outer invocation,
+raw conditioning is reconstructed from `guider.original_conds`; current ComfyUI can then resolve
+percentage areas, masks, and other shape-dependent conditions against that stage's live geometry.
+H3 rebuilds layout and MM-RoPE when the signature changes.
 An isolated CPU generator, seeded by graph seed plus a fixed domain offset, makes retries reproducible
 without perturbing sampler RNG.
 
