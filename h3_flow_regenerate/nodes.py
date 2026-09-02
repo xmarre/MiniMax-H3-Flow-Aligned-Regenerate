@@ -52,6 +52,7 @@ class H3TrajectoryCapture:
         patched, _ = patch_flow_model(
             model,
             trajectory=trajectory,
+            capture_enabled=True,
             capture_forecasts=capture_forecasts,
             metrics=metrics,
         )
@@ -101,7 +102,13 @@ class H3FlowAlignedRegenerate:
             consistency_weight=consistency_weight,
             cutoff=low_frequency_cutoff,
         )
-        patched, _ = patch_flow_model(model, trajectory=trajectory, guidance=guidance, metrics=metrics)
+        patched, _ = patch_flow_model(
+            model,
+            trajectory=trajectory,
+            guidance=guidance,
+            capture_enabled=False,
+            metrics=metrics,
+        )
         return patched, metrics
 
 
@@ -167,6 +174,7 @@ class H3ProgressiveHandoff:
             trajectory=trajectory,
             guidance=guidance,
             progressive=progressive,
+            capture_enabled=True,
             metrics=metrics,
         )
         return patched, metrics
