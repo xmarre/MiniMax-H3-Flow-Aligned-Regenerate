@@ -73,6 +73,11 @@ def test_invalid_schedule_fails_closed():
         select_handoff_index(torch.tensor([1.0, 0.8, 0.8, 0.0]), 0.3)
 
 
+def test_nonfinite_schedule_fails_closed():
+    with pytest.raises(ValueError, match="finite"):
+        select_handoff_index(torch.tensor([1.0, float("nan"), 0.3, 0.0]), 0.3)
+
+
 def test_auto_handoff_is_deterministic_bounded_and_uses_live_area():
     config = ProgressiveHandoffConfig(target_scale=2.0, handoff_selection="auto_compute")
     target = config.resolve_target(40, 54)
