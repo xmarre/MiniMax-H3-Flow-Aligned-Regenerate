@@ -485,6 +485,12 @@ def _run_progressive(
 ):
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    if sigmas.ndim != 1 or sigmas.numel() < 4:
+        raise ValueError("progressive handoff requires a full H3 sigma schedule")
+    if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
+        float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
+    ):
+        raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
     source_shapes = list(latent_shapes)
     if source_shapes[0][-2] % 2 or source_shapes[0][-1] % 2:
         raise ValueError("source H3 geometry is not patch-safe")
@@ -560,17 +566,22 @@ def _run_progressive(
         transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
         try:
             _reset_guider_conds(guider)
-            source_x0 = executor(
-                probe_noise,
-                torch.zeros_like(source_raw),
-                _make_probe_sampler(),
-                sigmas[index : index + 1],
-                denoise_mask,
-                None,
-                disable_pbar,
-                seed,
-                latent_shapes=source_shapes,
-            )
+            # The probe is a one-call sampler lifetime, but model-level patches such
+            # as DiffAid must still see the full H3 sigma reference. The explicit
+            # refinement contract provides that reference without carrying solver or
+            # Spectrum history across the split.
+            with _high_stage_contract(guider):
+                source_x0 = executor(
+                    probe_noise,
+                    torch.zeros_like(source_raw),
+                    _make_probe_sampler(),
+                    sigmas[index : index + 1],
+                    denoise_mask,
+                    None,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=source_shapes,
+                )
         finally:
             if previous_probe is None:
                 transformer.pop(PROBE_CONTEXT_KEY, None)
