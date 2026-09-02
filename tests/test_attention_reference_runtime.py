@@ -7,11 +7,11 @@ import torch
 from h3_flow_regenerate.attention import AttentionConfig, layout_summary, make_attention_override, video_local_mask
 from h3_flow_regenerate.comfy_compat import patch_flow_model, reconfigure_binding
 from h3_flow_regenerate.contracts import H3FlowTrajectory
+from h3_flow_regenerate.geometry import pack_streams
 from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.handoff import ProgressiveHandoffConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.reference import apply_reference_budget
-from h3_flow_regenerate.geometry import pack_streams
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
     SPECTRUM_ACTUAL_KEY,
