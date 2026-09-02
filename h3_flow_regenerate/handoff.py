@@ -73,6 +73,12 @@ def select_handoff_index(
 ) -> int:
     if sigmas.ndim != 1 or sigmas.numel() < 4:
         raise ValueError("progressive handoff requires at least three sampling intervals")
+    if not bool(torch.isfinite(sigmas).all().item()):
+        raise ValueError("progressive handoff requires finite sigma values")
+    if not math.isfinite(float(coordinate)) or not 0.0 < float(coordinate) < 1.0:
+        raise ValueError("progressive handoff coordinate must be finite and inside (0, 1)")
+    if not math.isfinite(float(video_shift)) or float(video_shift) <= 0.0:
+        raise ValueError("progressive handoff video shift must be finite and positive")
     if bool((sigmas[1:] >= sigmas[:-1]).any()):
         raise ValueError("progressive handoff requires a strictly descending sigma schedule")
     candidates = torch.arange(1, sigmas.numel() - min_high_steps, device=sigmas.device)
