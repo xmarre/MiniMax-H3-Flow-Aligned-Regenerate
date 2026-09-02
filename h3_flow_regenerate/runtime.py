@@ -428,6 +428,23 @@ def _resize_packed_mask(
     return pack_streams((video_mask, audio_mask))[0]
 
 
+def _reset_guider_conds(guider: Any) -> None:
+    """Recreate raw conditioning before each independent geometry/sampler lifetime.
+
+    ComfyUI resolves percentage areas, masks, and model conditions in-place on
+    guider.conds. Reusing the processed low-resolution structure for the
+    probe/high stage can therefore leak low-grid shape metadata across a
+    progressive handoff.
+    """
+    original = getattr(guider, "original_conds", None)
+    if not isinstance(original, dict):
+        return
+    guider.conds = {
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
+        for key, entries in original.items()
+    }
+
+
 @contextlib.contextmanager
 def _high_stage_contract(guider: Any):
     options = getattr(guider, "model_options", None)
@@ -471,7 +488,12 @@ def _run_progressive(
     source_shapes = list(latent_shapes)
     if source_shapes[0][-2] % 2 or source_shapes[0][-1] % 2:
         raise ValueError("source H3 geometry is not patch-safe")
-    transformer = (getattr(guider, "model_options", None) or {}).get("transformer_options") or {}
+    model_options = getattr(guider, "model_options", None)
+    if not isinstance(model_options, dict):
+        raise RuntimeError("progressive handoff requires mutable model options")
+    transformer = model_options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("progressive handoff requires mutable transformer options")
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
     target_h, target_w = config.resolve_target(source_shapes[0][-2], source_shapes[0][-1])
     selected_coordinate = config.resolve_coordinate(
@@ -508,6 +530,7 @@ def _run_progressive(
 
     _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     try:
+        _reset_guider_conds(guider)
         low_started = time.perf_counter()
         try:
             low_result = executor(
@@ -533,6 +556,7 @@ def _run_progressive(
         previous_probe = transformer.get(PROBE_CONTEXT_KEY)
         transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
         try:
+            _reset_guider_conds(guider)
             source_x0 = executor(
                 probe_noise,
                 torch.zeros_like(source_raw),
@@ -588,6 +612,7 @@ def _run_progressive(
         return None
 
     high_started = time.perf_counter()
+    _reset_guider_conds(guider)
     with _high_stage_contract(guider):
         result = executor(
             _noise_argument(base_model, target_raw, sigma),
@@ -605,10 +630,11 @@ def _run_progressive(
         "handoff_complete",
         sigma=sigma,
         target_shape=target_shapes[0],
-        audio_preserved=True,
-        solver_history_reset=True,
-        spectrum_history_reset=True,
-        target_exact_anchor_required=True,
+        audio_state_copied=True,
+        separate_sampler_invocations=True,
+        exact_probe_performed=True,
+        high_stage_exact_prefix_requested=1,
+        conditioning_rebuilt_for_high_grid=True,
     )
     return result
 
