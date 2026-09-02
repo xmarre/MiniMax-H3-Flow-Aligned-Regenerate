@@ -70,7 +70,10 @@ The high-resolution model call is guided only in low spatial frequencies. Exact 
 evaluations are preferred as trajectory anchors; Spectrum forecasts retain their provenance
 and are excluded from trustworthy anchors by default. The regenerate patch reads the supplied
 trajectory but does not append the high-resolution pass back into it, so the low-resolution
-source run cannot be silently replaced by its own guided output.
+source run cannot be silently replaced by its own guided output. HiFlow-style initialization
+alignment is not exposed as a two-pass guidance mode: its published operation changes the
+high-resolution sampler's starting state, whereas this node modifies denoised predictions.
+Use the explicit upstream initialization/refine step or the progressive handoff path instead.
 
 ### Progressive handoff use
 
