@@ -84,7 +84,7 @@ def main() -> None:
     )
     require(
         args.untwist / "flux_untwist/spectrum_h3.py",
-        'VISUAL_PATCH_SCHEMA_VERSION = 1',
+        "VISUAL_PATCH_SCHEMA_VERSION = 1",
         'VISUAL_PATCH_ARCHITECTURE = "minimax_h3"',
         'VISUAL_PATCH_RUNTIME_KEY = "spectrum_h3_visual_reference_patch_runtime"',
         '"schedule_progress"',
