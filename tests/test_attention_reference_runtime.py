@@ -11,7 +11,20 @@ from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.handoff import ProgressiveHandoffConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.reference import apply_reference_budget
-from h3_flow_regenerate.runtime import FlowBinding, _run_progressive, _sampler_phases
+from h3_flow_regenerate.geometry import pack_streams
+from h3_flow_regenerate.runtime import (
+    FLOW_BINDING_KEY,
+    SPECTRUM_ACTUAL_KEY,
+    SPECTRUM_OUTER_STEP_KEY,
+    SPECTRUM_PHASE_KEY,
+    FlowBinding,
+    _begin_capture,
+    _conditioning_signature,
+    _finish_capture,
+    _run_progressive,
+    _sampler_phases,
+    flow_predict_wrapper,
+)
 
 
 def layout():
@@ -223,6 +236,79 @@ def test_attention_layers_are_validated_against_loaded_block_count(monkeypatch):
         attention=AttentionConfig(mode="diagnostic", layers=(50,)),
     )
     assert ("double_block", 50) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
+
+
+def test_conditioning_signature_tracks_content_across_tensor_clones():
+    cross = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
+    ref = torch.arange(1 * 24 * 1 * 4 * 4, dtype=torch.float32).reshape(1, 24, 1, 4, 4)
+
+    def guider(cross_tensor, ref_tensor):
+        return SimpleNamespace(
+            original_conds={
+                "positive": [
+                    {
+                        "cross_attn": cross_tensor,
+                        "minimax_refs": [{"kind": "video", "latent": ref_tensor}],
+                    }
+                ]
+            }
+        )
+
+    signature = _conditioning_signature(guider(cross, ref))
+    assert signature == _conditioning_signature(guider(cross.clone(), ref.clone()))
+    assert signature != _conditioning_signature(guider(cross + 1, ref))
+    assert signature != _conditioning_signature(guider(cross, ref + 1))
+
+
+def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
+    video = torch.full((1, 24, 1, 4, 4), 2.0)
+    audio = torch.full((1, 32, 2, 5), 3.0)
+    packed, shapes = pack_streams((video, audio))
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(trajectory=trajectory, capture_forecasts=False)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding, "transformer_options": {}},
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+
+    def native():
+        pass
+
+    native.__name__ = "sample_sa_solver_pece"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    _begin_capture(binding, guider, sampler, torch.tensor([1.0, 0.5, 0.0]), list(shapes))
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            return packed
+
+    forecast_options = {
+        "transformer_options": {
+            SPECTRUM_ACTUAL_KEY: False,
+            SPECTRUM_PHASE_KEY: "predicted",
+            SPECTRUM_OUTER_STEP_KEY: 0,
+        }
+    }
+    actual_options = {
+        "transformer_options": {
+            SPECTRUM_ACTUAL_KEY: True,
+            SPECTRUM_PHASE_KEY: "corrected",
+            SPECTRUM_OUTER_STEP_KEY: 1,
+        }
+    }
+    flow_predict_wrapper(Executor(), packed, torch.tensor([0.5]), forecast_options, 7)
+    flow_predict_wrapper(Executor(), packed, torch.tensor([0.4]), actual_options, 7)
+    _finish_capture(binding)
+
+    run = trajectory.latest
+    assert len(run.samples) == 1
+    assert run.samples[0].provenance == "actual"
+    assert run.samples[0].phase == "corrected"
+    assert run.samples[0].call_index == 1
+    assert binding.metrics.counters["spectrum_forecast_calls"] == 1
+    assert binding.metrics.counters["transformer_actual_nfe"] == 1
 
 
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
