@@ -24,7 +24,7 @@ class GuidanceConfig:
     max_correction_rms_ratio: float = 0.5
 
     def __post_init__(self) -> None:
-        modes = {"off", "initialization", "direction", "direction+acceleration", "downsample_consistency"}
+        modes = {"off", "direction", "direction+acceleration", "downsample_consistency"}
         if self.mode not in modes:
             raise ValueError(f"unsupported guidance mode {self.mode!r}")
         for name in ("direction_weight", "acceleration_weight", "consistency_weight"):
@@ -140,7 +140,7 @@ def apply_guidance(
     ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
     schedule = min(1.0, max(0.0, float(coordinate))) ** config.schedule_power
     correction = torch.zeros_like(high_x0)
-    if config.mode in {"direction", "direction+acceleration", "initialization"}:
+    if config.mode in {"direction", "direction+acceleration"}:
         residual = low_frequency_projection(ref - high_x0, config.cutoff)
         correction = correction + schedule * config.direction_weight * residual
     if config.mode == "downsample_consistency":
