@@ -67,7 +67,7 @@ class H3FlowAlignedRegenerate:
                 "model": ("MODEL",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
                 "guidance_mode": (
-                    ["off", "initialization", "direction", "direction+acceleration", "downsample_consistency"],
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
