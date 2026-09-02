@@ -51,12 +51,42 @@ class GuidanceState:
         self.previous_reference = None
 
 
+_PHASE_PRIORITY = {
+    "handoff_probe": 4,
+    "corrected": 3,
+    "single": 2,
+    "predicted": 1,
+}
+
+
 def trustworthy_samples(run: TrajectoryRun) -> tuple[TrajectorySample, ...]:
+    if not run.complete:
+        raise RuntimeError("incomplete trajectory runs cannot guide regeneration")
     exact = [sample for sample in run.samples if sample.provenance == "actual"]
     if not exact:
         raise RuntimeError("trajectory has no exact anchors")
+    if any(not math.isfinite(float(sample.coordinate)) for sample in exact):
+        raise RuntimeError("trajectory contains a non-finite exact coordinate")
     exact.sort(key=lambda sample: sample.coordinate, reverse=True)
-    return tuple(exact)
+
+    # PECE evaluates predicted and corrected states at the same sigma. Keep one
+    # exact anchor per coordinate, preferring the corrected endpoint; a dedicated
+    # handoff probe is the strongest anchor because it evaluates the actual
+    # stopped low-stage state at the split coordinate.
+    deduplicated: list[TrajectorySample] = []
+    for sample in exact:
+        if deduplicated and math.isclose(
+            float(sample.coordinate),
+            float(deduplicated[-1].coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            current = deduplicated[-1]
+            if _PHASE_PRIORITY.get(sample.phase, 0) > _PHASE_PRIORITY.get(current.phase, 0):
+                deduplicated[-1] = sample
+            continue
+        deduplicated.append(sample)
+    return tuple(deduplicated)
 
 
 def time_matched_reference(run: TrajectoryRun, coordinate: float) -> torch.Tensor:
