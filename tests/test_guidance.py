@@ -56,11 +56,24 @@ def test_duplicate_pece_coordinate_prefers_corrected_anchor():
         TrajectorySample(0.2, 0.2, 0.1, 2, 3, "predicted", "actual", values[3]),
     )
     trajectory = TrajectoryRun(
-        1, "r", "s", "0", "sa", "sched",
+        1,
+        "r",
+        "s",
+        "0",
+        "sa",
+        "sched",
         geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
-        (1, 32, 2, 8), "layout", "cond", "system_ram", samples, 0, 1, True,
+        (1, 32, 2, 8),
+        "layout",
+        "cond",
+        "system_ram",
+        samples,
+        0,
+        1,
+        True,
     )
     assert torch.equal(time_matched_reference(trajectory, 0.5), values[2])
+
 
 def test_zero_weight_is_exact_baseline_parity():
     high = torch.randn(1, 24, 1, 8, 8)
