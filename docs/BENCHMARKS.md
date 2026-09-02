@@ -19,10 +19,17 @@ KSampler and node time around upscaler/handoff; total prompt time is secondary.
 | C5 | Flow-aligned learned-upscale refine | 54x40 -> 64x48 | 5 | 0.25 |
 | C4 | Flow-aligned learned-upscale refine | 54x40 -> 64x48 | 4 | 0.25 |
 | D | Progressive handoff | 54x40 -> 64x48 | one split schedule | n/a |
-| E | Resolution-shift-only native | final 64x48 | base schedule | n/a |
+| E | Resolution-shift-only native | shift reference 54x40 -> generation 64x48 | base schedule | n/a |
 
-Run at least three fixed seeds. Repeat relevant rows at denoise 0.30, a 0.5 MP base, nominal 0.7 MP,
-difficult motion/scene changes, small people/faces, fine text, and reference-heavy conditioning.
+Run the same set of at least three fixed seeds for every paired row. The primary learned-refine
+comparison remains denoise 0.25. Repeat the relevant learned-refine rows at denoise 0.30 only after
+the 0.25 behavior is understood. Repeat the matrix at a ~0.5 MP base and nominal ~0.7 MP base, and
+include difficult motion/scene changes, small people/faces, fine text, and reference-heavy conditioning.
+
+Row E does not generate a low-resolution first pass. Its 54x40 value is the spatial reference used to
+derive the experimental resolution-dependent coordinate shift while H3 itself samples directly on the
+64x48 target grid. This makes the shift ratio non-identity and keeps the row isolated from trajectory
+guidance or progressive handoff.
 
 ## Required metrics
 
