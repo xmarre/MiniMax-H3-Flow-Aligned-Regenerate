@@ -187,10 +187,12 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
 
     native.__name__ = "sample_sa_solver_pece"
     sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    original_cond = {"cross_attn": torch.zeros(1, 2, 4)}
     guider = SimpleNamespace(
         model_options={"transformer_options": {}},
         model_patcher=SimpleNamespace(model=MiniMaxH3()),
-        original_conds={},
+        original_conds={"positive": [original_cond]},
+        conds={"positive": [original_cond.copy()]},
     )
     calls = []
 
@@ -204,8 +206,10 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
                     list(latent_shapes),
                     dict(guider.model_options["transformer_options"]),
                     call_sigmas.clone(),
+                    "stage_mutated" in guider.conds["positive"][0],
                 )
             )
+            guider.conds["positive"][0]["stage_mutated"] = True
             if call_sampler.sampler_function.__name__ == "_h3_flow_exact_probe":
                 return source_x0
             if len(calls) == 1:
@@ -231,6 +235,7 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
     )
     assert [call[0] for call in calls] == ["sample_sa_solver_pece", "_h3_flow_exact_probe", "sample_sa_solver_pece"]
     assert calls[-1][2]["h3_refinement"]["min_actual_prefix_steps"] == 1
+    assert [call[4] for call in calls] == [False, False, False]
     assert mutable_shapes[0] == (1, 24, 1, 8, 6)
     _, result_audio = __import__("h3_flow_regenerate.geometry", fromlist=["unpack_streams"]).unpack_streams(
         result * float(calls[-1][3][0]), mutable_shapes
