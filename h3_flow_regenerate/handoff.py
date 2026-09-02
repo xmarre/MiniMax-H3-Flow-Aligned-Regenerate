@@ -33,8 +33,8 @@ class ProgressiveHandoffConfig:
                 raise ValueError("target latent H must be positive and even")
             if self.target_latent_w is None or self.target_latent_w < 2 or self.target_latent_w % 2:
                 raise ValueError("target latent W must be positive and even")
-        elif not math.isfinite(float(self.target_scale)) or float(self.target_scale) < 1.0:
-            raise ValueError("target scale must be finite and at least 1")
+        elif not math.isfinite(float(self.target_scale)) or float(self.target_scale) <= 1.0:
+            raise ValueError("target scale must be finite and greater than 1")
         if not 0 < self.handoff_coordinate < 1 or not math.isfinite(self.handoff_coordinate):
             raise ValueError("handoff coordinate must be finite and inside (0, 1)")
         if self.handoff_selection not in {"fixed", "auto_compute"}:
