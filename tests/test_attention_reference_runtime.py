@@ -161,6 +161,39 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
 
 
+def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    first, first_binding = patch_flow_model(FakePatcher(), capture_forecasts=True)
+    assert first_binding.capture_forecasts
+    second, second_binding = patch_flow_model(first, capture_forecasts=False)
+    assert not second_binding.capture_forecasts
+    _, inherited = patch_flow_model(second)
+    assert not inherited.capture_forecasts
+
+
+def test_attention_layers_are_validated_against_loaded_block_count(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    model = FakePatcher()
+    model.model.diffusion_model.blocks.append(object())
+    patched, _ = patch_flow_model(
+        model,
+        attention=AttentionConfig(mode="diagnostic", layers=(50,)),
+    )
+    assert ("double_block", 50) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
+
+
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
     class KSampler:
         def __init__(self, function):
