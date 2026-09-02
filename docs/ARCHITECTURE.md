@@ -69,6 +69,12 @@ dedicated handoff probe takes precedence at the split coordinate.
 
 ## Two-pass flow guidance
 
+HiFlow's published initialization alignment changes the high-resolution sampler state before the
+guided trajectory begins. This package does not label a PREDICT_NOISE correction as initialization
+alignment. The two-pass node therefore exposes only direction, the experimental acceleration proxy,
+and downsample-consistency guidance; sampler initialization remains an explicit upstream workflow
+operation. Progressive handoff uses the rectified-flow conditional-state law described below.
+
 Exact low-grid clean estimates bracket and interpolate the high call's coordinate. A cheap spatial
 map `U` transfers the reference. The conservative direction update is
 
