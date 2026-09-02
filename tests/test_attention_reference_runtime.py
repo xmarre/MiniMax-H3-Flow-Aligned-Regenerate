@@ -296,6 +296,19 @@ def test_reference_native_parity_and_direct_only_decoupling():
     assert report.direct_video_rows_after <= 16
 
 
+def test_reference_budget_handles_thin_aspect_ratios():
+    thin = torch.randn(1, 24, 1, 2, 40)
+    conditioning = [[torch.randn(1, 3, 4), {"minimax_refs": [{"kind": "video", "latent": thin}]}]]
+    changed, report = apply_reference_budget(
+        conditioning,
+        mode="decoupled_direct_experimental",
+        max_direct_video_rows=5,
+    )
+    fitted = changed[0][1]["minimax_refs"][0]["latent"]
+    assert fitted.shape[-2] == 2
+    assert report.direct_video_rows_after <= 5
+
+
 @pytest.mark.parametrize(
     ("name", "calls", "phases"),
     [
