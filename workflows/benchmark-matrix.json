@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "fixed": ["seed", "prompt", "references", "continuum_chunks", "loras", "diffaid", "untwist", "sampler", "scheduler", "audio_lock", "decode"],
+  "runs": [
+    {"id": "A", "mode": "native", "source_grid": [64, 48], "target_grid": [64, 48]},
+    {"id": "B", "mode": "learned_upscale_baseline", "source_grid": [54, 40], "target_grid": [64, 48], "outer_steps": 6, "denoise": 0.25},
+    {"id": "C6", "mode": "flow_aligned", "source_grid": [54, 40], "target_grid": [64, 48], "outer_steps": 6, "denoise": 0.25},
+    {"id": "C5", "mode": "flow_aligned", "source_grid": [54, 40], "target_grid": [64, 48], "outer_steps": 5, "denoise": 0.25},
+    {"id": "C4", "mode": "flow_aligned", "source_grid": [54, 40], "target_grid": [64, 48], "outer_steps": 4, "denoise": 0.25},
+    {"id": "D", "mode": "progressive_handoff", "source_grid": [54, 40], "target_grid": [64, 48], "handoff_coordinate": 0.35},
+    {"id": "E", "mode": "resolution_shift_only", "source_grid": [64, 48], "target_grid": [64, 48], "resolution_shift": "resolution_aware"}
+  ],
+  "required_outputs": ["workflow_json", "metrics_json", "decoded_media", "decoded_sha256", "sampler_timing", "peak_vram", "review_sheet"]
+}

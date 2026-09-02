@@ -1,0 +1,130 @@
+# Architecture and derivations
+
+## Verified native H3 contract
+
+Current ComfyUI implements MiniMax H3 as a joint audio/video flow model. Video is
+`B x 24 x T x H x W`; audio is `B x 32 x 2 x Ta`. The sampler flattens both streams into
+one state and scales audio by `12/3 = 4` so the packed state follows video sigma. Inside
+the DiT, audio sigma is reconstructed through the common unshifted coordinate.
+
+The DiT patch is `(1,2,2)`, so video latent H/W must be even. The VAE spatial factor is 16.
+A pixel dimension aligned to 32 maps cleanly through VAE and DiT patching. The transformer packs
+text, keyframe/direct reference rows, audio, then video, and derives area-normalized MM-RoPE
+coordinates from the current layout.
+
+## Flow coordinates and joint AV law
+
+Define
+
+\[
+f_s(t)=\frac{s t}{1+(s-1)t},\qquad
+f_s^{-1}(\sigma)=\frac{\sigma}{s+(1-s)\sigma}.
+\]
+
+H3 video uses `sigma_v = f_12(t)` and derives
+
+\[
+\sigma_a=f_3(f_{12}^{-1}(\sigma_v)).
+\]
+
+Trajectory matching and handoff selection use `t = f_12^-1(sigma_v)`. This retains one
+full-trajectory coordinate for both streams and avoids matching different samplers by step index.
+
+### Resolution-aware schedule probe
+
+SD3 derives `alpha = sqrt(m/n)` for target/source observations under a constant-image assumption
+and uses `f_alpha(t)`. That assumption does not establish an optimal H3 video mapping, so the node
+is off by default. Since `f_a(f_b(t)) = f_ab(t)`, an already H3-shifted schedule maps as
+
+\[
+\sigma'_v=f_{12}(f_\alpha(f_{12}^{-1}(\sigma_v))).
+\]
+
+H3 still inverts video to the new base coordinate and applies `f_3` for audio. Analytic tests cover
+endpoints, monotonicity, inverse/composition behavior, and AV invariants.
+
+## Transactional trajectory schema
+
+`H3_FLOW_TRAJECTORY` owns immutable committed runs and at most one pending transaction. A run has
+API version, run/session/chunk IDs, sampler and schedule signatures, latent/pixel/padded geometry,
+audio shape, layout and conditioning signatures, storage policy, timestamps, and samples. Each
+sample records unshifted coordinate, both stream sigmas, outer/call index, phase, actual/forecast
+provenance, and video denoised estimate.
+
+Capture wraps ComfyUI `PREDICT_NOISE`; the returned value there is the calculated denoised estimate,
+not raw H3 velocity. Failed outer sampling aborts the pending transaction. Only committed runs are
+selectable. CPU storage detaches, copies as fp32, and pins when CUDA is available; VRAM storage clones.
+
+Spectrum's `spectrum_h3_actual` metadata controls provenance. Forecast calls advance topology but are
+stored only when requested. Exact anchors drive guidance. PECE predicted/corrected calls are distinct.
+
+## Two-pass flow guidance
+
+Exact low-grid clean estimates bracket and interpolate the high call's coordinate. A cheap spatial
+map `U` transfers the reference. The conservative direction update is
+
+\[
+\hat x^{HR}_0 \leftarrow \hat x^{HR}_0 +
+\lambda(t)L\left(U(\hat x^{LR}_0(t))-\hat x^{HR}_0\right),
+\]
+
+where `L` is an explicit average-pool low-frequency projection. A per-sample RMS bound limits the
+correction. Acceleration compares adjacent low/high denoised-estimate changes and stays inactive
+until prior exact state exists. Downsample consistency forms the low-grid residual before lifting it.
+
+## Progressive handoff law
+
+The flow wrapper is first in ComfyUI's outer-sample chain. It invokes the downstream chain three
+times, creating fresh Spectrum and multistep lifetimes:
+
+1. low-grid native sampler over the early schedule;
+2. one exact denoised probe at the nonterminal handoff sigma;
+3. high-grid native sampler over the remaining schedule.
+
+ComfyUI's flow sampler returns an inverse-scaled state at nonterminal sigma. The wrapper reverses
+that output transform to recover packed `x_sigma`. The probe feeds that exact state through the normal
+guider/model path and compensates terminal inverse scaling, yielding `x0_hat` with one visible NFE.
+
+The target video state uses the rectified-flow conditional law
+
+\[
+x^{HR}_\sigma=(1-\sigma)U(\hat x^{LR}_0)+\sigma\epsilon^{HR},
+\qquad \epsilon^{HR}\sim\mathcal N(0,I).
+\]
+
+This supplies high-frequency stochastic degrees of freedom without an arbitrary texture coefficient.
+It is a training-free conditional state, not RALU's nearest-neighbor correlated-noise formula, whose
+specific assumptions do not transfer unchanged to arbitrary H3 geometry and packed AV state.
+
+Audio's packed sampler slice is copied exactly. Target shape metadata is mutated in place so ComfyUI's
+final unpack/callback uses new geometry. H3 rebuilds layout and MM-RoPE when the signature changes.
+An isolated CPU generator, seeded by graph seed plus a fixed domain offset, makes retries reproducible
+without perturbing sampler RNG.
+
+`auto_compute` is a deterministic, bounded handoff heuristic that moves the base coordinate later
+as the target/source area ratio grows. It uses no model calls and is reported in metrics. It is a
+compute-allocation probe, not a learned quality criterion; fixed `0.35` remains the reproducible
+benchmark setting until decoded runs establish a better policy.
+
+### Reset and exact-anchor contracts
+
+- **SA/PECE/SEEDS:** separate sampler invocations prevent old-grid history crossing.
+- **Spectrum:** separate outer executions end the low runtime and create the high runtime.
+  `h3_refinement` API v1 requires an actual prefix and full-trajectory sigma reference.
+- **External patches:** exact calls traverse the normal guider/model patch chain.
+- **Continuum:** selection includes session/chunk identity and conditioning signature.
+- **Failure:** low capture aborts; guidance state clears in `finally`.
+
+## Reference budget
+
+Qwen3-VL context and direct H3 reference rows are separate. Native mode returns the exact input.
+Experimental direct decoupling shallow-copies conditioning and caps each direct video latent by patch
+rows while preserving aspect ratio and even H/W. Already encoded Qwen tokens remain unchanged.
+
+## Attention lab
+
+Diagnostics sample selected heads/queries and report entropy and modality mass without retaining full
+matrices. Experimental sparse layers keep text/reference/audio global. Video queries retain non-video
+keys and all temporal positions inside a spatial patch window; configured heads remain fully global.
+Query chunking avoids a sequence-square mask. RoPE is untouched and block replacements are chained.
+If another optimized attention override exists, the experiment records a fallback and delegates to it.

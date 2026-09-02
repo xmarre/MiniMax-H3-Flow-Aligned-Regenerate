@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "comfyui_workflow_overlay",
+  "purpose": "Replace each Continuum chunk's full-base-plus-refine sampler pair with one split sampler path",
+  "shared_handle": {
+    "node": "H3FlowTrajectory",
+    "widgets": {"storage": "system_ram", "max_runs": 8}
+  },
+  "model_patch": {
+    "node": "H3ProgressiveHandoff",
+    "inputs": {"trajectory": "shared_handle"},
+    "widgets": {
+      "target_mode": "pixels",
+      "scale": 1.2,
+      "target_width": 1024,
+      "target_height": 768,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction",
+      "direction_weight": 0.25
+    },
+    "placement": "after all chunk-local MODEL patches and before the existing base KSampler"
+  },
+  "sampler": {
+    "reuse_existing_sampler_and_full_sigma_schedule": true,
+    "remove_separate_high_resolution_refine_sampler": true,
+    "expected_visible_extra_nfe": "one low-grid exact handoff probe",
+    "high_grid_actual_anchor": "mandatory"
+  },
+  "invariants": {
+    "source_latent_wh": [54, 40],
+    "target_latent_wh": [64, 48],
+    "target_pixels": [1024, 768],
+    "audio": "packed_state_preserved_at_handoff",
+    "decoded_media_required": true
+  }
+}

@@ -1,0 +1,310 @@
+from __future__ import annotations
+
+from dataclasses import asdict
+
+from .attention import AttentionConfig
+from .comfy_compat import patch_flow_model
+from .contracts import H3FlowTrajectory
+from .geometry import pixel_to_safe_latent
+from .guidance import GuidanceConfig
+from .handoff import ProgressiveHandoffConfig
+from .metrics import H3FlowMetrics
+from .reference import apply_reference_budget
+from .sigma import resolution_aware_sigmas, resolution_shift_factor
+
+
+class H3FlowTrajectoryNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "storage": (["system_ram", "vram"], {"default": "system_ram"}),
+                "max_runs": ("INT", {"default": 8, "min": 1, "max": 128}),
+            }
+        }
+
+    RETURN_TYPES = ("H3_FLOW_TRAJECTORY",)
+    FUNCTION = "create"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def create(self, storage, max_runs):
+        return (H3FlowTrajectory(storage=storage, max_runs=max_runs),)
+
+
+class H3TrajectoryCapture:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "trajectory": ("H3_FLOW_TRAJECTORY",),
+                "capture_forecasts": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def patch(self, model, trajectory, capture_forecasts=False):
+        metrics = H3FlowMetrics()
+        patched, _ = patch_flow_model(
+            model,
+            trajectory=trajectory,
+            capture_forecasts=capture_forecasts,
+            metrics=metrics,
+        )
+        return patched, metrics
+
+
+class H3FlowAlignedRegenerate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "trajectory": ("H3_FLOW_TRAJECTORY",),
+                "guidance_mode": (
+                    ["off", "initialization", "direction", "direction+acceleration", "downsample_consistency"],
+                    {"default": "direction"},
+                ),
+                "direction_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        guidance_mode,
+        direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
+        metrics=None,
+    ):
+        metrics = metrics or H3FlowMetrics()
+        guidance = GuidanceConfig(
+            mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            cutoff=low_frequency_cutoff,
+        )
+        patched, _ = patch_flow_model(model, trajectory=trajectory, guidance=guidance, metrics=metrics)
+        return patched, metrics
+
+
+class H3ProgressiveHandoff:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "trajectory": ("H3_FLOW_TRAJECTORY",),
+                "target_mode": (["scale", "pixels"], {"default": "scale"}),
+                "scale": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 4.0, "step": 0.01}),
+                "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192, "step": 32}),
+                "target_height": ("INT", {"default": 768, "min": 32, "max": 8192, "step": 32}),
+                "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
+                "handoff_selection": (["fixed", "auto_compute"], {"default": "fixed"}),
+                "guidance_mode": (
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
+                    {"default": "direction"},
+                ),
+                "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        target_mode,
+        scale,
+        target_width,
+        target_height,
+        handoff_coordinate,
+        handoff_selection,
+        guidance_mode,
+        direction_weight,
+        metrics=None,
+    ):
+        if target_mode == "scale":
+            progressive = ProgressiveHandoffConfig(
+                target_scale=scale,
+                handoff_coordinate=handoff_coordinate,
+                handoff_selection=handoff_selection,
+            )
+        else:
+            target_h, target_w = pixel_to_safe_latent(target_height, target_width)
+            progressive = ProgressiveHandoffConfig(
+                target_latent_h=target_h,
+                target_latent_w=target_w,
+                handoff_coordinate=handoff_coordinate,
+                handoff_selection=handoff_selection,
+            )
+        guidance = GuidanceConfig(mode=guidance_mode, direction_weight=direction_weight)
+        metrics = metrics or H3FlowMetrics()
+        patched, _ = patch_flow_model(
+            model,
+            trajectory=trajectory,
+            guidance=guidance,
+            progressive=progressive,
+            metrics=metrics,
+        )
+        return patched, metrics
+
+
+class H3ResolutionAwareSigmas:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "sigmas": ("SIGMAS",),
+                "mode": (["off", "resolution_aware", "calibrated"], {"default": "off"}),
+                "source_width": ("INT", {"default": 864, "min": 32, "max": 8192}),
+                "source_height": ("INT", {"default": 640, "min": 32, "max": 8192}),
+                "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192}),
+                "target_height": ("INT", {"default": 768, "min": 32, "max": 8192}),
+                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "calibrated_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01}),
+            }
+        }
+
+    RETURN_TYPES = ("SIGMAS", "H3_FLOW_DIAGNOSTICS")
+    RETURN_NAMES = ("sigmas", "diagnostics")
+    FUNCTION = "map"
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+
+    def map(self, sigmas, mode, source_width, source_height, target_width, target_height, strength, calibrated_factor):
+        source_area = source_width * source_height
+        target_area = target_width * target_height
+        mapped = resolution_aware_sigmas(
+            sigmas,
+            source_area=source_area,
+            target_area=target_area,
+            mode=mode,
+            strength=strength,
+            calibrated_factor=calibrated_factor,
+        )
+        return mapped, {
+            "mode": mode,
+            "source_area": source_area,
+            "target_area": target_area,
+            "extra_shift_factor": resolution_shift_factor(source_area, target_area, strength),
+        }
+
+
+class H3ReferenceBudget:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "conditioning": ("CONDITIONING",),
+                "mode": (["native", "diagnostic", "decoupled_direct_experimental"], {"default": "native"}),
+                "max_direct_video_rows": ("INT", {"default": 2048, "min": 64, "max": 65536, "step": 64}),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "H3_REFERENCE_REPORT")
+    RETURN_NAMES = ("conditioning", "report")
+    FUNCTION = "apply"
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+
+    def apply(self, conditioning, mode, max_direct_video_rows):
+        result, report = apply_reference_budget(
+            conditioning,
+            mode=mode,
+            max_direct_video_rows=max_direct_video_rows,
+        )
+        return result, asdict(report)
+
+
+class H3AttentionExperiment:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "mode": (["native", "diagnostic", "experimental_sparse"], {"default": "native"}),
+                "layers": ("STRING", {"default": "8,16,24,32,40"}),
+                "sparse_window": ("INT", {"default": 4, "min": 1, "max": 32}),
+                "global_heads": ("INT", {"default": 8, "min": 0, "max": 56}),
+                "max_sequence": ("INT", {"default": 8192, "min": 256, "max": 65536}),
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+
+    def patch(self, model, mode, layers, sparse_window, global_heads, max_sequence, metrics=None):
+        selected = tuple(sorted({int(value.strip()) for value in layers.split(",") if value.strip()}))
+        config = AttentionConfig(
+            mode=mode,
+            layers=selected,
+            sparse_window=sparse_window,
+            global_heads=global_heads,
+            max_sequence=max_sequence,
+        )
+        metrics = metrics or H3FlowMetrics()
+        if mode == "native":
+            return model, metrics
+        patched, _ = patch_flow_model(model, attention=config, metrics=metrics)
+        return patched, metrics
+
+
+class H3MetricsJSON:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"metrics": ("H3_FLOW_METRICS",)}}
+
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "render"
+    OUTPUT_NODE = True
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def render(self, metrics):
+        return (metrics.to_json(),)
+
+
+NODE_CLASS_MAPPINGS = {
+    "H3FlowTrajectory": H3FlowTrajectoryNode,
+    "H3TrajectoryCapture": H3TrajectoryCapture,
+    "H3FlowAlignedRegenerate": H3FlowAlignedRegenerate,
+    "H3ProgressiveHandoff": H3ProgressiveHandoff,
+    "H3ResolutionAwareSigmas": H3ResolutionAwareSigmas,
+    "H3ReferenceBudget": H3ReferenceBudget,
+    "H3AttentionExperiment": H3AttentionExperiment,
+    "H3MetricsJSON": H3MetricsJSON,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3FlowTrajectory": "MiniMax H3 Flow Trajectory",
+    "H3TrajectoryCapture": "MiniMax H3 Trajectory Capture",
+    "H3FlowAlignedRegenerate": "MiniMax H3 Flow-Aligned Regenerate",
+    "H3ProgressiveHandoff": "MiniMax H3 Progressive Handoff",
+    "H3ResolutionAwareSigmas": "MiniMax H3 Resolution-Aware Sigmas [Experimental]",
+    "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
+    "H3AttentionExperiment": "MiniMax H3 Attention Lab [Experimental]",
+    "H3MetricsJSON": "MiniMax H3 Metrics JSON",
+}
