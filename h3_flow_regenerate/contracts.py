@@ -95,9 +95,10 @@ class H3FlowTrajectory:
     @property
     def latest(self) -> TrajectoryRun:
         with self._lock:
-            if not self._runs:
-                raise RuntimeError("trajectory has no committed run")
-            return self._runs[-1]
+            for run in reversed(self._runs):
+                if run.complete:
+                    return run
+            raise RuntimeError("trajectory has no completed run")
 
     @property
     def bytes(self) -> int:
@@ -174,17 +175,38 @@ class H3FlowTrajectory:
             self._pending = None
             return run
 
-    def abort(self, run_id: str, reason: str) -> None:
+    def abort(self, run_id: str, reason: str) -> TrajectoryRun:
         with self._lock:
-            self._require_pending(run_id)
+            pending = self._require_pending(run_id)
+            run = TrajectoryRun(
+                schema_version=SCHEMA_VERSION,
+                run_id=pending.run_id,
+                session_id=pending.session_id,
+                chunk_id=pending.chunk_id,
+                sampler=pending.sampler,
+                scheduler=pending.scheduler,
+                geometry=pending.geometry,
+                audio_shape=pending.audio_shape,
+                layout_signature=pending.layout_signature,
+                conditioning_signature=pending.conditioning_signature,
+                storage=pending.storage,
+                samples=tuple(pending.samples),
+                started_ns=pending.started_ns,
+                completed_ns=time.time_ns(),
+                complete=False,
+                abort_reason=str(reason),
+            )
+            self._runs = (*self._runs, run)[-self.max_runs :]
             self._pending = None
+            return run
 
     def select(self, *, chunk_id: str | None = None, session_id: str | None = None) -> TrajectoryRun:
         with self._lock:
             candidates = [
                 run
                 for run in self._runs
-                if (chunk_id is None or run.chunk_id == str(chunk_id))
+                if run.complete
+                and (chunk_id is None or run.chunk_id == str(chunk_id))
                 and (session_id is None or run.session_id == str(session_id))
             ]
             if not candidates:
