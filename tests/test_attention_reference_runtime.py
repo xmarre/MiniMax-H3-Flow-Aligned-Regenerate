@@ -45,7 +45,7 @@ def test_layout_summary_counts_packed_modalities():
 
 def test_attention_config_is_guarded():
     with pytest.raises(ValueError):
-        AttentionConfig(mode="experimental_sparse", layers=(50,))
+        AttentionConfig(mode="experimental_sparse", layers=(-1,))
 
 
 def test_sparse_backend_error_falls_back_to_full_attention():
@@ -96,6 +96,7 @@ class FakeH3Base:
             audio_latents_dim=32,
             sigma_shift_video=12.0,
             sigma_shift_audio=3.0,
+            blocks=[object() for _ in range(50)],
         )
         self.latent_shapes = None
 
@@ -114,7 +115,14 @@ class MiniMaxH3:
 class FakePatcher:
     def __init__(self):
         self.model = MiniMaxH3()
-        self.model_options = {"transformer_options": {"wrappers": {"outer_sample": {"spectrum": [object()]}}}}
+        self.model_options = {
+            "transformer_options": {
+                "wrappers": {
+                    "outer_sample": {"spectrum": [object()]},
+                    "predict_noise": {"spectrum": [object()]},
+                }
+            }
+        }
         self.wrappers = self.model_options["transformer_options"]["wrappers"]
 
     def clone(self):
@@ -148,6 +156,8 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert binding.trajectory is trajectory
     assert next(iter(patched.wrappers["outer_sample"])) == "h3_flow_regenerate.outer.v1"
     assert "spectrum" in patched.wrappers["outer_sample"]
+    assert next(iter(patched.wrappers["predict_noise"])) == "spectrum"
+    assert list(patched.wrappers["predict_noise"])[-1] == "h3_flow_regenerate.predict.v1"
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
 
 
