@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import tempfile
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -55,7 +56,20 @@ class H3FlowMetrics:
     def write_json(self, path: str | Path) -> Path:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.tmp")
-        temporary.write_text(self.to_json() + "\n", encoding="utf-8")
-        temporary.replace(target)
-        return target
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write(self.to_json() + "\n")
+                temporary = Path(handle.name)
+            temporary.replace(target)
+            return target
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
