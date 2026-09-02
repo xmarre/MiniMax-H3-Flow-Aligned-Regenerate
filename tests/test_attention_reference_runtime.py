@@ -48,6 +48,37 @@ def test_attention_config_is_guarded():
         AttentionConfig(mode="experimental_sparse", layers=(-1,))
 
 
+def test_attention_diagnostic_preserves_existing_override():
+    metrics = H3FlowMetrics()
+    calls = []
+
+    def previous(backend, q, k, v, heads, mask=None, skip_reshape=False, **kwargs):
+        calls.append((mask, skip_reshape))
+        return backend(q, k, v, heads, mask=mask, skip_reshape=skip_reshape, **kwargs)
+
+    config = AttentionConfig(mode="diagnostic", layers=(0,))
+    override = make_attention_override(config, metrics, previous_override=previous)
+    q = torch.randn(1, 2, 20, 4)
+
+    def backend(q, _k, _v, heads, mask=None, skip_reshape=False, **_kwargs):
+        assert mask is None
+        assert skip_reshape
+        return q.transpose(1, 2).reshape(1, q.shape[2], heads * q.shape[-1])
+
+    result = override(
+        backend,
+        q,
+        q,
+        q,
+        2,
+        skip_reshape=True,
+        transformer_options={"h3_flow_attention_context": {"layout": layout(), "layer": 0}},
+    )
+    assert result.shape == (1, 20, 8)
+    assert calls == [(None, True)]
+    assert metrics.events[-1].kind == "attention_diagnostic"
+
+
 def test_sparse_backend_error_falls_back_to_full_attention():
     metrics = H3FlowMetrics()
     config = AttentionConfig(
