@@ -40,8 +40,10 @@ is off by default. Since `f_a(f_b(t)) = f_ab(t)`, an already H3-shifted schedule
 \sigma'_v=f_{12}(f_\alpha(f_{12}^{-1}(\sigma_v))).
 \]
 
-H3 still inverts video to the new base coordinate and applies `f_3` for audio. Analytic tests cover
-endpoints, monotonicity, inverse/composition behavior, and AV invariants.
+H3 still inverts video to the new base coordinate and applies `f_3` for audio. Therefore this
+SIGMAS-only experiment moves the shared AV coordinate and changes the derived audio sigma schedule
+as well; it is not a video-only schedule modifier. Analytic tests cover endpoints, monotonicity,
+inverse/composition behavior, and AV invariants, while decoded audio remains part of the media gate.
 
 ## Transactional trajectory schema
 
@@ -80,8 +82,9 @@ velocity field. Downsample consistency forms the low-grid residual before liftin
 
 ## Progressive handoff law
 
-The flow wrapper is first in ComfyUI's outer-sample chain. It invokes the downstream chain three
-times, creating fresh Spectrum and multistep lifetimes:
+The flow wrapper is first in ComfyUI's outer-sample chain. Progressive mode accepts only a complete
+1-to-0 H3 sigma schedule and invokes the downstream chain three times, creating fresh Spectrum and
+multistep lifetimes:
 
 1. low-grid native sampler over the early schedule;
 2. one exact denoised probe at the nonterminal handoff sigma;
@@ -119,9 +122,14 @@ benchmark setting until decoded runs establish a better policy.
 
 - **SA/PECE/SEEDS:** separate sampler invocations prevent old-grid history crossing.
 - **Spectrum:** separate outer executions end the low runtime and create the high runtime.
-  `h3_refinement` API v1 requires an actual prefix and full-trajectory sigma reference.
-- **External patches:** exact calls traverse the normal guider/model patch chain.
-- **Continuum:** selection includes session/chunk identity and conditioning signature.
+  `h3_refinement` API v1 supplies the full-trajectory sigma reference; the high stage requests
+  an actual prefix.
+- **External patches:** exact calls traverse the normal guider/model patch chain. The probe also
+  publishes the full-trajectory refinement reference so sigma-sensitive patches such as DiffAid
+  do not renormalize the split coordinate to the probe invocation's first sigma.
+- **Continuum:** selection includes session/chunk identity and a bounded content fingerprint of
+  raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
+  entire Qwen/reference tensors back from the GPU.
 - **Failure:** low capture aborts; guidance state clears in `finally`.
 
 ## Reference budget
