@@ -47,6 +47,21 @@ def test_forecast_only_trajectory_is_not_trustworthy():
         time_matched_reference(run(provenance=("forecast", "forecast")), 0.5)
 
 
+def test_duplicate_pece_coordinate_prefers_corrected_anchor():
+    values = [torch.full((1, 24, 1, 4, 4), value) for value in (1.0, 2.0, 3.0, 4.0)]
+    samples = (
+        TrajectorySample(0.8, 0.8, 0.7, 0, 0, "predicted", "actual", values[0]),
+        TrajectorySample(0.5, 0.5, 0.4, 1, 1, "predicted", "actual", values[1]),
+        TrajectorySample(0.5, 0.5, 0.4, 1, 2, "corrected", "actual", values[2]),
+        TrajectorySample(0.2, 0.2, 0.1, 2, 3, "predicted", "actual", values[3]),
+    )
+    trajectory = TrajectoryRun(
+        1, "r", "s", "0", "sa", "sched",
+        geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
+        (1, 32, 2, 8), "layout", "cond", "system_ram", samples, 0, 1, True,
+    )
+    assert torch.equal(time_matched_reference(trajectory, 0.5), values[2])
+
 def test_zero_weight_is_exact_baseline_parity():
     high = torch.randn(1, 24, 1, 8, 8)
     config = GuidanceConfig(mode="direction", direction_weight=0.0)
