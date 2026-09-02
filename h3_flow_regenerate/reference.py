@@ -42,11 +42,13 @@ def _fit_reference(video: torch.Tensor, max_rows: int, mode: str) -> torch.Tenso
         scale=scale,
         policy="nearest",
     )
-    while temporal * (target_h // 2) * (target_w // 2) > max_rows and min(target_h, target_w) > 2:
-        if target_h >= target_w:
+    while temporal * (target_h // 2) * (target_w // 2) > max_rows and max(target_h, target_w) > 2:
+        if target_h >= target_w and target_h > 2:
             target_h -= 2
-        else:
+        elif target_w > 2:
             target_w -= 2
+        else:
+            break
     return resize_video(video, target_h, target_w, mode=mode)
 
 
