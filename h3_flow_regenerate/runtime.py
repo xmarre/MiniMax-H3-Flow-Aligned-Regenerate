@@ -107,26 +107,77 @@ def _interop_identity(model_options: dict[str, Any] | None) -> tuple[str, str]:
     return "standalone", "standalone"
 
 
-def _conditioning_signature(guider: Any) -> str:
-    rows: list[str] = []
-    original = getattr(guider, "original_conds", {}) or {}
-    for group in sorted(original):
-        rows.append(str(group))
-        for entry in original[group]:
-            if not isinstance(entry, dict):
-                rows.append(type(entry).__name__)
+def _tensor_signature(tensor: torch.Tensor, *, max_values: int = 128) -> bytes:
+    """Return a bounded, device-independent content fingerprint.
+
+    Conditioning can contain multi-megabyte Qwen embeddings and reference
+    latents. Hashing every byte would introduce a full GPU readback. Sampling
+    deterministic positions catches ordinary prompt/reference changes while
+    keeping the identity check bounded; shape/dtype/layout are always included.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"{tuple(tensor.shape)}|{tensor.dtype}|{tensor.layout}".encode())
+    if tensor.numel() == 0 or tensor.device.type == "meta" or tensor.layout != torch.strided:
+        return digest.digest()
+
+    count = min(int(max_values), int(tensor.numel()))
+    if count == 1:
+        linear = torch.zeros(1, dtype=torch.long, device=tensor.device)
+    else:
+        ordinal = torch.arange(count, dtype=torch.long, device=tensor.device)
+        linear = torch.div(
+            ordinal * (int(tensor.numel()) - 1),
+            count - 1,
+            rounding_mode="floor",
+        )
+    if tensor.ndim == 0:
+        sampled = tensor.detach().reshape(1)
+    else:
+        remainder = linear
+        reversed_coords: list[torch.Tensor] = []
+        for size in reversed(tensor.shape):
+            reversed_coords.append(remainder.remainder(int(size)))
+            remainder = torch.div(remainder, int(size), rounding_mode="floor")
+        sampled = tensor.detach()[tuple(reversed(reversed_coords))]
+    raw = sampled.contiguous().view(torch.uint8).to(device="cpu")
+    digest.update(bytes(raw.tolist()))
+    return digest.digest()
+
+
+def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
+    if depth > 8:
+        digest.update(f"<depth:{type(value).__module__}.{type(value).__qualname__}>".encode())
+        return
+    if torch.is_tensor(value):
+        digest.update(b"tensor:")
+        digest.update(_tensor_signature(value))
+        return
+    if isinstance(value, dict):
+        digest.update(f"dict:{len(value)}:".encode())
+        for key in sorted(value, key=lambda item: str(item)):
+            # ComfyUI's convert_cond creates a fresh UUID on each conversion.
+            # It is execution identity, not conditioning identity.
+            if str(key) == "uuid":
                 continue
-            rows.append(",".join(sorted(str(key) for key in entry)))
-            cross = entry.get("cross_attn")
-            if torch.is_tensor(cross):
-                rows.append(f"cross:{tuple(cross.shape)}")
-            refs = entry.get("minimax_refs")
-            if isinstance(refs, list):
-                for ref in refs:
-                    if isinstance(ref, dict):
-                        latent = ref.get("latent")
-                        rows.append(f"ref:{ref.get('kind')}:{tuple(latent.shape) if torch.is_tensor(latent) else '-'}")
-    return hashlib.sha256("|".join(rows).encode()).hexdigest()[:16]
+            digest.update(f"key:{key!s}:".encode())
+            _update_conditioning_digest(digest, value[key], depth=depth + 1)
+        return
+    if isinstance(value, (list, tuple)):
+        digest.update(f"{type(value).__name__}:{len(value)}:".encode())
+        for item in value:
+            _update_conditioning_digest(digest, item, depth=depth + 1)
+        return
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        digest.update(f"{type(value).__name__}:{value!r}:".encode())
+        return
+    digest.update(f"type:{type(value).__module__}.{type(value).__qualname__}:".encode())
+
+
+def _conditioning_signature(guider: Any) -> str:
+    digest = hashlib.sha256()
+    original = getattr(guider, "original_conds", {}) or {}
+    _update_conditioning_digest(digest, original)
+    return digest.hexdigest()[:32]
 
 
 def _resolve_binding(guider: Any) -> FlowBinding | None:
