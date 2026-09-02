@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from .geometry import normalize_target_geometry, resize_video, validate_video
+from .geometry import resize_video, validate_video
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,12 +36,9 @@ def _fit_reference(video: torch.Tensor, max_rows: int, mode: str) -> torch.Tenso
     if max_rows < temporal:
         raise ValueError("direct-reference row budget is smaller than one spatial patch per frame")
     scale = math.sqrt(max_rows / current_rows)
-    target_h, target_w = normalize_target_geometry(
-        source_h=int(video.shape[-2]),
-        source_w=int(video.shape[-1]),
-        scale=scale,
-        policy="nearest",
-    )
+    source_h, source_w = map(int, video.shape[-2:])
+    target_h = max(2, round(source_h * scale / 2) * 2)
+    target_w = max(2, round(source_w * scale / 2) * 2)
     while temporal * (target_h // 2) * (target_w // 2) > max_rows and max(target_h, target_w) > 2:
         if target_h >= target_w and target_h > 2:
             target_h -= 2
