@@ -23,8 +23,8 @@ class AttentionConfig:
     def __post_init__(self) -> None:
         if self.mode not in {"native", "diagnostic", "experimental_sparse"}:
             raise ValueError(f"unsupported H3 attention mode {self.mode!r}")
-        if any(layer < 0 or layer >= 50 for layer in self.layers):
-            raise ValueError("H3 diagnostic/sparse layers must be in [0, 49]")
+        if any(layer < 0 for layer in self.layers):
+            raise ValueError("H3 diagnostic/sparse layers must be non-negative")
         if self.diagnostic_head < 0 or self.diagnostic_queries < 1:
             raise ValueError("attention diagnostic selectors must be non-negative")
         if self.sparse_window < 1 or self.global_heads < 0 or self.query_chunk < 1:
