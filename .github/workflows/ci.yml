@@ -31,9 +31,9 @@ jobs:
       - name: Validate built wheel in an isolated environment
         run: |
           WHEEL="$(pwd)/$(ls dist/*.whl | head -n 1)"
-          python -m venv /tmp/h3-flow-wheel
+          python -m venv --system-site-packages /tmp/h3-flow-wheel
           /tmp/h3-flow-wheel/bin/python -m pip install --upgrade pip
-          /tmp/h3-flow-wheel/bin/python -m pip install "$WHEEL"
+          /tmp/h3-flow-wheel/bin/python -m pip install --no-deps "$WHEEL"
           (cd /tmp && /tmp/h3-flow-wheel/bin/python -c "import h3_flow_regenerate; assert h3_flow_regenerate.H3FlowTrajectory.api_version == 1")
 
   source-contracts:
