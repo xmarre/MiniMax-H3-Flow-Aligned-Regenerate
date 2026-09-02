@@ -325,6 +325,24 @@ def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     assert binding.metrics.counters["transformer_actual_nfe"] == 1
 
 
+def test_progressive_handoff_fails_closed_on_denoise_mask():
+    with pytest.raises(RuntimeError, match="does not yet support denoise masks"):
+        _run_progressive(
+            None,
+            None,
+            FlowBinding(),
+            ProgressiveHandoffConfig(8, 6, handoff_coordinate=0.3),
+            None,
+            None,
+            None,
+            torch.tensor([1.0, 0.7, 0.3, 0.0]),
+            torch.ones(1),
+            None,
+            True,
+            7,
+            [(1, 24, 1, 4, 4), (1, 32, 2, 5)],
+        )
+
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
     class KSampler:
         def __init__(self, function):
