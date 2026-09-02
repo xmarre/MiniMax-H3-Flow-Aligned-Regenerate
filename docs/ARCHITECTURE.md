@@ -140,6 +140,9 @@ benchmark setting until decoded runs establish a better policy.
   raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
   entire Qwen/reference tensors back from the GPU.
 - **Failure:** low capture aborts; guidance state clears in `finally`.
+- **Denoise masks:** progressive mode fails closed. Current ComfyUI inpainting semantics combine the
+  mask with a preserved sampler `latent_image`; transforming the mask without carrying that latent
+  state to the new spatial grid would inject the wrong preserved-region values.
 
 ## Reference budget
 
