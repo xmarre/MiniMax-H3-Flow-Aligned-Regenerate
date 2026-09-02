@@ -60,9 +60,12 @@ inside Spectrum's PREDICT wrapper, so Spectrum's call-local copied model options
 step. Failed outer sampling records a bounded incomplete diagnostic run. Only complete runs are
 selectable. CPU storage detaches, copies as fp32, and pins when CUDA is available; VRAM storage clones.
 
-Forecast calls advance topology but are stored only when explicitly requested. Exact anchors drive
-guidance. At duplicate SA-Solver-PECE coordinates, corrected exact endpoints take precedence over
-predicted endpoints; a dedicated handoff probe takes precedence at the split coordinate.
+Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
+The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
+a guided target pass cannot become the next source trajectory by accident. Forecast calls advance
+topology but are stored only when explicitly requested. Exact anchors drive guidance. At duplicate
+SA-Solver-PECE coordinates, corrected exact endpoints take precedence over predicted endpoints; a
+dedicated handoff probe takes precedence at the split coordinate.
 
 ## Two-pass flow guidance
 
