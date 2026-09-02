@@ -45,6 +45,7 @@ class FlowBinding:
     trajectory: H3FlowTrajectory | None = None
     guidance: GuidanceConfig | None = None
     metrics: H3FlowMetrics = field(default_factory=H3FlowMetrics)
+    capture_enabled: bool = False
     capture_forecasts: bool = False
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     active_capture: _ActiveCapture | None = None
@@ -193,7 +194,7 @@ def _begin_capture(
     latent_shapes: list[tuple[int, ...]],
 ) -> None:
     trajectory = binding.trajectory
-    if trajectory is None or sampler_name(sampler) == PROBE_MARKER:
+    if not binding.capture_enabled or trajectory is None or sampler_name(sampler) == PROBE_MARKER:
         return
     if len(latent_shapes) != 2:
         raise ValueError("H3 trajectory capture requires exactly video and audio latent shapes")
