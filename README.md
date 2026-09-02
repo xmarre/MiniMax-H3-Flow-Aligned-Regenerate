@@ -72,14 +72,17 @@ and are excluded from trustworthy anchors by default.
 
 ### Progressive handoff use
 
-Patch the model with **Progressive Handoff** before the sampler. The node splits one sigma
-schedule at the closest valid unshifted coordinate, invokes the selected native sampler for
-the low stage, performs one explicit H3 clean-state probe, creates the target-grid conditional
-state, and starts a fresh sampler invocation on the high grid.
+Patch the model with **Progressive Handoff** before the sampler. The node requires a complete
+H3 1-to-0 sigma schedule, splits it at the closest valid unshifted coordinate, invokes the
+selected native sampler for the low stage, performs one explicit H3 clean-state probe, creates
+the target-grid conditional state, and starts a fresh sampler invocation on the high grid.
+Partial low-sigma refinement schedules are rejected because their absolute flow origin is
+ambiguous for a progressive split.
 
 The split invocation is the reset contract: SA/PECE Adams history and Spectrum hidden-feature
-history cannot cross the geometry boundary. The high stage advertises `h3_refinement` API v1
-with a mandatory actual prefix and full-schedule sigma reference. Audio is copied without a
+history cannot cross the geometry boundary. The exact probe and high stage advertise
+`h3_refinement` API v1 with a full-schedule sigma reference; the high stage additionally
+requests a mandatory actual prefix. Audio is copied without a
 spatial transform. Handoff noise comes from a documented CPU generator derived from the graph
 seed, so retries reproduce the same state.
 
@@ -108,7 +111,9 @@ acceleration-alignment equations.
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
-an investigative implementation rather than a reconstruction of MiniMax internals.
+an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware
+sigmas move H3's shared AV flow coordinate, so they also change the derived audio sigma schedule;
+the probe is not a video-only schedule modifier and requires decoded-audio validation.
 
 ## Metrics and benchmarking
 
