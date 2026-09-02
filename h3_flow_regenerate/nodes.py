@@ -258,7 +258,12 @@ class H3AttentionExperiment:
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
 
     def patch(self, model, mode, layers, sparse_window, global_heads, max_sequence, metrics=None):
-        selected = tuple(sorted({int(value.strip()) for value in layers.split(",") if value.strip()}))
+        try:
+            selected = tuple(sorted({int(value.strip()) for value in layers.split(",") if value.strip()}))
+        except ValueError as exc:
+            raise ValueError("layers must be a comma-separated list of non-negative integers") from exc
+        if not selected:
+            raise ValueError("layers must select at least one H3 transformer block")
         config = AttentionConfig(
             mode=mode,
             layers=selected,
