@@ -66,8 +66,10 @@ component and is used upstream when desired.
 4. Patch the high-resolution H3 model with **Flow-Aligned Regenerate**, using the same trajectory.
 5. Keep pass-one audio locked in the surrounding workflow.
 
-The high-resolution model call is guided only in low spatial frequencies. Exact H3 model
-evaluations are preferred as trajectory anchors; Spectrum forecasts retain their provenance
+The high-resolution model call is guided only in low spatial frequencies. Its control schedule is
+normalized to the first coordinate of that high-resolution invocation, so low-sigma refinement starts
+at the configured guidance strength and then weakens toward zero. Exact H3 model evaluations are
+preferred as trajectory anchors; Spectrum forecasts retain their provenance
 and are excluded from trustworthy anchors by default. The regenerate patch reads the supplied
 trajectory but does not append the high-resolution pass back into it, so the low-resolution
 source run cannot be silently replaced by its own guided output. HiFlow-style initialization
