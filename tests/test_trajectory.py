@@ -43,15 +43,23 @@ def test_commit_publishes_exact_provenance_and_copies_storage():
     assert torch.all(run.samples[0].video_x0 == 1)
 
 
-def test_abort_never_publishes_partial_run_and_retry_works():
+def test_abort_preserves_diagnostics_but_never_becomes_guidance_state():
     trajectory = H3FlowTrajectory()
     run_id = begin(trajectory)
     trajectory.append(run_id, sample())
-    trajectory.abort(run_id, "cancelled")
-    assert trajectory.runs == ()
+    aborted = trajectory.abort(run_id, "cancelled")
+    assert not aborted.complete
+    assert aborted.abort_reason == "cancelled"
+    assert len(trajectory.runs) == 1
+    with pytest.raises(RuntimeError, match="no committed trajectory"):
+        trajectory.select()
+
     retry = begin(trajectory)
     trajectory.append(retry, sample(2))
-    assert trajectory.commit(retry).samples[0].video_x0.mean() == 2
+    completed = trajectory.commit(retry)
+    assert completed.samples[0].video_x0.mean() == 2
+    assert trajectory.select().run_id == completed.run_id
+    assert trajectory.latest.run_id == completed.run_id
 
 
 def test_chunk_and_session_isolation():
