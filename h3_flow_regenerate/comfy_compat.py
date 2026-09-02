@@ -57,6 +57,12 @@ def _put_wrapper_first(model: Any, wrapper_type: str, key: str, wrapper) -> None
     model.wrappers[wrapper_type] = {key: [wrapper], **existing}
 
 
+def _put_wrapper_last(model: Any, wrapper_type: str, key: str, wrapper) -> None:
+    model.remove_wrappers_with_key(wrapper_type, key)
+    existing = model.wrappers.get(wrapper_type, {})
+    model.wrappers[wrapper_type] = {**existing, key: [wrapper]}
+
+
 def patch_flow_model(
     model: Any,
     *,
@@ -64,7 +70,7 @@ def patch_flow_model(
     guidance: GuidanceConfig | None = None,
     progressive: ProgressiveHandoffConfig | None = None,
     attention: AttentionConfig | None = None,
-    capture_forecasts: bool = False,
+    capture_forecasts: bool | None = None,
     metrics: H3FlowMetrics | None = None,
 ) -> tuple[Any, FlowBinding]:
     validate_h3_model(model)
@@ -77,7 +83,9 @@ def patch_flow_model(
         trajectory=trajectory if trajectory is not None else (prior.trajectory if prior else None),
         guidance=guidance if guidance is not None else (prior.guidance if prior else None),
         metrics=metrics or (prior.metrics if prior else H3FlowMetrics()),
-        capture_forecasts=bool(capture_forecasts or (prior.capture_forecasts if prior else False)),
+        capture_forecasts=(
+            prior.capture_forecasts if capture_forecasts is None and prior is not None else bool(capture_forecasts)
+        ),
     )
     patched.model_options[FLOW_BINDING_KEY] = binding
     if progressive is not None:
@@ -86,7 +94,11 @@ def patch_flow_model(
     import comfy.patcher_extension
 
     _put_wrapper_first(patched, comfy.patcher_extension.WrappersMP.OUTER_SAMPLE, OUTER_WRAPPER_KEY, flow_outer_wrapper)
-    _put_wrapper_first(
+    # OUTER_SAMPLE must remain outside Spectrum so progressive low/probe/high
+    # invocations each traverse Spectrum independently. PREDICT_NOISE must be
+    # inside Spectrum so it receives Spectrum's per-call copied model_options
+    # containing exact/forecast provenance.
+    _put_wrapper_last(
         patched,
         comfy.patcher_extension.WrappersMP.PREDICT_NOISE,
         PREDICT_WRAPPER_KEY,
@@ -99,6 +111,14 @@ def patch_flow_model(
 
 
 def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetrics) -> None:
+    diffusion = validate_h3_model(model)
+    blocks = getattr(diffusion, "blocks", None)
+    if blocks is None:
+        raise TypeError("native MiniMax H3 diffusion model does not expose transformer blocks")
+    num_layers = len(blocks)
+    invalid = tuple(layer for layer in config.layers if layer >= num_layers)
+    if invalid:
+        raise ValueError(f"H3 attention layers are outside the loaded model's {num_layers} blocks: {invalid}")
     transformer = model.model_options["transformer_options"]
     previous_override = transformer.get("optimized_attention_override")
     transformer["optimized_attention_override"] = make_attention_override(
@@ -107,7 +127,7 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
         previous_override=previous_override,
     )
     existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).copy()
-    for layer in range(50):
+    for layer in range(num_layers):
         previous = existing.get(("double_block", layer))
         wrapper = make_layout_block_wrapper(
             layer,
