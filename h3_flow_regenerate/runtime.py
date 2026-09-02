@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from .contracts import H3FlowTrajectory, TrajectorySample
-from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
+from .geometry import geometry_from_video, pack_streams, unpack_streams
 from .guidance import GuidanceConfig, GuidanceState, apply_guidance
 from .handoff import ProgressiveHandoffConfig, build_handoff_state, select_handoff_index
 from .metrics import H3FlowMetrics
@@ -467,18 +467,6 @@ def _noise_argument(base_model: Any, state: torch.Tensor, sigma: float) -> torch
     return state / (sigma * noise_scale)
 
 
-def _resize_packed_mask(
-    mask: torch.Tensor | None,
-    source_shapes: list[tuple[int, ...]],
-    target_shapes: list[tuple[int, ...]],
-):
-    if mask is None:
-        return None
-    video_mask, audio_mask = unpack_streams(mask, source_shapes)
-    target_h, target_w = target_shapes[0][-2:]
-    video_mask = resize_spatial_5d(video_mask, target_h, target_w, mode="nearest")
-    return pack_streams((video_mask, audio_mask))[0]
-
 
 def _reset_guider_conds(guider: Any) -> None:
     """Recreate raw conditioning before each independent geometry/sampler lifetime.
@@ -537,6 +525,11 @@ def _run_progressive(
 ):
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    if denoise_mask is not None:
+        raise RuntimeError(
+            "progressive handoff does not yet support denoise masks; preserving masked H3 regions "
+            "requires carrying and spatially transforming the sampler latent_image across the grid transition"
+        )
     if sigmas.ndim != 1 or sigmas.numel() < 4:
         raise ValueError("progressive handoff requires a full H3 sigma schedule")
     if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
@@ -657,7 +650,6 @@ def _run_progressive(
         seed=int(seed or 0) + config.seed_offset,
         transfer_mode=config.transfer_mode,
     )
-    target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
     binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
     latent_shapes[:] = target_shapes
 
@@ -685,7 +677,7 @@ def _run_progressive(
             torch.zeros_like(target_raw),
             sampler,
             high_sigmas,
-            target_mask,
+            None,
             high_callback,
             disable_pbar,
             seed,
