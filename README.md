@@ -68,7 +68,9 @@ component and is used upstream when desired.
 
 The high-resolution model call is guided only in low spatial frequencies. Exact H3 model
 evaluations are preferred as trajectory anchors; Spectrum forecasts retain their provenance
-and are excluded from trustworthy anchors by default.
+and are excluded from trustworthy anchors by default. The regenerate patch reads the supplied
+trajectory but does not append the high-resolution pass back into it, so the low-resolution
+source run cannot be silently replaced by its own guided output.
 
 ### Progressive handoff use
 
