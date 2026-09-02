@@ -63,6 +63,15 @@ def main() -> None:
         'request.get("sigma_reference")',
     )
     require(
+        args.spectrum / "comfyui_spectrum_h3/sampling.py",
+        'ACTUAL_KEY = "spectrum_h3_actual"',
+        'SOLVER_PHASE_KEY = "spectrum_h3_solver_phase"',
+        'OUTER_STEP_ID_KEY = "spectrum_h3_outer_step_id"',
+        "def copy_model_options_with_step(",
+        'transformer_options[ACTUAL_KEY] = bool(decision["actual"])',
+        "return executor(x, timestep, patched, seed)",
+    )
+    require(
         args.continuum / "model_patch.py",
         '"api": CONTINUUM_INTEROP_API',
         '"chunk_index": int(chunk_index)',
