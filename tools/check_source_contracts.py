@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--continuum", type=Path, required=True)
     parser.add_argument("--diffaid", type=Path, required=True)
     parser.add_argument("--refdelta", type=Path, required=True)
+    parser.add_argument("--untwist", type=Path, required=True)
     args = parser.parse_args()
 
     require(
@@ -52,6 +53,8 @@ def main() -> None:
         "unpack_latents(output, latent_shapes)",
         "WrappersMP.OUTER_SAMPLE",
         "WrappersMP.PREDICT_NOISE",
+        "#Returns denoised",
+        "inverse_noise_scaling(sigmas[-1], samples)",
     )
     require(
         args.spectrum / "comfyui_spectrum_h3/refinement_compat.py",
@@ -69,6 +72,14 @@ def main() -> None:
         args.diffaid / "spectrum_h3_compat.py",
         '"h3_refinement"',
         '"sigma_reference"',
+    )
+    require(
+        args.untwist / "flux_untwist/spectrum_h3.py",
+        'VISUAL_PATCH_SCHEMA_VERSION = 1',
+        'VISUAL_PATCH_ARCHITECTURE = "minimax_h3"',
+        'VISUAL_PATCH_RUNTIME_KEY = "spectrum_h3_visual_reference_patch_runtime"',
+        '"schedule_progress"',
+        '"active"',
     )
     refdelta_text = "\n".join(path.read_text(encoding="utf-8") for path in args.refdelta.rglob("*.py"))
     for name in ("sa_solver", "sa_solver_pece", "seeds_2", "seeds_3", "er_sde"):
