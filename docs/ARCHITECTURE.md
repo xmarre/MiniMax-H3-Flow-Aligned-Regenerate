@@ -83,8 +83,11 @@ map `U` transfers the reference. The conservative direction update is
 \lambda(t)L\left(U(\hat x^{LR}_0(t))-\hat x^{HR}_0\right),
 \]
 
-where `L` is an explicit average-pool low-frequency projection. A per-sample RMS bound limits the
-correction. The optional acceleration term compares adjacent low/high denoised-estimate changes and
+where `L` is an explicit average-pool low-frequency projection. The schedule weight is normalized
+to the first coordinate of the current high-resolution invocation, i.e. `(t / tau)^p` clamped to
+`[0,1]`, rather than to the full 1-to-0 trajectory. This preserves the intended weakening schedule
+when a refine pass begins at low sigma. A per-sample RMS bound limits the correction. The optional
+acceleration term compares adjacent low/high denoised-estimate changes and
 stays inactive until prior exact state exists. This is an experimental first-difference proxy; it does
 not reproduce HiFlow's acceleration formulation, which is derived from changes in the reference-flow
 velocity field. Downsample consistency forms the low-grid residual before lifting it.
