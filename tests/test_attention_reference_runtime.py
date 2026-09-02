@@ -279,7 +279,7 @@ def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     audio = torch.full((1, 32, 2, 5), 3.0)
     packed, shapes = pack_streams((video, audio))
     trajectory = H3FlowTrajectory()
-    binding = FlowBinding(trajectory=trajectory, capture_forecasts=False)
+    binding = FlowBinding(trajectory=trajectory, capture_enabled=True, capture_forecasts=False)
     guider = SimpleNamespace(
         model_options={FLOW_BINDING_KEY: binding, "transformer_options": {}},
         original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
