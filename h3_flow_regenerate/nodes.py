@@ -113,7 +113,7 @@ class H3ProgressiveHandoff:
                 "model": ("MODEL",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
                 "target_mode": (["scale", "pixels"], {"default": "scale"}),
-                "scale": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 4.0, "step": 0.01}),
+                "scale": ("FLOAT", {"default": 1.2, "min": 1.01, "max": 4.0, "step": 0.01}),
                 "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192, "step": 32}),
                 "target_height": ("INT", {"default": 768, "min": 32, "max": 8192, "step": 32}),
                 "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
