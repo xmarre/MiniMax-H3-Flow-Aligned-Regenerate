@@ -41,11 +41,13 @@ class GuidanceConfig:
 
 @dataclass(slots=True)
 class GuidanceState:
+    start_coordinate: float | None = None
     previous_coordinate: float | None = None
     previous_high_x0: torch.Tensor | None = None
     previous_reference: torch.Tensor | None = None
 
     def reset(self) -> None:
+        self.start_coordinate = None
         self.previous_coordinate = None
         self.previous_high_x0 = None
         self.previous_reference = None
@@ -136,9 +138,15 @@ def apply_guidance(
         return high_x0
     if config.mode == "direction+acceleration" and config.acceleration_weight > 0 and len(trustworthy_samples(run)) < 3:
         raise RuntimeError("acceleration guidance requires at least three exact trajectory anchors")
+    coordinate = float(coordinate)
+    if not math.isfinite(coordinate) or not 0.0 <= coordinate <= 1.0:
+        raise ValueError("guidance coordinate must be finite and inside [0, 1]")
     source_ref = time_matched_reference(run, coordinate).to(device=high_x0.device, dtype=high_x0.dtype)
     ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
-    schedule = min(1.0, max(0.0, float(coordinate))) ** config.schedule_power
+    if state.start_coordinate is None:
+        state.start_coordinate = coordinate
+    start = max(float(state.start_coordinate), 1e-8)
+    schedule = min(1.0, max(0.0, coordinate / start)) ** config.schedule_power
     correction = torch.zeros_like(high_x0)
     if config.mode in {"direction", "direction+acceleration"}:
         residual = low_frequency_projection(ref - high_x0, config.cutoff)
