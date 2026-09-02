@@ -102,7 +102,9 @@ never used as an alignment mechanism; this prevents the known odd-grid flashing-
 
 ## Experimental controls
 
-`direction+acceleration` needs adjacent exact trajectory support and is bounded by an RMS guard.
+`direction+acceleration` is an experimental first-difference trajectory proxy. It needs adjacent exact
+trajectory support and is bounded by an RMS guard; it is not an implementation of HiFlow's published
+acceleration-alignment equations.
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
