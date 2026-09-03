@@ -195,6 +195,14 @@ def main() -> None:
         '"schedule_progress"',
         '"active"',
     )
+    require(
+        args.upscaler / "nodes/minimax_h3_latent_upscaler_3d.py",
+        'SCALE_BY = "scale by multiplier"',
+        "def _aligned_pixel_size(",
+        "w_pixel_target = w_in * downsample * scale_val",
+        "h_pixel_target = h_in * downsample * scale_val",
+        "w_pixel_final, h_pixel_final = _aligned_pixel_size(",
+    )
     require_symbols(
         args.upscaler / "nodes/minimax_h3_refine.py",
         functions=(
