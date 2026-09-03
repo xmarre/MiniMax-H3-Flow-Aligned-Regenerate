@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+import torch
+
 from .attention import AttentionConfig
 from .comfy_compat import patch_flow_model
 from .contracts import H3FlowTrajectory
