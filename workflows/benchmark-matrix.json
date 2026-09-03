@@ -383,7 +383,8 @@
         "Continuum chunking",
         "audio behavior",
         "decode"
-      ]
+      ],
+      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics output -> H3MetricsJSON"
     },
     "runs": [
       {
@@ -415,7 +416,8 @@
       "progressive_history_boundaries": 0,
       "handoff_exact_probe_nfe": 0,
       "guidance_events": 0,
-      "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions"
+      "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions",
+      "metrics_source": "H3RuntimeMetricsProbe"
     },
     "diagnostics_gate": {
       "e0": {
