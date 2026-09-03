@@ -30,13 +30,13 @@ MiniMax documents H3-Base as a 768p generator and states that the shorter output
 
 SD3 Eq. 23 derives the relative flow-time shift
 
-[
+\[
 \alpha=\sqrt{m/n},\qquad
 t_m=\frac{\alpha t_n}{1+(\alpha-1)t_n},
-]
+\]
 
 under a constant-image uncertainty model. For 768x800 -> 896x928, the area ratio is ~1.35333333 and
-(alpha\approx1.16332856). simple diffusion independently argues that increasing spatial resolution
+\(\alpha\approx1.16332856\). simple diffusion independently argues that increasing spatial resolution
 requires a lower-SNR/more-noisy schedule at a comparable global-structure stage. Both results support
 the *direction* of the experiment, but neither proves that MiniMax H3 should use this exact mapping.
 
