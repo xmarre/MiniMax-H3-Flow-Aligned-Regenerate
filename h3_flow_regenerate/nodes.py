@@ -576,6 +576,30 @@ class H3AttentionExperiment:
         return patched, metrics
 
 
+class H3RuntimeMetricsProbe:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"model": ("MODEL",)},
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate/diagnostics"
+    DESCRIPTION = (
+        "Passive H3 sampler/model-call instrumentation. It installs the flow metrics wrappers without "
+        "enabling trajectory capture, guidance, progressive handoff, or attention changes. Place it "
+        "after Spectrum when exact/forecast provenance is required."
+    )
+
+    def patch(self, model, metrics=None):
+        metrics = metrics or H3FlowMetrics()
+        patched, _ = patch_flow_model(model, metrics=metrics)
+        return patched, metrics
+
+
 class H3MetricsJSON:
     @classmethod
     def INPUT_TYPES(cls):
@@ -628,6 +652,7 @@ NODE_CLASS_MAPPINGS = {
     "H3ResolutionAwareSigmas": H3ResolutionAwareSigmas,
     "H3ReferenceBudget": H3ReferenceBudget,
     "H3AttentionExperiment": H3AttentionExperiment,
+    "H3RuntimeMetricsProbe": H3RuntimeMetricsProbe,
     "H3MetricsJSON": H3MetricsJSON,
 }
 
@@ -641,5 +666,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3ResolutionAwareSigmas": "MiniMax H3 Resolution-Aware Sigmas [Experimental]",
     "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
     "H3AttentionExperiment": "MiniMax H3 Attention Lab [Experimental]",
+    "H3RuntimeMetricsProbe": "MiniMax H3 Runtime Metrics Probe",
     "H3MetricsJSON": "MiniMax H3 Metrics JSON",
 }
