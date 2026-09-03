@@ -21,35 +21,55 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 
 The difficult-motion D10 smoke isolated a failure that denoising-time acceleration did not clearly
 improve: moving clothing and newly revealed background can become malformed even when the overall
-trajectory and shot remain good. The new `direction+temporal` mode addresses a different axis:
-**video-frame time**.
+trajectory and shot remain good. `direction+temporal` tests a different axis: **video-frame time**.
 
-At each denoising coordinate, the exact low-resolution H3 clean-state prior is lightly smoothed and
-adjacent latent frames are matched with a bounded local cosine search. Both directions are computed.
-A match is trusted only to the degree that similarity, best-vs-second-best margin, and reverse-match
-cycle consistency agree. This produces a spatial confidence/visibility gate without RAFT/GMFlow or
-another learned network.
+The first implementation used adjacent-frame local cosine matching directly in the exact low-resolution
+H3 clean-state latent, followed by bidirectional cycle gating and confidence-weighted high-resolution
+detail transport. The first matched D10-temporal media run was a **negative result**: parts of the
+grass developed a repeated/patterned texture and the motion artifacts became different/more broken.
 
-For a trusted current-to-neighbor match, high-resolution detail is motion-transported from that
-neighbor and augmented with the low-resolution prior's same-time innovation:
+The metrics explain why this result should not be interpreted as evidence against all temporal
+regularization. The two physical chunks reported high mean accepted cosine similarity (~0.938/~0.959)
+but extremely small best-vs-second-best margins (~0.00381/~0.00269), while the configured
+`temporal_min_margin` was 0.02. V1 mistakenly used that value only to scale confidence rather than
+to reject ambiguous matches. Consequently ~46%/~51% of candidate locations were labeled "valid"
+even though mean confidence was only ~0.056/~0.048, and accepted flow magnitude averaged ~2.55-2.57
+low-grid cells with a radius-4 diagonal maximum ~5.657. Repetitive grass is precisely the kind of
+region where a weakly unique nearest-neighbor field can create patterned copying.
+
+The current v2 keeps the dependency-free H3-latent hypothesis but makes it conservative:
+
+- minimum cosine similarity and best-vs-second-best margin are hard admission tests;
+- reverse correspondence is exact by default (zero-cell cycle tolerance);
+- rejected/ambiguous locations contribute exactly zero temporal copy;
+- post-handoff reference clamping is explicit and cache identity follows the resolved low-grid anchor.
+
+The last point matters because progressive low-grid sampling stops at the handoff. In D10, the exact
+low-grid support ends at ~0.4, so requested high-stage coordinates ~0.3/~0.2/~0.1 all resolve to the
+same ~0.4 prior. V1 recomputed the identical map for each requested coordinate; v2 reuses it and
+reports the resolved coordinate/clamp state directly. The temporal correction still decays with the
+existing high-stage schedule.
+
+For a trusted current-to-neighbor match, the candidate target remains
 
 \[
 P_i = W(H_j) + U(R_i - W(R_j)).
 \]
 
-The temporal correction is confidence-weighted `P_i - H_i` and is combined with the existing
-same-time low-frequency direction term before the global RMS guard. Regions without a trustworthy
-predecessor/successor receive no temporal copy; they fall back to same-time low-resolution direction
-guidance so genuinely disoccluded content remains free to be synthesized.
+The important change is **where this operation is allowed**. V2 applies it only where the match is
+unique and mutually consistent; otherwise the ordinary same-time low-frequency direction term remains
+the only guidance.
 
-The matcher is bidirectional and non-recursive: every frame uses the current model call's unmodified
-neighbor estimates, so temporal propagation cannot accumulate sequential warp error through the clip.
-Its correspondence tensors are cached only across repeated PECE evaluations at the same denoising
-coordinate and are discarded with the sampler guidance state.
+This is still a research hypothesis. One matched D10-temporal-v2 rerun is justified because the first
+run exposed a concrete gating defect rather than merely failing to show benefit. If the conservative
+v2 still produces patterned copying, ghosting, or no useful improvement, stop latent nearest-neighbor
+transport and move to a different temporal formulation rather than sweeping weights/thresholds.
 
-This mode is **structurally tested but not decoded-media validated**. It is deliberately separate from
-HiFlow acceleration so the next D10 run can isolate video-time correspondence from denoising-time
-curvature.
+This direction is consistent with the broader source evidence: FrescoDiffusion explicitly warns that
+an unreliable prior can propagate incorrect structure or motion and decays/releases prior strength;
+its regional variant applies different prior constraints to active and background regions. The present
+H3 adaptation does not copy FrescoDiffusion's SAM activity map or tiled velocity fusion, but adopts the
+same conservative principle that prior regularization must be spatially trustworthy rather than global.
 
 ## Source implementations
 
