@@ -4,11 +4,16 @@
   "purpose": "Replace each Continuum chunk's full-base-plus-refine sampler pair with one split sampler path",
   "shared_handle": {
     "node": "H3FlowTrajectory",
-    "widgets": {"storage": "system_ram", "max_runs": 8}
+    "widgets": {
+      "storage": "system_ram",
+      "max_runs": 8
+    }
   },
   "model_patch": {
     "node": "H3ProgressiveHandoff",
-    "inputs": {"trajectory": "shared_handle"},
+    "inputs": {
+      "trajectory": "shared_handle"
+    },
     "widgets": {
       "target_mode": "pixels",
       "scale": 1.2,
@@ -28,10 +33,21 @@
     "high_grid_actual_anchor": "mandatory"
   },
   "invariants": {
-    "source_latent_wh": [54, 40],
-    "target_latent_wh": [64, 48],
-    "target_pixels": [1024, 768],
+    "source_latent_wh": [
+      54,
+      40
+    ],
+    "target_latent_wh": [
+      64,
+      48
+    ],
+    "target_pixels": [
+      1024,
+      768
+    ],
     "audio": "packed_state_preserved_at_handoff",
-    "decoded_media_required": true
+    "decoded_media_required": true,
+    "denoise_mask": "video mask resized on single-channel target grid; audio mask preserved; latent_image transferred consistently",
+    "target_keyframes": "minimax_keyframes resized to target grid; minimax_refs unchanged"
   }
 }
