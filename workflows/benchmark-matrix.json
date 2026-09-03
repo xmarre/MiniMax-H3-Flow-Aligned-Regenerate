@@ -1,0 +1,206 @@
+{
+  "schema_version": 3,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, and fixed seeds.",
+  "seed_set": [
+    0,
+    1,
+    2
+  ],
+  "matrix_axes": {
+    "area_regimes": [
+      {
+        "id": "base_0p55mp",
+        "source_grid": [
+          54,
+          40
+        ],
+        "source_pixels": [
+          864,
+          640
+        ],
+        "source_megapixels": 0.55296,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      },
+      {
+        "id": "base_0p70mp",
+        "source_grid": [
+          62,
+          44
+        ],
+        "source_pixels": [
+          992,
+          704
+        ],
+        "source_megapixels": 0.698368,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      }
+    ],
+    "refine_denoise": [
+      {
+        "value": 0.25,
+        "role": "primary"
+      },
+      {
+        "value": 0.3,
+        "role": "secondary"
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "motion_scene_change",
+        "requirement": "difficult motion with at least one scene or shot change"
+      },
+      {
+        "id": "small_people_faces",
+        "requirement": "small or distant people/faces whose structure is visible in the final decode"
+      },
+      {
+        "id": "fine_text",
+        "requirement": "legible fine text or similarly high-frequency structured detail"
+      },
+      {
+        "id": "reference_heavy",
+        "requirement": "multiple image/video/reference inputs with prompt-dependent identity or composition constraints"
+      }
+    ]
+  },
+  "fixed": [
+    "continuum_chunks",
+    "loras",
+    "diffaid",
+    "untwist",
+    "sampler",
+    "scheduler",
+    "audio_lock",
+    "decode"
+  ],
+  "run_axis_rules": {
+    "A": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "B": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C6": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C5": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C4": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "D": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "E": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    }
+  },
+  "runs": [
+    {
+      "id": "A",
+      "mode": "native",
+      "generation_grid": "area_regime.target_grid",
+      "target_grid": "area_regime.target_grid"
+    },
+    {
+      "id": "B",
+      "mode": "learned_upscale_baseline",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "outer_steps": 6,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C6",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "outer_steps": 6,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C5",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "outer_steps": 5,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C4",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "outer_steps": 4,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "D",
+      "mode": "progressive_target_input",
+      "continuum_grid": "area_regime.target_grid",
+      "internal_source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "handoff_coordinate": 0.35
+    },
+    {
+      "id": "E",
+      "mode": "resolution_shift_only",
+      "generation_grid": "area_regime.target_grid",
+      "shift_reference_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "resolution_shift": "resolution_aware"
+    }
+  ],
+  "required_outputs": [
+    "workflow_json",
+    "metrics_json",
+    "decoded_media",
+    "decoded_sha256",
+    "sampler_timing",
+    "peak_vram",
+    "host_ram",
+    "review_sheet"
+  ]
+}
