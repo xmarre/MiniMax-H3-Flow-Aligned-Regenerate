@@ -322,7 +322,7 @@
   "resolution_shift_smoke": {
     "id": "E10-smoke",
     "status": "ready_for_matched_pair",
-    "purpose": "Isolate the SD3-derived relative resolution shift on direct target-grid H3 sampling while retaining the user's MP -> Scale(1.20) automatic geometry path.",
+    "purpose": "Isolate the SD3-derived relative resolution shift on direct target-grid H3 sampling while preserving the user's normal MP-driven base geometry and exactly mirroring the downstream refine node's scale=1.20 target before sampler 1.",
     "research_basis": {
       "h3_reference": "MiniMax-H3 H3-Base is documented as 768p with shorter side 768 by default.",
       "reference_geometry_rule": "source_width=source_height=0 auto-derives the pinned H3 native canvas from the connected target aspect ratio (768px short edge, 768*1344 area cap, 32px alignment).",
@@ -358,9 +358,13 @@
       "relative_shift_factor": 1.163328557774343,
       "native_h3_video_shift": 12,
       "effective_video_shift_strength_1": 13.959942693292117,
-      "note": "896x928 target and 768x800 reference are the current example. E executes direct target-grid sampling; Scale(1.20) supplies geometry only and the learned Latent Upscale Refine node is bypassed.",
-      "dynamic_target_source": "existing MP sizing -> Scale node at 1.20",
-      "manual_per_image_dimensions": false
+      "note": "Current example: MP base 736x768 resolves through the exact downstream-refine sizing semantics to direct target 896x928; 768x800 is then auto-derived as the H3-native resolution reference. The actual learned Latent Upscaler + Refine node is bypassed.",
+      "dynamic_target_source": "existing MP width/height -> H3RefineTargetGeometry(scale=1.20, align=32, keep_proportion=true)",
+      "manual_per_image_dimensions": false,
+      "current_example_mp_base_pixels_wh": [
+        736,
+        768
+      ]
     },
     "common": {
       "outer_steps": 10,
@@ -373,6 +377,8 @@
       "run_storage": "off",
       "vae": "standard MiniMaxH3VideoVAE",
       "keep_identical": [
+        "H3RefineTargetGeometry scale/align/proportion",
+        "MP base geometry",
         "seed",
         "prompt",
         "references",
@@ -387,8 +393,9 @@
         "decode"
       ],
       "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON",
-      "target_geometry": "existing MP -> Scale(1.20) outputs",
-      "scale_node_execution_role": "geometry only"
+      "target_geometry": "existing MP outputs -> H3RefineTargetGeometry(scale=1.20)",
+      "scale_node_execution_role": "none; scale=1.20 normally lives inside the downstream refine node, so E mirrors its geometry in H3RefineTargetGeometry before Continuum",
+      "geometry_helper": "H3RefineTargetGeometry; geometry only, no learned upscale/refine"
     },
     "runs": [
       {
@@ -396,10 +403,10 @@
         "resolution_sigma_mode": "off",
         "reference_width": 0,
         "reference_height": 0,
-        "target_width": "Scale.width",
-        "target_height": "Scale.height",
+        "target_width": "H3RefineTargetGeometry.target_width",
+        "target_height": "H3RefineTargetGeometry.target_height",
         "strength": 0,
-        "role": "exact SIGMAS parity control through the same Resolution-Aware Sigmas node; target geometry comes from MP -> Scale(1.20)",
+        "role": "exact SIGMAS parity control on the direct post-refine-size target; target canvas comes from MP base -> geometry-only mirror of refine scale 1.20",
         "reference_mode": "h3_native_auto"
       },
       {
@@ -407,12 +414,12 @@
         "resolution_sigma_mode": "resolution_aware",
         "reference_width": 0,
         "reference_height": 0,
-        "target_width": "Scale.width",
-        "target_height": "Scale.height",
+        "target_width": "H3RefineTargetGeometry.target_width",
+        "target_height": "H3RefineTargetGeometry.target_height",
         "strength": 1,
         "expected_extra_shift_factor": 1.163328557774343,
         "expected_effective_video_shift": 13.959942693292117,
-        "role": "single analytic SD3-derived relative remap candidate; target geometry comes from MP -> Scale(1.20), native reference auto-resolves from target aspect",
+        "role": "single analytic SD3-derived relative remap candidate on the same direct post-refine-size target; native reference auto-resolves from that target aspect",
         "reference_mode": "h3_native_auto"
       }
     ],
