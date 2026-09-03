@@ -243,6 +243,8 @@ class H3FlowTrajectory:
             run = candidates[-1]
             if not run.complete:
                 raise RuntimeError("latest matching trajectory is incomplete")
+            if not any(sample.provenance == "actual" for sample in run.samples):
+                raise RuntimeError("latest matching trajectory has no exact anchors")
             return run
 
     def clear(self) -> None:
