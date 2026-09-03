@@ -575,6 +575,7 @@ def test_raw_conditioning_signature_matches_cfg_guider_conversion():
                     "model_conds": {},
                     "minimax_keyframes": [{"latent": keyframe}],
                     "tag": "chunk",
+                    "uuid": "fresh-runtime-only-uuid",
                 }
             ]
         }
