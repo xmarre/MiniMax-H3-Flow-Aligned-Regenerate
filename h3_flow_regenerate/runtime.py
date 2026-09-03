@@ -693,13 +693,25 @@ def _high_stage_contract(guider: Any):
         raise RuntimeError("progressive handoff requires mutable model options")
     transformer = options.setdefault("transformer_options", {})
     previous = transformer.get("h3_refinement")
-    transformer["h3_refinement"] = {
+    request = {
         "api": 1,
         "active": True,
         "min_actual_prefix_steps": 1,
         "sigma_reference": 1.0,
         "source": "h3_flow_progressive_handoff",
     }
+    if previous is not None:
+        if not isinstance(previous, dict):
+            raise RuntimeError("existing h3_refinement contract is not a dictionary")
+        conflicts = {
+            key: (previous[key], value)
+            for key, value in request.items()
+            if key in previous and previous[key] != value
+        }
+        if conflicts:
+            raise RuntimeError(f"existing h3_refinement contract conflicts with progressive handoff: {conflicts}")
+        request = {**previous, **request}
+    transformer["h3_refinement"] = request
     try:
         yield
     finally:
