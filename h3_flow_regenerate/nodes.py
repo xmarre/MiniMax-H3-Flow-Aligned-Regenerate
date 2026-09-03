@@ -65,6 +65,7 @@ class H3TrajectoryCapture:
             capture_enabled=True,
             capture_forecasts=capture_forecasts,
             clear_guidance_conditioning_signature=True,
+            clear_guidance_run_id=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -135,6 +136,7 @@ class H3FlowAlignedRegenerate:
             capture_forecasts=False,
             guidance_conditioning_signature=source_signature,
             clear_guidance_conditioning_signature=source_signature is None,
+            clear_guidance_run_id=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -192,6 +194,14 @@ class H3FlowAlignedRefineState:
         )
         metrics = metrics or H3FlowMetrics()
         source_signature = conditioning_signature_from_conditioning(positive)
+        source_binding = (getattr(model, "model_options", None) or {}).get(FLOW_BINDING_KEY)
+        source_run_id = source_binding.captured_run_id if isinstance(source_binding, FlowBinding) else None
+        if source_run_id is None:
+            raise RuntimeError(
+                "H3 Continuum refine_state MODEL has no captured trajectory provenance. "
+                "Ensure MiniMax H3 Trajectory Capture is the final MODEL patch before Continuum "
+                "and that Flow-Aligned Refine State uses the same H3_FLOW_TRAJECTORY."
+            )
         patched_model, _ = patch_flow_model(
             model,
             trajectory=trajectory,
@@ -200,6 +210,7 @@ class H3FlowAlignedRefineState:
             capture_enabled=False,
             capture_forecasts=False,
             guidance_conditioning_signature=source_signature,
+            guidance_run_id=source_run_id,
             metrics=metrics,
         )
         patched_state = dict(refine_state)
@@ -284,6 +295,7 @@ class H3ProgressiveHandoff:
             capture_enabled=True,
             capture_forecasts=False,
             clear_guidance_conditioning_signature=True,
+            clear_guidance_run_id=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -366,6 +378,7 @@ class H3ProgressiveTargetInputHandoff:
             capture_enabled=True,
             capture_forecasts=False,
             clear_guidance_conditioning_signature=True,
+            clear_guidance_run_id=True,
             metrics=metrics,
         )
         return patched, metrics
