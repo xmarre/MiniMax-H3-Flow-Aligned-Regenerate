@@ -81,6 +81,7 @@ class H3FlowAlignedRegenerate:
             },
             "optional": {
                 "source_conditioning": ("CONDITIONING",),
+                "source_negative": ("CONDITIONING",),
                 "metrics": ("H3_FLOW_METRICS",),
             },
         }
@@ -100,11 +101,14 @@ class H3FlowAlignedRegenerate:
         consistency_weight,
         low_frequency_cutoff,
         source_conditioning=None,
+        source_negative=None,
         metrics=None,
     ):
         metrics = metrics or H3FlowMetrics()
+        if source_negative is not None and source_conditioning is None:
+            raise ValueError("source_negative requires source_conditioning")
         source_signature = (
-            conditioning_signature_from_conditioning(source_conditioning)
+            conditioning_signature_from_conditioning(source_conditioning, source_negative)
             if source_conditioning is not None
             else None
         )
