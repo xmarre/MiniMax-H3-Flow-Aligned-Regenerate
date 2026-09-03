@@ -213,6 +213,9 @@ fresh-lifetime boundaries instead of reporting an unverified solver-reset boolea
 ### Reset and exact-anchor contracts
 
 - **SA/PECE/SEEDS:** separate sampler invocations prevent old-grid history crossing.
+- **Inpaint sampler options:** the exact probe preserves the selected sampler's KSampler-level
+  `inpaint_options` (including deterministic `random` inpaint noise), so masked-state evaluation
+  uses the same native inpaint policy as the low stage rather than silently reverting to defaults.
 - **Spectrum:** separate outer executions end the low runtime and create the high runtime.
   Explicit Spectrum provenance is authoritative: an exact handoff probe that is reported as a forecast
   fails closed rather than being relabeled as an actual anchor.
