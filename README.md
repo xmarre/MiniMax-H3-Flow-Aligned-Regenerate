@@ -184,7 +184,10 @@ the probe is not a video-only schedule modifier and requires decoded-audio valid
 Runtime events distinguish H3 transformer calls from Spectrum forecasts and record sigma, the
 unshifted coordinate, sampler topology, progressive low/probe/high stage, packed layout rows,
 trajectory transactions, guidance correction magnitude/time, handoff decisions, exact probes,
-reset/re-anchor evidence, and attention fallbacks. Use the
+reset/re-anchor evidence, and attention fallbacks. **Metrics JSON** has a required wildcard **after**
+input: connect it to the final sampler/decode artifact for that path so Comfy cannot snapshot the
+mutable metrics sink before generation has executed. Attention Lab also rebuilds its model/metrics
+closure for every prompt instead of reusing cumulative diagnostic state from Comfy's node cache. Use the
 [benchmark protocol](docs/BENCHMARKS.md) and [machine-readable matrix](workflows/benchmark-matrix.json)
 for matched runs. The `workflows/` directory also includes two-pass and progressive graph overlays.
 Decoded video and audio—not preview frames or logs—are the quality gate.
