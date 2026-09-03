@@ -70,6 +70,7 @@ component and is used upstream when desired.
 | MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift | Off |
 | MiniMax H3 Reference Budget | Token diagnostics and direct-reference-only cap | Native |
 | MiniMax H3 Attention Lab | Sampled diagnostics and guarded H3-local attention | Native |
+| MiniMax H3 Runtime Metrics Probe | Passive sampler/model-call instrumentation without capture/guidance | On demand |
 | MiniMax H3 Metrics JSON | Structured counters/events for benchmark capture | On demand |
 
 ### Two-pass flow-aligned use
