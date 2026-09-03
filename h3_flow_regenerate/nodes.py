@@ -79,7 +79,10 @@ class H3FlowAlignedRegenerate:
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
             },
-            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+            "optional": {
+                "source_conditioning": ("CONDITIONING",),
+                "metrics": ("H3_FLOW_METRICS",),
+            },
         }
 
     RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
@@ -96,9 +99,15 @@ class H3FlowAlignedRegenerate:
         acceleration_weight,
         consistency_weight,
         low_frequency_cutoff,
+        source_conditioning=None,
         metrics=None,
     ):
         metrics = metrics or H3FlowMetrics()
+        source_signature = (
+            conditioning_signature_from_conditioning(source_conditioning)
+            if source_conditioning is not None
+            else None
+        )
         guidance = GuidanceConfig(
             mode=guidance_mode,
             direction_weight=direction_weight,
@@ -113,7 +122,8 @@ class H3FlowAlignedRegenerate:
             clear_progressive=True,
             capture_enabled=False,
             capture_forecasts=False,
-            clear_guidance_conditioning_signature=True,
+            guidance_conditioning_signature=source_signature,
+            clear_guidance_conditioning_signature=source_signature is None,
             metrics=metrics,
         )
         return patched, metrics
