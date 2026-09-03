@@ -53,13 +53,16 @@ def test_refine_scale_target_matches_current_continuum_geometry():
     ],
 )
 def test_refine_scale_target_matches_lbh_alignment_semantics(base_width, base_height, expected):
-    assert h3_refine_scale_target_canvas(
-        base_width,
-        base_height,
-        1.20,
-        align=32,
-        keep_proportion=True,
-    ) == expected
+    assert (
+        h3_refine_scale_target_canvas(
+            base_width,
+            base_height,
+            1.20,
+            align=32,
+            keep_proportion=True,
+        )
+        == expected
+    )
 
 
 def test_refine_scale_target_rejects_invalid_inputs():
