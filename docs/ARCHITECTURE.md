@@ -107,17 +107,15 @@ t' = f_{12}^{-1}(\sigma'_v)=f_\alpha(t),
 \sigma'_a=f_3(t').
 \]
 
-Therefore the SIGMAS-only experiment moves the **shared AV coordinate** and changes audio timing as
-well. A video-only shift would require a different joint-state formulation and is intentionally not
-smuggled into this probe. Decoded audio is part of the E pass/fail gate.
+Therefore the refine SIGMAS experiment moves the **shared AV coordinate** inside the H3 model. E keeps
+the integrated refine node at `lock_audio=true`: it protects/zeroes the audio refinement path and
+restores sampler-1 audio after sampling, so final audio should remain exact even though internal audio
+tokens are evaluated at the remapped shared coordinate.
 
-The supplied SA-Solver-PECE path remains coherent under this remap. Pinned ComfyUI builds its default
-SA stochastic interval from `model_sampling.percent_to_sigma(0.2/0.8)` and evaluates that gate against
-the supplied `sigmas[i+1]`; RefDelta forwards the default `tau_func` contract to native SA-Solver.
-Therefore E1 may move which *outer index* lies inside the stochastic interval, but it does so because
-the model's effective shared time has moved. That is part of the resolution-time remap, not an
-independent sampler knob. Spectrum likewise sees the remapped coordinates, so its exact/forecast split
-is recorded rather than forced to match E0.
+The existing refine sampler and scheduler are held fixed between E0 and E1. Any sampler or Spectrum
+policy that depends on the supplied sigma coordinates may legitimately change its internal decisions
+under E1; record those decisions rather than forcing parity. The base Continuum sampler is upstream of
+the remap and must remain identical between E0 and E1.
 
 The node diagnostics expose the relative area ratio, extra shift factor, native video shift, effective
 video shift, and shared-AV status. Analytic tests cover exact-off parity, endpoint/monotonicity,
