@@ -1,7 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Replace each Continuum chunk's full-base-plus-refine sampler pair with one split sampler path",
+  "purpose": "Replace each Continuum chunk's base-plus-separate-refine path with a target-sized split sampler whose early H3 stage runs internally at the base grid",
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "widgets": {
+      "width": 1024,
+      "height": 768,
+      "run_storage": "Off"
+    },
+    "note": "Continuum must remain configured on the final grid so chunk/session/native-mask state is 64x48 across the whole sequence."
+  },
   "shared_handle": {
     "node": "H3FlowTrajectory",
     "widgets": {
@@ -10,44 +19,46 @@
     }
   },
   "model_patch": {
-    "node": "H3ProgressiveHandoff",
+    "node": "H3ProgressiveTargetInputHandoff",
     "inputs": {
       "trajectory": "shared_handle"
     },
     "widgets": {
-      "target_mode": "pixels",
-      "scale": 1.2,
-      "target_width": 1024,
-      "target_height": 768,
+      "source_mode": "pixels",
+      "source_scale": 0.84,
+      "source_width": 864,
+      "source_height": 640,
       "handoff_coordinate": 0.35,
       "handoff_selection": "fixed",
       "guidance_mode": "direction",
       "direction_weight": 0.25
     },
-    "placement": "after all chunk-local MODEL patches and before the existing base KSampler"
+    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the Continuum MODEL input"
   },
   "sampler": {
     "reuse_existing_sampler_and_full_sigma_schedule": true,
-    "remove_separate_high_resolution_refine_sampler": true,
+    "remove_separate_learned_upscale_and_high_resolution_refine": true,
     "expected_visible_extra_nfe": "one low-grid exact handoff probe",
     "high_grid_actual_anchor": "mandatory"
   },
   "invariants": {
-    "source_latent_wh": [
-      54,
-      40
-    ],
-    "target_latent_wh": [
+    "continuum_input_and_output_latent_wh": [
       64,
       48
+    ],
+    "internal_low_stage_latent_wh": [
+      54,
+      40
     ],
     "target_pixels": [
       1024,
       768
     ],
-    "audio": "packed_state_preserved_at_handoff",
-    "decoded_media_required": true,
-    "denoise_mask": "video mask resized on single-channel target grid; audio mask preserved; latent_image transferred consistently",
-    "target_keyframes": "minimax_keyframes resized to target grid; minimax_refs unchanged"
+    "audio": "target-grid audio noise/latent/mask preserved; no spatial transform",
+    "native_masked_continuation": "previous target-grid context remains exact in Continuum; only the private low-stage copy is downscaled",
+    "denoise_mask": "target mask retained for high stage; private single-channel video mask resized only for low/probe",
+    "target_keyframes": "target originals retained for high stage; private copies resized only for low/probe; minimax_refs unchanged",
+    "run_storage": "off for first media validation; persistence must be validated separately before enabling",
+    "decoded_media_required": true
   }
 }
