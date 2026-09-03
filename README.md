@@ -236,7 +236,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. The prior temporal-correspondence media runs are confounded by the accidental TensorRT VAE `w4a16_awq` decoder and cannot support a temporal-quality verdict; one clean v2 rerun with the corrected VAE is pending. Resolution-shift-only validation remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. Earlier TensorRT-`w4a16_awq` temporal runs remain confounded, while the clean standard-VAE temporal-v2 rerun is a weak/tentative positive (good media, maybe slightly better than the non-temporal control). Resolution-shift-only E10 validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
