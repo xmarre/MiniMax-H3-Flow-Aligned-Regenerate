@@ -78,6 +78,11 @@ def main() -> None:
         'temp["uuid"] = uuid.uuid4()',
     )
     require(
+        args.comfy / "execution.py",
+        'elif hasattr(class_def, "IS_CHANGED")',
+        'node["is_changed"] = float("NaN")',
+    )
+    require(
         args.comfy / "comfy/model_patcher.py",
         "def add_callback_with_key(",
         "def remove_callbacks_with_key(",
