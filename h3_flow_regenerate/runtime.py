@@ -334,6 +334,23 @@ def _active_spectrum_runtime(guider: Any) -> Any | None:
     return runtime
 
 
+def _active_spectrum_step(runtime: Any) -> tuple[str, str, int] | None:
+    step_id = getattr(runtime, "active_step_id", None)
+    if step_id is None:
+        return None
+    step = getattr(runtime, "_step", None)
+    if step is None or int(getattr(step, "step_id", -1)) != int(step_id):
+        raise RuntimeError("Spectrum H3 active-step provenance is internally inconsistent")
+    mode = getattr(step, "mode", None)
+    phase = getattr(runtime, "active_solver_phase", None)
+    outer = getattr(runtime, "active_policy_step_id", None)
+    if mode not in {"actual", "forecast"} or phase is None or outer is None:
+        raise RuntimeError(
+            "Spectrum H3 active-step provenance is incomplete; refusing to misclassify trajectory samples"
+        )
+    return str(mode), str(phase), int(outer)
+
+
 def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     guider = executor.class_obj
     binding = _resolve_binding(guider)
@@ -360,15 +377,22 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
+    spectrum_active_step = (
+        _active_spectrum_step(spectrum_runtime) if spectrum_runtime is not None else None
+    )
     spectrum_completed_after = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
     spectrum_completed_here = (
         spectrum_runtime is not None
+        and spectrum_active_step is None
         and spectrum_completed_after is not None
         and spectrum_completed_after != spectrum_completed_before
     )
-    if spectrum_completed_here:
+    if spectrum_active_step is not None:
+        active_mode, _, _ = spectrum_active_step
+        actual = active_mode == "actual"
+    elif spectrum_completed_here:
         completed_mode = getattr(spectrum_runtime, "last_completed_mode", None)
         if completed_mode == "actual":
             actual = True
@@ -404,7 +428,9 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             fallback_outer, fallback_phase = active.phases[active.call_index]
         else:
             fallback_outer, fallback_phase = active.call_index, "unclassified"
-        if spectrum_completed_here:
+        if spectrum_active_step is not None:
+            _, phase, outer = spectrum_active_step
+        elif spectrum_completed_here:
             phase = fallback_phase
             outer = fallback_outer
         else:
