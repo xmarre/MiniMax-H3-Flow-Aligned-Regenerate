@@ -169,8 +169,11 @@ target-grid** experiment:
 - Continuum Run Storage off.
 
 Wire **MiniMax H3 Resolution-Aware Sigmas** directly between the existing SA-Solver scheduler SIGMAS
-output and Continuum's SIGMAS input. Keep the MODEL chain unchanged
-(DiffAid -> Untwist -> Spectrum -> Continuum).
+output and Continuum's SIGMAS input. On the MODEL path keep DiffAid -> Untwist -> Spectrum, then insert
+**MiniMax H3 Runtime Metrics Probe** immediately before Continuum. Connect its metrics output to
+**MiniMax H3 Metrics JSON**. The probe is observational: it installs the existing call/layout metrics
+wrappers but enables no trajectory capture, guidance, progressive handoff, or attention change. This
+keeps E's 38-call/NFE/forecast audit available without contaminating the schedule experiment.
 
 Run **E0-direct-control** first through the same node with:
 
