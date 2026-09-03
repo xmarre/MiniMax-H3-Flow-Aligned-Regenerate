@@ -462,7 +462,8 @@ class H3ResolutionAwareSigmas:
                         "tooltip": "Direct relative shift factor for controlled research only.",
                     },
                 ),
-            }
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
 
     RETURN_TYPES = ("SIGMAS", "H3_FLOW_DIAGNOSTICS")
@@ -470,7 +471,18 @@ class H3ResolutionAwareSigmas:
     FUNCTION = "map"
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
 
-    def map(self, sigmas, mode, source_width, source_height, target_width, target_height, strength, calibrated_factor):
+    def map(
+        self,
+        sigmas,
+        mode,
+        source_width,
+        source_height,
+        target_width,
+        target_height,
+        strength,
+        calibrated_factor,
+        metrics=None,
+    ):
         source_area = source_width * source_height
         target_area = target_width * target_height
         mapped = resolution_aware_sigmas(
@@ -487,7 +499,7 @@ class H3ResolutionAwareSigmas:
             effective_factor = float(calibrated_factor)
         else:
             effective_factor = resolution_shift_factor(source_area, target_area, strength)
-        return mapped, {
+        diagnostics = {
             "mode": mode,
             "source_area": source_area,
             "target_area": target_area,
@@ -502,6 +514,29 @@ class H3ResolutionAwareSigmas:
             ),
             "shared_av_coordinate": True,
         }
+        if metrics is not None:
+            delta = (mapped.detach().to(device="cpu", dtype=torch.float64) - sigmas.detach().to(device="cpu", dtype=torch.float64)).abs()
+            metrics.event(
+                "resolution_sigma_map",
+                mode=mode,
+                source_width=int(source_width),
+                source_height=int(source_height),
+                target_width=int(target_width),
+                target_height=int(target_height),
+                strength=float(strength),
+                calibrated_factor=float(calibrated_factor),
+                source_area=int(source_area),
+                target_area=int(target_area),
+                area_ratio=float(diagnostics["area_ratio"]),
+                extra_shift_factor=float(effective_factor),
+                base_video_shift=float(H3_VIDEO_SHIFT),
+                effective_video_shift=float(H3_VIDEO_SHIFT * effective_factor),
+                shared_av_coordinate=True,
+                sigma_points=int(sigmas.numel()),
+                max_abs_sigma_delta=float(delta.max().item()) if delta.numel() else 0.0,
+                exact_identity=bool(torch.equal(mapped, sigmas)),
+            )
+        return mapped, diagnostics
 
     DESCRIPTION = (
         "Experimental H3 shared-AV SIGMAS remap. In resolution_aware mode, source dimensions "
