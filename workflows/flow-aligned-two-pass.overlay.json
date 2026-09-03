@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "kind": "comfyui_workflow_overlay",
+  "purpose": "Apply flow-aligned guidance to each current Continuum V3.4 base-plus-integrated-refine chunk",
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "required_widget": {
+      "emit_refine_conditioning": true,
+      "run_storage": "Off"
+    }
+  },
+  "shared_handle": {
+    "node": "H3FlowTrajectory",
+    "widgets": {
+      "storage": "system_ram",
+      "max_runs": 16
+    }
+  },
+  "base_model_patch": {
+    "node": "H3TrajectoryCapture",
+    "inputs": {
+      "trajectory": "shared_handle"
+    },
+    "widgets": {
+      "capture_forecasts": false
+    },
+    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the H3 Continuum Sampler V3.4 MODEL input"
+  },
+  "refine_state_patch": {
+    "node": "H3FlowAlignedRefineState",
+    "inputs": {
+      "trajectory": "shared_handle",
+      "refine_state": "matching Continuum chunk refine_state",
+      "metrics": "base_model_patch.metrics"
+    },
+    "widgets": {
+      "guidance_mode": "direction",
+      "direction_weight": 0.35,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25
+    },
+    "placement": "between each Continuum refine_state output and MiniMax H3 Latent Upscaler + Refine (3D).refine_state"
+  },
+  "integrated_refine": {
+    "node": "MiniMax H3 Latent Upscaler + Refine (3D)",
+    "keep_existing_inputs": [
+      "video_latents",
+      "audio_latents",
+      "RandomNoise",
+      "SAMPLER",
+      "partial SIGMAS"
+    ],
+    "note": "The flow adapter patches the public refine_state.model and preserves refine_state.positive. Continuum's captured sampler mask is not emitted in public refine_state; it is restored on the parallel video/audio LATENT outputs, which the integrated refiner uses for its actual denoise mask and which therefore remain direct."
+  },
+  "invariants": {
+    "audio": "locked_by_existing_refine_graph",
+    "target_pixels": [
+      1024,
+      768
+    ],
+    "target_latent_wh": [
+      64,
+      48
+    ],
+    "forecast_anchors": false,
+    "decoded_media_required": true,
+    "trajectory_history": "max_runs >= physical refine item count; default 16 covers current Continuum maximum",
+    "run_storage": "off for initial trajectory/refine validation; reused chunks do not replay base trajectory capture",
+    "metrics": "feed Trajectory Capture metrics into Flow-Aligned Refine State so base/refine events share one sink"
+  }
+}

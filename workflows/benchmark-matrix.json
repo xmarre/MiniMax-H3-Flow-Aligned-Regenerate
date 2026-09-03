@@ -1,0 +1,254 @@
+{
+  "schema_version": 3,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, fixed seeds, and a 7-step first pass. Refine-step reduction is the only B/C7/C6/C5 step-count variable.",
+  "seed_set": [
+    0,
+    1,
+    2
+  ],
+  "matrix_axes": {
+    "area_regimes": [
+      {
+        "id": "base_0p55mp",
+        "source_grid": [
+          54,
+          40
+        ],
+        "source_pixels": [
+          864,
+          640
+        ],
+        "source_megapixels": 0.55296,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      },
+      {
+        "id": "base_0p70mp",
+        "source_grid": [
+          62,
+          44
+        ],
+        "source_pixels": [
+          992,
+          704
+        ],
+        "source_megapixels": 0.698368,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      }
+    ],
+    "refine_denoise": [
+      {
+        "value": 0.25,
+        "role": "primary"
+      },
+      {
+        "value": 0.3,
+        "role": "secondary"
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "motion_scene_change",
+        "requirement": "difficult motion with at least one scene or shot change"
+      },
+      {
+        "id": "small_people_faces",
+        "requirement": "small or distant people/faces whose structure is visible in the final decode"
+      },
+      {
+        "id": "fine_text",
+        "requirement": "legible fine text or similarly high-frequency structured detail"
+      },
+      {
+        "id": "reference_heavy",
+        "requirement": "multiple image/video/reference inputs with prompt-dependent identity or composition constraints"
+      }
+    ]
+  },
+  "fixed": [
+    "continuum_chunks",
+    "loras",
+    "diffaid",
+    "untwist",
+    "sampler",
+    "scheduler",
+    "audio_lock",
+    "decode"
+  ],
+  "run_axis_rules": {
+    "A": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "B": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C7": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C6": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C5": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "D": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "E": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    }
+  },
+  "runs": [
+    {
+      "id": "A",
+      "mode": "native",
+      "generation_grid": "area_regime.target_grid",
+      "target_grid": "area_regime.target_grid"
+    },
+    {
+      "id": "B",
+      "mode": "learned_upscale_baseline",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C7",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C6",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 6,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C5",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 5,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "D",
+      "mode": "progressive_target_input",
+      "continuum_grid": "area_regime.target_grid",
+      "internal_source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "handoff_coordinate": 0.35
+    },
+    {
+      "id": "E",
+      "mode": "resolution_shift_only",
+      "generation_grid": "area_regime.target_grid",
+      "shift_reference_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "resolution_shift": "resolution_aware"
+    }
+  ],
+  "required_outputs": [
+    "workflow_json",
+    "metrics_json",
+    "decoded_media",
+    "decoded_sha256",
+    "sampler_timing",
+    "peak_vram",
+    "host_ram",
+    "review_sheet"
+  ],
+  "step_reduction_gate": {
+    "baseline": "C7",
+    "status": "complete",
+    "validated_smoke": [
+      "C7",
+      "C6",
+      "C5",
+      "C4"
+    ],
+    "exploratory_lower_step": "C4",
+    "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
+    "next_feature_path": "D"
+  },
+  "feature_path_smoke": {
+    "id": "D-smoke",
+    "mode": "progressive_target_input",
+    "purpose": "Validate progressive topology against the already-used difficult-motion workflow before spending the formal matrix.",
+    "continuum_grid": [
+      58,
+      58
+    ],
+    "internal_source_grid": [
+      48,
+      48
+    ],
+    "target_pixels": [
+      928,
+      928
+    ],
+    "internal_source_pixels": [
+      768,
+      768
+    ],
+    "outer_steps": 7,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "guidance_mode": "direction",
+    "direction_weight": 0.25,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "remove_separate_learned_refine": true,
+    "run_storage": "off"
+  }
+}
