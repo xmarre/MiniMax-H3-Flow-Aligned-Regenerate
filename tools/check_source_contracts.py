@@ -110,12 +110,20 @@ def main() -> None:
     )
     require(
         args.spectrum / "comfyui_spectrum_h3/sampling.py",
+        'BINDING_KEY = "spectrum_h3_binding"',
         'ACTUAL_KEY = "spectrum_h3_actual"',
         'SOLVER_PHASE_KEY = "spectrum_h3_solver_phase"',
         'OUTER_STEP_ID_KEY = "spectrum_h3_outer_step_id"',
+        "class SpectrumH3Binding:",
         "def copy_model_options_with_step(",
         'transformer_options[ACTUAL_KEY] = bool(decision["actual"])',
         "return executor(x, timestep, patched, seed)",
+    )
+    require(
+        args.spectrum / "comfyui_spectrum_h3/runtime.py",
+        "def last_completed_mode(",
+        "def last_completed_step_id(",
+        "def active_run_id(",
     )
     require(
         args.continuum / "model_patch.py",
