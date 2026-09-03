@@ -8,7 +8,11 @@ import torch
 from .attention import AttentionConfig
 from .comfy_compat import patch_flow_model
 from .contracts import H3FlowTrajectory
-from .geometry import h3_native_reference_canvas, h3_refine_scale_target_canvas, pixel_to_safe_latent
+from .geometry import (
+    h3_native_reference_canvas,
+    h3_refine_scale_target_canvas,
+    pixel_to_safe_latent,
+)
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
