@@ -844,18 +844,12 @@ def _run_progressive(
             latent_shapes=latent_shapes,
         )
     binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
-    high_model_calls = [
-        event
-        for event in binding.metrics.events[high_event_start:]
-        if event.kind == "model_call"
-    ]
+    high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
     first_high_actual = None
     if high_model_calls:
         first_high_actual = bool(high_model_calls[0].fields.get("actual"))
         if not first_high_actual:
-            raise RuntimeError(
-                "progressive high stage did not begin with the required exact H3 model evaluation"
-            )
+            raise RuntimeError("progressive high stage did not begin with the required exact H3 model evaluation")
     binding.metrics.event(
         "handoff_complete",
         sigma=sigma,
