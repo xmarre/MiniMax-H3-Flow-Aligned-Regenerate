@@ -36,9 +36,7 @@ def test_resolution_node_reports_effective_shift_factor():
 
     assert off["extra_shift_factor"] == 1.0
     assert calibrated["extra_shift_factor"] == 2.5
-    assert derived["extra_shift_factor"] == pytest.approx(
-        resolution_shift_factor(864 * 640, 1024 * 768)
-    )
+    assert derived["extra_shift_factor"] == pytest.approx(resolution_shift_factor(864 * 640, 1024 * 768))
 
 
 def test_resolution_mapping_is_ordered_finite_and_exact_at_endpoints():
