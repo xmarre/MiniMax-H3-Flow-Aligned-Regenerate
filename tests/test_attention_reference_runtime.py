@@ -29,6 +29,7 @@ from h3_flow_regenerate.runtime import (
     _resize_packed_mask,
     _run_progressive,
     _sampler_phases,
+    _validate_progressive_sampler_state,
     conditioning_signature_from_conditioning,
     flow_predict_wrapper,
 )
@@ -862,6 +863,15 @@ def test_reference_budget_handles_thin_aspect_ratios():
     fitted = changed[0][1]["minimax_refs"][0]["latent"]
     assert fitted.shape[-2] == 2
     assert report.direct_video_rows_after <= 5
+
+
+def test_progressive_rejects_explicit_stateful_noise_sampler():
+    sampler = SimpleNamespace(
+        sampler_function=SimpleNamespace(__name__="sample_sa_solver"),
+        extra_options={"noise_sampler": object()},
+    )
+    with pytest.raises(ValueError, match="explicit sampler noise_sampler"):
+        _validate_progressive_sampler_state(sampler)
 
 
 def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
