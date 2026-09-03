@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 
 from .geometry import normalize_target_geometry, pack_streams, unpack_streams, validate_av
-from .guidance import initialization_alignment
+from .guidance import conditional_renoise_alignment
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 
@@ -204,7 +204,7 @@ def build_handoff_state(
         device=source_video.device,
         dtype=source_video.dtype,
     )
-    target_video = initialization_alignment(
+    target_video = conditional_renoise_alignment(
         x0_video,
         target_h=target_h,
         target_w=target_w,
