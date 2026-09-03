@@ -120,16 +120,26 @@ def test_conditioning_signature_isolates_interleaved_chunk_runs():
     trajectory.append(second, sample(2))
     trajectory.commit(second)
 
-    assert trajectory.select(
-        session_id="continuum",
-        chunk_id="0",
-        conditioning_signature="cond-a",
-    ).samples[0].video_x0.mean() == 1
-    assert trajectory.select(
-        session_id="continuum",
-        chunk_id="0",
-        conditioning_signature="cond-b",
-    ).samples[0].video_x0.mean() == 2
+    assert (
+        trajectory.select(
+            session_id="continuum",
+            chunk_id="0",
+            conditioning_signature="cond-a",
+        )
+        .samples[0]
+        .video_x0.mean()
+        == 1
+    )
+    assert (
+        trajectory.select(
+            session_id="continuum",
+            chunk_id="0",
+            conditioning_signature="cond-b",
+        )
+        .samples[0]
+        .video_x0.mean()
+        == 2
+    )
 
 
 def test_chunk_and_session_isolation():
