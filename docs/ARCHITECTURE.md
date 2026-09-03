@@ -146,63 +146,19 @@ correction, including direction plus acceleration, remains subject to the RMS gu
 separates direction and acceleration RMS ratios and records whether a call is exact or a Spectrum
 forecast so this interaction remains auditable.
 
-### Video-time correspondence guidance
+### Retired adjacent-frame transport experiment
 
-The `direction+temporal` experiment is intentionally separate from denoising-time acceleration.
-For the resolved exact low-grid clean estimate \(R\), adjacent video-latent frames are lightly
-spatially smoothed and matched inside a bounded local search window using channel-normalized cosine
-similarity. Both \(i\rightarrow i-1\) and \(i-1\rightarrow i\) maps are computed.
+An experimental H3-latent adjacent-frame nearest-neighbor transport path was evaluated twice on the
+matched D10 difficult-motion case and is **not part of the active runtime architecture**. The first
+version admitted ambiguous repetitive-texture matches and produced patterned grass. A second version
+made similarity/margin admission hard, required exact reverse-cycle consistency, and reused the
+resolved post-handoff anchor. Its temporal support collapsed to roughly 0.22% of candidate locations,
+yet the same visible grass pattern remained. Because decoded media failed twice, the transport code,
+public mode, widget, cache, and runtime telemetry were removed rather than left as a disabled feature.
 
-The first decoded-media smoke exposed an important ambiguity failure in repetitive texture. High
-absolute cosine similarity alone was not discriminative: grass matches had ~0.94-0.96 similarity but
-mean best-vs-second-best margins only ~0.0027-0.0038. The original implementation treated
-`temporal_min_margin` as a soft scaling term, so those ambiguous matches still transported detail.
-The result was visible repeated/patterned grass and worse motion artifacts.
-
-The current matcher therefore treats its confidence conditions as **admission gates**, not suggestions.
-A candidate must meet the configured minimum similarity and minimum uniqueness margin, and the
-forward/backward integer correspondence must satisfy the configured cycle tolerance. The default
-cycle tolerance is now zero latent cells. Rejected candidates contribute exactly zero temporal
-correction.
-
-For a trusted mapping from target frame \(i\) to neighbor \(j\), let \(W\) warp along that low-grid
-correspondence and let \(U\) transfer a low-grid residual to the target grid. The high-grid temporal
-target is
-
-\[
-P_i = W(\hat x^{HR}_{0,j}) + U\left(R_i - W(R_j)\right).
-\]
-
-Thus the neighbor contributes high-resolution detail while the low-resolution H3 prior supplies the
-same-reference structural innovation. The correction \(P_i-\hat x^{HR}_{0,i}\) is confidence weighted.
-Failed/ambiguous/cycle-inconsistent matches contribute zero instead of copying stale or repetitive
-content into regions treated as disoccluded.
-
-Previous- and next-frame estimates are accumulated symmetrically. When their summed confidence is
-below one, the correction remains attenuated; above one, the two estimates are normalized rather than
-double-counted. The result is non-recursive within a model call: warped neighbors come from the
-original current clean-state estimate, not from an already temporally corrected frame.
-
-Progressive handoff imposes one additional constraint. The low-grid capture stops at the exact handoff
-probe. Once the high-stage coordinate advances below the final low-grid anchor, there is no later
-low-grid trajectory sample to interpolate. Reference lookup therefore clamps to that final exact anchor
-(~0.4 in the D10 smoke). This is explicit rather than hidden: temporal cache identity is keyed by the
-**resolved reference coordinate**, so predictor/corrector calls at later requested coordinates reuse the
-same correspondence map instead of recomputing an identical one. Telemetry reports both
-`temporal_reference_coordinate` and `temporal_reference_clamped`.
-
-The ordinary direction term keeps its existing decaying high-stage schedule. Temporal transport is
-therefore still strongest at handoff and weakens toward the end even when its low-grid correspondence
-map is handoff-anchored.
-
-Correspondence is computed only from the captured H3 video clean-state latent. No external optical-flow
-network is loaded, audio is untouched, and no packed non-video tokens participate. The combined
-direction+temporal correction still passes through the same per-sample RMS guard.
-
-Telemetry exposes temporal RMS ratio, mean confidence, strict valid/disocclusion fractions, similarity
-and uniqueness-margin statistics, low-grid flow magnitude, cache-hit state, resolved reference
-coordinate, and clamp state. Structural telemetry can show that the mechanism is active and conservative;
-only decoded-media comparison establishes quality.
+The benchmark/research documents retain the negative result. Future temporal work must use a different
+formulation; the architecture does not assume that more nearest-neighbor threshold or weight tuning
+will make this path viable.
 
 Downsample consistency forms the low-grid residual before lifting it.
 
