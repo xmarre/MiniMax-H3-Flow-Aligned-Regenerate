@@ -87,13 +87,43 @@ additional denoising-time acceleration strength.
 
 ### D10 video-time correspondence gate
 
-HiFlow-style denoising-time acceleration is closed as neutral/inconclusive for the difficult-motion
-artifact class. The next isolated experiment changes the axis of guidance rather than its global
-strength: `direction+temporal` uses adjacent-frame correspondence in the exact low-resolution H3
-clean-state prior and refuses temporal copying where that correspondence is ambiguous or
-cycle-inconsistent.
+The first `direction+temporal` smoke (**D10-temporal-v1**) completed with the expected topology:
+38 logical / 28 actual / 10 Spectrum forecast calls, 22 low + 2 exact probes + 14 high. Both
+progressive sampler walls completed without failure, geometry remained 48x46 -> 58x56, the fixed
+handoff remained schedule index 6 / coordinate ~0.400000016 / sigma ~0.888888896, and no guidance
+correction hit the RMS clamp.
 
-Run one matched **D10-temporal** sample before tuning any correspondence thresholds:
+Decoded media **failed the quality gate**. The user observed a new repeated/patterned texture in parts
+of the grass and motion artifacts that were different and more broken than the accepted D10
+direction-only control. This is negative evidence for the v1 correspondence implementation, not a
+reason to tune the temporal weight upward.
+
+The telemetry exposed two concrete implementation problems:
+
+- per-chunk temporal similarity was high (~0.938 and ~0.959) but the best-vs-second-best match margin
+  was only ~0.00381 and ~0.00269, far below the configured `temporal_min_margin=0.02`;
+- v1 treated `temporal_min_margin` as a soft denominator rather than a rejection threshold, so
+  ambiguous repetitive-texture matches retained small nonzero weights. This produced nominal
+  `temporal_valid_fraction` values of ~0.460 and ~0.513 despite mean confidence of only ~0.056 and
+  ~0.048;
+- valid-flow magnitude averaged ~2.55-2.57 low-grid latent cells and reached the radius-4 diagonal
+  maximum ~5.657, which is implausibly aggressive for large portions of the grass/background and is
+  consistent with ambiguous repetitive-texture matching;
+- after the exact handoff probe, the captured low-grid trajectory has no support below coordinate
+  ~0.4. Requests at ~0.3/~0.2/~0.1 therefore clamp to the same ~0.4 clean-state reference. v1 keyed
+  its cache by the requested coordinate, needlessly recomputing the same correspondence map and
+  obscuring that the post-handoff temporal prior was frozen.
+
+The v2 fix is deliberately narrow rather than another weight sweep:
+
+- `temporal_min_margin` is now a **hard uniqueness gate**;
+- the default reverse-cycle tolerance is exact (0 latent cells) instead of allowing a one-cell
+  round-trip discrepancy;
+- cache identity uses the resolved reference coordinate, so all post-handoff calls that clamp to the
+  same exact anchor reuse one correspondence map;
+- telemetry reports the resolved temporal reference coordinate and whether it was clamped.
+
+Run exactly one matched **D10-temporal-v2** sample before any further temporal tuning:
 
 - 10 SA-Solver-PECE outer steps;
 - Target Input `source_mode=scale`, `source_scale=0.83`;
@@ -105,20 +135,16 @@ Run one matched **D10-temporal** sample before tuning any correspondence thresho
   decode as the accepted D10 direction-only reference;
 - Continuum Run Storage off.
 
-The temporal matcher is tensor-only guidance and should add **zero H3 NFEs**. The expected sampler
-topology therefore remains 38 logical / 28 actual / 10 Spectrum forecast calls across the two chunks,
-with 22 low + 2 exact probes + 14 high. Any topology change is a regression and invalidates the media
-comparison.
+The expected transformer topology remains 38 logical / 28 actual / 10 forecasts. On v2, post-handoff
+predictor calls below ~0.4 should normally report `temporal_reference_coordinate~=0.4`,
+`temporal_reference_clamped=true`, and `temporal_cache_hit=true` after the first map is built.
+The corrected `temporal_valid_fraction` should now describe only uniqueness- and cycle-valid matches,
+not every weakly weighted candidate.
 
-Inspect the temporal telemetry before interpreting the decode: temporal RMS must be nonzero on at
-least some high-stage calls; `temporal_valid_fraction`, confidence, similarity/margin, and flow
-magnitude must be finite; PECE same-coordinate correctors should report
-`temporal_cache_hit=true`. No universal coverage threshold is asserted before real H3 data exists.
-
-The primary media question is whether the fast-motion clothing and newly revealed grass/background
-artifacts improve **without** motion freezing, stale-content copying, or new temporal smearing.
-Shot-count/continuity changes are secondary because earlier matched runs already showed that shot
-structure can vary while overall quality remains acceptable.
+The media question is unchanged: fast-motion clothing and newly revealed grass/background must improve
+without motion freezing, stale-content copying, repeated texture, ghosting, or temporal smearing.
+If v2 still fails this gate, stop latent nearest-neighbor transport rather than continuing a parameter
+sweep.
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
