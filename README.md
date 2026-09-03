@@ -34,13 +34,13 @@ two-pass path has completed real decoded-media smoke validation through 7+4 refi
 correct Spectrum provenance and live guidance telemetry. Progressive Target Input has also completed
 the difficult-motion D10 smoke at 10 SA-Solver-PECE outer steps; decoded media is good/baseline-level,
 while the remaining fast-motion clothing/background disocclusion artifacts are not clearly improved by
-the tested HiFlow-style acceleration term. Two matched H3-latent adjacent-frame correspondence smokes
-also failed: v1 introduced patterned grass and worse/different motion artifacts, and conservative v2
-retained the same visible pattern even after strict uniqueness/cycle gating reduced temporal support to
-about 0.22% of candidate locations. That nearest-neighbor transport experiment is therefore retired
-rather than exposed as a selectable mode. Resolution-shift-only validation remains pending and is the
-next active feature path. The safe default for the schedule, reference budget, and attention lab remains
-`off`/`native`.
+the tested HiFlow-style acceleration term. Two temporal-correspondence media runs previously showed a
+patterned-grass artifact, but those media verdicts are now **invalid for attribution**: the workflow had
+accidentally switched to the TensorRT H3 VAE and compiled the `w4a16_awq` decoder. The user identified
+that decoder as the source of the pattern. The conservative temporal v2 implementation is therefore
+restored and awaits one clean matched rerun with the corrected VAE before any quality conclusion.
+Resolution-shift-only validation remains pending behind that rerun. The safe default for the schedule,
+reference budget, and attention lab remains `off`/`native`.
 
 ## Install
 
@@ -186,11 +186,16 @@ adaptation of the published image-generation method, not evidence that HiFlow's 
 unchanged to H3 video. Progressive nodes expose the acceleration, consistency, and low-frequency controls needed by their
 selectable guidance modes; a selected mode is never left with an inaccessible mode-specific weight.
 
-The attempted adjacent-frame H3-latent nearest-neighbor transport mode is intentionally **not** exposed.
-Both matched media smokes produced the same patterned-grass failure, including a conservative second
-implementation where strict uniqueness/cycle gating reduced valid temporal support to ~0.22%. The
-negative result is retained in the research/benchmark documentation rather than leaving a known-bad
-runtime mode available.
+`direction+temporal` is a video-time experiment rather than another denoising-time flow correction.
+It estimates bounded local adjacent-frame correspondences directly from the exact low-resolution H3
+clean-state video latent. The first temporal smoke revealed a real soft-confidence matcher defect, but its visible patterned-grass media result is now confounded by the unintended TensorRT VAE `w4a16_awq` decoder. The matcher fix is retained independently of that media result. The current implementation therefore treats minimum similarity and
+best-vs-second-best margin as hard admission gates and requires exact reverse-cycle consistency by
+default. Trusted regions may transport neighboring high-resolution detail plus the low-resolution
+trajectory's structural innovation; ambiguous/disoccluded regions receive no temporal copy and retain
+the ordinary same-time direction guidance. After progressive handoff, low-grid reference lookup
+necessarily clamps to the final exact anchor; the resolved coordinate/clamp state is now explicit and
+the correspondence cache follows that resolved anchor. The matcher has no RAFT/GMFlow dependency and
+adds no H3 transformer evaluations. Its 0.20 weight remains only a controlled smoke-test operating point, not a validated recommendation. The next media verdict must use the corrected VAE.
 
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
@@ -225,7 +230,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. Two adjacent-frame latent-correspondence smokes both produced the patterned-grass regression; that transport path is retired. Resolution-shift-only validation remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. The prior temporal-correspondence media runs are confounded by the accidental TensorRT VAE `w4a16_awq` decoder and cannot support a temporal-quality verdict; one clean v2 rerun with the corrected VAE is pending. Resolution-shift-only validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
