@@ -10,7 +10,7 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .reference import apply_reference_budget
-from .runtime import conditioning_signature_from_conditioning
+from .runtime import FLOW_BINDING_KEY, FlowBinding, conditioning_signature_from_conditioning
 from .sigma import resolution_aware_sigmas, resolution_shift_factor
 
 
