@@ -73,6 +73,12 @@ A sampler may finish while a diagnostic trajectory contains only Spectrum foreca
 recorded as complete sampling telemetry, but it is not selectable as a guidance source: selection requires
 at least one provenance=`actual` anchor and fails before the target sampler begins otherwise.
 
+ComfyUI's `ModelPatcher.clone()` recursively copies dict/list containers but leaves arbitrary objects
+shared by reference. The flow binding therefore installs an `ON_CLONE` callback: clones share only the
+intentional trajectory handle, immutable guidance config, and metrics sink, while receiving fresh
+capture transaction, selected-guidance-run, and guidance-state fields. This prevents downstream model
+branching (including Continuum's per-chunk MODEL clones) from sharing mutable execution state.
+
 Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
 The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
 a guided target pass cannot become the next source trajectory by accident. Forecast calls advance
