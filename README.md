@@ -40,8 +40,10 @@ complete. It preserved the exact D10 topology and removed the patterned-VAE arti
 good and judged **maybe slightly better than the non-temporal D10 control**, but the perceptual gain is
 small enough to remain tentative rather than promoted as a proven improvement. The conservative
 `direction+temporal` path is retained as an experimental candidate at temporal weight 0.20.
-Resolution-shift-only validation is now the next active feature path. The safe default for the schedule,
-reference budget, and attention lab remains `off`/`native`.
+Resolution-shift-only validation is now the next active feature path. Its E10 gate is defined as a
+direct-target 896x928 matched pair against an aspect-matched H3-Base 768p reference regime (768x800);
+the SD3-derived factor is composed with H3's native shift rather than replacing it. The safe default
+for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
 
@@ -203,7 +205,9 @@ direct latent-reference rows; already encoded Qwen3-VL tokens are measured and l
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
 an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware
 sigmas move H3's shared AV flow coordinate, so they also change the derived audio sigma schedule;
-the probe is not a video-only schedule modifier and requires decoded-audio validation.
+the probe is not a video-only schedule modifier and requires decoded-audio validation. For E10,
+`source_width/source_height` mean the analytic H3-Base/native reference regime, not a low-resolution
+pass; the current 896x928 target uses 768x800 as the 32px-aligned aspect-matched 768p reference.
 
 ## Metrics and benchmarking
 
@@ -212,7 +216,8 @@ unshifted coordinate, sampler topology, progressive low/probe/high stage, packed
 trajectory transactions, guidance correction magnitude/time, handoff decisions, exact probes,
 reset/re-anchor evidence, and attention fallbacks. Use the
 [benchmark protocol](docs/BENCHMARKS.md) and [machine-readable matrix](workflows/benchmark-matrix.json)
-for matched runs. The `workflows/` directory also includes two-pass and progressive graph overlays.
+for matched runs. The `workflows/` directory also includes two-pass, progressive, and
+resolution-shift-only graph overlays.
 Decoded video and audio—not preview frames or logs—are the quality gate.
 
 ## Development
