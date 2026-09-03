@@ -1033,6 +1033,29 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert handoff.fields["sampler_invocation_count"] == 3
     assert handoff.fields["history_boundary_count"] == 2
 
+    calls.clear()
+    callback_shapes.clear()
+    _run_progressive(
+        Executor(),
+        guider,
+        binding,
+        ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4, handoff_coordinate=0.3),
+        target_noise,
+        target_latent,
+        sampler,
+        sigmas,
+        packed_mask,
+        target_callback,
+        True,
+        7,
+        mutable_shapes,
+    )
+    second_handoff = [event for event in binding.metrics.events if event.kind == "handoff_complete"][-1]
+    assert second_handoff.fields["sampler_invocation_count"] == 3
+    assert second_handoff.fields["history_boundary_count"] == 2
+    assert binding.metrics.counters["progressive_sampler_invocations"] == 6
+    assert binding.metrics.counters["progressive_history_boundaries"] == 4
+
 
 def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):
     class KSampler:
