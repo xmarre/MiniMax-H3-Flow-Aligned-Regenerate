@@ -645,6 +645,13 @@ def _noise_argument(
     if latent_image is not None:
         if latent_image.shape != state.shape:
             raise ValueError("H3 latent_image and sampler state shapes differ")
+        # OUTER_SAMPLE wrappers run before CFGGuider.outer_sample moves the caller's
+        # latent_image/noise onto the model load device. A split sampler result has
+        # already passed through that boundary, so its raw state can be on CUDA while
+        # the original/private latent_image retained here is still on CPU. Reconstruct
+        # the sampler noise in the state domain, matching ComfyUI's inner-sampler
+        # device/dtype contract rather than assuming wrapper inputs were preloaded.
+        latent_image = latent_image.to(device=state.device, dtype=state.dtype)
         numerator = state - (1.0 - float(sigma)) * latent_image
     return numerator / (float(sigma) * noise_scale)
 
