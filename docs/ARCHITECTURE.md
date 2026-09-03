@@ -154,6 +154,12 @@ the high invocation. This second topology is required for Continuum: its session
 continuation contracts validate spatial geometry across chunks and therefore must never observe a
 54x40 output chunk when the sequence is configured for 64x48.
 
+Caller callback geometry is also fenced at the target-input boundary. ComfyUI creates its packed AV
+callback closure against the caller-visible target shapes before OUTER_SAMPLE wrappers execute, so
+private low-stage callback tensors are spatially lifted back to the target video grid before that
+closure is invoked. This keeps previews and any callback consumer from trying to unpack a private
+source-grid tensor with target-grid metadata.
+
 Before each independent low/probe/high outer invocation, raw conditioning is reconstructed from
 `guider.original_conds`; current ComfyUI can then resolve percentage areas, masks, and other
 shape-dependent conditions against that stage's live geometry. Source-input mode resizes target
