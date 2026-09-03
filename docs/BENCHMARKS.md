@@ -21,17 +21,20 @@ KSampler and node time around upscaler/handoff; total prompt time is secondary.
 | D | Progressive target-input handoff | workflow stays 64x48; early stage internally 54x40 | one split schedule | n/a |
 | E | Resolution-shift-only native | shift reference 54x40 -> generation 64x48 | base schedule | n/a |
 
-Run the same set of at least three fixed seeds for every paired row. The primary learned-refine
-comparison remains denoise 0.25. Repeat the relevant learned-refine rows at denoise 0.30 only after
-the 0.25 behavior is understood. Repeat the matrix at a ~0.5 MP base and nominal ~0.7 MP base, and
-include difficult motion/scene changes, small people/faces, fine text, and reference-heavy conditioning.
+The machine-readable matrix fixes the seed set to `0, 1, 2` and expands every applicable row across
+four required content scenarios. The primary learned-refine comparison remains denoise 0.25; the same
+B/C rows are also repeated at 0.30. Two patch-safe base regimes are explicit: 54x40 latent
+(864x640, 0.553 MP) and 62x44 latent (992x704, 0.698 MP), both evaluated against the 64x48
+(1024x768) target. The scenarios cover difficult motion/scene changes, small people/faces, fine text,
+and reference-heavy conditioning. Prompts and reference assets may differ between scenarios but must
+remain identical across rows within one scenario/area/denoise/seed slice.
 
 Row D must use **Progressive Handoff (Target Input)** in the two-chunk Continuum graph: Continuum is configured at 64x48 while the wrapper's internal source is 54x40. This preserves target-sized session and native-mask geometry between chunks. The source-input progressive node is a standalone control and is not the Continuum benchmark topology.
 
-Row E does not generate a low-resolution first pass. Its 54x40 value is the spatial reference used to
-derive the experimental resolution-dependent coordinate shift while H3 itself samples directly on the
-64x48 target grid. This makes the shift ratio non-identity and keeps the row isolated from trajectory
-guidance or progressive handoff.
+Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
+regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
+The source and target observations therefore differ in both regimes, keeping the resolution mapping
+non-identity while isolating it from trajectory guidance and progressive handoff.
 
 ## Required metrics
 
