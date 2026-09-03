@@ -33,8 +33,10 @@ full-trajectory coordinate for both streams and avoids matching different sample
 ### Resolution-aware schedule probe
 
 MiniMax's public H3 documentation describes **H3-Base as a 768p generator** and states that the
-shorter output side defaults to 768 pixels. That is the defensible reference regime for the isolated
-resolution-shift experiment. It is distinct from the private low grid chosen by progressive handoff.
+shorter output side defaults to 768 pixels. The pinned ComfyUI H3 frontend contract independently
+encodes this as `BASE_SHORT_EDGE = 768`, `CANVAS_MULTIPLE = 32`, and `adapt_canvas()`. That is the
+defensible reference regime for the isolated resolution-shift experiment, distinct from the private
+low grid chosen by progressive handoff.
 
 SD3 derives a relative map between a reference resolution with \(n\) spatial observations and a
 target resolution with \(m\) observations:
