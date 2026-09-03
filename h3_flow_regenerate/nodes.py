@@ -12,7 +12,7 @@ from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .reference import apply_reference_budget
 from .runtime import FLOW_BINDING_KEY, FlowBinding, conditioning_signature_from_conditioning
-from .sigma import resolution_aware_sigmas, resolution_shift_factor
+from .sigma import H3_VIDEO_SHIFT, resolution_aware_sigmas, resolution_shift_factor
 
 
 class H3FlowTrajectoryNode:
@@ -439,7 +439,16 @@ class H3ResolutionAwareSigmas:
             "mode": mode,
             "source_area": source_area,
             "target_area": target_area,
+            "area_ratio": target_area / source_area,
             "extra_shift_factor": effective_factor,
+            "base_video_shift": H3_VIDEO_SHIFT,
+            "effective_video_shift": H3_VIDEO_SHIFT * effective_factor,
+            "reference_semantics": (
+                "source_width/source_height describe the reference/native resolution regime "
+                "whose uncertainty level is being mapped to the target resolution; they do not "
+                "imply that a low-resolution pass is executed"
+            ),
+            "shared_av_coordinate": True,
         }
 
 
