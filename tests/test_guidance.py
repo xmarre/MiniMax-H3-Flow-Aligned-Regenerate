@@ -37,6 +37,13 @@ def run(values=(1.0, 0.0), coords=(0.8, 0.2), provenance=("actual", "actual")):
     )
 
 
+def test_guidance_config_rejects_nonfinite_correction_bound():
+    with pytest.raises(ValueError, match="finite and positive"):
+        GuidanceConfig(max_correction_rms_ratio=float("nan"))
+    with pytest.raises(ValueError, match="finite and positive"):
+        GuidanceConfig(max_correction_rms_ratio=float("inf"))
+
+
 def test_time_matching_interpolates_coordinate_not_step():
     ref = time_matched_reference(run(), 0.5)
     assert torch.allclose(ref, torch.full_like(ref, 0.5))
