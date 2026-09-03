@@ -121,9 +121,14 @@ def main() -> None:
     )
     require(
         args.spectrum / "comfyui_spectrum_h3/runtime.py",
+        "class _StepState:",
+        "mode: str",
+        "def active_run_id(",
+        "def active_step_id(",
+        "def active_solver_phase(",
+        "def active_policy_step_id(",
         "def last_completed_mode(",
         "def last_completed_step_id(",
-        "def active_run_id(",
     )
     require(
         args.continuum / "model_patch.py",
