@@ -499,15 +499,37 @@ class H3AttentionExperiment:
 class H3MetricsJSON:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"metrics": ("H3_FLOW_METRICS",)}}
+        return {
+            "required": {"metrics": ("H3_FLOW_METRICS",)},
+            "optional": {
+                "filename_prefix": (
+                    "STRING",
+                    {"default": "h3_flow_regenerate/metrics"},
+                )
+            },
+        }
 
     RETURN_TYPES = ("STRING",)
     FUNCTION = "render"
     OUTPUT_NODE = True
     CATEGORY = "MiniMax H3/flow regenerate"
 
-    def render(self, metrics):
-        return (metrics.to_json(),)
+    def render(self, metrics, filename_prefix="h3_flow_regenerate/metrics"):
+        import folder_paths
+
+        payload = metrics.to_json()
+        output_dir = folder_paths.get_output_directory()
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            filename_prefix,
+            output_dir,
+        )
+        file_name = f"{filename}_{counter:05}_.json"
+        metrics.write_json(f"{full_output_folder}/{file_name}")
+        relative_path = f"{subfolder}/{file_name}" if subfolder else file_name
+        return {
+            "ui": {"text": [f"Saved metrics JSON: {relative_path}"]},
+            "result": (payload,),
+        }
 
 
 NODE_CLASS_MAPPINGS = {
