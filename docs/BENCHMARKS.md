@@ -63,6 +63,17 @@ It did not eliminate the characteristic clothing deformation and newly revealed 
 artifacts. Direction+acceleration experiments must keep every other D10 setting fixed so their decoded
 media can be compared against this reference.
 
+The first D10 run with the full-spectrum velocity-acceleration implementation preserved the same
+38/28/10 logical/actual/forecast topology and completed both chunks without a guidance clamp or
+sampler failure. The decoded result changed shot structure but remained acceptable; the fast-motion
+clothing/grass artifacts were judged approximately unchanged, with at most a possible slight
+improvement. That run is **not** the final acceleration verdict: post-run audit found that the initial
+SA-Solver-PECE adaptation advanced acceleration history on the predictor, so the same-coordinate
+corrector no longer compared against the previous distinct denoising time. The corrected implementation
+keeps the previous distinct-coordinate velocity pair through predictor and corrector and promotes the
+final corrected endpoint only when the coordinate advances. One matched D10 rerun is therefore the
+remaining acceleration media gate; do not tune the global weight before that gate.
+
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
 The source and target observations therefore differ in both regimes, keeping the resolution mapping

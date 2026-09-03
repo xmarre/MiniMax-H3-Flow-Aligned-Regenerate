@@ -212,7 +212,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The difficult-motion progressive smoke still shows MiniMax-H3 motion/occlusion artifacts in clothing deformation and newly revealed background; resolution-shift-only validation remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The difficult-motion progressive smoke still shows MiniMax-H3 motion/occlusion artifacts in clothing deformation and newly revealed background. A matched D10 rerun is still required for the corrected PECE acceleration semantics; resolution-shift-only validation also remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
