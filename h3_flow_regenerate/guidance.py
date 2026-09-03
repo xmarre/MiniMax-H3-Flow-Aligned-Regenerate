@@ -658,6 +658,7 @@ def apply_guidance(
         state.previous_reference_velocity = None
     return result
 
+
 def conditional_renoise_alignment(
     reference_x0: torch.Tensor,
     *,
