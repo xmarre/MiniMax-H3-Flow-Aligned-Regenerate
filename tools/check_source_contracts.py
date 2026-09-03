@@ -71,6 +71,14 @@ def main() -> None:
         "return latent / (1.0 - sigma)",
     )
     require(
+        args.comfy / "comfy/k_diffusion/sampling.py",
+        "def sample_sa_solver(",
+        "start_sigma = model_sampling.percent_to_sigma(0.2)",
+        "end_sigma = model_sampling.percent_to_sigma(0.8)",
+        "tau_t = tau_func(sigmas[i + 1])",
+        "sigmas = offset_first_sigma_for_snr(sigmas, model_sampling)",
+    )
+    require(
         args.comfy / "comfy/samplers.py",
         "latent_shapes=latent_shapes",
         "unpack_latents(output, latent_shapes)",
@@ -204,6 +212,12 @@ def main() -> None:
         "resize_h3_target_conditioning",
         'noise_mask = latent.get("noise_mask")',
         "denoise_mask=noise_mask",
+    )
+    require(
+        args.refdelta / "comfyui_refdelta_solver/sampler_backends.py",
+        "def sample_refdelta_sa_solver_pece(",
+        "tau_func=tau_func",
+        'native_function = _native_backend("sample_sa_solver")',
     )
     refdelta_text = "\n".join(path.read_text(encoding="utf-8") for path in args.refdelta.rglob("*.py"))
     for name in ("sa_solver", "sa_solver_pece", "seeds_2", "seeds_3", "er_sde"):
