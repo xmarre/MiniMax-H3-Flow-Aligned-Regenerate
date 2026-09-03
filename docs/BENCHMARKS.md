@@ -47,10 +47,13 @@ remain identical across rows within one scenario/area/denoise/seed slice.
 Row D must use **Progressive Handoff (Target Input)** in the two-chunk Continuum graph: Continuum is configured at 64x48 while the wrapper's internal source is 54x40. This preserves target-sized session and native-mask geometry between chunks. The source-input progressive node is a standalone control and is not the Continuum benchmark topology.
 
 Before spending the formal matrix, validate D on the already-used difficult-motion smoke graph so the
-only structural change is the generation path. For that smoke, keep the current final grid at 58x58
-(928x928), set the progressive internal source to 48x48 (768x768), keep the same full 7-outer-step
-SA-Solver-PECE schedule, seed, prompt, references, DiffAid, Untwist, Spectrum and Continuum chunking,
-and remove the separate learned-upscale/refine branch entirely. Use fixed handoff coordinate 0.35,
+only structural change is the generation path. For that smoke, keep the current final grid unchanged and set **source_mode=scale** with
+**source_scale=0.83**. The node derives the private source directly from the live target latent geometry,
+so no source width/height needs to be copied from reference-image preprocessing. On a 58x58 target this
+resolves to 48x48 (768x768); on a non-square target the private source follows that target aspect ratio
+subject to H3's required even latent grid. Keep the same full 7-outer-step SA-Solver-PECE schedule,
+seed, prompt, references, DiffAid, Untwist, Spectrum and Continuum chunking, and remove the separate
+learned-upscale/refine branch entirely. Use fixed handoff coordinate 0.35,
 direction guidance 0.25, acceleration/consistency 0, and low-frequency cutoff 0.25. Continuum Run
 Storage stays off. A passing smoke must show target-grid Continuum chunks throughout, a private low
 stage at 48x48, one exact handoff probe, a fresh high-stage sampler lifetime whose first H3 call is
