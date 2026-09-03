@@ -19,7 +19,7 @@ class H3FlowTrajectoryNode:
         return {
             "required": {
                 "storage": (["system_ram", "vram"], {"default": "system_ram"}),
-                "max_runs": ("INT", {"default": 8, "min": 1, "max": 128}),
+                "max_runs": ("INT", {"default": 16, "min": 1, "max": 128}),
             }
         }
 
