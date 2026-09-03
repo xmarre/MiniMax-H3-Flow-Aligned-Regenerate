@@ -209,11 +209,46 @@
   ],
   "step_reduction_gate": {
     "baseline": "C7",
-    "already_validated_smoke": "C7",
-    "sequence": [
+    "status": "complete",
+    "validated_smoke": [
+      "C7",
       "C6",
-      "C5"
+      "C5",
+      "C4"
     ],
-    "stopping_rule": "Run C6 next. Run C5 only if C6 decoded video/audio remains acceptable. Further reductions are exploratory rather than a required gate."
+    "exploratory_lower_step": "C4",
+    "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
+    "next_feature_path": "D"
+  },
+  "feature_path_smoke": {
+    "id": "D-smoke",
+    "mode": "progressive_target_input",
+    "purpose": "Validate progressive topology against the already-used difficult-motion workflow before spending the formal matrix.",
+    "continuum_grid": [
+      58,
+      58
+    ],
+    "internal_source_grid": [
+      48,
+      48
+    ],
+    "target_pixels": [
+      928,
+      928
+    ],
+    "internal_source_pixels": [
+      768,
+      768
+    ],
+    "outer_steps": 7,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "guidance_mode": "direction",
+    "direction_weight": 0.25,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "remove_separate_learned_refine": true,
+    "run_storage": "off"
   }
 }
