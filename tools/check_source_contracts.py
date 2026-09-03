@@ -147,6 +147,7 @@ def main() -> None:
         '"H3_CONTINUUM_REFINE_STATE"',
         "transformer_options[H3_REFINEMENT_REQUEST_KEY]",
         "resize_h3_target_conditioning",
+        'noise_mask = latent.get("noise_mask")',
         "denoise_mask=noise_mask",
     )
     refdelta_text = "\n".join(path.read_text(encoding="utf-8") for path in args.refdelta.rglob("*.py"))
