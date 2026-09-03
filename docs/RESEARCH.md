@@ -42,9 +42,10 @@ the *direction* of the experiment, but neither proves that MiniMax H3 should use
 
 H3 already uses video flow shift 12 and audio shift 3. The implementation therefore composes the SD3
 factor **relatively** with shift 12 rather than replacing H3's native schedule. At strength 1 the
-effective video shift is ~13.95994. Because H3 is a packed joint AV flow model, the same transformed
-base coordinate also changes audio sigma. A video-only interpretation would be false; decoded audio is
-part of the gate.
+effective video shift is ~13.95994. Because H3 is a packed joint AV flow model, the same transformed base coordinate also changes the
+audio sigma seen internally during refinement. E keeps the refine node's `lock_audio=true`: audio
+noise is zeroed/protected and sampler-1 audio is restored after refinement. Final decoded audio should
+therefore remain invariant, while the internal audio tokens can still influence the video prediction.
 
 The E0/E1 pair leaves Continuum itself unchanged at the existing MP-driven base resolution and keeps
 the actual downstream learned Latent Upscaler + Refine pass enabled. The geometry-only helper reads the
