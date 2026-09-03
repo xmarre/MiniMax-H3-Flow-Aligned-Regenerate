@@ -350,7 +350,16 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             state=binding.guidance_state,
         )
         result, _ = pack_streams((guided_video, audio_x0))
-        binding.metrics.event("guidance", coordinate=coordinate, mode=binding.guidance.mode)
+        binding.metrics.event(
+            "guidance",
+            coordinate=coordinate,
+            mode=binding.guidance.mode,
+            schedule=binding.guidance_state.last_schedule,
+            correction_rms=binding.guidance_state.last_correction_rms,
+            reference_rms=binding.guidance_state.last_reference_rms,
+            correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
+            clamp_scale=binding.guidance_state.last_clamp_scale,
+        )
     return result
 
 
@@ -817,6 +826,7 @@ def _run_progressive(
         return None
 
     high_started = time.perf_counter()
+    high_event_start = len(binding.metrics.events)
     _reset_guider_conds(
         guider,
         target_video_hw=None if target_input else (target_h, target_w),
@@ -834,6 +844,18 @@ def _run_progressive(
             latent_shapes=latent_shapes,
         )
     binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
+    high_model_calls = [
+        event
+        for event in binding.metrics.events[high_event_start:]
+        if event.kind == "model_call"
+    ]
+    first_high_actual = None
+    if high_model_calls:
+        first_high_actual = bool(high_model_calls[0].fields.get("actual"))
+        if not first_high_actual:
+            raise RuntimeError(
+                "progressive high stage did not begin with the required exact H3 model evaluation"
+            )
     binding.metrics.event(
         "handoff_complete",
         sigma=sigma,
@@ -842,6 +864,8 @@ def _run_progressive(
         separate_sampler_invocations=True,
         exact_probe_performed=True,
         high_stage_exact_prefix_requested=1,
+        high_stage_first_call_actual=first_high_actual,
+        high_stage_model_calls=len(high_model_calls),
         conditioning_rebuilt_for_high_grid=True,
         input_mode="target_grid" if target_input else "source_grid",
     )
