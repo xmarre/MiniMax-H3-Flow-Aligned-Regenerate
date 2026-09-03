@@ -15,6 +15,7 @@ from h3_flow_regenerate.nodes import H3FlowAlignedRefineState
 from h3_flow_regenerate.reference import apply_reference_budget
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
+    FLOW_STAGE_KEY,
     PROBE_CONTEXT_KEY,
     PROGRESSIVE_KEY,
     SPECTRUM_ACTUAL_KEY,
@@ -649,6 +650,32 @@ def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     assert binding.metrics.counters["transformer_actual_nfe"] == 1
 
 
+def test_model_call_metrics_are_stage_scoped():
+    video = torch.full((1, 24, 1, 4, 4), 2.0)
+    audio = torch.full((1, 32, 2, 5), 3.0)
+    packed, _ = pack_streams((video, audio))
+    binding = FlowBinding()
+    guider = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            return packed
+
+    options = {
+        "transformer_options": {
+            FLOW_STAGE_KEY: "high",
+            SPECTRUM_ACTUAL_KEY: True,
+        }
+    }
+    flow_predict_wrapper(Executor(), packed, torch.tensor([0.5]), options, 7)
+    assert binding.metrics.counters["transformer_actual_nfe"] == 1
+    assert binding.metrics.counters["transformer_actual_nfe_high"] == 1
+    assert binding.metrics.counters["sampler_logical_calls_high"] == 1
+    assert binding.metrics.events[-1].fields["stage"] == "high"
+
+
 def test_progressive_probe_rejects_explicit_spectrum_forecast():
     video = torch.full((1, 24, 1, 4, 4), 2.0)
     audio = torch.full((1, 32, 2, 5), 3.0)
@@ -935,6 +962,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
             calls.append(
                 {
                     "name": call_sampler.sampler_function.__name__,
+                    "stage": guider.model_options["transformer_options"].get(FLOW_STAGE_KEY),
                     "shapes": list(latent_shapes),
                     "keyframe_hw": tuple(guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]),
                     "mask_shapes": mask_shapes,
@@ -983,6 +1011,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         "_h3_flow_exact_probe",
         "sample_sa_solver_pece",
     ]
+    assert [call["stage"] for call in calls] == ["low", "probe", "high"]
     assert [call["shapes"][0][-2:] for call in calls] == [(4, 4), (4, 4), (8, 6)]
     assert callback_shapes == [((8, 6), (8, 6)), ((8, 6), (8, 6))]
     assert [call["keyframe_hw"] for call in calls] == [(4, 4), (4, 4), (8, 6)]
@@ -995,6 +1024,8 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     handoff = [event for event in binding.metrics.events if event.kind == "handoff_complete"][-1]
     assert handoff.fields["high_stage_first_call_actual"] is True
     assert handoff.fields["high_stage_model_calls"] == 1
+    assert handoff.fields["sampler_invocation_count"] == 3
+    assert handoff.fields["history_boundary_count"] == 2
 
 
 def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):
