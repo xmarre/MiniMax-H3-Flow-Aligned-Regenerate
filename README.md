@@ -94,9 +94,10 @@ LATENT outputs, not inside `refine_state`; those LATENT wires remain connected d
 integrated upscaler/refine node.
 
 Target-grid `minimax_keyframes` are expected to be spatially resized by the learned-refine node.
-The trajectory conditioning fence therefore ignores only those keyframes' spatial latent bytes and
-H/W metadata while retaining their non-spatial metadata; Qwen/context tensors and independent
-`minimax_refs` remain content-fingerprinted.
+The refine-state adapter therefore records the exact sampler-1 conditioning signature before that
+resize and binds sampler 2 to it explicitly. The trajectory fingerprint itself remains strict over
+keyframe latent content and geometry, Qwen/context tensors, and independent `minimax_refs`; expected
+geometry transfer is not implemented by weakening the global conditioning identity check.
 
 ### Progressive handoff use
 
