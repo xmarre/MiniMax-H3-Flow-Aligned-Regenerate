@@ -791,6 +791,80 @@ def test_progressive_flow_rejects_parallel_multigpu_even_without_active_capture(
     assert not executor_called
 
 
+def test_flow_wrapper_uses_effective_active_spectrum_mode_after_nested_promotion():
+    video = torch.full((1, 24, 1, 4, 4), 2.0)
+    audio = torch.full((1, 32, 2, 5), 3.0)
+    packed, shapes = pack_streams((video, audio))
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(trajectory=trajectory, capture_enabled=True, capture_forecasts=False)
+
+    class SpectrumRuntime:
+        def __init__(self):
+            self.active_run_id = 1
+            self._step = SimpleNamespace(
+                step_id=5,
+                policy_step_id=3,
+                phase="predicted",
+                mode="forecast",
+            )
+            self.last_completed_step_id = 4
+            self.last_completed_mode = "actual"
+
+        @property
+        def active_step_id(self):
+            return self._step.step_id if self._step is not None else None
+
+        @property
+        def active_solver_phase(self):
+            return None if self._step is None else self._step.phase
+
+        @property
+        def active_policy_step_id(self):
+            return None if self._step is None else self._step.policy_step_id
+
+    spectrum_runtime = SpectrumRuntime()
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            SPECTRUM_BINDING_KEY: SimpleNamespace(runtime=spectrum_runtime),
+            "transformer_options": {},
+        },
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+
+    def native():
+        pass
+
+    native.__name__ = "sample_sa_solver_pece"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    _begin_capture(binding, guider, sampler, torch.tensor([1.0, 0.5, 0.0]), list(shapes))
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            spectrum_runtime._step.mode = "actual"
+            return packed
+
+    stale_options = {
+        "transformer_options": {
+            SPECTRUM_ACTUAL_KEY: False,
+            SPECTRUM_PHASE_KEY: "predicted",
+            SPECTRUM_OUTER_STEP_KEY: 3,
+        }
+    }
+    flow_predict_wrapper(Executor(), packed, torch.tensor([0.5]), stale_options, 7)
+    _finish_capture(binding)
+
+    run = trajectory.latest
+    assert len(run.samples) == 1
+    assert run.samples[0].provenance == "actual"
+    assert run.samples[0].phase == "predicted"
+    assert run.samples[0].outer_step == 3
+    assert binding.metrics.counters["transformer_actual_nfe"] == 1
+    assert binding.metrics.counters.get("spectrum_forecast_calls", 0) == 0
+
+
 def test_outer_flow_wrapper_uses_completed_spectrum_mode_for_exact_provenance():
     video = torch.full((1, 24, 1, 4, 4), 2.0)
     audio = torch.full((1, 32, 2, 5), 3.0)
