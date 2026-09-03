@@ -8,7 +8,7 @@ import torch
 from .attention import AttentionConfig
 from .comfy_compat import patch_flow_model
 from .contracts import H3FlowTrajectory
-from .geometry import h3_native_reference_canvas, pixel_to_safe_latent
+from .geometry import h3_native_reference_canvas, h3_refine_scale_target_canvas, pixel_to_safe_latent
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
@@ -399,6 +399,54 @@ class H3ProgressiveTargetInputHandoff:
         return patched, metrics
 
 
+class H3RefineTargetGeometry:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "base_width": ("INT", {"default": 768, "min": 32, "max": 8192, "step": 32}),
+                "base_height": ("INT", {"default": 768, "min": 32, "max": 8192, "step": 32}),
+                "scale": ("FLOAT", {"default": 1.20, "min": 1.0, "max": 4.0, "step": 0.05}),
+                "align": ("INT", {"default": 32, "min": 1, "max": 512, "step": 1}),
+                "keep_proportion": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("INT", "INT", "H3_FLOW_DIAGNOSTICS")
+    RETURN_NAMES = ("target_width", "target_height", "diagnostics")
+    FUNCTION = "resolve"
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+    DESCRIPTION = (
+        "Geometry-only mirror of the integrated MiniMax H3 Latent Upscaler + Refine "
+        "scale-by-multiplier sizing. Feed the existing pre-Continuum MP width/height here, "
+        "then use the outputs as the direct Continuum target for E0/E1. This node performs "
+        "no latent upscale and no sampling."
+    )
+
+    def resolve(self, base_width, base_height, scale, align, keep_proportion):
+        target_width, target_height = h3_refine_scale_target_canvas(
+            base_width,
+            base_height,
+            scale,
+            align=align,
+            keep_proportion=keep_proportion,
+        )
+        return (
+            target_width,
+            target_height,
+            {
+                "base_width": int(base_width),
+                "base_height": int(base_height),
+                "scale": float(scale),
+                "align": int(align),
+                "keep_proportion": bool(keep_proportion),
+                "target_width": int(target_width),
+                "target_height": int(target_height),
+                "semantics": "LBH refine scale-by-multiplier geometry only; no upscale/refine execution",
+            },
+        )
+
+
 class H3ResolutionAwareSigmas:
     @classmethod
     def INPUT_TYPES(cls):
@@ -718,6 +766,7 @@ NODE_CLASS_MAPPINGS = {
     "H3FlowAlignedRefineState": H3FlowAlignedRefineState,
     "H3ProgressiveHandoff": H3ProgressiveHandoff,
     "H3ProgressiveTargetInputHandoff": H3ProgressiveTargetInputHandoff,
+    "H3RefineTargetGeometry": H3RefineTargetGeometry,
     "H3ResolutionAwareSigmas": H3ResolutionAwareSigmas,
     "H3ReferenceBudget": H3ReferenceBudget,
     "H3AttentionExperiment": H3AttentionExperiment,
@@ -732,6 +781,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3FlowAlignedRefineState": "MiniMax H3 Flow-Aligned Refine State",
     "H3ProgressiveHandoff": "MiniMax H3 Progressive Handoff",
     "H3ProgressiveTargetInputHandoff": "MiniMax H3 Progressive Handoff (Target Input)",
+    "H3RefineTargetGeometry": "MiniMax H3 Refine Target Geometry [Experimental]",
     "H3ResolutionAwareSigmas": "MiniMax H3 Resolution-Aware Sigmas [Experimental]",
     "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
     "H3AttentionExperiment": "MiniMax H3 Attention Lab [Experimental]",
