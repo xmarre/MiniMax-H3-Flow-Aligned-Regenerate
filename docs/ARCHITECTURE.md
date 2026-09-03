@@ -49,7 +49,7 @@ inverse/composition behavior, and AV invariants, while decoded audio remains par
 
 `H3_FLOW_TRAJECTORY` owns immutable committed runs and at most one pending transaction. A run has
 API version, run/session/chunk IDs, sampler and schedule signatures, latent/pixel/padded geometry,
-audio shape, layout and conditioning signatures, storage policy, timestamps, and samples. Each
+audio shape, AV latent-layout and conditioning signatures, storage policy, timestamps, and samples. Each
 sample records unshifted coordinate, both stream sigmas, outer/call index, phase, actual/forecast
 provenance, and video denoised estimate.
 
@@ -114,9 +114,11 @@ LATENT mask path.
 The learned refine path legitimately resizes target-grid `minimax_keyframes` before sampler 2.
 The adapter computes the same content signature as CFGGuider conversion from the exact sampler-1
 `positive` object and stores it on the read-only guidance binding. Sampler 2 is checked against that
-source signature rather than against its resized conditioning. Global trajectory fingerprints remain
-strict over keyframe latent bytes/shape, Qwen/context tensors, and independent `minimax_refs`, so a
-real keyframe-content change cannot be hidden behind the geometry-transfer exception.
+source signature rather than against its resized conditioning. There is no keyframe-specific
+geometry/content exemption: keyframe tensors/shape, Qwen/context tensors, and independent
+`minimax_refs` all pass through the same bounded deterministic fingerprint. That fingerprint samples
+tensor positions to avoid full accelerator readback; it is intended to reject ordinary conditioning
+drift, not to prove byte-for-byte tensor identity.
 
 ## Progressive handoff law
 
@@ -178,9 +180,11 @@ benchmark setting until decoded runs establish a better policy.
 - **External patches:** exact calls traverse the normal guider/model patch chain. The probe also
   publishes the full-trajectory refinement reference so sigma-sensitive patches such as DiffAid
   do not renormalize the split coordinate to the probe invocation's first sigma.
-- **Continuum:** selection includes session/chunk identity and a bounded content fingerprint of
-  raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
-  entire Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
+- **Continuum:** selection includes the available session/chunk namespace and a bounded content
+  fingerprint of raw conditioning. Current V3.4 interop exposes chunk index but no unique sequence
+  session ID; conditioning identity therefore also separates same-index runs from independent
+  branches. The fingerprint samples deterministic tensor positions rather than reading entire
+  Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
   target-input topology so Continuum's output/session/native-mask geometry stays final-sized.
 - **Failure:** low/probe failure aborts the active trajectory transaction. The low run must be committed
   before same-invocation high guidance can select it; if transfer or the high stage then fails, that
