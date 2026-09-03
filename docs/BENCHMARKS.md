@@ -85,6 +85,41 @@ global acceleration-weight tuning from this smoke result. If that artifact class
 the next research target should be video-time correspondence/occlusion-aware guidance rather than
 additional denoising-time acceleration strength.
 
+### D10 video-time correspondence gate
+
+HiFlow-style denoising-time acceleration is closed as neutral/inconclusive for the difficult-motion
+artifact class. The next isolated experiment changes the axis of guidance rather than its global
+strength: `direction+temporal` uses adjacent-frame correspondence in the exact low-resolution H3
+clean-state prior and refuses temporal copying where that correspondence is ambiguous or
+cycle-inconsistent.
+
+Run one matched **D10-temporal** sample before tuning any correspondence thresholds:
+
+- 10 SA-Solver-PECE outer steps;
+- Target Input `source_mode=scale`, `source_scale=0.83`;
+- fixed handoff request 0.35;
+- `guidance_mode=direction+temporal`;
+- direction 0.25, temporal 0.20, acceleration 0, consistency 0;
+- low-frequency cutoff 0.25;
+- same seed, prompt, references, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior, and
+  decode as the accepted D10 direction-only reference;
+- Continuum Run Storage off.
+
+The temporal matcher is tensor-only guidance and should add **zero H3 NFEs**. The expected sampler
+topology therefore remains 38 logical / 28 actual / 10 Spectrum forecast calls across the two chunks,
+with 22 low + 2 exact probes + 14 high. Any topology change is a regression and invalidates the media
+comparison.
+
+Inspect the temporal telemetry before interpreting the decode: temporal RMS must be nonzero on at
+least some high-stage calls; `temporal_valid_fraction`, confidence, similarity/margin, and flow
+magnitude must be finite; PECE same-coordinate correctors should report
+`temporal_cache_hit=true`. No universal coverage threshold is asserted before real H3 data exists.
+
+The primary media question is whether the fast-motion clothing and newly revealed grass/background
+artifacts improve **without** motion freezing, stale-content copying, or new temporal smearing.
+Shot-count/continuity changes are secondary because earlier matched runs already showed that shot
+structure can vary while overall quality remains acceptable.
+
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
 The source and target observations therefore differ in both regimes, keeping the resolution mapping
