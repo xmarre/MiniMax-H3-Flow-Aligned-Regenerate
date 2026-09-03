@@ -226,6 +226,7 @@ class H3FlowTrajectory:
     def select(
         self,
         *,
+        run_id: str | None = None,
         chunk_id: str | None = None,
         session_id: str | None = None,
         conditioning_signature: str | None = None,
@@ -234,11 +235,14 @@ class H3FlowTrajectory:
             candidates = [
                 run
                 for run in self._runs
-                if (chunk_id is None or run.chunk_id == str(chunk_id))
+                if (run_id is None or run.run_id == str(run_id))
+                and (chunk_id is None or run.chunk_id == str(chunk_id))
                 and (session_id is None or run.session_id == str(session_id))
                 and (conditioning_signature is None or run.conditioning_signature == str(conditioning_signature))
             ]
             if not candidates:
+                if run_id is not None:
+                    raise RuntimeError(f"no trajectory matches requested run_id={run_id}")
                 raise RuntimeError("no trajectory matches the requested session/chunk/conditioning")
             run = candidates[-1]
             if not run.complete:
