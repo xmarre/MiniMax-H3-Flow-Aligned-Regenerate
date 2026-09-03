@@ -356,7 +356,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             mode=binding.guidance.mode,
             schedule=binding.guidance_state.last_schedule,
             correction_rms=binding.guidance_state.last_correction_rms,
-            reference_rms=binding.guidance_state.last_reference_rms,
+            baseline_rms=binding.guidance_state.last_baseline_rms,
             correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
             clamp_scale=binding.guidance_state.last_clamp_scale,
         )
