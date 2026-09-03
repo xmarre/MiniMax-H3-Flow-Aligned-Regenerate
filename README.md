@@ -153,7 +153,9 @@ used as an alignment mechanism; this prevents the known odd-grid flashing-border
 
 `direction+acceleration` is an experimental first-difference trajectory proxy. It needs adjacent exact
 trajectory support and is bounded by an RMS guard; it is not an implementation of HiFlow's published
-acceleration-alignment equations.
+acceleration-alignment equations. Progressive nodes expose the acceleration, consistency, and
+low-frequency controls needed by their selectable guidance modes; a selected mode is never left with
+an inaccessible mode-specific weight.
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
