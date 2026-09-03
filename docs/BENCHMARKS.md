@@ -6,7 +6,9 @@ Duplicate the current two-chunk Continuum graph and keep seed, prompt, Qwen/dire
 LoRAs, DiffAid, Untwist, sampler, scheduler, base frames, audio behavior, chunk boundaries, crop,
 and decode settings identical. Record exact git revisions for ComfyUI and every custom node.
 
-Attach **MiniMax H3 Metrics JSON** to each experimental path. Capture sampler-only wall time around
+Attach **MiniMax H3 Metrics JSON** to each experimental path. In the two-pass path, route the
+Trajectory Capture metrics object into the Flow-Aligned Regenerate/Refine State optional `metrics`
+input so low-pass capture and high-pass guidance share one sink. Capture sampler-only wall time around
 KSampler and node time around upscaler/handoff; total prompt time is secondary.
 
 ## Primary matrix
