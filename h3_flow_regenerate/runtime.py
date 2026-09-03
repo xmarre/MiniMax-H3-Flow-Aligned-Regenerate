@@ -724,9 +724,7 @@ def _high_stage_contract(guider: Any):
         if not isinstance(previous, dict):
             raise RuntimeError("existing h3_refinement contract is not a dictionary")
         conflicts = {
-            key: (previous[key], value)
-            for key, value in request.items()
-            if key in previous and previous[key] != value
+            key: (previous[key], value) for key, value in request.items() if key in previous and previous[key] != value
         }
         if conflicts:
             raise RuntimeError(f"existing h3_refinement contract conflicts with progressive handoff: {conflicts}")
