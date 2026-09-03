@@ -204,6 +204,9 @@ class H3ProgressiveHandoff:
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -225,6 +228,9 @@ class H3ProgressiveHandoff:
         handoff_selection,
         guidance_mode,
         direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
         metrics=None,
     ):
         if target_mode == "scale":
@@ -241,7 +247,13 @@ class H3ProgressiveHandoff:
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
             )
-        guidance = GuidanceConfig(mode=guidance_mode, direction_weight=direction_weight)
+        guidance = GuidanceConfig(
+            mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            cutoff=low_frequency_cutoff,
+        )
         metrics = metrics or H3FlowMetrics()
         patched, _ = patch_flow_model(
             model,
@@ -274,6 +286,9 @@ class H3ProgressiveTargetInputHandoff:
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -295,6 +310,9 @@ class H3ProgressiveTargetInputHandoff:
         handoff_selection,
         guidance_mode,
         direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
         metrics=None,
     ):
         if source_mode == "scale":
@@ -311,7 +329,13 @@ class H3ProgressiveTargetInputHandoff:
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
             )
-        guidance = GuidanceConfig(mode=guidance_mode, direction_weight=direction_weight)
+        guidance = GuidanceConfig(
+            mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            cutoff=low_frequency_cutoff,
+        )
         metrics = metrics or H3FlowMetrics()
         patched, _ = patch_flow_model(
             model,
