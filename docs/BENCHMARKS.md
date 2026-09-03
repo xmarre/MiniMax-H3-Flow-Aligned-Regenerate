@@ -67,12 +67,23 @@ The first D10 run with the full-spectrum velocity-acceleration implementation pr
 38/28/10 logical/actual/forecast topology and completed both chunks without a guidance clamp or
 sampler failure. The decoded result changed shot structure but remained acceptable; the fast-motion
 clothing/grass artifacts were judged approximately unchanged, with at most a possible slight
-improvement. That run is **not** the final acceleration verdict: post-run audit found that the initial
-SA-Solver-PECE adaptation advanced acceleration history on the predictor, so the same-coordinate
-corrector no longer compared against the previous distinct denoising time. The corrected implementation
-keeps the previous distinct-coordinate velocity pair through predictor and corrector and promotes the
-final corrected endpoint only when the coordinate advances. One matched D10 rerun is therefore the
-remaining acceleration media gate; do not tune the global weight before that gate.
+improvement. Post-run audit found that the initial SA-Solver-PECE adaptation advanced acceleration
+history on the predictor, so the same-coordinate corrector no longer compared against the previous
+distinct denoising time.
+
+The corrected PECE acceleration rerun is now complete. It again preserved the D10 topology
+(38 logical / 28 actual / 10 forecast, 22 low + 2 probe + 14 high), used the same 48x46 -> 58x56
+geometry and schedule-index-6 handoff, and completed both progressive sampler walls without failure.
+Telemetry confirms the intended PECE semantics: predictor and same-coordinate corrector calls at
+coordinate ~0.3 both use ~0.4 as their acceleration anchor, calls at 0.2 both use ~0.3, and calls at
+~0.1 both use 0.2. No guidance correction hit the RMS clamp.
+
+Decoded media remained good and returned to one continuous shot, but the difficult fast-motion
+clothing/grass/disocclusion artifact class did **not** show a clear perceptual improvement. The
+acceleration result is therefore recorded as neutral/inconclusive rather than promoted. Do not continue
+global acceleration-weight tuning from this smoke result. If that artifact class is pursued further,
+the next research target should be video-time correspondence/occlusion-aware guidance rather than
+additional denoising-time acceleration strength.
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
