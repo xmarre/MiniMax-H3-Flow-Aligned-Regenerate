@@ -94,6 +94,8 @@ velocity field. Downsample consistency forms the low-grid residual before liftin
 
 ### Continuum integrated-refine adapter
 
+The trajectory history is a delayed-consumer buffer in this topology: Continuum samples its base chunk list before downstream list-mapped refinement consumes the matching runs. `max_runs` therefore must be at least the number of physical refine items; the public node default is 16, matching Continuum's current maximum configured chunk count. Eviction remains bounded and deterministic.
+
 Current Continuum V3.4 exposes a per-chunk `H3_CONTINUUM_REFINE_STATE` containing the fresh sampled
 MODEL and exact positive conditioning. Native continuation denoise masks are attached separately to
 the parallel video/audio LATENT outputs. The learned H3 upscaler/refine consumes the refine state
