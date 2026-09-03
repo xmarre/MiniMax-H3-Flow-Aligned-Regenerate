@@ -197,6 +197,44 @@
       "resolution_shift": "resolution_aware"
     }
   ],
+  "temporal_correspondence_smoke": {
+    "id": "D10-temporal",
+    "status": "pending_media",
+    "base_reference": "accepted difficult-motion D10 direction-only run",
+    "outer_steps": 10,
+    "guidance_mode": "direction+temporal",
+    "direction_weight": 0.25,
+    "temporal_weight": 0.2,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "source_mode": "scale",
+    "source_scale": 0.83,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "keep_identical": [
+      "seed",
+      "prompt",
+      "references",
+      "DiffAid",
+      "Untwist",
+      "Spectrum",
+      "sampler",
+      "scheduler",
+      "chunking",
+      "audio behavior",
+      "decode"
+    ],
+    "expected_transformer_topology": {
+      "logical_calls": 38,
+      "actual_nfe": 28,
+      "spectrum_forecasts": 10,
+      "low_logical": 22,
+      "probe_logical": 2,
+      "high_logical": 14
+    },
+    "primary_media_question": "Does occlusion-aware video-time correspondence reduce fast-motion clothing and newly revealed background artifacts without freezing motion or copying stale content?"
+  },
   "required_outputs": [
     "workflow_json",
     "metrics_json",
