@@ -69,6 +69,10 @@ fingerprints differ, but it cannot disambiguate two independent sequences with i
 conditioning fingerprints. Newest-attempt strictness also prevents a failed regeneration attempt from
 silently reactivating stale low-resolution guidance state.
 
+A sampler may finish while a diagnostic trajectory contains only Spectrum forecasts. Such a run remains
+recorded as complete sampling telemetry, but it is not selectable as a guidance source: selection requires
+at least one provenance=`actual` anchor and fails before the target sampler begins otherwise.
+
 Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
 The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
 a guided target pass cannot become the next source trajectory by accident. Forecast calls advance
