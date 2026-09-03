@@ -222,6 +222,27 @@ def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
     assert not second_binding.capture_enabled
 
 
+def test_patch_can_explicitly_clear_inherited_progressive_handoff(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    progressive = ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4)
+    first, _ = patch_flow_model(FakePatcher(), progressive=progressive)
+    assert first.model_options[PROGRESSIVE_KEY] is progressive
+
+    inherited, _ = patch_flow_model(first)
+    assert inherited.model_options[PROGRESSIVE_KEY] is progressive
+
+    cleared, _ = patch_flow_model(inherited, clear_progressive=True)
+    assert PROGRESSIVE_KEY not in cleared.model_options
+
+    with pytest.raises(ValueError, match="cannot set and clear"):
+        patch_flow_model(first, progressive=progressive, clear_progressive=True)
+
 def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
