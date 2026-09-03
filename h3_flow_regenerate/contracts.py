@@ -95,10 +95,12 @@ class H3FlowTrajectory:
     @property
     def latest(self) -> TrajectoryRun:
         with self._lock:
-            for run in reversed(self._runs):
-                if run.complete:
-                    return run
-            raise RuntimeError("trajectory has no completed run")
+            if not self._runs:
+                raise RuntimeError("trajectory has no runs")
+            run = self._runs[-1]
+            if not run.complete:
+                raise RuntimeError("latest trajectory run is incomplete")
+            return run
 
     @property
     def bytes(self) -> int:
@@ -226,13 +228,15 @@ class H3FlowTrajectory:
             candidates = [
                 run
                 for run in self._runs
-                if run.complete
-                and (chunk_id is None or run.chunk_id == str(chunk_id))
+                if (chunk_id is None or run.chunk_id == str(chunk_id))
                 and (session_id is None or run.session_id == str(session_id))
             ]
             if not candidates:
-                raise RuntimeError("no committed trajectory matches the requested session/chunk")
-            return candidates[-1]
+                raise RuntimeError("no trajectory matches the requested session/chunk")
+            run = candidates[-1]
+            if not run.complete:
+                raise RuntimeError("latest matching trajectory is incomplete")
+            return run
 
     def clear(self) -> None:
         with self._lock:
