@@ -197,6 +197,11 @@ Qwen3-VL context and direct H3 reference rows are separate. Native mode returns 
 Experimental direct decoupling shallow-copies conditioning and caps each direct video latent by patch
 rows while preserving aspect ratio and even H/W. Already encoded Qwen tokens remain unchanged.
 
+Direct-reference budgeting updates the resized reference latent and its native `latent_h`/`latent_w`
+(and existing `latent_t`) metadata atomically. MiniMax H3's `PackedLayout` consumes those metadata
+fields to allocate reference rows and positions, so leaving source-grid metadata attached to a resized
+latent would make the packed reference contract inconsistent.
+
 ## Attention lab
 
 Diagnostics sample selected heads/queries and report entropy and modality mass without retaining full
