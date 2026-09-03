@@ -9,7 +9,7 @@ from h3_flow_regenerate.comfy_compat import patch_flow_model, reconfigure_bindin
 from h3_flow_regenerate.contracts import H3FlowTrajectory
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.guidance import GuidanceConfig
-from h3_flow_regenerate.handoff import ProgressiveHandoffConfig
+from h3_flow_regenerate.handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.nodes import H3FlowAlignedRefineState
 from h3_flow_regenerate.reference import apply_reference_budget
@@ -538,6 +538,111 @@ def test_reference_budget_handles_thin_aspect_ratios():
     assert fitted.shape[-2] == 2
     assert report.direct_video_rows_after <= 5
 
+
+def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
+    class KSampler:
+        def __init__(self, function):
+            self.sampler_function = function
+            self.extra_options = {}
+
+    fake_samplers = ModuleType("comfy.samplers")
+    fake_samplers.KSAMPLER = KSampler
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.samplers = fake_samplers
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake_samplers)
+
+    target_video = torch.randn(1, 24, 1, 8, 6)
+    target_audio = torch.randn(1, 32, 2, 5)
+    target_latent, target_shapes = pack_streams((target_video, target_audio))
+    target_noise = torch.randn_like(target_latent)
+    video_mask = torch.ones(1, 1, 1, 8, 6)
+    video_mask[:, :, :, :2] = 0
+    audio_mask = torch.ones(1, 1, 2, 5)
+    packed_mask, _ = pack_streams((video_mask, audio_mask))
+    source_video = torch.randn(1, 24, 1, 4, 4)
+    source_audio = target_audio.clone()
+    source_raw, source_shapes = pack_streams((source_video, source_audio))
+    source_x0 = source_raw.clone()
+    sigmas = torch.tensor([1.0, 0.9, 0.7, 0.4, 0.0])
+
+    def native():
+        pass
+
+    native.__name__ = "sample_sa_solver_pece"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    original_cond = {
+        "cross_attn": torch.zeros(1, 2, 4),
+        "minimax_keyframes": [{"latent": target_video.clone(), "latent_h": 8, "latent_w": 6}],
+    }
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        model_patcher=SimpleNamespace(model=MiniMaxH3()),
+        original_conds={"positive": [original_cond]},
+        conds={"positive": [original_cond.copy()]},
+    )
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, noise, latent, call_sampler, call_sigmas, mask, *args, latent_shapes):
+            mask_shapes = None
+            if mask is not None:
+                mask_shapes = tuple(
+                    tensor.shape
+                    for tensor in unpack_streams(
+                        mask,
+                        [(latent_shapes[0][0], 1, *latent_shapes[0][2:]), (latent_shapes[1][0], 1, *latent_shapes[1][2:])],
+                    )
+                )
+            calls.append(
+                {
+                    "name": call_sampler.sampler_function.__name__,
+                    "shapes": list(latent_shapes),
+                    "keyframe_hw": tuple(
+                        guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]
+                    ),
+                    "mask_shapes": mask_shapes,
+                }
+            )
+            if call_sampler.sampler_function.__name__ == "_h3_flow_exact_probe":
+                return source_x0
+            if len(calls) == 1:
+                return source_raw / (1.0 - call_sigmas[-1])
+            return noise
+
+    mutable_shapes = list(target_shapes)
+    binding = FlowBinding(trajectory=H3FlowTrajectory(), guidance=GuidanceConfig(mode="off"), capture_enabled=True)
+    result = _run_progressive(
+        Executor(),
+        guider,
+        binding,
+        ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4, handoff_coordinate=0.3),
+        target_noise,
+        target_latent,
+        sampler,
+        sigmas,
+        packed_mask,
+        None,
+        True,
+        7,
+        mutable_shapes,
+    )
+
+    assert [call["name"] for call in calls] == [
+        "sample_sa_solver_pece",
+        "_h3_flow_exact_probe",
+        "sample_sa_solver_pece",
+    ]
+    assert [call["shapes"][0][-2:] for call in calls] == [(4, 4), (4, 4), (8, 6)]
+    assert [call["keyframe_hw"] for call in calls] == [(4, 4), (4, 4), (8, 6)]
+    assert calls[0]["mask_shapes"] == (torch.Size([1, 1, 1, 4, 4]), torch.Size([1, 1, 2, 5]))
+    assert calls[2]["mask_shapes"] == (torch.Size([1, 1, 1, 8, 6]), torch.Size([1, 1, 2, 5]))
+    assert mutable_shapes == target_shapes
+    assert result.shape == target_latent.shape
+    assert binding.trajectory.latest.geometry.latent_h == 4
+    assert binding.trajectory.latest.geometry.latent_w == 4
 
 @pytest.mark.parametrize(
     ("name", "calls", "phases"),
