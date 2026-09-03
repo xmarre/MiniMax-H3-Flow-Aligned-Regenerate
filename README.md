@@ -81,7 +81,7 @@ Use the explicit upstream initialization/refine step or the progressive handoff 
 
 ### Continuum V3.4 integrated-refine use
 
-Keep **Flow Trajectory → max_runs** at least as large as the number of physical chunks that will be refined; the node default is 16 to cover Continuum's current maximum sequence length. Downstream refinement happens after the base sampler has emitted its chunk list, so a smaller history can evict early chunk trajectories before their matching refine item executes.
+Keep **Flow Trajectory → max_runs** at least as large as the number of physical chunks that will be refined; the node default is 16 to cover Continuum's current maximum sequence length. Downstream refinement happens after the base sampler has emitted its chunk list, so a smaller history can evict early chunk trajectories before their matching refine item executes. Keep Continuum **Run Storage off** for the initial two-pass validation: a reused base chunk does not replay this node's trajectory-capture sampler lifetime, so cached media alone is not a valid source trajectory for a fresh refine pass.
 
 For the current integrated **MiniMax H3 Latent Upscaler + Refine (3D)** path, do not look for a
 MODEL output from the learned upscaler. Enable Continuum's `emit_refine_conditioning`, pass each
