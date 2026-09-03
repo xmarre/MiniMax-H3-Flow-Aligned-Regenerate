@@ -236,10 +236,7 @@ class H3FlowTrajectory:
                 for run in self._runs
                 if (chunk_id is None or run.chunk_id == str(chunk_id))
                 and (session_id is None or run.session_id == str(session_id))
-                and (
-                    conditioning_signature is None
-                    or run.conditioning_signature == str(conditioning_signature)
-                )
+                and (conditioning_signature is None or run.conditioning_signature == str(conditioning_signature))
             ]
             if not candidates:
                 raise RuntimeError("no trajectory matches the requested session/chunk/conditioning")
