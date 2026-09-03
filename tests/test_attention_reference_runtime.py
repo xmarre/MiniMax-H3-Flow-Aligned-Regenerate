@@ -772,6 +772,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         class_obj = guider
 
         def __call__(self, noise, latent, call_sampler, call_sigmas, mask, *args, latent_shapes):
+            callback_arg = args[0] if args else None
             mask_shapes = None
             if mask is not None:
                 mask_shapes = tuple(
@@ -789,6 +790,8 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                     "mask_shapes": mask_shapes,
                 }
             )
+            if callback_arg is not None:
+                callback_arg(0, noise, noise, len(call_sigmas) - 1)
             if call_sampler.sampler_function.__name__ == "_h3_flow_exact_probe":
                 return source_x0
             if len(calls) == 1:
@@ -796,6 +799,16 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
             if len(calls) == 3:
                 binding.metrics.event("model_call", actual=True)
             return noise
+
+    callback_shapes = []
+
+    def target_callback(_step, x0, x, _total):
+        callback_shapes.append(
+            (
+                tuple(unpack_streams(x0, target_shapes)[0].shape[-2:]),
+                tuple(unpack_streams(x, target_shapes)[0].shape[-2:]),
+            )
+        )
 
     mutable_shapes = list(target_shapes)
     binding = FlowBinding(trajectory=H3FlowTrajectory(), guidance=GuidanceConfig(mode="off"), capture_enabled=True)
@@ -809,7 +822,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         sampler,
         sigmas,
         packed_mask,
-        None,
+        target_callback,
         True,
         7,
         mutable_shapes,
@@ -821,6 +834,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         "sample_sa_solver_pece",
     ]
     assert [call["shapes"][0][-2:] for call in calls] == [(4, 4), (4, 4), (8, 6)]
+    assert callback_shapes == [((8, 6), (8, 6)), ((8, 6), (8, 6))]
     assert [call["keyframe_hw"] for call in calls] == [(4, 4), (4, 4), (8, 6)]
     assert calls[0]["mask_shapes"] == (torch.Size([1, 24, 1, 4, 4]), torch.Size([1, 32, 2, 5]))
     assert calls[2]["mask_shapes"] == (torch.Size([1, 24, 1, 8, 6]), torch.Size([1, 32, 2, 5]))
