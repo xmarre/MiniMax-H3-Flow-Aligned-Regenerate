@@ -31,6 +31,7 @@ FLOW_BINDING_KEY = "h3_flow_regenerate_binding"
 PROGRESSIVE_KEY = "h3_flow_progressive_v1"
 OUTER_WRAPPER_KEY = "h3_flow_regenerate.outer.v1"
 PREDICT_WRAPPER_KEY = "h3_flow_regenerate.predict.v1"
+CLONE_CALLBACK_KEY = "h3_flow_regenerate.clone.v1"
 PROBE_MARKER = "_h3_flow_exact_probe"
 PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
 FLOW_STAGE_KEY = "h3_flow_stage"
@@ -224,6 +225,25 @@ def _conditioning_signature(guider: Any) -> str:
 def _resolve_binding(guider: Any) -> FlowBinding | None:
     value = (getattr(guider, "model_options", None) or {}).get(FLOW_BINDING_KEY)
     return value if isinstance(value, FlowBinding) else None
+
+
+def flow_model_clone_callback(source_model: Any, cloned_model: Any) -> None:
+    source_options = getattr(source_model, "model_options", None) or {}
+    binding = source_options.get(FLOW_BINDING_KEY)
+    if not isinstance(binding, FlowBinding):
+        return
+    cloned_options = getattr(cloned_model, "model_options", None)
+    if not isinstance(cloned_options, dict):
+        cloned_model.model_options = {}
+        cloned_options = cloned_model.model_options
+    cloned_options[FLOW_BINDING_KEY] = FlowBinding(
+        trajectory=binding.trajectory,
+        guidance=binding.guidance,
+        metrics=binding.metrics,
+        capture_enabled=binding.capture_enabled,
+        capture_forecasts=binding.capture_forecasts,
+        guidance_conditioning_signature=binding.guidance_conditioning_signature,
+    )
 
 
 def _begin_capture(
