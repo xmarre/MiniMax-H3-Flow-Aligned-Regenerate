@@ -45,12 +45,22 @@ class GuidanceState:
     previous_coordinate: float | None = None
     previous_high_x0: torch.Tensor | None = None
     previous_reference: torch.Tensor | None = None
+    last_schedule: float | None = None
+    last_correction_rms: float | None = None
+    last_reference_rms: float | None = None
+    last_correction_rms_ratio: float | None = None
+    last_clamp_scale: float | None = None
 
     def reset(self) -> None:
         self.start_coordinate = None
         self.previous_coordinate = None
         self.previous_high_x0 = None
         self.previous_reference = None
+        self.last_schedule = None
+        self.last_correction_rms = None
+        self.last_reference_rms = None
+        self.last_correction_rms_ratio = None
+        self.last_clamp_scale = None
 
 
 _PHASE_PRIORITY = {
@@ -118,12 +128,23 @@ def low_frequency_projection(video: torch.Tensor, cutoff: float) -> torch.Tensor
     return filtered.reshape(video.shape[0], video.shape[2], video.shape[1], h, w).permute(0, 2, 1, 3, 4).to(video)
 
 
-def _bounded(correction: torch.Tensor, reference: torch.Tensor, ratio: float) -> torch.Tensor:
+def _bounded(
+    correction: torch.Tensor,
+    reference: torch.Tensor,
+    ratio: float,
+) -> tuple[torch.Tensor, dict[str, float]]:
     dims = tuple(range(1, correction.ndim))
     corr_rms = correction.float().square().mean(dim=dims, keepdim=True).sqrt()
     ref_rms = reference.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
     scale = torch.clamp(ref_rms * ratio / corr_rms.clamp_min(1e-8), max=1.0)
-    return correction * scale.to(correction)
+    bounded_rms = corr_rms * scale
+    stats = {
+        "correction_rms": float(bounded_rms.mean().item()),
+        "reference_rms": float(ref_rms.mean().item()),
+        "correction_rms_ratio": float((bounded_rms / ref_rms).mean().item()),
+        "clamp_scale": float(scale.mean().item()),
+    }
+    return correction * scale.to(correction), stats
 
 
 def apply_guidance(
@@ -170,7 +191,12 @@ def apply_guidance(
         ref_delta = low_frequency_projection(ref - state.previous_reference, config.cutoff)
         high_delta = low_frequency_projection(high_x0 - state.previous_high_x0, config.cutoff)
         correction = correction + schedule * config.acceleration_weight * (ref_delta - high_delta)
-    correction = _bounded(correction, high_x0, config.max_correction_rms_ratio)
+    correction, correction_stats = _bounded(correction, high_x0, config.max_correction_rms_ratio)
+    state.last_schedule = float(schedule)
+    state.last_correction_rms = correction_stats["correction_rms"]
+    state.last_reference_rms = correction_stats["reference_rms"]
+    state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
+    state.last_clamp_scale = correction_stats["clamp_scale"]
     state.previous_coordinate = float(coordinate)
     state.previous_high_x0 = high_x0.detach()
     state.previous_reference = ref.detach()
