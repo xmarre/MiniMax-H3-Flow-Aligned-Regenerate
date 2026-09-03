@@ -117,7 +117,10 @@ def _sparse_attention(backend, q, k, v, heads, layout, config, kwargs):
     for start in range(0, sequence, config.query_chunk):
         stop = min(sequence, start + config.query_chunk)
         indices = torch.arange(start, stop, device=q.device)
-        local_mask = video_local_mask(layout, indices, radius=config.sparse_window, device=q.device)
+        allowed = video_local_mask(layout, indices, radius=config.sparse_window, device=q.device)
+        mask_value = -torch.finfo(q.dtype).max
+        local_mask = torch.zeros(allowed.shape, dtype=q.dtype, device=q.device)
+        local_mask.masked_fill_(~allowed, mask_value)
         out = _call_backend(
             backend,
             q[:, global_heads:, start:stop],
