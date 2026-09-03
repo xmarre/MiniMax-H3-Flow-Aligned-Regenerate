@@ -518,15 +518,21 @@ class H3MetricsJSON:
     def render(self, metrics, filename_prefix="h3_flow_regenerate/metrics"):
         import folder_paths
 
-        output_dir = folder_paths.get_output_directory()
-        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
-            filename_prefix,
-            output_dir,
-        )
-        file_name = f"{filename}_{counter:05}_.json"
-        metrics.enable_autosave(Path(full_output_folder) / file_name)
+        output_dir = Path(folder_paths.get_output_directory())
+        target = metrics.autosave_path
+        if target is None:
+            full_output_folder, filename, counter, _, _ = folder_paths.get_save_image_path(
+                filename_prefix,
+                str(output_dir),
+            )
+            file_name = f"{filename}_{counter:05}_.json"
+            target = Path(full_output_folder) / file_name
+        target = metrics.enable_autosave(target)
         payload = metrics.to_json()
-        relative_path = f"{subfolder}/{file_name}" if subfolder else file_name
+        try:
+            relative_path = target.relative_to(output_dir).as_posix()
+        except ValueError:
+            relative_path = target.as_posix()
         return {
             "ui": {"text": [f"Saving metrics JSON: {relative_path}"]},
             "result": (payload,),
