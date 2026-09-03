@@ -808,87 +808,87 @@ def _run_progressive(
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
-            source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
-            transfer_started = time.perf_counter()
-            target_raw, target_shapes = build_handoff_state(
-                source_packed_state=source_raw,
-                source_x0_packed=source_x0,
-                source_shapes=source_shapes,
-                sigma=sigma,
-                target_h=target_h,
-                target_w=target_w,
-                seed=int(seed or 0) + config.seed_offset,
-                transfer_mode=config.transfer_mode,
-            )
-            if target_input:
-                target_latent_image = latent_image
-                target_mask = denoise_mask
-            else:
-                target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
-                target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
-                latent_shapes[:] = target_shapes
-            target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
-            target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
-            if target_input:
-                target_noise = _merge_preserved_noise(target_noise, noise, target_mask)
-            binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
+        source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        transfer_started = time.perf_counter()
+        target_raw, target_shapes = build_handoff_state(
+            source_packed_state=source_raw,
+            source_x0_packed=source_x0,
+            source_shapes=source_shapes,
+            sigma=sigma,
+            target_h=target_h,
+            target_w=target_w,
+            seed=int(seed or 0) + config.seed_offset,
+            transfer_mode=config.transfer_mode,
+        )
+        if target_input:
+            target_latent_image = latent_image
+            target_mask = denoise_mask
+        else:
+            target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
+            target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
+            latent_shapes[:] = target_shapes
+        target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
+        target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
+        if target_input:
+            target_noise = _merge_preserved_noise(target_noise, noise, target_mask)
+        binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
 
-            if binding.guidance is not None and binding.guidance.mode != "off":
-                if binding.trajectory is None:
-                    raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
-                session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
-                run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
-                if run.geometry.latent_t != int(target_shapes[0][2]):
-                    raise ValueError("trajectory and target video temporal geometry differ")
-                expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-                if run.conditioning_signature != expected_signature:
-                    raise ValueError("trajectory conditioning signature does not match the regeneration run")
-                binding.active_guidance_run = run
+        if binding.guidance is not None and binding.guidance.mode != "off":
+            if binding.trajectory is None:
+                raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
+            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+            run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
+            if run.geometry.latent_t != int(target_shapes[0][2]):
+                raise ValueError("trajectory and target video temporal geometry differ")
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            if run.conditioning_signature != expected_signature:
+                raise ValueError("trajectory conditioning signature does not match the regeneration run")
+            binding.active_guidance_run = run
 
-            def high_callback(step, x0, x, _total):
-                if callback is not None:
-                    return callback(index + step, x0, x, len(sigmas) - 1)
-                return None
+        def high_callback(step, x0, x, _total):
+            if callback is not None:
+                return callback(index + step, x0, x, len(sigmas) - 1)
+            return None
 
-            high_started = time.perf_counter()
-            high_event_start = len(binding.metrics.events)
-            _reset_guider_conds(
-                guider,
-                target_video_hw=None if target_input else (target_h, target_w),
+        high_started = time.perf_counter()
+        high_event_start = len(binding.metrics.events)
+        _reset_guider_conds(
+            guider,
+            target_video_hw=None if target_input else (target_h, target_w),
+        )
+        with _high_stage_contract(guider):
+            result = executor(
+                target_noise,
+                target_latent_image,
+                sampler,
+                high_sigmas,
+                target_mask,
+                high_callback,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
             )
-            with _high_stage_contract(guider):
-                result = executor(
-                    target_noise,
-                    target_latent_image,
-                    sampler,
-                    high_sigmas,
-                    target_mask,
-                    high_callback,
-                    disable_pbar,
-                    seed,
-                    latent_shapes=latent_shapes,
-                )
-            binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
-            high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
-            first_high_actual = None
-            if high_model_calls:
-                first_high_actual = bool(high_model_calls[0].fields.get("actual"))
-                if not first_high_actual:
-                    raise RuntimeError("progressive high stage did not begin with the required exact H3 model evaluation")
-            binding.metrics.event(
-                "handoff_complete",
-                sigma=sigma,
-                target_shape=target_shapes[0],
-                audio_state_copied=True,
-                separate_sampler_invocations=True,
-                exact_probe_performed=True,
-                high_stage_exact_prefix_requested=1,
-                high_stage_first_call_actual=first_high_actual,
-                high_stage_model_calls=len(high_model_calls),
-                conditioning_rebuilt_for_high_grid=True,
-                input_mode="target_grid" if target_input else "source_grid",
-            )
-            return result
+        binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
+        high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
+        first_high_actual = None
+        if high_model_calls:
+            first_high_actual = bool(high_model_calls[0].fields.get("actual"))
+            if not first_high_actual:
+                raise RuntimeError("progressive high stage did not begin with the required exact H3 model evaluation")
+        binding.metrics.event(
+            "handoff_complete",
+            sigma=sigma,
+            target_shape=target_shapes[0],
+            audio_state_copied=True,
+            separate_sampler_invocations=True,
+            exact_probe_performed=True,
+            high_stage_exact_prefix_requested=1,
+            high_stage_first_call_actual=first_high_actual,
+            high_stage_model_calls=len(high_model_calls),
+            conditioning_rebuilt_for_high_grid=True,
+            input_mode="target_grid" if target_input else "source_grid",
+        )
+        return result
 
     except BaseException as exc:
         if committed_low_run is not None and binding.trajectory is not None:
