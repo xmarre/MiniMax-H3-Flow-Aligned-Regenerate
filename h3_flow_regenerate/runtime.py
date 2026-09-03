@@ -281,14 +281,13 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     binding = _resolve_binding(guider)
     progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
     progressive_active = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
-    if binding is not None and "multigpu_clones" in (model_options or {}) and (
-        binding.active_capture is not None
-        or binding.active_guidance_run is not None
-        or progressive_active
+    if (
+        binding is not None
+        and "multigpu_clones" in (model_options or {})
+        and (binding.active_capture is not None or binding.active_guidance_run is not None or progressive_active)
     ):
         raise RuntimeError(
-            "H3 flow trajectory capture/guidance/progressive handoff does not support "
-            "parallel multi-GPU model calls"
+            "H3 flow trajectory capture/guidance/progressive handoff does not support parallel multi-GPU model calls"
         )
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
