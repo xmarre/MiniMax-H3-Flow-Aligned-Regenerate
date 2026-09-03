@@ -238,8 +238,9 @@ legitimately change because the supplied refine coordinates changed.
 
 The media gate is E1 versus E0: fast-motion clothing, newly revealed grass/background,
 limb/disocclusion boundaries, anatomy, detail, shot continuity/dynamics, prompt/reference fidelity,
-Continuum seams, learned-upscale quality, and decoded audio. A video gain that harms audio, motion, or
-continuity fails.
+Continuum seams, and learned-upscale quality. With `lock_audio=true`, final audio should be restored
+from sampler 1 exactly; treat any final-audio delta as a wiring/runtime failure rather than a quality
+tradeoff.
 
 Do not tune strength or use `calibrated` mode before this pair is decoded. If E1 is clearly better,
 the next experiment is a combination test with the accepted progressive/temporal work. If E1 is
