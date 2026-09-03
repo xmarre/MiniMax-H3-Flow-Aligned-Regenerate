@@ -517,7 +517,9 @@ class H3ResolutionAwareSigmas:
             "shared_av_coordinate": True,
         }
         if metrics is not None:
-            delta = (mapped.detach().to(device="cpu", dtype=torch.float64) - sigmas.detach().to(device="cpu", dtype=torch.float64)).abs()
+            mapped_cpu = mapped.detach().to(device="cpu", dtype=torch.float64)
+            input_cpu = sigmas.detach().to(device="cpu", dtype=torch.float64)
+            delta = (mapped_cpu - input_cpu).abs()
             metrics.event(
                 "resolution_sigma_map",
                 mode=mode,
