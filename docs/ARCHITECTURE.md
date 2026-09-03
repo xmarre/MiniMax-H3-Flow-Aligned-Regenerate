@@ -118,8 +118,10 @@ wall telemetry used by the progressive experiments, but attaching trajectory cap
 an unnecessary source-trajectory side effect. `H3RuntimeMetricsProbe` therefore installs the existing
 flow OUTER_SAMPLE/PREDICT_NOISE and packed-layout metrics wrappers with no trajectory, guidance,
 progressive configuration, or attention experiment. It must be placed after Spectrum so its PREDICT
-wrapper observes Spectrum's call-local actual/forecast provenance. The returned metrics sink can be
-connected directly to `H3MetricsJSON`.
+wrapper observes Spectrum's call-local actual/forecast provenance. The returned metrics sink is also fed to the
+resolution-sigma node, which records a single `resolution_sigma_map` configuration/delta event, and
+then to `H3MetricsJSON`. E's saved metrics artifact therefore proves both the schedule configuration
+and the resulting sampler/model-call topology.
 
 ## Transactional trajectory schema
 
