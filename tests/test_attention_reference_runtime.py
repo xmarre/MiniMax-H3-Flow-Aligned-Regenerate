@@ -397,6 +397,8 @@ def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
         capture_enabled=True,
         capture_forecasts=True,
     )
+    binding.captured_run_id = "captured-run"
+    binding.guidance_run_id = "guidance-run"
     binding.active_capture = object()
     binding.active_guidance_run = object()
     binding.guidance_state.start_coordinate = 0.5
@@ -409,6 +411,8 @@ def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
     assert cloned_binding.metrics is binding.metrics
     assert cloned_binding.capture_enabled
     assert cloned_binding.capture_forecasts
+    assert cloned_binding.captured_run_id == "captured-run"
+    assert cloned_binding.guidance_run_id == "guidance-run"
     assert cloned_binding.active_capture is None
     assert cloned_binding.active_guidance_run is None
     assert cloned_binding.guidance_state.start_coordinate is None
@@ -648,7 +652,8 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
 
     trajectory = H3FlowTrajectory()
-    base_model, _ = patch_flow_model(FakePatcher(), trajectory=trajectory, capture_enabled=True)
+    base_model, source_binding = patch_flow_model(FakePatcher(), trajectory=trajectory, capture_enabled=True)
+    source_binding.captured_run_id = "exact-continuum-run"
     positive = [[torch.zeros(1, 2, 4), {"tag": "chunk"}]]
     opaque = object()
     state = {"api": 1, "model": base_model, "positive": positive, "opaque": opaque}
@@ -670,11 +675,42 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert binding.guidance.mode == "direction"
     assert not binding.capture_enabled
     assert binding.guidance_conditioning_signature == conditioning_signature_from_conditioning(positive)
+    assert binding.guidance_run_id == "exact-continuum-run"
     assert binding.metrics is metrics
     layout_wrapper = patched_state["model"].model_options["transformer_options"]["patches_replace"]["dit"][
         ("double_block", 0)
     ]
     assert layout_wrapper._h3_flow_metrics is metrics
+
+
+
+def test_continuum_refine_state_requires_exact_capture_provenance(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    trajectory = H3FlowTrajectory()
+    base_model, _ = patch_flow_model(FakePatcher(), trajectory=trajectory, capture_enabled=True)
+    state = {
+        "api": 1,
+        "model": base_model,
+        "positive": [[torch.zeros(1, 2, 4), {"tag": "chunk"}]],
+    }
+
+    with pytest.raises(RuntimeError, match="no captured trajectory provenance"):
+        H3FlowAlignedRefineState().patch(
+            state,
+            trajectory,
+            "direction",
+            0.35,
+            0.0,
+            0.0,
+            0.25,
+        )
 
 
 def test_active_flow_state_rejects_parallel_multigpu_model_calls():
