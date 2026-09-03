@@ -34,7 +34,10 @@ def test_progressive_nodes_expose_all_selectable_guidance_controls():
             "acceleration_weight",
             "consistency_weight",
             "low_frequency_cutoff",
+            "temporal_weight",
         }.issubset(required)
+        names = list(required)
+        assert names.index("temporal_weight") > names.index("low_frequency_cutoff")
 
 
 def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(monkeypatch, tmp_path):
