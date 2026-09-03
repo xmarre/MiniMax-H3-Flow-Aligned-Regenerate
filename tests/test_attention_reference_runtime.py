@@ -779,11 +779,13 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
         "cross_attn": torch.zeros(1, 2, 4),
         "minimax_keyframes": [{"latent": source_video.clone(), "latent_h": 4, "latent_w": 4}],
     }
+    runtime_cond = original_cond.copy()
+    runtime_cond["hooks"] = "filtered-runtime-hooks"
     guider = SimpleNamespace(
         model_options={"transformer_options": {}},
         model_patcher=SimpleNamespace(model=MiniMaxH3()),
         original_conds={"positive": [original_cond]},
-        conds={"positive": [original_cond.copy()]},
+        conds={"positive": [runtime_cond]},
     )
     calls = []
 
@@ -965,6 +967,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                     "stage": guider.model_options["transformer_options"].get(FLOW_STAGE_KEY),
                     "shapes": list(latent_shapes),
                     "keyframe_hw": tuple(guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]),
+                    "hooks": guider.conds["positive"][0].get("hooks"),
                     "mask_shapes": mask_shapes,
                 }
             )
@@ -1015,6 +1018,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert [call["shapes"][0][-2:] for call in calls] == [(4, 4), (4, 4), (8, 6)]
     assert callback_shapes == [((8, 6), (8, 6)), ((8, 6), (8, 6))]
     assert [call["keyframe_hw"] for call in calls] == [(4, 4), (4, 4), (8, 6)]
+    assert [call["hooks"] for call in calls] == ["filtered-runtime-hooks"] * 3
     assert calls[0]["mask_shapes"] == (torch.Size([1, 24, 1, 4, 4]), torch.Size([1, 32, 2, 5]))
     assert calls[2]["mask_shapes"] == (torch.Size([1, 24, 1, 8, 6]), torch.Size([1, 32, 2, 5]))
     assert mutable_shapes == target_shapes
