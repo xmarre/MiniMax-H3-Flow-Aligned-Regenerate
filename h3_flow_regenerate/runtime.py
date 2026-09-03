@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from .contracts import H3FlowTrajectory, TrajectorySample
-from .geometry import geometry_from_video, pack_streams, unpack_streams
+from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import GuidanceConfig, GuidanceState, apply_guidance
 from .handoff import ProgressiveHandoffConfig, build_handoff_state, select_handoff_index
 from .metrics import H3FlowMetrics
@@ -164,6 +164,7 @@ def _update_keyframe_digest(digest, value: Any, *, depth: int) -> None:
                 continue
             digest.update(f"kf-key:{key!s}:".encode())
             _update_conditioning_digest(digest, block[key], depth=depth + 1)
+
 
 def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     if depth > 8:
@@ -482,15 +483,91 @@ def _process_latent_in(base_model: Any, value: torch.Tensor, shapes: list[tuple[
         base_model.latent_shapes = previous
 
 
-def _noise_argument(base_model: Any, state: torch.Tensor, sigma: float) -> torch.Tensor:
+def _noise_argument(
+    base_model: Any,
+    state: torch.Tensor,
+    sigma: float,
+    latent_image: torch.Tensor | None = None,
+) -> torch.Tensor:
     model_sampling = getattr(base_model, "model_sampling", None)
     noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
     if not math.isfinite(noise_scale) or noise_scale <= 0:
         raise ValueError("H3 model noise_scale must be finite and positive")
-    return state / (sigma * noise_scale)
+    if not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
+        raise ValueError("H3 noise reconstruction requires a finite positive sigma")
+    numerator = state
+    if latent_image is not None:
+        if latent_image.shape != state.shape:
+            raise ValueError("H3 latent_image and sampler state shapes differ")
+        numerator = state - (1.0 - float(sigma)) * latent_image
+    return numerator / (float(sigma) * noise_scale)
 
 
-def _reset_guider_conds(guider: Any) -> None:
+def _resize_packed_latent_image(
+    latent_image: torch.Tensor,
+    source_shapes: list[tuple[int, ...]],
+    target_shapes: list[tuple[int, ...]],
+) -> torch.Tensor:
+    video, audio = unpack_streams(latent_image, source_shapes)
+    target_h, target_w = target_shapes[0][-2:]
+    video = resize_spatial_5d(video, target_h, target_w, mode="bicubic")
+    return pack_streams((video, audio))[0]
+
+
+def _mask_shapes(latent_shapes: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    if len(latent_shapes) != 2:
+        raise ValueError("H3 denoise-mask geometry requires video and audio latent shapes")
+    return [(shape[0], 1, *shape[2:]) for shape in latent_shapes]
+
+
+def _resize_packed_mask(
+    mask: torch.Tensor | None,
+    source_shapes: list[tuple[int, ...]],
+    target_shapes: list[tuple[int, ...]],
+) -> torch.Tensor | None:
+    if mask is None:
+        return None
+    source_mask_shapes = _mask_shapes(source_shapes)
+    video_mask, audio_mask = unpack_streams(mask, source_mask_shapes)
+    target_h, target_w = target_shapes[0][-2:]
+    video_mask = resize_spatial_5d(video_mask, target_h, target_w, mode="nearest")
+    packed, packed_shapes = pack_streams((video_mask, audio_mask))
+    if packed_shapes != _mask_shapes(target_shapes):
+        raise RuntimeError("resized H3 denoise mask does not match target AV geometry")
+    return packed
+
+
+def _resize_target_keyframes(entry: dict[str, Any], target_h: int, target_w: int) -> dict[str, Any]:
+    out = entry.copy()
+    keyframes = entry.get("minimax_keyframes")
+    if keyframes is None:
+        return out
+    if not isinstance(keyframes, (list, tuple)):
+        raise TypeError("minimax_keyframes must be a list or tuple")
+    resized_keyframes = []
+    for block in keyframes:
+        if not isinstance(block, dict):
+            raise TypeError("MiniMax H3 keyframe entries must be dictionaries")
+        resized = block.copy()
+        latent = block.get("latent")
+        if latent is not None:
+            if not torch.is_tensor(latent) or latent.ndim not in (4, 5) or latent.shape[1] != 24:
+                raise ValueError("MiniMax H3 keyframe latent must be Bx24xHxW or Bx24xTxHxW")
+            if latent.ndim == 4:
+                latent = resize_spatial_5d(latent.unsqueeze(2), target_h, target_w, mode="bicubic").squeeze(2)
+            else:
+                latent = resize_spatial_5d(latent, target_h, target_w, mode="bicubic")
+            resized["latent"] = latent
+            if "latent_h" in resized:
+                resized["latent_h"] = int(target_h)
+            if "latent_w" in resized:
+                resized["latent_w"] = int(target_w)
+        resized_keyframes.append(resized)
+    out["minimax_keyframes"] = tuple(resized_keyframes) if isinstance(keyframes, tuple) else resized_keyframes
+    return out
+
+
+def _reset_guider_conds(guider: Any, *, target_video_hw: tuple[int, int] | None = None) -> None:
     """Recreate raw conditioning before each independent geometry/sampler lifetime.
 
     ComfyUI resolves percentage areas, masks, and model conditions in-place on
@@ -501,10 +578,17 @@ def _reset_guider_conds(guider: Any) -> None:
     original = getattr(guider, "original_conds", None)
     if not isinstance(original, dict):
         return
-    guider.conds = {
-        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
-        for key, entries in original.items()
-    }
+    target_h, target_w = target_video_hw if target_video_hw is not None else (None, None)
+    rebuilt = {}
+    for key, entries in original.items():
+        copied_entries = []
+        for entry in entries:
+            copied = entry.copy() if isinstance(entry, dict) else copy.copy(entry)
+            if target_video_hw is not None and isinstance(copied, dict):
+                copied = _resize_target_keyframes(copied, int(target_h), int(target_w))
+            copied_entries.append(copied)
+        rebuilt[key] = copied_entries
+    guider.conds = rebuilt
 
 
 @contextlib.contextmanager
@@ -547,11 +631,6 @@ def _run_progressive(
 ):
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
-    if denoise_mask is not None:
-        raise RuntimeError(
-            "progressive handoff does not yet support denoise masks; preserving masked H3 regions "
-            "requires carrying and spatially transforming the sampler latent_image across the grid transition"
-        )
     if sigmas.ndim != 1 or sigmas.numel() < 4:
         raise ValueError("progressive handoff requires a full H3 sigma schedule")
     if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
@@ -624,11 +703,12 @@ def _run_progressive(
             binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
         base_model = guider.model_patcher.model
         source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
+        source_latent_internal = _process_latent_in(base_model, latent_image, source_shapes)
         active = binding.active_capture
         if active is not None:
             active.phases = (*active.phases, (index, "handoff_probe"))
         probe_started = time.perf_counter()
-        probe_noise = _noise_argument(base_model, source_raw, sigma)
+        probe_noise = _noise_argument(base_model, source_raw, sigma, source_latent_internal)
         previous_probe = transformer.get(PROBE_CONTEXT_KEY)
         transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
         try:
@@ -640,7 +720,7 @@ def _run_progressive(
             with _high_stage_contract(guider):
                 source_x0 = executor(
                     probe_noise,
-                    torch.zeros_like(source_raw),
+                    latent_image,
                     _make_probe_sampler(),
                     sigmas[index : index + 1],
                     denoise_mask,
@@ -672,6 +752,10 @@ def _run_progressive(
         seed=int(seed or 0) + config.seed_offset,
         transfer_mode=config.transfer_mode,
     )
+    target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
+    target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
+    target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
+    target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
     binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
     latent_shapes[:] = target_shapes
 
@@ -692,14 +776,14 @@ def _run_progressive(
         return None
 
     high_started = time.perf_counter()
-    _reset_guider_conds(guider)
+    _reset_guider_conds(guider, target_video_hw=(target_h, target_w))
     with _high_stage_contract(guider):
         result = executor(
-            _noise_argument(base_model, target_raw, sigma),
-            torch.zeros_like(target_raw),
+            target_noise,
+            target_latent_image,
             sampler,
             high_sigmas,
-            None,
+            target_mask,
             high_callback,
             disable_pbar,
             seed,
