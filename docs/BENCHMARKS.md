@@ -31,10 +31,13 @@ KSampler and node time around upscaler/handoff; total prompt time is secondary.
 
 The machine-readable matrix fixes the seed set to `0, 1, 2` and expands every applicable row across
 four required content scenarios. The actual working workflow uses **7 first-pass steps and 7 refine
-steps**. Keep the first pass fixed at 7 throughout the learned-refine comparison. C7 is the
-flow-aligned parity smoke baseline; test C6 next and test C5 only if C6 decoded video/audio remains
-acceptable. Further refine-step reductions are exploratory rather than a required gate. The primary
-learned-refine comparison remains denoise 0.25; the same B/C rows are also repeated at 0.30. Two
+steps**. Keep the first pass fixed at 7 throughout the learned-refine comparison. The reduced-refine
+smoke ladder is complete: C7=7+7, C6=7+6, C5=7+5, and exploratory C4=7+4 all completed with acceptable
+decoded media in the difficult-motion smoke case, and corrected C4 telemetry matched the expected
+Spectrum provenance exactly (9 actual / 4 forecast and 9 exact anchors per base chunk). C4 remains an
+exploratory lower-step operating point rather than a formal primary-matrix row. The next feature-path
+gate is D, progressive target-input. The primary learned-refine comparison remains denoise 0.25; the
+same B/C rows are also repeated at 0.30. Two
 patch-safe base regimes are explicit: 54x40 latent
 (864x640, 0.553 MP) and 62x44 latent (992x704, 0.698 MP), both evaluated against the 64x48
 (1024x768) target. The scenarios cover difficult motion/scene changes, small people/faces, fine text,
@@ -42,6 +45,17 @@ and reference-heavy conditioning. Prompts and reference assets may differ betwee
 remain identical across rows within one scenario/area/denoise/seed slice.
 
 Row D must use **Progressive Handoff (Target Input)** in the two-chunk Continuum graph: Continuum is configured at 64x48 while the wrapper's internal source is 54x40. This preserves target-sized session and native-mask geometry between chunks. The source-input progressive node is a standalone control and is not the Continuum benchmark topology.
+
+Before spending the formal matrix, validate D on the already-used difficult-motion smoke graph so the
+only structural change is the generation path. For that smoke, keep the current final grid at 58x58
+(928x928), set the progressive internal source to 48x48 (768x768), keep the same full 7-outer-step
+SA-Solver-PECE schedule, seed, prompt, references, DiffAid, Untwist, Spectrum and Continuum chunking,
+and remove the separate learned-upscale/refine branch entirely. Use fixed handoff coordinate 0.35,
+direction guidance 0.25, acceleration/consistency 0, and low-frequency cutoff 0.25. Continuum Run
+Storage stays off. A passing smoke must show target-grid Continuum chunks throughout, a private low
+stage at 48x48, one exact handoff probe, a fresh high-stage sampler lifetime whose first H3 call is
+actual, explicit reset/history-boundary telemetry, no fallback/invalidation, and acceptable decoded
+video/audio/seams.
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
