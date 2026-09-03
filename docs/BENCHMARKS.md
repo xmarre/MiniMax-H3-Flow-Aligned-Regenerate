@@ -125,6 +125,34 @@ regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 6
 The source and target observations therefore differ in both regimes, keeping the resolution mapping
 non-identity while isolating it from trajectory guidance and progressive handoff.
 
+### E10 resolution-shift smoke
+
+Before spending the formal E matrix, use one matched difficult-motion pair on the user's current
+working geometry. This is a **direct target-grid** experiment, not another progressive handoff:
+
+- source reference geometry for the analytic mapping: 736x768 pixels (46x48 latent W/H);
+- actual generation geometry: 896x928 pixels (56x58 latent W/H);
+- target/source area ratio: ~1.47101449;
+- strength-1 SD3-derived factor: ~1.21285386;
+- 10 SA-Solver-PECE outer steps;
+- same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
+  and decode;
+- no progressive handoff, trajectory guidance, or separate learned upscale/refine;
+- Continuum Run Storage off.
+
+Run **E0-direct-control** first with Resolution-Aware Sigmas set to `off`. Then run
+**E1-resolution-aware** with mode `resolution_aware`, strength 1.0, source 736x768 and target
+896x928. Do not tune strength before decoding this pair.
+
+A two-chunk 10-outer-step PECE run should still produce 38 sampler logical calls, but there must be
+zero progressive sampler invocations/history boundaries and zero handoff probes. Do **not** require
+the same actual-NFE/forecast split between E0 and E1: changing the sigma coordinates can legitimately
+change Spectrum's policy decisions, so record that difference rather than forcing parity.
+
+The media gate includes motion/disocclusion, clothing, grass/background texture, anatomy, detail,
+shot dynamics, prompt/reference fidelity, and decoded audio. The resolution remap moves H3's shared AV
+coordinate; a video improvement that damages audio is not a pass.
+
 ## Required metrics
 
 - actual pixels and video latent T/H/W; padded H/W and whether padding occurred;
