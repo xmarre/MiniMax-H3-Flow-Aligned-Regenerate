@@ -34,7 +34,9 @@ two-pass path has completed real decoded-media smoke validation through 7+4 refi
 correct Spectrum provenance and live guidance telemetry. Progressive Target Input has also completed
 the difficult-motion D10 smoke at 10 SA-Solver-PECE outer steps; decoded media is good/baseline-level,
 while the remaining fast-motion clothing/background disocclusion artifacts are not clearly improved by
-the tested HiFlow-style acceleration term. Resolution-shift-only validation remains pending. The safe
+the tested HiFlow-style acceleration term. A new `direction+temporal` mode now tests H3-latent
+adjacent-frame correspondence with cycle-consistent occlusion gating; its matched D10 media gate is
+pending. Resolution-shift-only validation also remains pending. The safe
 default for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
@@ -178,9 +180,19 @@ H3's full-resolution flow velocity from the sampler state and predicted-clean es
 HiFlow's adjacent velocity-difference acceleration update. It needs adjacent exact trajectory support
 and the combined predicted-clean correction remains bounded by the RMS guard. This is an H3/video
 adaptation of the published image-generation method, not evidence that HiFlow's image results transfer
-unchanged to H3 video. Progressive nodes expose the acceleration, consistency, and low-frequency
+unchanged to H3 video. Progressive nodes expose the acceleration, temporal, consistency, and low-frequency
 controls needed by their selectable guidance modes; a selected mode is never left with an inaccessible
 mode-specific weight.
+
+`direction+temporal` is a video-time experiment rather than another denoising-time flow correction.
+It estimates bounded local adjacent-frame correspondences directly from the exact low-resolution H3
+clean-state video latent, requires similarity/margin plus reverse-match cycle consistency, and uses the
+result as a confidence/occlusion gate. Trusted regions transport neighboring high-resolution detail
+plus the low-resolution trajectory's same-time innovation; ambiguous/disoccluded regions receive no
+temporal copy and retain the ordinary same-time direction guidance. The matcher has no RAFT/GMFlow
+dependency and adds no H3 transformer evaluations. Its 0.20 default weight is a smoke-test operating
+point, not a validated recommendation.
+
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
@@ -214,7 +226,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. Resolution-shift-only validation remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. The new `direction+temporal` correspondence mode is structurally tested but still requires its matched D10 decoded-media gate. Resolution-shift-only validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
