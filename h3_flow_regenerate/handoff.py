@@ -64,6 +64,72 @@ class ProgressiveHandoffConfig:
         return min(self.auto_max_coordinate, max(self.auto_min_coordinate, estimate))
 
 
+@dataclass(frozen=True, slots=True)
+class ProgressiveTargetInputConfig:
+    """Run early denoising on a smaller grid while the workflow stays target-sized.
+
+    This mode is designed for Continuum and other pipelines whose latent/session
+    contract must remain on the final output grid. The wrapper derives a low-grid
+    sampler invocation internally and returns to the original target grid at the
+    handoff, so downstream spatial contracts never observe a geometry change.
+    """
+
+    source_latent_h: int | None = None
+    source_latent_w: int | None = None
+    source_scale: float | None = None
+    handoff_coordinate: float = 0.35
+    handoff_selection: str = "fixed"
+    auto_min_coordinate: float = 0.2
+    auto_max_coordinate: float = 0.55
+    transfer_mode: str = "bicubic"
+    matching_mode: str = "conditional_renoise"
+    seed_offset: int = 0x4833464C4F57
+    source_noise_offset: int = 0x48334C4F574C52
+    min_high_steps: int = 2
+
+    def __post_init__(self) -> None:
+        explicit = self.source_latent_h is not None or self.source_latent_w is not None
+        if explicit == (self.source_scale is not None):
+            raise ValueError("provide either source latent H/W or source scale")
+        if explicit:
+            if self.source_latent_h is None or self.source_latent_h < 2 or self.source_latent_h % 2:
+                raise ValueError("source latent H must be positive and even")
+            if self.source_latent_w is None or self.source_latent_w < 2 or self.source_latent_w % 2:
+                raise ValueError("source latent W must be positive and even")
+        elif not math.isfinite(float(self.source_scale)) or not 0.0 < float(self.source_scale) < 1.0:
+            raise ValueError("source scale must be finite and inside (0, 1)")
+        if not 0 < self.handoff_coordinate < 1 or not math.isfinite(self.handoff_coordinate):
+            raise ValueError("handoff coordinate must be finite and inside (0, 1)")
+        if self.handoff_selection not in {"fixed", "auto_compute"}:
+            raise ValueError("handoff selection must be fixed or auto_compute")
+        if not 0 < self.auto_min_coordinate <= self.auto_max_coordinate < 1:
+            raise ValueError("automatic handoff bounds must lie inside (0, 1)")
+        if self.matching_mode != "conditional_renoise":
+            raise ValueError("only the derived conditional_renoise handoff is currently supported")
+        if self.min_high_steps < 1:
+            raise ValueError("min_high_steps must be positive")
+
+    def resolve_source(self, target_h: int, target_w: int) -> tuple[int, int]:
+        if self.source_scale is not None:
+            source_h, source_w = normalize_target_geometry(
+                source_h=target_h,
+                source_w=target_w,
+                scale=self.source_scale,
+                policy="nearest",
+            )
+        else:
+            source_h, source_w = int(self.source_latent_h), int(self.source_latent_w)
+        if source_h * source_w >= int(target_h) * int(target_w):
+            raise ValueError("target-input progressive source area must be smaller than the target area")
+        return source_h, source_w
+
+    def resolve_coordinate(self, source_h: int, source_w: int, target_h: int, target_w: int) -> float:
+        if self.handoff_selection == "fixed":
+            return self.handoff_coordinate
+        area_ratio = (target_h * target_w) / (source_h * source_w)
+        estimate = self.handoff_coordinate / math.sqrt(area_ratio)
+        return min(self.auto_max_coordinate, max(self.auto_min_coordinate, estimate))
+
 def select_handoff_index(
     sigmas: torch.Tensor,
     coordinate: float,
