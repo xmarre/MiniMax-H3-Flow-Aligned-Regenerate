@@ -174,6 +174,7 @@ class H3FlowAlignedRefineState:
         patched_state["model"] = patched_model
         return patched_state, metrics
 
+
 class H3ProgressiveHandoff:
     @classmethod
     def INPUT_TYPES(cls):
