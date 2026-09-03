@@ -87,6 +87,10 @@ def main() -> None:
         "signature = [class_type, await self.is_changed_cache.get(node_id)]",
     )
     require(
+        args.comfy / "comfy_execution/validation.py",
+        "If one of the types is '*', we can return True immediately",
+    )
+    require(
         args.comfy / "comfy/model_patcher.py",
         "def add_callback_with_key(",
         "def remove_callbacks_with_key(",
