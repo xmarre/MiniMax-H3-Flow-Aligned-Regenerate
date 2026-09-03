@@ -146,6 +146,44 @@ correction, including direction plus acceleration, remains subject to the RMS gu
 separates direction and acceleration RMS ratios and records whether a call is exact or a Spectrum
 forecast so this interaction remains auditable.
 
+### Video-time correspondence guidance
+
+The `direction+temporal` experiment is intentionally separate from denoising-time acceleration.
+For the time-matched exact low-grid clean estimate (R), adjacent video-latent frames are lightly
+spatially smoothed and matched inside a bounded local search window using channel-normalized cosine
+similarity. Both (i\rightarrow i-1) and (i-1\rightarrow i) maps are computed. Match strength combines
+absolute similarity, the best-vs-second-best margin, and a reverse-match cycle-consistency gate.
+
+For a trusted mapping from target frame (i) to neighbor (j), let (W) warp along that low-grid
+correspondence and let (U) transfer a low-grid residual to the target grid. The high-grid temporal
+target is
+
+[
+P_i = W(\hat x^{HR}_{0,j}) + U\left(R_i - W(R_j)\right).
+]
+
+Thus the neighbor contributes high-resolution detail, while the low-resolution H3 trajectory supplies
+the actual same-time structural innovation. The correction (P_i-\hat x^{HR}_{0,i}) is weighted by
+correspondence confidence. Failed/ambiguous/cycle-inconsistent matches contribute zero temporal
+correction instead of copying stale content into disoccluded regions. The existing same-time direction
+term remains active there.
+
+Previous- and next-frame estimates are accumulated symmetrically. When their summed confidence is
+below one, the correction remains attenuated; above one, the two estimates are normalized rather than
+double-counted. The result is non-recursive within a model call: warped neighbors come from the
+original current clean-state estimate, not from an already temporally corrected frame.
+
+Correspondence is computed only from the captured H3 video clean-state latent. No external optical-flow
+network is loaded, audio is untouched, and no packed non-video tokens participate. PECE predictor and
+corrector calls at the same denoising coordinate reuse the small flow/confidence cache; a new coordinate
+recomputes it. The combined direction+temporal correction still passes through the same per-sample RMS
+guard.
+
+Telemetry exposes temporal RMS ratio, mean confidence, valid/disocclusion fractions, similarity and
+margin statistics, low-grid flow magnitude, and cache-hit state. These diagnostics establish that the
+mechanism is active and whether its correspondence gate is plausible; only decoded-media comparison can
+establish quality.
+
 Downsample consistency forms the low-grid residual before lifting it.
 
 ### Continuum integrated-refine adapter
