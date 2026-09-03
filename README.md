@@ -129,8 +129,9 @@ is ambiguous for a progressive split.
 
 Use **Progressive Handoff** when the sampler input itself is the low grid and changing the workflow's
 output latent geometry is acceptable. Use **Progressive Handoff (Target Input)** for Continuum V3.4:
-configure Continuum on the final target grid, set the progressive source to the intended private low
-grid, and patch the MODEL entering Continuum. The formal benchmark uses 1024x768 target with 864x640
+configure Continuum on the final target grid, use **source_mode=scale** so the private low grid is
+derived automatically from that live target geometry, and patch the MODEL entering Continuum. Explicit
+source width/height are fallback controls only for deliberately fixed-grid experiments. The formal benchmark uses 1024x768 target with 864x640
 internal source; the first feature smoke deliberately reuses the existing 928x928 target with 768x768
 internal source so prompt/seed/references stay matched to the accepted C4 run. The wrapper derives a fresh low-grid video noise tensor, downsizes the
 target-grid latent/mask/keyframes for the low and probe stages, then returns to the untouched target
