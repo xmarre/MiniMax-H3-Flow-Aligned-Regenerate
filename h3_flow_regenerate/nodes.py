@@ -112,6 +112,68 @@ class H3FlowAlignedRegenerate:
         return patched, metrics
 
 
+class H3FlowAlignedRefineState:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "refine_state": ("H3_CONTINUUM_REFINE_STATE",),
+                "trajectory": ("H3_FLOW_TRAJECTORY",),
+                "guidance_mode": (
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
+                    {"default": "direction"},
+                ),
+                "direction_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("H3_CONTINUUM_REFINE_STATE", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("refine_state", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def patch(
+        self,
+        refine_state,
+        trajectory,
+        guidance_mode,
+        direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
+        metrics=None,
+    ):
+        if not isinstance(refine_state, dict):
+            raise TypeError("H3 Continuum refine_state must be a dictionary")
+        if type(refine_state.get("api")) is not int or int(refine_state["api"]) != 1:
+            raise ValueError("H3 Flow-Aligned Refine State requires H3 Continuum refine_state API 1")
+        model = refine_state.get("model")
+        positive = refine_state.get("positive")
+        if model is None or positive is None:
+            raise ValueError("H3 Continuum refine_state is missing model or positive conditioning")
+        guidance = GuidanceConfig(
+            mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            cutoff=low_frequency_cutoff,
+        )
+        metrics = metrics or H3FlowMetrics()
+        patched_model, _ = patch_flow_model(
+            model,
+            trajectory=trajectory,
+            guidance=guidance,
+            capture_enabled=False,
+            metrics=metrics,
+        )
+        patched_state = dict(refine_state)
+        patched_state["model"] = patched_model
+        return patched_state, metrics
+
 class H3ProgressiveHandoff:
     @classmethod
     def INPUT_TYPES(cls):
@@ -304,6 +366,7 @@ NODE_CLASS_MAPPINGS = {
     "H3FlowTrajectory": H3FlowTrajectoryNode,
     "H3TrajectoryCapture": H3TrajectoryCapture,
     "H3FlowAlignedRegenerate": H3FlowAlignedRegenerate,
+    "H3FlowAlignedRefineState": H3FlowAlignedRefineState,
     "H3ProgressiveHandoff": H3ProgressiveHandoff,
     "H3ResolutionAwareSigmas": H3ResolutionAwareSigmas,
     "H3ReferenceBudget": H3ReferenceBudget,
@@ -315,6 +378,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3FlowTrajectory": "MiniMax H3 Flow Trajectory",
     "H3TrajectoryCapture": "MiniMax H3 Trajectory Capture",
     "H3FlowAlignedRegenerate": "MiniMax H3 Flow-Aligned Regenerate",
+    "H3FlowAlignedRefineState": "MiniMax H3 Flow-Aligned Refine State",
     "H3ProgressiveHandoff": "MiniMax H3 Progressive Handoff",
     "H3ResolutionAwareSigmas": "MiniMax H3 Resolution-Aware Sigmas [Experimental]",
     "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
