@@ -7,7 +7,7 @@ from h3_flow_regenerate.guidance import (
     GuidanceConfig,
     GuidanceState,
     apply_guidance,
-    initialization_alignment,
+    conditional_renoise_alignment,
     low_frequency_projection,
     time_matched_reference,
 )
@@ -119,6 +119,21 @@ def test_guidance_state_records_bounded_correction_telemetry():
     assert 0.0 < state.last_clamp_scale < 1.0
 
 
+def test_non_acceleration_guidance_does_not_retain_full_video_state():
+    high = torch.randn(1, 24, 1, 8, 8)
+    state = GuidanceState()
+    apply_guidance(
+        high,
+        run=run(),
+        coordinate=0.5,
+        config=GuidanceConfig(mode="direction"),
+        state=state,
+    )
+    assert state.previous_coordinate is None
+    assert state.previous_high_x0 is None
+    assert state.previous_reference is None
+
+
 def test_low_frequency_projection_does_not_change_constant():
     constant = torch.ones(1, 24, 1, 8, 8)
     assert torch.allclose(low_frequency_projection(constant, 0.25), constant)
@@ -141,8 +156,8 @@ def test_acceleration_fails_closed_without_three_exact_anchors():
         apply_guidance(high, run=run(), coordinate=0.5, config=config, state=GuidanceState())
 
 
-def test_initialization_is_rectified_flow_conditional_law():
+def test_conditional_renoise_is_rectified_flow_law():
     x0 = torch.ones(1, 24, 1, 4, 4)
     noise = torch.zeros(1, 24, 1, 8, 8)
-    state = initialization_alignment(x0, target_h=8, target_w=8, sigma=0.25, noise=noise)
+    state = conditional_renoise_alignment(x0, target_h=8, target_w=8, sigma=0.25, noise=noise)
     assert torch.allclose(state, torch.full_like(state, 0.75))
