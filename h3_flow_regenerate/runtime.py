@@ -145,6 +145,26 @@ def _tensor_signature(tensor: torch.Tensor, *, max_values: int = 128) -> bytes:
     return digest.digest()
 
 
+def _update_keyframe_digest(digest, value: Any, *, depth: int) -> None:
+    """Hash keyframe semantics while ignoring expected target-grid resize fields."""
+    if not isinstance(value, (list, tuple)):
+        _update_conditioning_digest(digest, value, depth=depth + 1)
+        return
+    digest.update(f"keyframes:{len(value)}:".encode())
+    for block in value:
+        if not isinstance(block, dict):
+            _update_conditioning_digest(digest, block, depth=depth + 1)
+            continue
+        latent = block.get("latent")
+        if torch.is_tensor(latent):
+            leading_shape = tuple(int(size) for size in latent.shape[:-2])
+            digest.update(f"latent-leading:{leading_shape}|{latent.dtype}|{latent.layout}:".encode())
+        for key in sorted(block, key=lambda item: str(item)):
+            if str(key) in {"latent", "latent_h", "latent_w"}:
+                continue
+            digest.update(f"kf-key:{key!s}:".encode())
+            _update_conditioning_digest(digest, block[key], depth=depth + 1)
+
 def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     if depth > 8:
         digest.update(f"<depth:{type(value).__module__}.{type(value).__qualname__}>".encode())
@@ -161,7 +181,10 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
             if str(key) == "uuid":
                 continue
             digest.update(f"key:{key!s}:".encode())
-            _update_conditioning_digest(digest, value[key], depth=depth + 1)
+            if str(key) == "minimax_keyframes":
+                _update_keyframe_digest(digest, value[key], depth=depth)
+            else:
+                _update_conditioning_digest(digest, value[key], depth=depth + 1)
         return
     if isinstance(value, (list, tuple)):
         digest.update(f"{type(value).__name__}:{len(value)}:".encode())
