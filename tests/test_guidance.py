@@ -552,3 +552,26 @@ def test_temporal_cache_keys_resolved_clamped_reference_coordinate():
 
 def test_temporal_default_requires_exact_reverse_cycle():
     assert GuidanceConfig().temporal_cycle_tolerance == pytest.approx(0.0)
+
+
+def test_temporal_guidance_handles_single_spatial_candidate():
+    torch.manual_seed(17)
+    reference = torch.randn(1, 24, 2, 1, 1)
+    trajectory = run_video(reference)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=1,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.01,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(reference, run=trajectory, coordinate=0.5, config=config, state=state)
+
+    assert torch.allclose(result, reference, atol=1e-5, rtol=1e-5)
+    assert state.last_temporal_valid_fraction == pytest.approx(1.0)
+    assert state.last_temporal_confidence_mean is not None
+    assert torch.isfinite(torch.tensor(state.last_temporal_confidence_mean))
