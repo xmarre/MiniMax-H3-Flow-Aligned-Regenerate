@@ -103,6 +103,16 @@ video shift, and shared-AV status. Analytic tests cover exact-off parity, endpoi
 native-shift composition, and the resulting AV common-coordinate law.
 
 
+### Passive runtime metrics probe
+
+The isolated E path still needs the same auditable H3 logical-call, exact/forecast, layout, and sampler
+wall telemetry used by the progressive experiments, but attaching trajectory capture would introduce
+an unnecessary source-trajectory side effect. `H3RuntimeMetricsProbe` therefore installs the existing
+flow OUTER_SAMPLE/PREDICT_NOISE and packed-layout metrics wrappers with no trajectory, guidance,
+progressive configuration, or attention experiment. It must be placed after Spectrum so its PREDICT
+wrapper observes Spectrum's call-local actual/forecast provenance. The returned metrics sink can be
+connected directly to `H3MetricsJSON`.
+
 ## Transactional trajectory schema
 
 `H3_FLOW_TRAJECTORY` owns immutable committed runs and at most one pending transaction. A run has
