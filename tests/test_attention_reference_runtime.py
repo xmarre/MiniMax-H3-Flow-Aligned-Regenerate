@@ -257,6 +257,44 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
 
 
+def test_repatch_preserves_existing_flow_attention_context_wrapper(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    attention_metrics = H3FlowMetrics()
+    attention_model, _ = patch_flow_model(
+        FakePatcher(),
+        attention=AttentionConfig(mode="diagnostic", layers=(0,)),
+        metrics=attention_metrics,
+    )
+    attention_wrapper = attention_model.model_options["transformer_options"]["patches_replace"]["dit"][
+        ("double_block", 0)
+    ]
+    assert attention_wrapper._h3_flow_layout_scope == "attention"
+
+    flow_metrics = H3FlowMetrics()
+    repatched, _ = patch_flow_model(attention_model, metrics=flow_metrics)
+    outer = repatched.model_options["transformer_options"]["patches_replace"]["dit"][("double_block", 0)]
+    assert outer._h3_flow_layout_scope == "layout"
+    assert outer._h3_flow_metrics is flow_metrics
+    assert outer._h3_flow_previous is attention_wrapper
+
+    replacement_metrics = H3FlowMetrics()
+    replaced, _ = patch_flow_model(
+        repatched,
+        attention=AttentionConfig(mode="diagnostic", layers=(0,)),
+        metrics=replacement_metrics,
+    )
+    replacement = replaced.model_options["transformer_options"]["patches_replace"]["dit"][("double_block", 0)]
+    assert replacement._h3_flow_layout_scope == "attention"
+    assert replacement._h3_flow_metrics is replacement_metrics
+    assert not getattr(replacement._h3_flow_previous, "_h3_flow_layout_wrapper", False)
+
+
 def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
