@@ -183,6 +183,13 @@ as the target/source area ratio grows. It uses no model calls and is reported in
 compute-allocation probe, not a learned quality criterion; fixed `0.35` remains the reproducible
 benchmark setting until decoded runs establish a better policy.
 
+Progressive model-call telemetry is stage-scoped. The live transformer options carry a temporary
+`h3_flow_stage` marker for `low`, `probe`, and `high`; because the flow PREDICT wrapper is
+inside Spectrum, Spectrum's call-local model-options copy preserves that marker alongside actual/
+forecast provenance. Counters therefore expose low/probe/high logical calls and actual/forecast
+counts separately. The wrapper also counts the three downstream sampler invocations and the two
+fresh-lifetime boundaries instead of reporting an unverified solver-reset boolean.
+
 ### Reset and exact-anchor contracts
 
 - **SA/PECE/SEEDS:** separate sampler invocations prevent old-grid history crossing.
