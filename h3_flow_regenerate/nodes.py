@@ -635,7 +635,16 @@ class H3RuntimeMetricsProbe:
 
     def patch(self, model, metrics=None):
         metrics = metrics or H3FlowMetrics()
-        patched, _ = patch_flow_model(model, metrics=metrics)
+        patched, _ = patch_flow_model(
+            model,
+            guidance=GuidanceConfig(mode="off"),
+            clear_progressive=True,
+            capture_enabled=False,
+            capture_forecasts=False,
+            clear_guidance_conditioning_signature=True,
+            clear_guidance_run_id=True,
+            metrics=metrics,
+        )
         return patched, metrics
 
 
