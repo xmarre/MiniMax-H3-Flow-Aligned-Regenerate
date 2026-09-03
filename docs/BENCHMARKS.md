@@ -155,7 +155,18 @@ the relative shift.
 ### E10 resolution-shift smoke
 
 Use one matched difficult-motion pair on the current standard-VAE workflow. E is a **direct
-target-grid** experiment:
+target-grid** experiment. Keep the user's normal automatic geometry chain:
+
+`MP sizing -> Scale (1.20)`
+
+The Scale node is retained **only as the target-dimension calculator for E**. Do not execute the
+learned **Latent Upscale Refine** node. Fan the Scale node's width/height outputs to both Continuum
+width/height and Resolution-Aware Sigmas target_width/target_height. Leave source_width/source_height
+at 0/0 so the resolution node derives the H3-native reference automatically for each target aspect
+ratio. No per-image manual width/height calculation is part of the experiment.
+
+For the current example, Scale produces 896x928, which auto-resolves the pinned H3 native reference
+to 768x800:
 
 - analytic H3-Base reference regime: 768x800 pixels (48x50 latent W/H, 24x25 H3 spatial patches);
 - actual generation: 896x928 pixels (56x58 latent W/H, 28x29 spatial patches);
@@ -165,7 +176,7 @@ target-grid** experiment:
 - 10 SA-Solver-PECE outer steps with the same `MiniMax H3 SA-Solver Scheduler / simple_control`;
 - same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
   standard MiniMax H3 VAE, and decode;
-- no progressive handoff, trajectory capture/guidance, temporal guidance, or learned upscale/refine;
+- no progressive handoff, trajectory capture/guidance, temporal guidance, or learned upscale/refine execution; the ordinary Scale(1.20) geometry node remains active;
 - Continuum Run Storage off.
 
 Wire **MiniMax H3 Resolution-Aware Sigmas** directly between the existing SA-Solver scheduler SIGMAS
@@ -181,8 +192,8 @@ self-describing without contaminating the schedule experiment.
 Run **E0-direct-control** first through the same node with:
 
 - `mode=off`
-- source/reference width 768, height 800
-- target width 896, height 928
+- source/reference width 0, height 0 (auto H3-native reference)
+- target width/height connected from the existing Scale(1.20) node
 - strength 0
 
 The output SIGMAS must be bit-exact parity with the input schedule. Diagnostics should report
@@ -193,8 +204,10 @@ Then run **E1-resolution-aware** with only:
 - `mode=resolution_aware`
 - strength 1.0
 
-changed. Diagnostics should report area ratio ~1.35333333, relative factor ~1.16332856,
-effective video shift ~13.95994269, and `shared_av_coordinate=true`.
+changed. For the current 896x928 example, diagnostics should resolve source 768x800 and report
+area ratio ~1.35333333, relative factor ~1.16332856, effective video shift ~13.95994269,
+`reference_mode=h3_native_auto`, and `shared_av_coordinate=true`. Other source images may produce
+different target/reference numbers through the same automatic MP -> Scale(1.20) geometry path.
 
 The implementation first inverts H3's native video shift, applies only the **relative** SD3 map, and
 then restores H3's native video shift:
