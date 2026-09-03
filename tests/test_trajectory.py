@@ -173,6 +173,28 @@ def test_conditioning_signature_isolates_interleaved_chunk_runs():
     )
 
 
+
+def test_exact_run_id_selection_bypasses_recomputed_conditioning_identity():
+    trajectory = H3FlowTrajectory(max_runs=8)
+
+    first = trajectory.begin(
+        session_id="continuum",
+        chunk_id="0",
+        sampler="euler",
+        scheduler="schedule",
+        geometry=geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
+        audio_shape=(1, 32, 2, 8),
+        layout_signature="layout",
+        conditioning_signature="capture-signature",
+    )
+    trajectory.append(first, sample(1))
+    committed = trajectory.commit(first)
+
+    assert trajectory.select(run_id=committed.run_id).run_id == committed.run_id
+    with pytest.raises(RuntimeError, match="requested run_id=missing"):
+        trajectory.select(run_id="missing")
+
+
 def test_chunk_and_session_isolation():
     trajectory = H3FlowTrajectory()
     for session, chunk, value in [("a", "0", 1), ("a", "1", 2), ("b", "0", 3)]:
