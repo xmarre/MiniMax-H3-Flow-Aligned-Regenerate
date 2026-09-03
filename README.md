@@ -109,7 +109,9 @@ output latent geometry is acceptable. Use **Progressive Handoff (Target Input)**
 configure Continuum at the final 1024x768 target, set the progressive source to 864x640, and patch the
 MODEL entering Continuum. The wrapper derives a fresh low-grid video noise tensor, downsizes the
 target-grid latent/mask/keyframes for the low and probe stages, then returns to the untouched target
-latent/mask/keyframe contract for the high stage. Continuum therefore always receives and stores
+latent/mask/keyframe contract for the high stage. In masked target-input mode, protected regions also
+keep Continuum's original target-grid noise because native H3 uses that noise in its 0.999 visual
+conditioning injection. Continuum therefore always receives and stores
 64x48 output chunks, so native masked continuation and session geometry remain target-sized across
 multiple chunks.
 
@@ -178,7 +180,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 - No decoded-media claim is made yet.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Progressive handoff carries ComfyUI denoise-mask semantics across the grid transition by resizing
-  the single-channel video mask, preserving the audio mask, spatially transferring the sampler
+  ComfyUI's prepared packed video mask, preserving the audio mask, spatially transferring the sampler
   `latent_image`, and reconstructing the exact noise argument against that preserved latent state.
   This path is synthetic-tested but still requires real masked Continuum media validation.
 - Reference decoupling cannot retroactively change Qwen3-VL tokens.
