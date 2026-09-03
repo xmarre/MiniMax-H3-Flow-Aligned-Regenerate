@@ -46,15 +46,17 @@ effective video shift is ~13.95994. Because H3 is a packed joint AV flow model, 
 base coordinate also changes audio sigma. A video-only interpretation would be false; decoded audio is
 part of the gate.
 
-The E0/E1 pair keeps the workflow's existing MP sizing -> Scale(1.20) geometry chain, but uses its
-scaled width/height as the **direct H3 generation grid**. The learned Latent Upscale Refine execution
-is bypassed. Resolution-Aware Sigmas receives the same Scale width/height as its target dimensions and
-uses source_width=source_height=0, which mirrors pinned ComfyUI `adapt_canvas()` to derive the native
-H3 reference automatically for that aspect ratio. The current 896x928 example resolves to 768x800,
-but no per-image manual calculation is required. E0 passes SIGMAS through the resolution node in
-`off` mode as an exact-parity control. E1 changes only the mode to `resolution_aware` at strength 1.
-No progressive handoff, trajectory guidance, temporal transport, or learned refine execution is active.
-This isolates the schedule hypothesis before any combination test.
+The E0/E1 pair cannot obtain its target geometry from the actual downstream refine node because that
+node executes after Continuum sampler 1. Instead, the existing pre-Continuum MP width/height remain the
+base geometry and a new geometry-only helper mirrors the pinned LBH refine node's
+scale-by-multiplier calculation **before** sampler 1. With scale 1.20 / align 32 / keep_proportion true,
+the current 736x768 MP base resolves to the same 896x928 canvas the downstream refine would have
+produced. Those helper outputs drive both Continuum width/height and Resolution-Aware Sigmas target
+width/height. The learned Latent Upscale Refine execution itself is bypassed. Resolution-Aware Sigmas
+uses source_width=source_height=0 to derive the native H3 reference automatically for the target aspect;
+896x928 resolves to 768x800. E0 passes SIGMAS through in `off` mode as an exact-parity control; E1
+changes only to `resolution_aware` at strength 1. This isolates the schedule hypothesis without
+manual per-image resolution calculation or a hidden sampler-2 refinement confound.
 
 If E1 wins clearly, only then combine the shift with the accepted progressive+temporal path. If E1 is
 neutral or worse, the mapping remains experimental/off and no strength sweep is justified from this
