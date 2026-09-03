@@ -500,6 +500,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_flow_magnitude_mean=binding.guidance_state.last_temporal_flow_magnitude_mean,
             temporal_flow_magnitude_max=binding.guidance_state.last_temporal_flow_magnitude_max,
             temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
+            temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
+            temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
             actual=actual,
             solver_phase=(
                 spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
