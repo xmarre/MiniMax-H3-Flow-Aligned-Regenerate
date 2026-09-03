@@ -47,7 +47,7 @@ class GuidanceState:
     previous_reference: torch.Tensor | None = None
     last_schedule: float | None = None
     last_correction_rms: float | None = None
-    last_reference_rms: float | None = None
+    last_baseline_rms: float | None = None
     last_correction_rms_ratio: float | None = None
     last_clamp_scale: float | None = None
 
@@ -58,7 +58,7 @@ class GuidanceState:
         self.previous_reference = None
         self.last_schedule = None
         self.last_correction_rms = None
-        self.last_reference_rms = None
+        self.last_baseline_rms = None
         self.last_correction_rms_ratio = None
         self.last_clamp_scale = None
 
@@ -140,7 +140,7 @@ def _bounded(
     bounded_rms = corr_rms * scale
     stats = {
         "correction_rms": float(bounded_rms.mean().item()),
-        "reference_rms": float(ref_rms.mean().item()),
+        "baseline_rms": float(ref_rms.mean().item()),
         "correction_rms_ratio": float((bounded_rms / ref_rms).mean().item()),
         "clamp_scale": float(scale.mean().item()),
     }
@@ -194,7 +194,7 @@ def apply_guidance(
     correction, correction_stats = _bounded(correction, high_x0, config.max_correction_rms_ratio)
     state.last_schedule = float(schedule)
     state.last_correction_rms = correction_stats["correction_rms"]
-    state.last_reference_rms = correction_stats["reference_rms"]
+    state.last_baseline_rms = correction_stats["baseline_rms"]
     state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
     state.last_clamp_scale = correction_stats["clamp_scale"]
     state.previous_coordinate = float(coordinate)
