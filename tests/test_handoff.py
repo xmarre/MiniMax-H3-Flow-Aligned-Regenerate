@@ -4,6 +4,7 @@ import torch
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import (
     ProgressiveHandoffConfig,
+    ProgressiveTargetInputConfig,
     build_handoff_state,
     deterministic_video_noise,
     select_handoff_index,
@@ -84,6 +85,18 @@ def test_auto_handoff_is_deterministic_bounded_and_uses_live_area():
     first = config.resolve_coordinate(40, 54, *target)
     second = config.resolve_coordinate(40, 54, *target)
     assert first == second == pytest.approx(0.2)
+
+
+def test_progressive_explicit_target_rejects_mixed_shrink_expand_geometry():
+    config = ProgressiveHandoffConfig(target_latent_h=32, target_latent_w=80)
+    with pytest.raises(ValueError, match="must not shrink either"):
+        config.resolve_target(40, 54)
+
+
+def test_target_input_source_rejects_mixed_expand_shrink_geometry():
+    config = ProgressiveTargetInputConfig(source_latent_h=56, source_latent_w=20)
+    with pytest.raises(ValueError, match="must not exceed either"):
+        config.resolve_source(48, 64)
 
 
 def test_default_scale_maps_motivating_grid_without_odd_padding():
