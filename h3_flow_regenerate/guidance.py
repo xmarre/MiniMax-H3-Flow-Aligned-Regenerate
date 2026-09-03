@@ -35,8 +35,8 @@ class GuidanceConfig:
             raise ValueError("cutoff must be in (0, 1]")
         if self.schedule_power < 0 or not math.isfinite(self.schedule_power):
             raise ValueError("schedule_power must be finite and non-negative")
-        if self.max_correction_rms_ratio <= 0:
-            raise ValueError("max_correction_rms_ratio must be positive")
+        if not math.isfinite(float(self.max_correction_rms_ratio)) or self.max_correction_rms_ratio <= 0:
+            raise ValueError("max_correction_rms_ratio must be finite and positive")
 
 
 @dataclass(slots=True)
