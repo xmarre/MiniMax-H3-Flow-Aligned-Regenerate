@@ -7,7 +7,7 @@ from .comfy_compat import patch_flow_model
 from .contracts import H3FlowTrajectory
 from .geometry import pixel_to_safe_latent
 from .guidance import GuidanceConfig
-from .handoff import ProgressiveHandoffConfig
+from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .reference import apply_reference_budget
 from .sigma import resolution_aware_sigmas, resolution_shift_factor
@@ -243,6 +243,73 @@ class H3ProgressiveHandoff:
         return patched, metrics
 
 
+class H3ProgressiveTargetInputHandoff:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "trajectory": ("H3_FLOW_TRAJECTORY",),
+                "source_mode": (["pixels", "scale"], {"default": "pixels"}),
+                "source_scale": ("FLOAT", {"default": 0.84, "min": 0.1, "max": 0.99, "step": 0.01}),
+                "source_width": ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32}),
+                "source_height": ("INT", {"default": 640, "min": 32, "max": 8192, "step": 32}),
+                "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
+                "handoff_selection": (["fixed", "auto_compute"], {"default": "fixed"}),
+                "guidance_mode": (
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
+                    {"default": "direction"},
+                ),
+                "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
+            },
+            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+        }
+
+    RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
+    RETURN_NAMES = ("model", "metrics")
+    FUNCTION = "patch"
+    CATEGORY = "MiniMax H3/flow regenerate"
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        source_mode,
+        source_scale,
+        source_width,
+        source_height,
+        handoff_coordinate,
+        handoff_selection,
+        guidance_mode,
+        direction_weight,
+        metrics=None,
+    ):
+        if source_mode == "scale":
+            progressive = ProgressiveTargetInputConfig(
+                source_scale=source_scale,
+                handoff_coordinate=handoff_coordinate,
+                handoff_selection=handoff_selection,
+            )
+        else:
+            source_h, source_w = pixel_to_safe_latent(source_height, source_width)
+            progressive = ProgressiveTargetInputConfig(
+                source_latent_h=source_h,
+                source_latent_w=source_w,
+                handoff_coordinate=handoff_coordinate,
+                handoff_selection=handoff_selection,
+            )
+        guidance = GuidanceConfig(mode=guidance_mode, direction_weight=direction_weight)
+        metrics = metrics or H3FlowMetrics()
+        patched, _ = patch_flow_model(
+            model,
+            trajectory=trajectory,
+            guidance=guidance,
+            progressive=progressive,
+            capture_enabled=True,
+            metrics=metrics,
+        )
+        return patched, metrics
+
 class H3ResolutionAwareSigmas:
     @classmethod
     def INPUT_TYPES(cls):
@@ -369,6 +436,7 @@ NODE_CLASS_MAPPINGS = {
     "H3FlowAlignedRegenerate": H3FlowAlignedRegenerate,
     "H3FlowAlignedRefineState": H3FlowAlignedRefineState,
     "H3ProgressiveHandoff": H3ProgressiveHandoff,
+    "H3ProgressiveTargetInputHandoff": H3ProgressiveTargetInputHandoff,
     "H3ResolutionAwareSigmas": H3ResolutionAwareSigmas,
     "H3ReferenceBudget": H3ReferenceBudget,
     "H3AttentionExperiment": H3AttentionExperiment,
@@ -381,6 +449,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3FlowAlignedRegenerate": "MiniMax H3 Flow-Aligned Regenerate",
     "H3FlowAlignedRefineState": "MiniMax H3 Flow-Aligned Refine State",
     "H3ProgressiveHandoff": "MiniMax H3 Progressive Handoff",
+    "H3ProgressiveTargetInputHandoff": "MiniMax H3 Progressive Handoff (Target Input)",
     "H3ResolutionAwareSigmas": "MiniMax H3 Resolution-Aware Sigmas [Experimental]",
     "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
     "H3AttentionExperiment": "MiniMax H3 Attention Lab [Experimental]",
