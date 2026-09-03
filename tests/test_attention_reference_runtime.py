@@ -297,12 +297,37 @@ def test_runtime_metrics_probe_is_observational(monkeypatch):
     binding = patched.model_options[FLOW_BINDING_KEY]
     assert binding.metrics is metrics
     assert binding.trajectory is None
-    assert binding.guidance is None
+    assert binding.guidance is not None
+    assert binding.guidance.mode == "off"
     assert binding.capture_enabled is False
     assert binding.capture_forecasts is False
     assert PROGRESSIVE_KEY not in patched.model_options
     assert next(iter(patched.wrappers["outer_sample"])) == "h3_flow_regenerate.outer.v1"
     assert list(patched.wrappers["predict_noise"])[-1] == "h3_flow_regenerate.predict.v1"
+
+    upstream = FakePatcher()
+    prior_trajectory = H3FlowTrajectory()
+    upstream.model_options[FLOW_BINDING_KEY] = FlowBinding(
+        trajectory=prior_trajectory,
+        guidance=GuidanceConfig(mode="direction"),
+        capture_enabled=True,
+        capture_forecasts=True,
+        guidance_conditioning_signature="prior-conditioning",
+        guidance_run_id="prior-run",
+    )
+    upstream.model_options[PROGRESSIVE_KEY] = object()
+
+    neutralized, neutral_metrics = H3RuntimeMetricsProbe().patch(upstream)
+    neutral = neutralized.model_options[FLOW_BINDING_KEY]
+    assert neutral.metrics is neutral_metrics
+    assert neutral.trajectory is None
+    assert neutral.guidance is not None
+    assert neutral.guidance.mode == "off"
+    assert neutral.capture_enabled is False
+    assert neutral.capture_forecasts is False
+    assert neutral.guidance_conditioning_signature is None
+    assert neutral.guidance_run_id is None
+    assert PROGRESSIVE_KEY not in neutralized.model_options
 
 
 def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
@@ -321,6 +346,23 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert next(iter(patched.wrappers["predict_noise"])) == "spectrum"
     assert list(patched.wrappers["predict_noise"])[-1] == "h3_flow_regenerate.predict.v1"
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
+
+
+def test_patch_flow_model_rejects_setting_and_clearing_trajectory(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    with pytest.raises(ValueError, match="set and clear trajectory"):
+        patch_flow_model(
+            FakePatcher(),
+            trajectory=H3FlowTrajectory(),
+            clear_trajectory=True,
+        )
 
 
 def test_repatch_replaces_prior_flow_attention_override_without_nesting(monkeypatch):
