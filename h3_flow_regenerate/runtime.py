@@ -531,10 +531,11 @@ def _exact_probe_function(model, x, sigmas, extra_args=None, callback=None, disa
 _exact_probe_function.__name__ = PROBE_MARKER
 
 
-def _make_probe_sampler():
+def _make_probe_sampler(source_sampler: Any):
     import comfy.samplers
 
-    return comfy.samplers.KSAMPLER(_exact_probe_function)
+    inpaint_options = dict(getattr(source_sampler, "inpaint_options", {}) or {})
+    return comfy.samplers.KSAMPLER(_exact_probe_function, inpaint_options=inpaint_options)
 
 
 def _raw_sampler_state(
@@ -913,7 +914,7 @@ def _run_progressive(
                 source_x0 = executor(
                     probe_noise,
                     low_latent_image,
-                    _make_probe_sampler(),
+                    _make_probe_sampler(sampler),
                     sigmas[index : index + 1],
                     low_mask,
                     None,
