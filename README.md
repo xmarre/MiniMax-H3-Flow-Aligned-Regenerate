@@ -29,9 +29,11 @@ H3 is treated as its actual joint AV model: 24-channel video, 32-channel two-tra
 
 ## Status
 
-The architecture, guards, instrumentation, and synthetic test suite are implemented.
-Decoded-media comparison is still required before recommending non-native settings. The
-safe default for the schedule, reference budget, and attention lab is `off`/`native`.
+The architecture, guards, instrumentation, and synthetic test suite are implemented. The integrated
+two-pass path has completed real decoded-media smoke validation through 7+4 refine reduction, including
+correct Spectrum provenance and live guidance telemetry. Progressive target-input and resolution-shift
+paths still require their own decoded-media validation before they can be recommended. The safe default
+for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
 
@@ -127,8 +129,10 @@ is ambiguous for a progressive split.
 
 Use **Progressive Handoff** when the sampler input itself is the low grid and changing the workflow's
 output latent geometry is acceptable. Use **Progressive Handoff (Target Input)** for Continuum V3.4:
-configure Continuum at the final 1024x768 target, set the progressive source to 864x640, and patch the
-MODEL entering Continuum. The wrapper derives a fresh low-grid video noise tensor, downsizes the
+configure Continuum on the final target grid, set the progressive source to the intended private low
+grid, and patch the MODEL entering Continuum. The formal benchmark uses 1024x768 target with 864x640
+internal source; the first feature smoke deliberately reuses the existing 928x928 target with 768x768
+internal source so prompt/seed/references stay matched to the accepted C4 run. The wrapper derives a fresh low-grid video noise tensor, downsizes the
 target-grid latent/mask/keyframes for the low and probe stages, then returns to the untouched target
 latent/mask/keyframe contract for the high stage. In masked target-input mode, protected regions also
 keep Continuum's original target-grid noise because native H3 uses that noise in its 0.999 visual
@@ -205,7 +209,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- No decoded-media claim is made yet.
+- The two-pass flow-aligned path has decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet; progressive target-input and resolution-shift paths remain unvalidated on real media.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
