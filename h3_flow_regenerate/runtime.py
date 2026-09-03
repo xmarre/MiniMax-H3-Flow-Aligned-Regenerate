@@ -463,6 +463,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         if not isinstance(shapes, list) or len(shapes) != 2:
             raise RuntimeError("flow guidance could not resolve H3 AV latent shapes")
         video_x0, audio_x0 = unpack_streams(result, shapes)
+        video_state, _ = unpack_streams(x, shapes)
         guidance_started = time.perf_counter()
         guided_video = apply_guidance(
             video_x0,
@@ -470,6 +471,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             coordinate=coordinate,
             config=binding.guidance,
             state=binding.guidance_state,
+            high_state=video_state,
+            sigma=sigma,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))

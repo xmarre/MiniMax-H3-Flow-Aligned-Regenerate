@@ -137,8 +137,8 @@ def test_non_acceleration_guidance_does_not_retain_full_video_state():
         state=state,
     )
     assert state.previous_coordinate is None
-    assert state.previous_high_x0 is None
-    assert state.previous_reference is None
+    assert state.previous_high_velocity is None
+    assert state.previous_reference_velocity is None
 
 
 def test_low_frequency_projection_does_not_change_constant():
@@ -151,9 +151,102 @@ def test_acceleration_requires_state_and_stays_bounded():
     state = GuidanceState()
     config = GuidanceConfig(mode="direction+acceleration", acceleration_weight=0.2)
     trajectory = run(values=(1.0, 0.5, 0.0), coords=(0.8, 0.5, 0.2), provenance=("actual",) * 3)
-    first = apply_guidance(high, run=trajectory, coordinate=0.7, config=config, state=state)
-    second = apply_guidance(first, run=trajectory, coordinate=0.4, config=config, state=state)
+    high_state = torch.ones_like(high)
+    first = apply_guidance(
+        high,
+        run=trajectory,
+        coordinate=0.7,
+        config=config,
+        state=state,
+        high_state=high_state,
+        sigma=0.9,
+    )
+    second = apply_guidance(
+        first,
+        run=trajectory,
+        coordinate=0.4,
+        config=config,
+        state=state,
+        high_state=high_state,
+        sigma=0.7,
+    )
     assert torch.isfinite(second).all()
+
+
+def test_acceleration_requires_sampler_state_and_sigma():
+    high = torch.zeros(1, 24, 1, 4, 4)
+    trajectory = run(values=(1.0, 0.5, 0.0), coords=(0.8, 0.5, 0.2), provenance=("actual",) * 3)
+    config = GuidanceConfig(mode="direction+acceleration", direction_weight=0.0, acceleration_weight=0.2)
+
+    with pytest.raises(ValueError, match="sampler state"):
+        apply_guidance(high, run=trajectory, coordinate=0.7, config=config, state=GuidanceState(), sigma=0.9)
+    with pytest.raises(ValueError, match="sampler sigma"):
+        apply_guidance(
+            high,
+            run=trajectory,
+            coordinate=0.7,
+            config=config,
+            state=GuidanceState(),
+            high_state=torch.ones_like(high),
+        )
+
+
+def test_acceleration_matches_hiflow_velocity_alignment():
+    trajectory = run(values=(0.9, 0.5, 0.1), coords=(0.8, 0.5, 0.2), provenance=("actual",) * 3)
+    config = GuidanceConfig(
+        mode="direction+acceleration",
+        direction_weight=0.0,
+        acceleration_weight=0.4,
+        cutoff=0.25,
+        max_correction_rms_ratio=10.0,
+    )
+    state = GuidanceState()
+
+    first_x0 = torch.full((1, 24, 1, 4, 4), 0.25)
+    first_state = torch.full_like(first_x0, 0.8)
+    first_sigma = 0.9
+    first_coordinate = 0.7
+    first_ref = time_matched_reference(trajectory, first_coordinate)
+    first = apply_guidance(
+        first_x0,
+        run=trajectory,
+        coordinate=first_coordinate,
+        config=config,
+        state=state,
+        high_state=first_state,
+        sigma=first_sigma,
+    )
+    assert torch.equal(first, first_x0)
+
+    previous_high_velocity = (first_state - first) / first_sigma
+    previous_reference_velocity = (first_state - first_ref) / first_sigma
+
+    current_x0 = torch.full_like(first_x0, 0.15)
+    current_state = torch.full_like(first_x0, 0.6)
+    current_sigma = 0.7
+    current_coordinate = 0.4
+    current_ref = time_matched_reference(trajectory, current_coordinate)
+    current_high_velocity = (current_state - current_x0) / current_sigma
+    current_reference_velocity = (current_state - current_ref) / current_sigma
+    schedule = current_coordinate / first_coordinate
+    expected_velocity = current_high_velocity + schedule * config.acceleration_weight * (
+        current_reference_velocity
+        - previous_reference_velocity
+        - current_high_velocity
+        + previous_high_velocity
+    )
+    expected_x0 = current_state - current_sigma * expected_velocity
+
+    actual = apply_guidance(
+        current_x0,
+        run=trajectory,
+        coordinate=current_coordinate,
+        config=config,
+        state=state,
+        high_state=current_state,
+        sigma=current_sigma,
+    )
+    assert torch.allclose(actual, expected_x0)
 
 
 def test_acceleration_fails_closed_without_three_exact_anchors():

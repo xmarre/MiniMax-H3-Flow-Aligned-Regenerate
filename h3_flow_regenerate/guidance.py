@@ -43,8 +43,8 @@ class GuidanceConfig:
 class GuidanceState:
     start_coordinate: float | None = None
     previous_coordinate: float | None = None
-    previous_high_x0: torch.Tensor | None = None
-    previous_reference: torch.Tensor | None = None
+    previous_high_velocity: torch.Tensor | None = None
+    previous_reference_velocity: torch.Tensor | None = None
     last_schedule: float | None = None
     last_correction_rms: float | None = None
     last_baseline_rms: float | None = None
@@ -54,8 +54,8 @@ class GuidanceState:
     def reset(self) -> None:
         self.start_coordinate = None
         self.previous_coordinate = None
-        self.previous_high_x0 = None
-        self.previous_reference = None
+        self.previous_high_velocity = None
+        self.previous_reference_velocity = None
         self.last_schedule = None
         self.last_correction_rms = None
         self.last_baseline_rms = None
@@ -167,20 +167,36 @@ def apply_guidance(
     coordinate: float,
     config: GuidanceConfig,
     state: GuidanceState,
+    high_state: torch.Tensor | None = None,
+    sigma: float | None = None,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
-    if config.mode == "direction+acceleration" and config.acceleration_weight > 0 and len(trustworthy_samples(run)) < 3:
+    acceleration_active = config.mode == "direction+acceleration" and config.acceleration_weight > 0
+    if acceleration_active and len(trustworthy_samples(run)) < 3:
         raise RuntimeError("acceleration guidance requires at least three exact trajectory anchors")
     coordinate = float(coordinate)
     if not math.isfinite(coordinate) or not 0.0 <= coordinate <= 1.0:
         raise ValueError("guidance coordinate must be finite and inside [0, 1]")
+    if acceleration_active:
+        if high_state is None:
+            raise ValueError("acceleration guidance requires the current high-grid sampler state")
+        if high_state.shape != high_x0.shape:
+            raise ValueError("acceleration sampler state and predicted-clean video shapes differ")
+        if sigma is None or not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
+            raise ValueError("acceleration guidance requires a finite positive sampler sigma")
+        high_state = high_state.to(device=high_x0.device, dtype=high_x0.dtype)
+        sigma_value = float(sigma)
+    else:
+        sigma_value = None
+
     source_ref = time_matched_reference(run, coordinate).to(device=high_x0.device, dtype=high_x0.dtype)
     ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
     schedule = min(1.0, max(0.0, coordinate / start)) ** config.schedule_power
+
     correction = torch.zeros_like(high_x0)
     if config.mode in {"direction", "direction+acceleration"}:
         residual = low_frequency_projection(ref - high_x0, config.cutoff)
@@ -193,33 +209,50 @@ def apply_guidance(
         source_error = source_ref - down.to(source_ref)
         error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
         correction = correction + schedule * config.consistency_weight * error
-    if (
-        config.mode == "direction+acceleration"
-        and config.acceleration_weight > 0
-        and state.previous_coordinate is not None
-        and state.previous_high_x0 is not None
-        and state.previous_reference is not None
-        and abs(coordinate - state.previous_coordinate) > 1e-8
-    ):
-        ref_delta = low_frequency_projection(ref - state.previous_reference, config.cutoff)
-        high_delta = low_frequency_projection(high_x0 - state.previous_high_x0, config.cutoff)
-        correction = correction + schedule * config.acceleration_weight * (ref_delta - high_delta)
+
+    guided = high_x0 + correction
+    reference_velocity = None
+    if acceleration_active:
+        assert high_state is not None
+        assert sigma_value is not None
+        reference_velocity = (high_state - ref) / sigma_value
+        high_velocity = (high_state - guided) / sigma_value
+        if (
+            state.previous_coordinate is not None
+            and state.previous_high_velocity is not None
+            and state.previous_reference_velocity is not None
+            and abs(coordinate - state.previous_coordinate) > 1e-8
+        ):
+            acceleration_delta = (
+                reference_velocity
+                - state.previous_reference_velocity
+                - high_velocity
+                + state.previous_high_velocity
+            )
+            high_velocity = high_velocity + schedule * config.acceleration_weight * acceleration_delta
+            guided = high_state - sigma_value * high_velocity
+        correction = guided - high_x0
+
     correction, correction_stats = _bounded(correction, high_x0, config.max_correction_rms_ratio)
+    result = high_x0 + correction
     state.last_schedule = float(schedule)
     state.last_correction_rms = correction_stats["correction_rms"]
     state.last_baseline_rms = correction_stats["baseline_rms"]
     state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
     state.last_clamp_scale = correction_stats["clamp_scale"]
-    if config.mode == "direction+acceleration" and config.acceleration_weight > 0:
+
+    if acceleration_active:
+        assert high_state is not None
+        assert sigma_value is not None
+        assert reference_velocity is not None
         state.previous_coordinate = float(coordinate)
-        state.previous_high_x0 = high_x0.detach()
-        state.previous_reference = ref.detach()
+        state.previous_high_velocity = ((high_state - result) / sigma_value).detach()
+        state.previous_reference_velocity = reference_velocity.detach()
     else:
         state.previous_coordinate = None
-        state.previous_high_x0 = None
-        state.previous_reference = None
-    return high_x0 + correction
-
+        state.previous_high_velocity = None
+        state.previous_reference_velocity = None
+    return result
 
 def conditional_renoise_alignment(
     reference_x0: torch.Tensor,

@@ -57,6 +57,7 @@ def main() -> None:
     require(
         args.comfy / "comfy/model_sampling.py",
         "class ModelSamplingAV(ModelSamplingDiscreteFlow):",
+        "return model_input - model_output * sigma",
         "return self.shift / self.audio_shift",
         "return sigma * (s * noise) + (1.0 - sigma) * latent_image",
         "return latent / (1.0 - sigma)",
