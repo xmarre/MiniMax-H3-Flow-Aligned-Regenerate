@@ -310,6 +310,7 @@ class H3ProgressiveTargetInputHandoff:
         )
         return patched, metrics
 
+
 class H3ResolutionAwareSigmas:
     @classmethod
     def INPUT_TYPES(cls):
