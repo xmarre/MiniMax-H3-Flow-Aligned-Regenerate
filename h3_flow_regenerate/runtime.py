@@ -399,12 +399,14 @@ def flow_outer_wrapper(
         if binding.trajectory is None:
             raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
         session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
-        run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
+        expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+        run = binding.trajectory.select(
+            chunk_id=chunk_id,
+            session_id=session_id,
+            conditioning_signature=expected_signature,
+        )
         if run.geometry.latent_t != int(latent_shapes[0][2]):
             raise ValueError("trajectory and target video temporal geometry differ")
-        expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-        if run.conditioning_signature != expected_signature:
-            raise ValueError("trajectory conditioning signature does not match the regeneration run")
         binding.active_guidance_run = run
     if not is_progressive:
         _begin_capture(binding, guider, sampler, sigmas, latent_shapes)
@@ -837,12 +839,14 @@ def _run_progressive(
             if binding.trajectory is None:
                 raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
             session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
-            run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            run = binding.trajectory.select(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                conditioning_signature=expected_signature,
+            )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise ValueError("trajectory and target video temporal geometry differ")
-            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-            if run.conditioning_signature != expected_signature:
-                raise ValueError("trajectory conditioning signature does not match the regeneration run")
             binding.active_guidance_run = run
 
         def high_callback(step, x0, x, _total):
