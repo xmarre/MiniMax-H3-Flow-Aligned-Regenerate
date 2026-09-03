@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "kind": "comfyui_workflow_overlay",
+  "purpose": "Replace each Continuum chunk's base-plus-separate-refine path with a target-sized split sampler whose early H3 stage runs internally at the base grid",
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "widgets": {
+      "width": 1024,
+      "height": 768,
+      "run_storage": "Off"
+    },
+    "note": "Continuum must remain configured on the final grid so chunk/session/native-mask state is 64x48 across the whole sequence."
+  },
+  "shared_handle": {
+    "node": "H3FlowTrajectory",
+    "widgets": {
+      "storage": "system_ram",
+      "max_runs": 16
+    }
+  },
+  "model_patch": {
+    "node": "H3ProgressiveTargetInputHandoff",
+    "inputs": {
+      "trajectory": "shared_handle"
+    },
+    "widgets": {
+      "source_mode": "pixels",
+      "source_scale": 0.84,
+      "source_width": 864,
+      "source_height": 640,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction",
+      "direction_weight": 0.25,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25
+    },
+    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the Continuum MODEL input"
+  },
+  "sampler": {
+    "reuse_existing_sampler_and_full_sigma_schedule": true,
+    "remove_separate_learned_upscale_and_high_resolution_refine": true,
+    "expected_visible_extra_nfe": "one low-grid exact handoff probe",
+    "high_grid_actual_anchor": "mandatory"
+  },
+  "invariants": {
+    "continuum_input_and_output_latent_wh": [
+      64,
+      48
+    ],
+    "internal_low_stage_latent_wh": [
+      54,
+      40
+    ],
+    "target_pixels": [
+      1024,
+      768
+    ],
+    "audio": "target-grid audio noise/latent/mask preserved; no spatial transform",
+    "native_masked_continuation": "previous target-grid context remains exact in Continuum; only the private low-stage copy is downscaled",
+    "denoise_mask": "ComfyUI-prepared full-channel target mask retained for high stage; prepared video mask privately resized for low/probe",
+    "target_keyframes": "target originals retained for high stage; private copies resized only for low/probe; minimax_refs unchanged",
+    "run_storage": "off for first media validation; persistence must be validated separately before enabling",
+    "decoded_media_required": true,
+    "protected_noise": "target-input protected regions retain Continuum's original sampler noise for MiniMax H3 scale_latent_inpaint"
+  }
+}

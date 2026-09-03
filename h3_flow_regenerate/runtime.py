@@ -1,0 +1,1058 @@
+from __future__ import annotations
+
+import contextlib
+import copy
+import hashlib
+import logging
+import math
+import struct
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import torch
+
+from .contracts import H3FlowTrajectory, TrajectorySample
+from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
+from .guidance import GuidanceConfig, GuidanceState, apply_guidance
+from .handoff import (
+    ProgressiveHandoffConfig,
+    ProgressiveTargetInputConfig,
+    build_handoff_state,
+    deterministic_video_noise,
+    select_handoff_index,
+)
+from .metrics import H3FlowMetrics
+from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+
+LOG = logging.getLogger(__name__)
+
+FLOW_BINDING_KEY = "h3_flow_regenerate_binding"
+PROGRESSIVE_KEY = "h3_flow_progressive_v1"
+OUTER_WRAPPER_KEY = "h3_flow_regenerate.outer.v1"
+PREDICT_WRAPPER_KEY = "h3_flow_regenerate.predict.v1"
+CLONE_CALLBACK_KEY = "h3_flow_regenerate.clone.v1"
+PROBE_MARKER = "_h3_flow_exact_probe"
+PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
+FLOW_STAGE_KEY = "h3_flow_stage"
+SPECTRUM_ACTUAL_KEY = "spectrum_h3_actual"
+SPECTRUM_PHASE_KEY = "spectrum_h3_solver_phase"
+SPECTRUM_OUTER_STEP_KEY = "spectrum_h3_outer_step_id"
+
+
+@dataclass(slots=True)
+class _ActiveCapture:
+    run_id: str
+    shapes: list[tuple[int, ...]]
+    phases: tuple[tuple[int, str], ...]
+    call_index: int = 0
+
+
+@dataclass(slots=True)
+class FlowBinding:
+    trajectory: H3FlowTrajectory | None = None
+    guidance: GuidanceConfig | None = None
+    metrics: H3FlowMetrics = field(default_factory=H3FlowMetrics)
+    capture_enabled: bool = False
+    capture_forecasts: bool = False
+    guidance_conditioning_signature: str | None = None
+    captured_run_id: str | None = None
+    guidance_run_id: str | None = None
+    guidance_state: GuidanceState = field(default_factory=GuidanceState)
+    active_capture: _ActiveCapture | None = None
+    active_guidance_run: Any = None
+
+
+def sampler_name(sampler: Any) -> str:
+    function = getattr(sampler, "sampler_function", None)
+    return str(getattr(function, "__name__", type(sampler).__name__))
+
+
+def _validate_progressive_sampler_state(sampler: Any) -> None:
+    options = getattr(sampler, "extra_options", {}) or {}
+    if not isinstance(options, dict):
+        raise TypeError("progressive handoff requires sampler extra_options to be a dictionary")
+    if options.get("noise_sampler") is not None:
+        raise ValueError(
+            "progressive handoff does not support an explicit sampler noise_sampler; "
+            "its mutable RNG/history cannot be proven reset across low/probe/high lifetimes"
+        )
+
+
+def _sampler_phases(sampler: Any, sigmas: torch.Tensor) -> tuple[tuple[int, str], ...]:
+    name = sampler_name(sampler)
+    outer_steps = max(0, int(sigmas.numel()) - 1)
+    sa_solvers = {
+        "sample_sa_solver",
+        "sample_sa_solver_pece",
+        "sample_refdelta_sa_solver",
+        "sample_refdelta_sa_solver_pece",
+    }
+    if name in sa_solvers:
+        options = getattr(sampler, "extra_options", {}) or {}
+        pece = name.endswith("_pece") or options.get("use_pece") is True
+        corrector_order = int(options.get("corrector_order", 4))
+        phases: list[tuple[int, str]] = []
+        for outer in range(outer_steps):
+            phases.append((outer, "predicted"))
+            if pece and corrector_order > 0 and outer > 0:
+                phases.append((outer, "corrected"))
+        return tuple(phases)
+    stages = {
+        "sample_seeds_2": 2,
+        "sample_refdelta_seeds_2": 2,
+        "sample_seeds_3": 3,
+        "sample_refdelta_seeds_3": 3,
+    }.get(name)
+    if stages:
+        phases = []
+        for outer in range(outer_steps):
+            count = 1 if float(sigmas[outer + 1]) == 0.0 else stages
+            phases.extend((outer, f"stage_{stage + 1}") for stage in range(count))
+        return tuple(phases)
+    return tuple((outer, "single") for outer in range(outer_steps))
+
+
+def _schedule_signature(sigmas: torch.Tensor) -> str:
+    values = b"".join(
+        struct.pack("!d", float(value)) for value in sigmas.detach().to(device="cpu", dtype=torch.float64)
+    )
+    return hashlib.sha256(values).hexdigest()[:16]
+
+
+def _interop_identity(model_options: dict[str, Any] | None) -> tuple[str, str]:
+    transformer = (model_options or {}).get("transformer_options") or {}
+    continuum = transformer.get("h3_continuum")
+    if isinstance(continuum, dict) and continuum.get("active") is True:
+        chunk = str(continuum.get("chunk_index", "unknown"))
+        session = str(continuum.get("session_id", "continuum"))
+        return session, chunk
+    return "standalone", "standalone"
+
+
+def _tensor_signature(tensor: torch.Tensor, *, max_values: int = 128) -> bytes:
+    """Return a bounded, device-independent content fingerprint.
+
+    Conditioning can contain multi-megabyte Qwen embeddings and reference
+    latents. Hashing every byte would introduce a full GPU readback. Sampling
+    deterministic positions catches ordinary prompt/reference changes while
+    keeping the identity check bounded; shape/dtype/layout are always included.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"{tuple(tensor.shape)}|{tensor.dtype}|{tensor.layout}".encode())
+    if tensor.numel() == 0 or tensor.device.type == "meta" or tensor.layout != torch.strided:
+        return digest.digest()
+
+    count = min(int(max_values), int(tensor.numel()))
+    if count == 1:
+        linear = torch.zeros(1, dtype=torch.long, device=tensor.device)
+    else:
+        ordinal = torch.arange(count, dtype=torch.long, device=tensor.device)
+        linear = torch.div(
+            ordinal * (int(tensor.numel()) - 1),
+            count - 1,
+            rounding_mode="floor",
+        )
+    if tensor.ndim == 0:
+        sampled = tensor.detach().reshape(1)
+    else:
+        remainder = linear
+        reversed_coords: list[torch.Tensor] = []
+        for size in reversed(tensor.shape):
+            reversed_coords.append(remainder.remainder(int(size)))
+            remainder = torch.div(remainder, int(size), rounding_mode="floor")
+        sampled = tensor.detach()[tuple(reversed(reversed_coords))]
+    raw = sampled.contiguous().view(torch.uint8).to(device="cpu")
+    digest.update(bytes(raw.tolist()))
+    return digest.digest()
+
+
+def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
+    if depth > 8:
+        digest.update(f"<depth:{type(value).__module__}.{type(value).__qualname__}>".encode())
+        return
+    if torch.is_tensor(value):
+        digest.update(b"tensor:")
+        digest.update(_tensor_signature(value))
+        return
+    if isinstance(value, dict):
+        # ComfyUI's convert_cond creates a fresh UUID on each conversion. It is
+        # execution identity, not conditioning identity, so it must be excluded
+        # from both the keyed payload *and the structural field count*.
+        keys = [key for key in value if str(key) != "uuid"]
+        digest.update(f"dict:{len(keys)}:".encode())
+        for key in sorted(keys, key=lambda item: str(item)):
+            digest.update(f"key:{key!s}:".encode())
+            _update_conditioning_digest(digest, value[key], depth=depth + 1)
+        return
+    if isinstance(value, (list, tuple)):
+        digest.update(f"{type(value).__name__}:{len(value)}:".encode())
+        for item in value:
+            _update_conditioning_digest(digest, item, depth=depth + 1)
+        return
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        digest.update(f"{type(value).__name__}:{value!r}:".encode())
+        return
+    digest.update(f"type:{type(value).__module__}.{type(value).__qualname__}:".encode())
+
+
+def _conditioning_signature_from_original(original: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    _update_conditioning_digest(digest, original)
+    return digest.hexdigest()[:32]
+
+
+def _convert_conditioning_for_signature(conditioning: list[Any]) -> list[dict[str, Any]]:
+    converted = []
+    for entry in conditioning:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2 or not isinstance(entry[1], dict):
+            raise TypeError("conditioning entries must contain tensor/context plus metadata dictionary")
+        metadata = entry[1].copy()
+        model_conds = metadata.get("model_conds", {})
+        if entry[0] is not None:
+            metadata["cross_attn"] = entry[0]
+        metadata["model_conds"] = model_conds
+        converted.append(metadata)
+    return converted
+
+
+def conditioning_signature_from_conditioning(
+    positive: list[Any],
+    negative: list[Any] | None = None,
+) -> str:
+    """Match CFGGuider.convert_cond without its execution-only UUID."""
+    original = {"positive": _convert_conditioning_for_signature(positive)}
+    if negative is not None:
+        original["negative"] = _convert_conditioning_for_signature(negative)
+    return _conditioning_signature_from_original(original)
+
+
+def _conditioning_signature(guider: Any) -> str:
+    original = getattr(guider, "original_conds", {}) or {}
+    if not isinstance(original, dict):
+        raise TypeError("guider original_conds must be a dictionary")
+    return _conditioning_signature_from_original(original)
+
+
+def _resolve_binding(guider: Any) -> FlowBinding | None:
+    value = (getattr(guider, "model_options", None) or {}).get(FLOW_BINDING_KEY)
+    return value if isinstance(value, FlowBinding) else None
+
+
+def flow_model_clone_callback(source_model: Any, cloned_model: Any) -> None:
+    source_options = getattr(source_model, "model_options", None) or {}
+    binding = source_options.get(FLOW_BINDING_KEY)
+    if not isinstance(binding, FlowBinding):
+        return
+    cloned_options = getattr(cloned_model, "model_options", None)
+    if not isinstance(cloned_options, dict):
+        cloned_model.model_options = {}
+        cloned_options = cloned_model.model_options
+    cloned_options[FLOW_BINDING_KEY] = FlowBinding(
+        trajectory=binding.trajectory,
+        guidance=binding.guidance,
+        metrics=binding.metrics,
+        capture_enabled=binding.capture_enabled,
+        capture_forecasts=binding.capture_forecasts,
+        guidance_conditioning_signature=binding.guidance_conditioning_signature,
+        captured_run_id=binding.captured_run_id,
+        guidance_run_id=binding.guidance_run_id,
+    )
+
+
+def _begin_capture(
+    binding: FlowBinding,
+    guider: Any,
+    sampler: Any,
+    sigmas: torch.Tensor,
+    latent_shapes: list[tuple[int, ...]],
+) -> None:
+    trajectory = binding.trajectory
+    if not binding.capture_enabled or trajectory is None or sampler_name(sampler) == PROBE_MARKER:
+        return
+    if len(latent_shapes) != 2:
+        raise ValueError("H3 trajectory capture requires exactly video and audio latent shapes")
+    video = torch.empty(latent_shapes[0], device="meta")
+    geometry = geometry_from_video(video)
+    session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+    binding.captured_run_id = None
+    run_id = trajectory.begin(
+        session_id=session_id,
+        chunk_id=chunk_id,
+        sampler=sampler_name(sampler),
+        scheduler=_schedule_signature(sigmas),
+        geometry=geometry,
+        audio_shape=tuple(latent_shapes[1]),
+        layout_signature=f"{latent_shapes[0]}|{latent_shapes[1]}",
+        conditioning_signature=_conditioning_signature(guider),
+    )
+    binding.active_capture = _ActiveCapture(
+        run_id=run_id,
+        shapes=list(latent_shapes),
+        phases=_sampler_phases(sampler, sigmas),
+    )
+    binding.metrics.event(
+        "trajectory_begin",
+        run_id=run_id,
+        sampler=sampler_name(sampler),
+        chunk_id=chunk_id,
+        geometry=tuple(latent_shapes[0]),
+        pixels=(geometry.pixel_h, geometry.pixel_w),
+        padded=(geometry.padded_h, geometry.padded_w),
+        spatial_padding=not geometry.patch_safe,
+        trajectory_bytes=binding.trajectory.bytes,
+    )
+
+
+def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None):
+    active = binding.active_capture
+    if active is None or binding.trajectory is None:
+        return None
+    binding.active_capture = None
+    if error is None:
+        run = binding.trajectory.commit(active.run_id)
+        binding.captured_run_id = run.run_id
+        binding.metrics.event(
+            "trajectory_commit",
+            run_id=run.run_id,
+            samples=len(run.samples),
+            trajectory_bytes=binding.trajectory.bytes,
+        )
+        return run
+    run = binding.trajectory.abort(active.run_id, f"{type(error).__name__}: {error}")
+    binding.captured_run_id = None
+    binding.metrics.event("trajectory_abort", run_id=active.run_id, error=type(error).__name__)
+    return run
+
+
+def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
+    guider = executor.class_obj
+    binding = _resolve_binding(guider)
+    progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
+    progressive_active = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
+    if (
+        binding is not None
+        and "multigpu_clones" in (model_options or {})
+        and (binding.active_capture is not None or binding.active_guidance_run is not None or progressive_active)
+    ):
+        raise RuntimeError(
+            "H3 flow trajectory capture/guidance/progressive handoff does not support parallel multi-GPU model calls"
+        )
+    started = time.perf_counter()
+    result = executor(x, timestep, model_options, seed)
+    if binding is None:
+        return result
+    transformer = (model_options or {}).get("transformer_options") or {}
+    probe_context = transformer.get(PROBE_CONTEXT_KEY)
+    stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
+    actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
+    actual = True if actual_value is None else bool(actual_value)
+    if isinstance(probe_context, dict) and not actual:
+        raise RuntimeError("progressive handoff exact probe was forecast instead of evaluated")
+    binding.metrics.increment("transformer_actual_nfe" if actual else "spectrum_forecast_calls")
+    binding.metrics.increment(f"transformer_actual_nfe_{stage}" if actual else f"spectrum_forecast_calls_{stage}")
+    binding.metrics.increment("sampler_logical_calls")
+    binding.metrics.increment(f"sampler_logical_calls_{stage}")
+    sigma = float(timestep.detach().reshape(-1)[0].item())
+    video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
+    audio_shift = float(transformer.get("minimax_h3_sigma_shift_audio", H3_AUDIO_SHIFT))
+    coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+    binding.metrics.event(
+        "model_call",
+        stage=stage,
+        sigma=sigma,
+        coordinate=coordinate,
+        actual=actual,
+        video_shift=video_shift,
+        audio_shift=audio_shift,
+        audio_sigma=float(audio_sigma(sigma, video_shift=video_shift, audio_shift=audio_shift)),
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+    )
+
+    active = binding.active_capture
+    if active is not None:
+        if active.call_index < len(active.phases):
+            fallback_outer, fallback_phase = active.phases[active.call_index]
+        else:
+            fallback_outer, fallback_phase = active.call_index, "unclassified"
+        phase = str(transformer.get(SPECTRUM_PHASE_KEY, fallback_phase))
+        outer = int(transformer.get(SPECTRUM_OUTER_STEP_KEY, fallback_outer))
+        if isinstance(probe_context, dict):
+            phase = "handoff_probe"
+            outer = int(probe_context["outer_step"])
+        if actual or binding.capture_forecasts:
+            video_x0 = unpack_streams(result, active.shapes)[0]
+            binding.trajectory.append(
+                active.run_id,
+                TrajectorySample(
+                    coordinate=coordinate,
+                    video_sigma=sigma,
+                    audio_sigma=float(audio_sigma(sigma, video_shift=video_shift, audio_shift=audio_shift)),
+                    outer_step=outer,
+                    call_index=active.call_index,
+                    phase=phase,
+                    provenance="actual" if actual else "forecast",
+                    video_x0=video_x0,
+                ),
+            )
+        active.call_index += 1
+
+    if binding.guidance is not None and binding.guidance.mode != "off":
+        run = binding.active_guidance_run
+        if run is None:
+            return result
+        base_model = getattr(guider, "inner_model", None)
+        shapes = getattr(base_model, "latent_shapes", None)
+        if not isinstance(shapes, list) or len(shapes) != 2:
+            raise RuntimeError("flow guidance could not resolve H3 AV latent shapes")
+        video_x0, audio_x0 = unpack_streams(result, shapes)
+        guidance_started = time.perf_counter()
+        guided_video = apply_guidance(
+            video_x0,
+            run=run,
+            coordinate=coordinate,
+            config=binding.guidance,
+            state=binding.guidance_state,
+        )
+        guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
+        result, _ = pack_streams((guided_video, audio_x0))
+        binding.metrics.event(
+            "guidance",
+            coordinate=coordinate,
+            elapsed_ms=guidance_elapsed_ms,
+            mode=binding.guidance.mode,
+            schedule=binding.guidance_state.last_schedule,
+            correction_rms=binding.guidance_state.last_correction_rms,
+            baseline_rms=binding.guidance_state.last_baseline_rms,
+            correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
+            clamp_scale=binding.guidance_state.last_clamp_scale,
+        )
+    return result
+
+
+def flow_outer_wrapper(
+    executor,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask=None,
+    callback=None,
+    disable_pbar=False,
+    seed=None,
+    latent_shapes=None,
+):
+    outer_started = time.perf_counter()
+    guider = executor.class_obj
+    binding = _resolve_binding(guider)
+    if binding is None:
+        return executor(
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
+    if not isinstance(latent_shapes, list):
+        raise RuntimeError("H3 flow wrapper requires mutable packed latent shape metadata")
+    binding.guidance_state.reset()
+    binding.active_guidance_run = None
+    progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
+    is_progressive = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
+    if not is_progressive and binding.guidance is not None and binding.guidance.mode != "off":
+        if binding.trajectory is None:
+            raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
+        if binding.guidance_run_id is not None:
+            run = binding.trajectory.select(run_id=binding.guidance_run_id)
+        else:
+            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            run = binding.trajectory.select(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                conditioning_signature=expected_signature,
+            )
+        if run.geometry.latent_t != int(latent_shapes[0][2]):
+            raise ValueError("trajectory and target video temporal geometry differ")
+        binding.active_guidance_run = run
+    if not is_progressive:
+        _begin_capture(binding, guider, sampler, sigmas, latent_shapes)
+    error: BaseException | None = None
+    try:
+        if is_progressive:
+            return _run_progressive(
+                executor,
+                guider,
+                binding,
+                progressive,
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes,
+            )
+        return executor(
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        if not is_progressive:
+            _finish_capture(binding, error=error)
+        binding.guidance_state.reset()
+        binding.active_guidance_run = None
+        binding.metrics.event(
+            "sampler_wall",
+            elapsed_ms=(time.perf_counter() - outer_started) * 1000.0,
+            progressive=is_progressive,
+            failed=error is not None,
+        )
+
+
+def _exact_probe_function(model, x, sigmas, extra_args=None, callback=None, disable=False, **_options):
+    if sigmas.numel() != 1 or not 0 < float(sigmas[0]) < 1:
+        raise ValueError("H3 exact handoff probe requires exactly one non-terminal sigma")
+    extra_args = {} if extra_args is None else extra_args
+    s_in = x.new_ones([x.shape[0]])
+    denoised = model(x, sigmas[0] * s_in, **extra_args)
+    if callback is not None:
+        callback({"x": x, "i": 0, "sigma": sigmas[0], "sigma_hat": sigmas[0], "denoised": denoised})
+    # Comfy's flow KSAMPLER applies inverse_noise_scaling at the terminal sigma.
+    return denoised * (1.0 - sigmas[0])
+
+
+_exact_probe_function.__name__ = PROBE_MARKER
+
+
+def _make_probe_sampler(source_sampler: Any):
+    import comfy.samplers
+
+    inpaint_options = dict(getattr(source_sampler, "inpaint_options", {}) or {})
+    return comfy.samplers.KSAMPLER(_exact_probe_function, inpaint_options=inpaint_options)
+
+
+def _raw_sampler_state(
+    base_model: Any,
+    returned: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+    sigma: float,
+) -> torch.Tensor:
+    previous = getattr(base_model, "latent_shapes", None)
+    try:
+        base_model.latent_shapes = shapes
+        carried = base_model.process_latent_in(returned)
+    finally:
+        base_model.latent_shapes = previous
+    return carried * (1.0 - sigma)
+
+
+def _process_latent_in(base_model: Any, value: torch.Tensor, shapes: list[tuple[int, ...]]) -> torch.Tensor:
+    previous = getattr(base_model, "latent_shapes", None)
+    try:
+        base_model.latent_shapes = shapes
+        return base_model.process_latent_in(value)
+    finally:
+        base_model.latent_shapes = previous
+
+
+def _noise_argument(
+    base_model: Any,
+    state: torch.Tensor,
+    sigma: float,
+    latent_image: torch.Tensor | None = None,
+) -> torch.Tensor:
+    model_sampling = getattr(base_model, "model_sampling", None)
+    noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
+    if not math.isfinite(noise_scale) or noise_scale <= 0:
+        raise ValueError("H3 model noise_scale must be finite and positive")
+    if not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
+        raise ValueError("H3 noise reconstruction requires a finite positive sigma")
+    numerator = state
+    if latent_image is not None:
+        if latent_image.shape != state.shape:
+            raise ValueError("H3 latent_image and sampler state shapes differ")
+        numerator = state - (1.0 - float(sigma)) * latent_image
+    return numerator / (float(sigma) * noise_scale)
+
+
+def _resize_packed_latent_image(
+    latent_image: torch.Tensor,
+    source_shapes: list[tuple[int, ...]],
+    target_shapes: list[tuple[int, ...]],
+) -> torch.Tensor:
+    video, audio = unpack_streams(latent_image, source_shapes)
+    target_h, target_w = target_shapes[0][-2:]
+    video = resize_spatial_5d(video, target_h, target_w, mode="bicubic")
+    return pack_streams((video, audio))[0]
+
+
+def _resize_packed_mask(
+    mask: torch.Tensor | None,
+    source_shapes: list[tuple[int, ...]],
+    target_shapes: list[tuple[int, ...]],
+) -> torch.Tensor | None:
+    """Resize ComfyUI's already-prepared packed AV denoise mask.
+
+    CFGGuider expands each user mask to the corresponding latent channel count
+    before OUTER_SAMPLE wrappers run, so this boundary sees the same packed shape
+    as the AV sampler state rather than the original single-channel mask.
+    """
+    if mask is None:
+        return None
+    if tuple(mask.shape) != (source_shapes[0][0], 1, sum(math.prod(shape[1:]) for shape in source_shapes)):
+        raise ValueError("prepared H3 denoise mask does not match source packed AV geometry")
+    video_mask, audio_mask = unpack_streams(mask, source_shapes)
+    target_h, target_w = target_shapes[0][-2:]
+    video_mask = resize_spatial_5d(video_mask, target_h, target_w, mode="nearest")
+    packed, packed_shapes = pack_streams((video_mask, audio_mask))
+    if packed_shapes != target_shapes:
+        raise RuntimeError("resized H3 denoise mask does not match target packed AV geometry")
+    return packed
+
+
+def _merge_preserved_noise(
+    generated_noise: torch.Tensor,
+    preserved_noise: torch.Tensor,
+    denoise_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    """Keep native inpaint noise in protected regions.
+
+    MiniMax H3's scale_latent_inpaint uses the sampler's original noise for its
+    0.999 visual-conditioning injection. Replacing that noise in mask==0 regions
+    changes the protected context seen by the transformer even though ComfyUI
+    restores the clean latent after every denoised prediction.
+    """
+    if denoise_mask is None:
+        return generated_noise
+    if generated_noise.shape != preserved_noise.shape or generated_noise.shape != denoise_mask.shape:
+        raise ValueError("H3 handoff noise/mask shapes differ")
+    mask = denoise_mask.to(device=generated_noise.device, dtype=generated_noise.dtype)
+    return generated_noise * mask + preserved_noise.to(generated_noise) * (1.0 - mask)
+
+
+def _resize_target_keyframes(entry: dict[str, Any], target_h: int, target_w: int) -> dict[str, Any]:
+    out = entry.copy()
+    keyframes = entry.get("minimax_keyframes")
+    if keyframes is None:
+        return out
+    if not isinstance(keyframes, (list, tuple)):
+        raise TypeError("minimax_keyframes must be a list or tuple")
+    resized_keyframes = []
+    for block in keyframes:
+        if not isinstance(block, dict):
+            raise TypeError("MiniMax H3 keyframe entries must be dictionaries")
+        resized = block.copy()
+        latent = block.get("latent")
+        if latent is not None:
+            if not torch.is_tensor(latent) or latent.ndim not in (4, 5) or latent.shape[1] != 24:
+                raise ValueError("MiniMax H3 keyframe latent must be Bx24xHxW or Bx24xTxHxW")
+            if latent.ndim == 4:
+                latent = resize_spatial_5d(latent.unsqueeze(2), target_h, target_w, mode="bicubic").squeeze(2)
+            else:
+                latent = resize_spatial_5d(latent, target_h, target_w, mode="bicubic")
+            resized["latent"] = latent
+            if "latent_h" in resized:
+                resized["latent_h"] = int(target_h)
+            if "latent_w" in resized:
+                resized["latent_w"] = int(target_w)
+        resized_keyframes.append(resized)
+    out["minimax_keyframes"] = tuple(resized_keyframes) if isinstance(keyframes, tuple) else resized_keyframes
+    return out
+
+
+def _reset_guider_conds(
+    guider: Any,
+    *,
+    template: dict[str, list[Any]] | None = None,
+    target_video_hw: tuple[int, int] | None = None,
+) -> None:
+    """Recreate conditioning before each independent geometry/sampler lifetime.
+
+    ComfyUI resolves percentage areas, masks, and model conditions in-place on
+    guider.conds. Reusing the processed low-resolution structure for the
+    probe/high stage can therefore leak low-grid shape metadata across a
+    progressive handoff. The progressive caller supplies a pristine snapshot of
+    guider.conds taken *after* ComfyUI's hook preprocessing/filtering so those
+    call-boundary hook semantics are not lost when geometry is rebuilt.
+    """
+    source = template if template is not None else getattr(guider, "original_conds", None)
+    if not isinstance(source, dict):
+        return
+    target_h, target_w = target_video_hw if target_video_hw is not None else (None, None)
+    rebuilt = {}
+    for key, entries in source.items():
+        copied_entries = []
+        for entry in entries:
+            copied = entry.copy() if isinstance(entry, dict) else copy.copy(entry)
+            if target_video_hw is not None and isinstance(copied, dict):
+                copied = _resize_target_keyframes(copied, int(target_h), int(target_w))
+            copied_entries.append(copied)
+        rebuilt[key] = copied_entries
+    guider.conds = rebuilt
+
+
+@contextlib.contextmanager
+def _flow_stage_contract(guider: Any, stage: str):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("H3 flow stage tracking requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("H3 flow stage tracking requires mutable transformer options")
+    previous = transformer.get(FLOW_STAGE_KEY)
+    transformer[FLOW_STAGE_KEY] = str(stage)
+    try:
+        yield
+    finally:
+        if previous is None:
+            transformer.pop(FLOW_STAGE_KEY, None)
+        else:
+            transformer[FLOW_STAGE_KEY] = previous
+
+
+@contextlib.contextmanager
+def _high_stage_contract(guider: Any):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("progressive handoff requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    previous = transformer.get("h3_refinement")
+    request = {
+        "api": 1,
+        "active": True,
+        "min_actual_prefix_steps": 1,
+        "sigma_reference": 1.0,
+        "source": "h3_flow_progressive_handoff",
+    }
+    if previous is not None:
+        if not isinstance(previous, dict):
+            raise RuntimeError("existing h3_refinement contract is not a dictionary")
+        conflicts = {
+            key: (previous[key], value) for key, value in request.items() if key in previous and previous[key] != value
+        }
+        if conflicts:
+            raise RuntimeError(f"existing h3_refinement contract conflicts with progressive handoff: {conflicts}")
+        request = {**previous, **request}
+    transformer["h3_refinement"] = request
+    try:
+        yield
+    finally:
+        if previous is None:
+            transformer.pop("h3_refinement", None)
+        else:
+            transformer["h3_refinement"] = previous
+
+
+def _run_progressive(
+    executor,
+    guider,
+    binding: FlowBinding,
+    config: ProgressiveHandoffConfig | ProgressiveTargetInputConfig,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask,
+    callback,
+    disable_pbar,
+    seed,
+    latent_shapes,
+):
+    if len(latent_shapes) != 2:
+        raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    _validate_progressive_sampler_state(sampler)
+    if sigmas.ndim != 1 or sigmas.numel() < 4:
+        raise ValueError("progressive handoff requires a full H3 sigma schedule")
+    if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
+        float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
+    ):
+        raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
+    input_shapes = list(latent_shapes)
+    if input_shapes[0][-2] % 2 or input_shapes[0][-1] % 2:
+        raise ValueError("input H3 geometry is not patch-safe")
+    model_options = getattr(guider, "model_options", None)
+    if not isinstance(model_options, dict):
+        raise RuntimeError("progressive handoff requires mutable model options")
+    transformer = model_options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("progressive handoff requires mutable transformer options")
+    current_conds = getattr(guider, "conds", None)
+    if not isinstance(current_conds, dict):
+        raise RuntimeError("progressive handoff requires ComfyUI guider conditioning state")
+    conditioning_template = {
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
+        for key, entries in current_conds.items()
+    }
+    video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
+
+    target_input = isinstance(config, ProgressiveTargetInputConfig)
+    if target_input:
+        target_shapes = input_shapes
+        target_h, target_w = target_shapes[0][-2:]
+        source_h, source_w = config.resolve_source(target_h, target_w)
+        source_shapes = list(target_shapes)
+        source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
+        target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
+        source_video_noise = deterministic_video_noise(
+            (*target_video_noise.shape[:-2], source_h, source_w),
+            seed=int(seed or 0) + config.source_noise_offset,
+            device=target_video_noise.device,
+            dtype=target_video_noise.dtype,
+        )
+        low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
+        low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+        low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+    else:
+        source_shapes = input_shapes
+        source_h, source_w = source_shapes[0][-2:]
+        target_h, target_w = config.resolve_target(source_h, source_w)
+        if target_h * target_w <= source_h * source_w:
+            raise ValueError("progressive handoff target must increase the video latent area")
+        target_shapes = None
+        low_noise = noise
+        low_latent_image = latent_image
+        low_mask = denoise_mask
+    selected_coordinate = config.resolve_coordinate(
+        source_shapes[0][-2],
+        source_shapes[0][-1],
+        target_h,
+        target_w,
+    )
+    index = select_handoff_index(
+        sigmas,
+        selected_coordinate,
+        min_high_steps=config.min_high_steps,
+        video_shift=video_shift,
+    )
+    sigma = float(sigmas[index].item())
+    low_sigmas = sigmas[: index + 1]
+    high_sigmas = sigmas[index:]
+    binding.metrics.event(
+        "handoff_plan",
+        index=index,
+        sigma=sigma,
+        coordinate=float(normalized_coordinate(sigma, video_shift=video_shift)),
+        requested_coordinate=config.handoff_coordinate,
+        selected_coordinate=selected_coordinate,
+        selection=config.handoff_selection,
+        input_mode="target_grid" if target_input else "source_grid",
+        source_shape=source_shapes[0],
+        target_hw=(target_h, target_w),
+    )
+
+    sampler_invocation_count = 0
+    history_boundary_count = 0
+
+    def low_callback(step, x0, x, _total):
+        if callback is None:
+            return None
+        if target_input:
+            # CFGGuider's packed callback closure was created against the caller's
+            # target latent_shapes. Feed it target-shaped preview/state tensors even
+            # though this private sampler lifetime runs on source_shapes.
+            x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
+            x = _resize_packed_latent_image(x, source_shapes, target_shapes)
+        return callback(step, x0, x, len(sigmas) - 1)
+
+    _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
+    try:
+        _reset_guider_conds(
+            guider,
+            template=conditioning_template,
+            target_video_hw=(source_h, source_w) if target_input else None,
+        )
+        low_started = time.perf_counter()
+        try:
+            sampler_invocation_count += 1
+            binding.metrics.increment("progressive_sampler_invocations")
+            with _flow_stage_contract(guider, "low"):
+                low_result = executor(
+                    low_noise,
+                    low_latent_image,
+                    sampler,
+                    low_sigmas,
+                    low_mask,
+                    low_callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=source_shapes,
+                )
+        finally:
+            binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
+        base_model = guider.model_patcher.model
+        source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
+        source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
+        active = binding.active_capture
+        if active is not None:
+            active.phases = (*active.phases, (index, "handoff_probe"))
+        probe_started = time.perf_counter()
+        probe_noise = _noise_argument(base_model, source_raw, sigma, source_latent_internal)
+        previous_probe = transformer.get(PROBE_CONTEXT_KEY)
+        transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
+        try:
+            _reset_guider_conds(
+                guider,
+                template=conditioning_template,
+                target_video_hw=(source_h, source_w) if target_input else None,
+            )
+            # The probe is a one-call sampler lifetime, but model-level patches such
+            # as DiffAid must still see the full H3 sigma reference. The explicit
+            # refinement contract provides that reference without carrying solver or
+            # Spectrum history across the split.
+            sampler_invocation_count += 1
+            history_boundary_count += 1
+            binding.metrics.increment("progressive_sampler_invocations")
+            binding.metrics.increment("progressive_history_boundaries")
+            with _flow_stage_contract(guider, "probe"), _high_stage_contract(guider):
+                source_x0 = executor(
+                    probe_noise,
+                    low_latent_image,
+                    _make_probe_sampler(sampler),
+                    sigmas[index : index + 1],
+                    low_mask,
+                    None,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=source_shapes,
+                )
+        finally:
+            if previous_probe is None:
+                transformer.pop(PROBE_CONTEXT_KEY, None)
+            else:
+                transformer[PROBE_CONTEXT_KEY] = previous_probe
+            binding.metrics.event("handoff_probe_wall", elapsed_ms=(time.perf_counter() - probe_started) * 1000.0)
+    except BaseException as exc:
+        _finish_capture(binding, error=exc)
+        raise
+    committed_low_run = _finish_capture(binding)
+    binding.metrics.increment("handoff_exact_probe_nfe")
+    try:
+        source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        transfer_started = time.perf_counter()
+        target_raw, target_shapes = build_handoff_state(
+            source_packed_state=source_raw,
+            source_x0_packed=source_x0,
+            source_shapes=source_shapes,
+            sigma=sigma,
+            target_h=target_h,
+            target_w=target_w,
+            seed=int(seed or 0) + config.seed_offset,
+            transfer_mode=config.transfer_mode,
+        )
+        if target_input and target_shapes != input_shapes:
+            raise RuntimeError("target-input progressive handoff changed the caller-visible AV geometry")
+        if target_input:
+            target_latent_image = latent_image
+            target_mask = denoise_mask
+        else:
+            target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
+            target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
+            latent_shapes[:] = target_shapes
+        target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
+        target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
+        if target_input:
+            target_noise = _merge_preserved_noise(target_noise, noise, target_mask)
+        binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
+
+        if binding.guidance is not None and binding.guidance.mode != "off":
+            if binding.trajectory is None:
+                raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
+            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            run = binding.trajectory.select(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                conditioning_signature=expected_signature,
+            )
+            if run.geometry.latent_t != int(target_shapes[0][2]):
+                raise ValueError("trajectory and target video temporal geometry differ")
+            binding.active_guidance_run = run
+
+        def high_callback(step, x0, x, _total):
+            if callback is not None:
+                return callback(index + step, x0, x, len(sigmas) - 1)
+            return None
+
+        high_started = time.perf_counter()
+        high_event_start = len(binding.metrics.events)
+        _reset_guider_conds(
+            guider,
+            template=conditioning_template,
+            target_video_hw=None if target_input else (target_h, target_w),
+        )
+        sampler_invocation_count += 1
+        history_boundary_count += 1
+        binding.metrics.increment("progressive_sampler_invocations")
+        binding.metrics.increment("progressive_history_boundaries")
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+            result = executor(
+                target_noise,
+                target_latent_image,
+                sampler,
+                high_sigmas,
+                target_mask,
+                high_callback,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
+            )
+        binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
+        high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
+        if not high_model_calls:
+            raise RuntimeError("progressive high stage produced no H3 model evaluations")
+        first_high_actual = bool(high_model_calls[0].fields.get("actual"))
+        if not first_high_actual:
+            raise RuntimeError("progressive high stage did not begin with the required exact H3 model evaluation")
+        binding.metrics.event(
+            "handoff_complete",
+            sigma=sigma,
+            target_shape=target_shapes[0],
+            audio_state_copied=True,
+            separate_sampler_invocations=True,
+            sampler_invocation_count=sampler_invocation_count,
+            history_boundary_count=history_boundary_count,
+            exact_probe_performed=True,
+            high_stage_exact_prefix_requested=1,
+            high_stage_first_call_actual=first_high_actual,
+            high_stage_model_calls=len(high_model_calls),
+            conditioning_rebuilt_for_high_grid=True,
+            input_mode="target_grid" if target_input else "source_grid",
+        )
+        return result
+
+    except BaseException as exc:
+        if committed_low_run is not None and binding.trajectory is not None:
+            invalid = binding.trajectory.invalidate(
+                committed_low_run.run_id,
+                f"progressive continuation failed: {type(exc).__name__}: {exc}",
+            )
+            binding.metrics.event(
+                "trajectory_invalidate",
+                run_id=invalid.run_id,
+                error=type(exc).__name__,
+            )
+        raise
+
+
+def clone_sampler(sampler: Any) -> Any:
+    cloned = copy.copy(sampler)
+    if hasattr(sampler, "extra_options"):
+        cloned.extra_options = dict(getattr(sampler, "extra_options", {}) or {})
+    return cloned
