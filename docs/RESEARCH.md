@@ -5,9 +5,9 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 | Source | Useful transfer | Boundary for H3 |
 |---|---|---|
 | [HiFlow](https://arxiv.org/abs/2504.06232) | A low-resolution flow trajectory contains time-varying structure; its separate initialization, direction, and acceleration alignments motivate the experiments here. | Published experiments are image models. H3 preserves packed audio and does not mislabel a prediction-space correction as HiFlow initialization alignment. Direction remains a low-frequency predicted-clean correction; acceleration now adapts HiFlow's adjacent full-spectrum velocity update by reconstructing H3 velocity from the native `x0 = x - sigma * v` sampling contract. Video-quality transfer remains an empirical question. |
-| [FrescoDiffusion](https://arxiv.org/abs/2603.17555) | Video high-resolution generation benefits from a global low-resolution prior; its regional variant shows that prior strength should vary spatially instead of forcing every region equally. | Its tiled fusion and SAM-derived activity masks are not copied into H3. A local H3-latent correspondence-transfer adaptation was tested twice and retired after patterned-media regressions; future transfer should preserve the paper's global/regional prior principle without direct nearest-neighbor detail copying. |
-| [TokenFlow](https://arxiv.org/abs/2307.10373) | Diffusion-space features can expose useful inter-frame nearest-neighbor correspondences for training-free temporal propagation. | Direct local nearest-neighbor transport on H3's clean-state video latent was tested and failed decoded-media validation twice. That negative result is retained rather than assuming TokenFlow's editing-time feature correspondence transfers to H3 progressive regeneration. |
-| [FRESCO](https://arxiv.org/abs/2403.12962) | Temporal correspondence needs an explicit validity/occlusion notion; forward/backward consistency is useful evidence for rejecting unreliable propagation. | FRESCO uses optical flow and image/video translation features. A dependency-free H3-latent analogue with strict reverse-cycle gating still produced a visible patterned regression, so that transport mechanism is removed rather than treated as a successful FRESCO transfer. |
+| [FrescoDiffusion](https://arxiv.org/abs/2603.17555) | Video high-resolution generation benefits from a global low-resolution prior; its regional variant shows that prior strength should vary spatially instead of forcing every region equally. | Its tiled fusion and SAM-derived activity masks are not copied into H3. Here the low-resolution H3 clean-state trajectory supplies the prior, while correspondence confidence supplies the spatial gate. |
+| [TokenFlow](https://arxiv.org/abs/2307.10373) | Diffusion-space features can expose useful inter-frame nearest-neighbor correspondences for training-free temporal propagation. | TokenFlow is a video-editing method built on image diffusion internals. This project does not replace H3 attention tokens; it independently tests local correspondence on H3's captured clean-state video latent. |
+| [FRESCO](https://arxiv.org/abs/2403.12962) | Temporal correspondence needs an explicit validity/occlusion notion; forward/backward consistency is useful evidence for rejecting unreliable propagation. | FRESCO uses optical flow and image/video translation features. This project adds no flow-network dependency and does not copy its implementation; it uses mutual local H3-latent matching as a conservative experimental visibility gate. |
 | [RALU](https://arxiv.org/abs/2507.08422) | Naively resizing noisy state causes distribution/timestep mismatch; transitions need explicit noise semantics. | Its correlated-noise/JSD result assumes a particular upsampler and schedule. H3 uses a conditional RF state plus native exact probe. |
 | [CineScale](https://arxiv.org/abs/2508.15774) | Self-cascade video regeneration and high-resolution attention/position degradation are relevant hypotheses. | Wan-specific position methods are not transferred to H3 MM-RoPE. |
 | [FreeSwim](https://arxiv.org/abs/2511.14712) | Local-detail and global-semantic paths motivate selective spatial locality. | H3 is one multimodal stream; non-video and temporal paths remain global. |
@@ -17,52 +17,54 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 | [simple diffusion](https://arxiv.org/abs/2301.11093) | Resolution changes the appropriate signal-to-noise relationship. | Its argument is not reduced to an unexplained H3 sigma multiplier. |
 | [SD3 / Scaling Rectified Flow Transformers](https://arxiv.org/abs/2403.03206) | The constant-observation derivation yields `alpha=sqrt(m/n)` and a fractional-linear map. | The constant-image assumption is unrealistic, as the paper notes; H3 composition is only a probe. |
 
-## Occlusion-aware temporal experiment — negative transfer result
+## Occlusion-aware temporal experiment
 
 The difficult-motion D10 smoke isolated a failure that denoising-time acceleration did not clearly
-improve: moving clothing and newly revealed background can become malformed even when overall action
-and shot structure remain good. Two experiments therefore tested a separate **video-frame-time**
-hypothesis using the captured low-resolution H3 clean-state trajectory.
+improve: moving clothing and newly revealed background can become malformed even when the overall
+trajectory and shot remain good. `direction+temporal` tests a different axis: **video-frame time**.
 
-V1 matched adjacent low-grid latent frames with bounded local cosine nearest neighbors and transported
-high-grid neighbor detail only where forward/backward correspondence appeared valid. It failed decoded
-media: parts of the grass developed a repeated/patterned texture and motion artifacts became
-different/more broken. Telemetry showed that high cosine similarity was not enough in repetitive
-texture: mean best-vs-second-best margins were only ~0.00381/~0.00269, yet ~46%/~51% of locations
-still received some temporal support.
+The first implementation used adjacent-frame local cosine matching directly in the exact low-resolution
+H3 clean-state latent, followed by bidirectional cycle gating and confidence-weighted high-resolution
+detail transport. The first matched D10-temporal media run showed repeated/patterned grass and different/more-broken motion artifacts, but that media result is now **confounded**: the workflow had accidentally switched to the TensorRT H3 VAE and compiled the `w4a16_awq` decoder. The user subsequently identified that decoder as the source of the visible pattern, so the media cannot be used to attribute the artifact to temporal guidance.
 
-V2 fixed that concrete gating defect rather than changing the strength. It made minimum similarity and
-uniqueness margin hard admission rules, required exact reverse-cycle consistency, and keyed the
-correspondence cache by the **resolved** low-grid reference coordinate. That last correction mattered
-because progressive low-grid sampling ends at the handoff; all later high-stage requests below ~0.4
-resolve to the same final exact low-grid anchor.
+The metrics still exposed a real matcher defect independent of the VAE confound. The two physical chunks reported high mean accepted cosine similarity (~0.938/~0.959)
+but extremely small best-vs-second-best margins (~0.00381/~0.00269), while the configured
+`temporal_min_margin` was 0.02. V1 mistakenly used that value only to scale confidence rather than
+to reject ambiguous matches. Consequently ~46%/~51% of candidate locations were labeled "valid"
+even though mean confidence was only ~0.056/~0.048, and accepted flow magnitude averaged ~2.55-2.57
+low-grid cells with a radius-4 diagonal maximum ~5.657. Repetitive grass is precisely the kind of
+region where a weakly unique nearest-neighbor field can create patterned copying.
 
-The conservative v2 gate behaved exactly as intended structurally, but the decoded pattern remained.
-Its valid temporal support collapsed to ~0.2202%/~0.2235% for the two chunks, mean confidence to
-~0.00118/~0.00120, and the mean temporal RMS ratio across all 14 high-stage guidance calls to only
-~0.00137. The correspondence cache correctly reused the final ~0.4 anchor on 12/14 calls. Even with
-that tiny global support, the localized repeated texture remained visible.
+The current v2 keeps the dependency-free H3-latent hypothesis but makes it conservative:
 
-This is decisive negative evidence for **nearest-neighbor latent detail transport in this H3 progressive
-setup**. The experiment is closed:
+- minimum cosine similarity and best-vs-second-best margin are hard admission tests;
+- reverse correspondence is exact by default (zero-cell cycle tolerance);
+- rejected/ambiguous locations contribute exactly zero temporal copy;
+- post-handoff reference clamping is explicit and cache identity follows the resolved low-grid anchor.
 
-- no `direction+temporal` public mode is retained;
-- no temporal transport cache or widget remains in runtime;
-- no further weight/radius/margin/cycle sweep is justified;
-- the metrics and media result remain documented as a failed transfer.
+The last point matters because progressive low-grid sampling stops at the handoff. In D10, the exact
+low-grid support ends at ~0.4, so requested high-stage coordinates ~0.3/~0.2/~0.1 all resolve to the
+same ~0.4 prior. V1 recomputed the identical map for each requested coordinate; v2 reuses it and
+reports the resolved coordinate/clamp state directly. The temporal correction still decays with the
+existing high-stage schedule.
 
-The broader temporal problem is not declared solved or impossible. The failure is narrower: sparse
-local copying is unsafe here. FrescoDiffusion's evidence instead favors coherent global/regional prior
-regularization, while FreeSwim shows that local-detail mechanisms need a global branch to prevent
-repetition. CineScale likewise treats repetition as a multi-scale/global-context problem rather than
-simply propagating local detail. These sources motivate any future motion-specific work toward a
-**non-copying global/local prior formulation** or attention/representation study, not another
-nearest-neighbor transport implementation.
+For a trusted current-to-neighbor match, the candidate target remains
 
-For the current PR, the active sequence therefore returns to the already-planned
-**resolution-shift-only path E**. That path changes the shared H3 AV flow coordinate without adding
-video-time detail propagation and remains separately media-gated.
+\[
+P_i = W(H_j) + U(R_i - W(R_j)).
+\]
 
+The important change is **where this operation is allowed**. V2 applies it only where the match is
+unique and mutually consistent; otherwise the ordinary same-time low-frequency direction term remains
+the only guidance.
+
+This remains a research hypothesis. The earlier v1/v2 decoded-media verdicts are invalid for temporal attribution because both used the unintended VAE decoder. The conservative v2 implementation is restored and requires one clean matched rerun using the corrected VAE. Only that run can decide whether the latent nearest-neighbor transport path should be retained or abandoned; do not tune weights or thresholds before it.
+
+This direction is consistent with the broader source evidence: FrescoDiffusion explicitly warns that
+an unreliable prior can propagate incorrect structure or motion and decays/releases prior strength;
+its regional variant applies different prior constraints to active and background regions. The present
+H3 adaptation does not copy FrescoDiffusion's SAM activity map or tiled velocity fusion, but adopts the
+same conservative principle that prior regularization must be spatially trustworthy rather than global.
 
 ## Source implementations
 
