@@ -33,9 +33,9 @@ another learned network.
 For a trusted current-to-neighbor match, high-resolution detail is motion-transported from that
 neighbor and augmented with the low-resolution prior's same-time innovation:
 
-[
+\[
 P_i = W(H_j) + U(R_i - W(R_j)).
-]
+\]
 
 The temporal correction is confidence-weighted `P_i - H_i` and is combined with the existing
 same-time low-frequency direction term before the global RMS guard. Regions without a trustworthy
