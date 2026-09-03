@@ -31,9 +31,11 @@ H3 is treated as its actual joint AV model: 24-channel video, 32-channel two-tra
 
 The architecture, guards, instrumentation, and synthetic test suite are implemented. The integrated
 two-pass path has completed real decoded-media smoke validation through 7+4 refine reduction, including
-correct Spectrum provenance and live guidance telemetry. Progressive target-input and resolution-shift
-paths still require their own decoded-media validation before they can be recommended. The safe default
-for the schedule, reference budget, and attention lab remains `off`/`native`.
+correct Spectrum provenance and live guidance telemetry. Progressive Target Input has also completed
+the difficult-motion D10 smoke at 10 SA-Solver-PECE outer steps; decoded media is good/baseline-level,
+while the remaining fast-motion clothing/background disocclusion artifacts are not clearly improved by
+the tested HiFlow-style acceleration term. Resolution-shift-only validation remains pending. The safe
+default for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
 
@@ -212,7 +214,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The difficult-motion progressive smoke still shows MiniMax-H3 motion/occlusion artifacts in clothing deformation and newly revealed background. A matched D10 rerun is still required for the corrected PECE acceleration semantics; resolution-shift-only validation also remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. Resolution-shift-only validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
