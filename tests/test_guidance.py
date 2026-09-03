@@ -38,10 +38,7 @@ def run(values=(1.0, 0.0), coords=(0.8, 0.2), provenance=("actual", "actual")):
 
 
 def run_video(video, coords=(0.8, 0.2)):
-    samples = tuple(
-        TrajectorySample(c, c, c, i, i, "corrected", "actual", video.clone())
-        for i, c in enumerate(coords)
-    )
+    samples = tuple(TrajectorySample(c, c, c, i, i, "corrected", "actual", video.clone()) for i, c in enumerate(coords))
     return TrajectoryRun(
         1,
         "r",
