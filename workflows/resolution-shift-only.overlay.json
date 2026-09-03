@@ -3,7 +3,7 @@
   "kind": "comfyui_workflow_overlay",
   "purpose": "Matched E0/E1 direct-target test of the SD3-derived relative resolution shift on MiniMax H3, isolated from progressive/trajectory guidance.",
   "model_chain": {
-    "keep": "existing DiffAid -> Untwist -> Spectrum MODEL chain into H3 Continuum Sampler V3.4",
+    "keep": "existing DiffAid -> Untwist -> Spectrum MODEL chain, then H3RuntimeMetricsProbe, then H3 Continuum Sampler V3.4",
     "remove_or_bypass": [
       "H3ProgressiveTargetInputHandoff",
       "H3ProgressiveHandoff",
@@ -130,7 +130,8 @@
     "progressive_history_boundaries": 0,
     "handoff_exact_probe_nfe": 0,
     "guidance_events": 0,
-    "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change."
+    "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change.",
+    "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON"
   },
   "media_gate": [
     "fast-motion clothing",
@@ -147,5 +148,14 @@
     "before_decoding": "Do not tune strength or calibrated_factor.",
     "if_positive": "Only then test the same remap combined with accepted D10 progressive+temporal.",
     "if_neutral_or_negative": "Leave resolution-aware sigmas experimental/off; do not start a strength sweep from this pair."
+  },
+  "metrics_probe": {
+    "node": "H3RuntimeMetricsProbe",
+    "placement": "after Spectrum and before H3 Continuum Sampler V3.4",
+    "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
+    "output": {
+      "metrics": "connect to H3MetricsJSON.metrics",
+      "autosave": "retain the same metrics JSON capture used by D10"
+    }
   }
 }
