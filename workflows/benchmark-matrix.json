@@ -199,84 +199,71 @@
   ],
   "temporal_correspondence_smoke": {
     "id": "D10-temporal-v2-rerun",
-    "status": "pending_clean_media_after_vae_confounded_runs",
+    "status": "clean_media_tentative_positive",
     "base_reference": "accepted difficult-motion D10 direction-only run",
-    "confound": {
-      "component": "ComfyUI-H3VAE_TRT",
-      "unintended_decoder": "w4a16_awq",
-      "effect": "user identified decoder as source of repeated/patterned output",
-      "consequence": "prior v1/v2 decoded-media verdicts are invalid for temporal attribution",
-      "structural_metrics_still_valid": true
+    "vae": {
+      "decoder": "standard MiniMaxH3VideoVAE",
+      "trt": false,
+      "prior_w4a16_awq_runs_confounded": true
     },
-    "prior_attempts": [
-      {
-        "id": "D10-temporal-v1",
-        "status": "media_confounded_by_vae",
-        "structural_finding": "soft uniqueness scaling admitted ambiguous repetitive-texture matches"
-      },
-      {
-        "id": "D10-temporal-v2",
-        "status": "media_confounded_by_vae",
-        "structural_telemetry": {
-          "logical_calls": 38,
-          "actual_nfe": 28,
-          "spectrum_forecasts": 10,
-          "low_logical": 22,
-          "probe_logical": 2,
-          "high_logical": 14,
-          "chunk_1_valid_fraction": 0.002202330157160759,
-          "chunk_2_valid_fraction": 0.002234794432297349,
-          "chunk_1_confidence_mean": 0.0011777953477576375,
-          "chunk_2_confidence_mean": 0.0012022219598293304,
-          "mean_temporal_rms_ratio": 0.0013664566483514915,
-          "cache_hits": 12,
-          "clamped_reference_calls": 12,
-          "guidance_calls": 14
-        },
-        "structural_finding": "hard uniqueness/cycle gating and resolved-anchor cache behaved as intended"
-      }
-    ],
-    "runtime_status": "public direction+temporal mode restored",
-    "outer_steps": 10,
-    "guidance_mode": "direction+temporal",
-    "direction_weight": 0.25,
-    "temporal_weight": 0.2,
-    "acceleration_weight": 0,
-    "consistency_weight": 0,
-    "low_frequency_cutoff": 0.25,
-    "source_mode": "scale",
-    "source_scale": 0.83,
-    "handoff_coordinate": 0.35,
-    "handoff_selection": "fixed",
-    "vae_requirement": {
-      "decoder": "corrected decoder selected by user",
-      "forbidden_decoder": "w4a16_awq",
-      "record_exact_decoder_and_engine": true
+    "configuration": {
+      "outer_steps": 10,
+      "guidance_mode": "direction+temporal",
+      "direction_weight": 0.25,
+      "temporal_weight": 0.2,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25,
+      "source_mode": "scale",
+      "source_scale": 0.83,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed"
     },
-    "keep_identical": [
-      "seed",
-      "prompt",
-      "references",
-      "LoRAs",
-      "DiffAid",
-      "Untwist",
-      "Spectrum",
-      "sampler",
-      "scheduler",
-      "Continuum chunking",
-      "audio behavior",
-      "decode settings"
-    ],
-    "expected_transformer_topology": {
+    "structure": {
       "logical_calls": 38,
       "actual_nfe": 28,
       "spectrum_forecasts": 10,
       "low_logical": 22,
       "probe_logical": 2,
-      "high_logical": 14
+      "high_logical": 14,
+      "high_actual": 10,
+      "high_forecast": 4,
+      "progressive_sampler_invocations": 6,
+      "progressive_history_boundaries": 4,
+      "handoff_exact_probe_nfe": 2,
+      "clamp_activations": 0
     },
-    "primary_media_question": "Does conservative direction+temporal improve fast-motion clothing/newly revealed grass/background on the corrected VAE without freezing, stale copying, repetition, ghosting, or smearing?",
-    "no_sweep_rule": "Do not tune temporal weight/search radius/margin/cycle tolerance before the clean corrected-VAE rerun."
+    "temporal_telemetry": {
+      "chunk_1": {
+        "valid_fraction": 0.0015984654892235994,
+        "confidence_mean": 0.000816209299955517,
+        "similarity_mean": 0.892415463924408,
+        "margin_mean": 0.03558775782585144,
+        "flow_magnitude_mean": 2.757479190826416,
+        "flow_magnitude_max": 5.656854152679443,
+        "temporal_rms_ratio_mean": 0.0011878941981454513,
+        "temporal_rms_ratio_max": 0.0022059499751776457
+      },
+      "chunk_2": {
+        "valid_fraction": 0.0005419933586381376,
+        "confidence_mean": 0.0002954935480374843,
+        "similarity_mean": 0.9495378136634827,
+        "margin_mean": 0.030557069927453995,
+        "flow_magnitude_mean": 3.000811815261841,
+        "flow_magnitude_max": 5.656854152679443,
+        "temporal_rms_ratio_mean": 0.00061124526005837,
+        "temporal_rms_ratio_max": 0.0011624410981312394
+      },
+      "mean_temporal_rms_ratio": 0.0008995697291019107,
+      "mean_direction_rms_ratio": 0.024258687626570463,
+      "cache_hits": 12,
+      "clamped_reference_calls": 12,
+      "guidance_calls": 14
+    },
+    "media_verdict": "good; maybe slightly better than the non-temporal D10 control",
+    "decision": "retain conservative direction+temporal v2 as experimental candidate at temporal_weight=0.20; no general quality claim and no parameter sweep from one weak positive",
+    "next_feature_path": "E",
+    "confirmation_if_promoting": "use a later matched second-seed direction-only vs direction+temporal pair"
   },
   "required_outputs": [
     "workflow_json",
@@ -299,7 +286,7 @@
     ],
     "exploratory_lower_step": "C4",
     "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
-    "next_feature_path": "D10-temporal-v2-rerun"
+    "next_feature_path": "E"
   },
   "feature_path_smoke": {
     "id": "D-smoke",
@@ -334,8 +321,8 @@
   },
   "resolution_shift_smoke": {
     "id": "E10-smoke",
-    "status": "pending_after_clean_temporal_rerun",
-    "purpose": "Isolate resolution-aware shared AV sigma remapping after the corrected-VAE temporal rerun resolves the current confound.",
+    "status": "pending_matched_pair",
+    "purpose": "Isolate resolution-aware shared AV sigma remapping after the clean standard-VAE temporal rerun produced a weak/tentative positive.",
     "geometry": {
       "source_reference_pixels_wh": [
         736,
