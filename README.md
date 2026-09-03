@@ -140,9 +140,11 @@ used as an alignment mechanism; this prevents the known odd-grid flashing-border
   consumed when present. A new downstream outer-sample execution is used per geometry.
 - **Continuum:** trajectory selection uses the available chunk identity plus the bounded conditioning
   signature (and a session namespace when one is present). Current Continuum V3.4 interop does not
-  expose a unique sequence/session ID, so conditioning identity prevents same-index runs from
-  independent branches being confused. Multi-chunk progressive use must use the Target Input node so
-  Continuum's latent/session geometry remains on the final grid.
+  expose a unique sequence/session ID, so use a separate trajectory handle for each independent
+  Continuum sequence. Conditioning identity adds a strong drift/cross-talk fence but cannot uniquely
+  distinguish two independent sequences whose relevant conditioning fingerprints are identical.
+  Multi-chunk progressive use must use the Target Input node so Continuum's latent/session geometry
+  remains on the final grid.
 - **DiffAid / Untwisting RoPE:** patches stay in the downstream path. The `h3_refinement` exact-anchor
   contract is published during the high stage.
 - **Other attention overrides:** experimental sparse attention delegates to the existing provider.
