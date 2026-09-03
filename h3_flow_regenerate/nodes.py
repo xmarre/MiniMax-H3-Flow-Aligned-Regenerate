@@ -106,6 +106,7 @@ class H3FlowAlignedRegenerate:
             model,
             trajectory=trajectory,
             guidance=guidance,
+            clear_progressive=True,
             capture_enabled=False,
             metrics=metrics,
         )
@@ -167,6 +168,7 @@ class H3FlowAlignedRefineState:
             model,
             trajectory=trajectory,
             guidance=guidance,
+            clear_progressive=True,
             capture_enabled=False,
             metrics=metrics,
         )
