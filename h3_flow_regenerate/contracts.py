@@ -200,6 +200,27 @@ class H3FlowTrajectory:
             self._pending = None
             return run
 
+    def invalidate(self, run_id: str, reason: str) -> TrajectoryRun:
+        """Make a previously committed run unavailable to future guidance selection."""
+        with self._lock:
+            for index in range(len(self._runs) - 1, -1, -1):
+                run = self._runs[index]
+                if run.run_id != str(run_id):
+                    continue
+                if not run.complete:
+                    return run
+                invalid = replace(
+                    run,
+                    complete=False,
+                    abort_reason=str(reason),
+                    completed_ns=time.time_ns(),
+                )
+                runs = list(self._runs)
+                runs[index] = invalid
+                self._runs = tuple(runs)
+                return invalid
+            raise RuntimeError("cannot invalidate an unknown trajectory run")
+
     def select(self, *, chunk_id: str | None = None, session_id: str | None = None) -> TrajectoryRun:
         with self._lock:
             candidates = [
