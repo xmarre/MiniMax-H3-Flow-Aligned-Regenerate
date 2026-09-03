@@ -42,8 +42,9 @@ CI checks the executable contracts at ComfyUI `567275141678c9fd65bafef6aa9dcb4ac
 Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`, Continuum
 `bf25353d8bec44afea22c89717c4301ce13c2036`, DiffAid
 `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`, RefDelta
-`034e4c4c14c56bf76813cee4765e7164b0c7e0db`, and Untwisting RoPE
-`299d4c56a3f057a97b3140d2136189bcd1e7d6bb`. The audit also inspected current MiniMax-H3 main
+`034e4c4c14c56bf76813cee4765e7164b0c7e0db`, Untwisting RoPE
+`299d4c56a3f057a97b3140d2136189bcd1e7d6bb`, and the integrated H3 latent upscaler/refine
+`2c707492084962f7ed665e8817a05a11b14dab27`. The audit also inspected current MiniMax-H3 main
 `d21241f0a4b3acbb34c97dae47fa417b7065e438`. Spectrum PR #98 and its companion Untwist PR #5
 were reviewed as open compatibility work; this package does not make either unmerged PR a dependency.
 Updating a pin requires re-running the source audit and decoded-media compatibility matrix.
