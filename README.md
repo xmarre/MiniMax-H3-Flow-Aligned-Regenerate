@@ -34,11 +34,13 @@ two-pass path has completed real decoded-media smoke validation through 7+4 refi
 correct Spectrum provenance and live guidance telemetry. Progressive Target Input has also completed
 the difficult-motion D10 smoke at 10 SA-Solver-PECE outer steps; decoded media is good/baseline-level,
 while the remaining fast-motion clothing/background disocclusion artifacts are not clearly improved by
-the tested HiFlow-style acceleration term. The first `direction+temporal` H3-latent correspondence
-smoke failed its media gate by introducing patterned grass and worse/different motion artifacts.
-Telemetry exposed overly permissive ambiguity handling; the current head hardens uniqueness/cycle
-gating and requires one matched v2 rerun. Resolution-shift-only validation also remains pending. The safe
-default for the schedule, reference budget, and attention lab remains `off`/`native`.
+the tested HiFlow-style acceleration term. Two matched H3-latent adjacent-frame correspondence smokes
+also failed: v1 introduced patterned grass and worse/different motion artifacts, and conservative v2
+retained the same visible pattern even after strict uniqueness/cycle gating reduced temporal support to
+about 0.22% of candidate locations. That nearest-neighbor transport experiment is therefore retired
+rather than exposed as a selectable mode. Resolution-shift-only validation remains pending and is the
+next active feature path. The safe default for the schedule, reference budget, and attention lab remains
+`off`/`native`.
 
 ## Install
 
@@ -181,23 +183,14 @@ H3's full-resolution flow velocity from the sampler state and predicted-clean es
 HiFlow's adjacent velocity-difference acceleration update. It needs adjacent exact trajectory support
 and the combined predicted-clean correction remains bounded by the RMS guard. This is an H3/video
 adaptation of the published image-generation method, not evidence that HiFlow's image results transfer
-unchanged to H3 video. Progressive nodes expose the acceleration, temporal, consistency, and low-frequency
-controls needed by their selectable guidance modes; a selected mode is never left with an inaccessible
-mode-specific weight.
+unchanged to H3 video. Progressive nodes expose the acceleration, consistency, and low-frequency controls needed by their
+selectable guidance modes; a selected mode is never left with an inaccessible mode-specific weight.
 
-`direction+temporal` is a video-time experiment rather than another denoising-time flow correction.
-It estimates bounded local adjacent-frame correspondences directly from the exact low-resolution H3
-clean-state video latent. The first decoded-media smoke showed that soft confidence was insufficient
-for repetitive texture: grass acquired a repeated pattern while match margins were far below the
-configured minimum. The current implementation therefore treats minimum similarity and
-best-vs-second-best margin as hard admission gates and requires exact reverse-cycle consistency by
-default. Trusted regions may transport neighboring high-resolution detail plus the low-resolution
-trajectory's structural innovation; ambiguous/disoccluded regions receive no temporal copy and retain
-the ordinary same-time direction guidance. After progressive handoff, low-grid reference lookup
-necessarily clamps to the final exact anchor; the resolved coordinate/clamp state is now explicit and
-the correspondence cache follows that resolved anchor. The matcher has no RAFT/GMFlow dependency and
-adds no H3 transformer evaluations. Its 0.20 weight remains only a controlled smoke-test operating
-point, not a validated recommendation.
+The attempted adjacent-frame H3-latent nearest-neighbor transport mode is intentionally **not** exposed.
+Both matched media smokes produced the same patterned-grass failure, including a conservative second
+implementation where strict uniqueness/cycle gating reduced valid temporal support to ~0.22%. The
+negative result is retained in the research/benchmark documentation rather than leaving a known-bad
+runtime mode available.
 
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
@@ -232,7 +225,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. The first `direction+temporal` correspondence smoke was a negative media result (patterned grass and worse/different motion artifacts); the current conservative gating fix requires one matched v2 rerun before the latent-correspondence idea is retained or abandoned. Resolution-shift-only validation remains pending.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The corrected PECE acceleration rerun completed successfully and produced good media, but did not show a clear improvement in the difficult fast-motion clothing/newly-revealed-background artifact class. Two adjacent-frame latent-correspondence smokes both produced the patterned-grass regression; that transport path is retired. Resolution-shift-only validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
