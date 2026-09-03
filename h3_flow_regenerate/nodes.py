@@ -10,6 +10,7 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .reference import apply_reference_budget
+from .runtime import conditioning_signature_from_conditioning
 from .sigma import resolution_aware_sigmas, resolution_shift_factor
 
 
@@ -164,12 +165,14 @@ class H3FlowAlignedRefineState:
             cutoff=low_frequency_cutoff,
         )
         metrics = metrics or H3FlowMetrics()
+        source_signature = conditioning_signature_from_conditioning(positive)
         patched_model, _ = patch_flow_model(
             model,
             trajectory=trajectory,
             guidance=guidance,
             clear_progressive=True,
             capture_enabled=False,
+            guidance_conditioning_signature=source_signature,
             metrics=metrics,
         )
         patched_state = dict(refine_state)
