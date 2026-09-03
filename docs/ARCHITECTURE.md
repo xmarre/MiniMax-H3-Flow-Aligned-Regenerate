@@ -100,7 +100,7 @@ the exact sampler-1 positive conditioning captured in `H3_CONTINUUM_REFINE_STATE
 
 HiFlow's published initialization alignment changes the high-resolution sampler state before the
 guided trajectory begins. This package does not label a PREDICT_NOISE correction as initialization
-alignment. The two-pass node therefore exposes only direction, the experimental acceleration proxy,
+alignment. The two-pass node therefore exposes direction, H3-adapted HiFlow velocity acceleration,
 and downsample-consistency guidance; sampler initialization remains an explicit upstream workflow
 operation. Progressive handoff uses the rectified-flow conditional-state law described below.
 
@@ -115,11 +115,34 @@ map `U` transfers the reference. The conservative direction update is
 where `L` is an explicit average-pool low-frequency projection. The schedule weight is normalized
 to the first coordinate of the current high-resolution invocation, i.e. `(t / tau)^p` clamped to
 `[0,1]`, rather than to the full 1-to-0 trajectory. This preserves the intended weakening schedule
-when a refine pass begins at low sigma. A per-sample RMS bound limits the correction. The optional
-acceleration term compares adjacent low/high denoised-estimate changes and
-stays inactive until prior exact state exists. This is an experimental first-difference proxy; it does
-not reproduce HiFlow's acceleration formulation, which is derived from changes in the reference-flow
-velocity field. Downsample consistency forms the low-grid residual before lifting it.
+when a refine pass begins at low sigma. A per-sample RMS bound limits the combined correction.
+
+For acceleration alignment, let (x_t^{HR}) be the current high-grid sampler state, let
+(hat x_{0,i}^{HR}) be the direction-corrected high-grid clean estimate, and let
+(hat x_{0,i}^{R}=U(hat x_{0,i}^{LR})) be the time-matched transferred reference. H3's
+`CONST.calculate_denoised` contract is (hat x_0=x_t-sigma v), so the two velocity fields are
+reconstructed exactly in the sampler's shifted-sigma domain:
+
+[
+v_i^{HR}=(x_t^{HR}-hat x_{0,i}^{HR})/sigma_i,qquad
+v_i^{R}=(x_t^{HR}-hat x_{0,i}^{R})/sigma_i.
+]
+
+At a new coordinate the HiFlow acceleration update is then adapted directly as
+
+[
+v_i^{HR}leftarrow v_i^{HR}+eta_i
+left(v_i^{R}-v_{i-1}^{R}-v_i^{HR}+v_{i-1}^{HR}ight),
+]
+
+followed by (hat x_{0,i}^{HR}=x_t^{HR}-sigma_i v_i^{HR}). Unlike direction guidance, this
+acceleration term is deliberately **not** low-pass filtered: HiFlow uses velocity acceleration to
+recover detail fidelity. The schedule uses the same normalized ((t/	au)^p) decay. A same-coordinate
+PECE corrector call does not apply a zero-time acceleration delta; it replaces the stored velocity
+endpoint so the next coordinate starts from the latest corrected state. The final returned correction,
+including direction plus acceleration, remains subject to the RMS guard.
+
+Downsample consistency forms the low-grid residual before lifting it.
 
 ### Continuum integrated-refine adapter
 

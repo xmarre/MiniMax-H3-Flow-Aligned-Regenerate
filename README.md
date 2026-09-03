@@ -171,11 +171,14 @@ used as an alignment mechanism; this prevents the known odd-grid flashing-border
 
 ## Experimental controls
 
-`direction+acceleration` is an experimental first-difference trajectory proxy. It needs adjacent exact
-trajectory support and is bounded by an RMS guard; it is not an implementation of HiFlow's published
-acceleration-alignment equations. Progressive nodes expose the acceleration, consistency, and
-low-frequency controls needed by their selectable guidance modes; a selected mode is never left with
-an inaccessible mode-specific weight.
+`direction+acceleration` keeps the low-frequency predicted-clean direction term, then reconstructs
+H3's full-resolution flow velocity from the sampler state and predicted-clean estimate and applies
+HiFlow's adjacent velocity-difference acceleration update. It needs adjacent exact trajectory support
+and the combined predicted-clean correction remains bounded by the RMS guard. This is an H3/video
+adaptation of the published image-generation method, not evidence that HiFlow's image results transfer
+unchanged to H3 video. Progressive nodes expose the acceleration, consistency, and low-frequency
+controls needed by their selectable guidance modes; a selected mode is never left with an inaccessible
+mode-specific weight.
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
@@ -209,7 +212,7 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 ## Limitations
 
-- The two-pass flow-aligned path has decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet; progressive target-input and resolution-shift paths remain unvalidated on real media.
+- The two-pass flow-aligned path and the 10-outer-step progressive Target Input path have decoded-media smoke evidence, but no broad cross-prompt quality claim is made yet. The difficult-motion progressive smoke still shows MiniMax-H3 motion/occlusion artifacts in clothing deformation and newly revealed background; resolution-shift-only validation remains pending.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
 - Target-input progressive mode intentionally derives its private low-grid **video** noise from a
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics

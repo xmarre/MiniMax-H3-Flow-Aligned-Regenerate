@@ -46,16 +46,22 @@ remain identical across rows within one scenario/area/denoise/seed slice.
 
 Row D must use **Progressive Handoff (Target Input)** in the two-chunk Continuum graph: Continuum is configured at 64x48 while the wrapper's internal source is 54x40. This preserves target-sized session and native-mask geometry between chunks. The source-input progressive node is a standalone control and is not the Continuum benchmark topology.
 
-Before spending the formal matrix, validate D on the already-used difficult-motion smoke graph so the
-only structural change is the generation path. For that smoke, keep the current final grid at 58x58
-(928x928), set the progressive internal source to 48x48 (768x768), keep the same full 7-outer-step
-SA-Solver-PECE schedule, seed, prompt, references, DiffAid, Untwist, Spectrum and Continuum chunking,
-and remove the separate learned-upscale/refine branch entirely. Use fixed handoff coordinate 0.35,
-direction guidance 0.25, acceleration/consistency 0, and low-frequency cutoff 0.25. Continuum Run
-Storage stays off. A passing smoke must show target-grid Continuum chunks throughout, a private low
-stage at 48x48, one exact handoff probe, a fresh high-stage sampler lifetime whose first H3 call is
-actual, explicit reset/history-boundary telemetry, no fallback/invalidation, and acceptable decoded
-video/audio/seams.
+The difficult-motion D smoke is now anchored to the user's aspect-correct 10-outer-step reference.
+Keep the target video latent at 58x56 HxW (928x896 pixel HxW; 896x928 W×H), use Target Input
+`source_mode=scale` with `source_scale=0.83`, which resolves to 48x46 latent HxW
+(768x736 pixel HxW; 736x768 W×H), and keep the same seed, prompt, references, DiffAid, Untwist,
+Spectrum and Continuum chunking. The separate learned-upscale/refine branch remains removed. Use
+fixed handoff coordinate 0.35, direction guidance 0.25, acceleration/consistency 0, low-frequency
+cutoff 0.25, and keep Continuum Run Storage off.
+
+The accepted direction-only D10 smoke selected schedule index 6 (actual unshifted coordinate about
+0.400000016, sigma about 0.888888896). Across two chunks it recorded 38 logical model calls,
+28 actual NFEs and 10 Spectrum forecasts: low 22/16/6 logical/actual/forecast, two exact probes,
+and high 14/10/4. Both high stages began with an actual H3 call, all sampler walls completed without
+fallback, and decoded media was accepted as roughly baseline-level for the difficult motion case.
+It did not eliminate the characteristic clothing deformation and newly revealed grass/background
+artifacts. Direction+acceleration experiments must keep every other D10 setting fixed so their decoded
+media can be compared against this reference.
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
