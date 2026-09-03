@@ -497,6 +497,46 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert layout_wrapper._h3_flow_metrics is metrics
 
 
+def test_active_flow_state_rejects_parallel_multigpu_model_calls():
+    video = torch.zeros(1, 24, 1, 4, 4)
+    audio = torch.zeros(1, 32, 2, 5)
+    packed, shapes = pack_streams((video, audio))
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(trajectory=trajectory, capture_enabled=True)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding, "transformer_options": {}},
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+
+    def native():
+        pass
+
+    native.__name__ = "sample_euler"
+    _begin_capture(
+        binding,
+        guider,
+        SimpleNamespace(sampler_function=native, extra_options={}),
+        torch.tensor([1.0, 0.5, 0.0]),
+        list(shapes),
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            return packed
+
+    with pytest.raises(RuntimeError, match="parallel multi-GPU"):
+        flow_predict_wrapper(
+            Executor(),
+            packed,
+            torch.tensor([0.5]),
+            {"multigpu_clones": {"cuda:1": object()}, "transformer_options": {}},
+            7,
+        )
+    _finish_capture(binding, error=RuntimeError("multigpu unsupported"))
+
+
 def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     video = torch.full((1, 24, 1, 4, 4), 2.0)
     audio = torch.full((1, 32, 2, 5), 3.0)
