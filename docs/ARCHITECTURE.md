@@ -32,18 +32,74 @@ full-trajectory coordinate for both streams and avoids matching different sample
 
 ### Resolution-aware schedule probe
 
-SD3 derives `alpha = sqrt(m/n)` for target/source observations under a constant-image assumption
-and uses `f_alpha(t)`. That assumption does not establish an optimal H3 video mapping, so the node
-is off by default. Since `f_a(f_b(t)) = f_ab(t)`, an already H3-shifted schedule maps as
+MiniMax's public H3 documentation describes **H3-Base as a 768p generator** and states that the
+shorter output side defaults to 768 pixels. That is the defensible reference regime for the isolated
+resolution-shift experiment. It is distinct from the private low grid chosen by progressive handoff.
+
+SD3 derives a relative map between a reference resolution with \(n\) spatial observations and a
+target resolution with \(m\) observations:
 
 \[
-\sigma'_v=f_{12}(f_\alpha(f_{12}^{-1}(\sigma_v))).
+\alpha=\sqrt{m/n},
+\qquad
+f_\alpha(t)=\frac{\alpha t}{1+(\alpha-1)t}.
 \]
 
-H3 still inverts video to the new base coordinate and applies `f_3` for audio. Therefore this
-SIGMAS-only experiment moves the shared AV coordinate and changes the derived audio sigma schedule
-as well; it is not a video-only schedule modifier. Analytic tests cover endpoints, monotonicity,
-inverse/composition behavior, and AV invariants, while decoded audio remains part of the media gate.
+The derivation assumes a constant image and explicitly does **not** establish an optimal H3 video
+schedule. simple diffusion reaches the compatible qualitative conclusion that higher spatial
+resolution requires more noise / lower SNR at a comparable global-structure stage. Those results
+justify a controlled schedule probe, not a claim that H3's native shift should be replaced.
+
+H3 already exposes a checkpoint/runtime video flow shift of 12. The node therefore treats
+\(\alpha\) as a **relative** resolution correction. For incoming H3-shifted SIGMAS,
+
+\[
+\sigma'_v
+= f_{12}\!\left(
+    f_\alpha\!\left(
+        f_{12}^{-1}(\sigma_v)
+    \right)
+  \right).
+\]
+
+Because fractional-linear shifts compose,
+
+\[
+f_a(f_b(t))=f_{ab}(t),
+\]
+
+so this is equivalent to an effective video shift \(12\alpha\) while preserving the native H3
+parameterization. At strength 0 the factor is exactly 1; at strength 1 the SD3 relative factor is
+used; intermediate strengths interpolate multiplicatively in log-space.
+
+For the current 896x928 target, aspect-matching H3-Base's 768px short side and snapping to the 32px
+VAE+DiT alignment gives a 768x800 analytic reference:
+
+- reference area: 614400 pixels / 2400 latent cells / 600 spatial DiT patch positions per frame;
+- target area: 831488 pixels / 3248 latent cells / 812 spatial DiT patch positions per frame;
+- area ratio: ~1.35333333;
+- \(\alpha\): ~1.16332856;
+- effective video shift at strength 1: ~13.95994269.
+
+The reference dimensions describe an uncertainty/resolution **regime only**. E does not execute a
+768x800 low-resolution pass.
+
+H3 still derives audio from the resulting shared base coordinate:
+
+\[
+t' = f_{12}^{-1}(\sigma'_v)=f_\alpha(t),
+\qquad
+\sigma'_a=f_3(t').
+\]
+
+Therefore the SIGMAS-only experiment moves the **shared AV coordinate** and changes audio timing as
+well. A video-only shift would require a different joint-state formulation and is intentionally not
+smuggled into this probe. Decoded audio is part of the E pass/fail gate.
+
+The node diagnostics expose the relative area ratio, extra shift factor, native video shift, effective
+video shift, and shared-AV status. Analytic tests cover exact-off parity, endpoint/monotonicity,
+native-shift composition, and the resulting AV common-coordinate law.
+
 
 ## Transactional trajectory schema
 
