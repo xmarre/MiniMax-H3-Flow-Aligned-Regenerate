@@ -7,7 +7,7 @@ from typing import Any
 from .attention import AttentionConfig, make_attention_override, make_layout_block_wrapper, mark_layout_wrapper
 from .contracts import H3FlowTrajectory
 from .guidance import GuidanceConfig
-from .handoff import ProgressiveHandoffConfig
+from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .runtime import (
     FLOW_BINDING_KEY,
@@ -68,7 +68,8 @@ def patch_flow_model(
     *,
     trajectory: H3FlowTrajectory | None = None,
     guidance: GuidanceConfig | None = None,
-    progressive: ProgressiveHandoffConfig | None = None,
+    progressive: ProgressiveHandoffConfig | ProgressiveTargetInputConfig | None = None,
+    clear_progressive: bool = False,
     attention: AttentionConfig | None = None,
     capture_enabled: bool | None = None,
     capture_forecasts: bool | None = None,
@@ -92,7 +93,11 @@ def patch_flow_model(
         ),
     )
     patched.model_options[FLOW_BINDING_KEY] = binding
-    if progressive is not None:
+    if clear_progressive and progressive is not None:
+        raise ValueError("cannot set and clear progressive handoff in the same model patch")
+    if clear_progressive:
+        patched.model_options.pop(PROGRESSIVE_KEY, None)
+    elif progressive is not None:
         patched.model_options[PROGRESSIVE_KEY] = progressive
 
     import comfy.patcher_extension
