@@ -246,6 +246,7 @@ class FakePatcher:
             }
         }
         self.wrappers = self.model_options["transformer_options"]["wrappers"]
+        self.callbacks = {}
 
     def clone(self):
         cloned = FakePatcher()
@@ -256,6 +257,14 @@ class FakePatcher:
         }
         cloned.wrappers = {key: dict(value) for key, value in self.wrappers.items()}
         cloned.model_options["transformer_options"]["wrappers"] = cloned.wrappers
+        cloned.callbacks = {
+            callback_type: {key: list(values) for key, values in keyed.items()}
+            for callback_type, keyed in self.callbacks.items()
+        }
+        for keyed in self.callbacks.values():
+            for callbacks in keyed.values():
+                for callback in callbacks:
+                    callback(self, cloned)
         return cloned
 
     def remove_wrappers_with_key(self, wrapper_type, key):
@@ -265,10 +274,17 @@ class FakePatcher:
         patches = self.model_options["transformer_options"].setdefault("patches_replace", {})
         patches.setdefault(name, {})[(block_name, number)] = patch
 
+    def remove_callbacks_with_key(self, callback_type, key):
+        self.callbacks.get(callback_type, {}).pop(key, None)
+
+    def add_callback_with_key(self, callback_type, key, callback):
+        self.callbacks.setdefault(callback_type, {}).setdefault(key, []).append(callback)
+
 
 def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -286,6 +302,7 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
 def test_repatch_preserves_existing_flow_attention_context_wrapper(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -321,9 +338,44 @@ def test_repatch_preserves_existing_flow_attention_context_wrapper(monkeypatch):
     assert not getattr(replacement._h3_flow_previous, "_h3_flow_layout_wrapper", False)
 
 
+def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    trajectory = H3FlowTrajectory()
+    patched, binding = patch_flow_model(
+        FakePatcher(),
+        trajectory=trajectory,
+        guidance=GuidanceConfig(mode="direction"),
+        capture_enabled=True,
+        capture_forecasts=True,
+    )
+    binding.active_capture = object()
+    binding.active_guidance_run = object()
+    binding.guidance_state.start_coordinate = 0.5
+
+    cloned = patched.clone()
+    cloned_binding = cloned.model_options[FLOW_BINDING_KEY]
+    assert cloned_binding is not binding
+    assert cloned_binding.trajectory is trajectory
+    assert cloned_binding.guidance is binding.guidance
+    assert cloned_binding.metrics is binding.metrics
+    assert cloned_binding.capture_enabled
+    assert cloned_binding.capture_forecasts
+    assert cloned_binding.active_capture is None
+    assert cloned_binding.active_guidance_run is None
+    assert cloned_binding.guidance_state.start_coordinate is None
+
+
 def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -338,6 +390,7 @@ def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
 def test_patch_can_explicitly_clear_inherited_progressive_handoff(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -360,6 +413,7 @@ def test_patch_can_explicitly_clear_inherited_progressive_handoff(monkeypatch):
 def test_patch_can_explicitly_clear_inherited_guidance_signature(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -385,6 +439,7 @@ def test_patch_can_explicitly_clear_inherited_guidance_signature(monkeypatch):
 def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -401,6 +456,7 @@ def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
 def test_attention_layers_are_validated_against_loaded_block_count(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
@@ -487,6 +543,7 @@ def test_raw_conditioning_signature_matches_cfg_guider_conversion():
 def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
     fake_comfy = ModuleType("comfy")
     fake_comfy.patcher_extension = fake_extension
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
