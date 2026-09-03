@@ -830,6 +830,8 @@ def _run_progressive(
             seed=int(seed or 0) + config.seed_offset,
             transfer_mode=config.transfer_mode,
         )
+        if target_input and target_shapes != input_shapes:
+            raise RuntimeError("target-input progressive handoff changed the caller-visible AV geometry")
         if target_input:
             target_latent_image = latent_image
             target_mask = denoise_mask
