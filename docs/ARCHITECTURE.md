@@ -183,6 +183,8 @@ benchmark setting until decoded runs establish a better policy.
 
 - **SA/PECE/SEEDS:** separate sampler invocations prevent old-grid history crossing.
 - **Spectrum:** separate outer executions end the low runtime and create the high runtime.
+  Explicit Spectrum provenance is authoritative: an exact handoff probe that is reported as a forecast
+  fails closed rather than being relabeled as an actual anchor.
   `h3_refinement` API v1 supplies the full-trajectory sigma reference; the high stage requests
   an actual prefix.
 - **External patches:** exact calls traverse the normal guider/model patch chain. The probe also
