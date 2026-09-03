@@ -51,7 +51,7 @@
       "SAMPLER",
       "partial SIGMAS"
     ],
-    "note": "The flow adapter patches refine_state.model and preserves refine_state.positive/noise_mask. The integrated refiner still derives its actual denoise mask from the parallel LATENT inputs, so those video/audio LATENT wires remain direct."
+    "note": "The flow adapter patches the public refine_state.model and preserves refine_state.positive. Continuum's captured sampler mask is not emitted in public refine_state; it is restored on the parallel video/audio LATENT outputs, which the integrated refiner uses for its actual denoise mask and which therefore remain direct."
   },
   "invariants": {
     "audio": "locked_by_existing_refine_graph",
