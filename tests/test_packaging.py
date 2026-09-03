@@ -21,6 +21,7 @@ def test_custom_node_root_registration_smoke():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
 
 
