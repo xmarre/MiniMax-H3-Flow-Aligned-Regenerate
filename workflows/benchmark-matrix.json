@@ -286,7 +286,7 @@
     ],
     "exploratory_lower_step": "C4",
     "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
-    "next_feature_path": "E"
+    "next_feature_path": "E10-smoke"
   },
   "feature_path_smoke": {
     "id": "D-smoke",
@@ -321,41 +321,60 @@
   },
   "resolution_shift_smoke": {
     "id": "E10-smoke",
-    "status": "pending_matched_pair",
-    "purpose": "Isolate resolution-aware shared AV sigma remapping after the clean standard-VAE temporal rerun produced a weak/tentative positive.",
+    "status": "ready_for_matched_pair",
+    "purpose": "Isolate the SD3-derived relative resolution shift on direct target-grid H3 sampling after the clean standard-VAE temporal rerun.",
+    "research_basis": {
+      "h3_reference": "MiniMax-H3 H3-Base is documented as 768p with shorter side 768 by default.",
+      "reference_geometry_rule": "Preserve the target aspect ratio at H3-Base's 768px short side, then snap to the 32px VAE+DiT alignment.",
+      "sd3_mapping": "alpha=sqrt(m/n); compose relative alpha with H3's native video shift 12 rather than replacing it.",
+      "simple_diffusion_cross_check": "higher resolution requires a lower-SNR/more-noisy schedule at comparable global structure scale."
+    },
     "geometry": {
-      "source_reference_pixels_wh": [
-        736,
-        768
+      "reference_pixels_wh": [
+        768,
+        800
       ],
       "target_generation_pixels_wh": [
         896,
         928
       ],
-      "source_reference_latent_wh": [
-        46,
-        48
+      "reference_latent_wh": [
+        48,
+        50
       ],
       "target_generation_latent_wh": [
         56,
         58
       ],
-      "target_to_source_area_ratio": 1.4710144927536233,
-      "derived_strength_1_factor": 1.2128538629008951
+      "reference_video_patch_wh": [
+        24,
+        25
+      ],
+      "target_video_patch_wh": [
+        28,
+        29
+      ],
+      "target_to_reference_area_ratio": 1.3533333333333333,
+      "relative_shift_factor": 1.163328557774343,
+      "native_h3_video_shift": 12,
+      "effective_video_shift_strength_1": 13.959942693292117,
+      "note": "The 768x800 reference is an analytic/native resolution regime only; E does not execute a low-resolution pass."
     },
     "common": {
       "outer_steps": 10,
       "sampler": "sa_solver_pece",
+      "scheduler": "MiniMax H3 SA-Solver Scheduler / simple_control",
       "generation_grid": "target only",
       "progressive_handoff": false,
       "trajectory_guidance": false,
       "learned_upscale_refine": false,
       "run_storage": "off",
+      "vae": "standard MiniMaxH3VideoVAE",
       "keep_identical": [
         "seed",
         "prompt",
         "references",
-        "loras",
+        "LoRAs",
         "DiffAid",
         "Untwist",
         "Spectrum",
@@ -370,18 +389,24 @@
       {
         "id": "E0-direct-control",
         "resolution_sigma_mode": "off",
+        "reference_width": 768,
+        "reference_height": 800,
+        "target_width": 896,
+        "target_height": 928,
         "strength": 0,
-        "role": "matched direct-target control"
+        "role": "exact SIGMAS parity control through the same Resolution-Aware Sigmas node"
       },
       {
         "id": "E1-resolution-aware",
         "resolution_sigma_mode": "resolution_aware",
-        "strength": 1,
-        "source_width": 736,
-        "source_height": 768,
+        "reference_width": 768,
+        "reference_height": 800,
         "target_width": 896,
         "target_height": 928,
-        "role": "single analytic SD3-derived resolution remap candidate"
+        "strength": 1,
+        "expected_extra_shift_factor": 1.163328557774343,
+        "expected_effective_video_shift": 13.959942693292117,
+        "role": "single analytic SD3-derived relative remap candidate"
       }
     ],
     "expected_structure": {
@@ -389,9 +414,25 @@
       "progressive_sampler_invocations": 0,
       "progressive_history_boundaries": 0,
       "handoff_exact_probe_nfe": 0,
-      "transformer_actual_nfe_and_spectrum_forecasts": "record, do not force equal; mapped sigmas can alter Spectrum decisions"
+      "guidance_events": 0,
+      "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions"
     },
-    "media_gate": "Compare E1 against E0 for motion/disocclusion, clothing, grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, and decoded audio. Reject if video improves only by harming audio or global dynamics.",
-    "no_sweep_rule": "Do not tune strength before the E0/E1 matched pair is decoded."
+    "diagnostics_gate": {
+      "e0": {
+        "extra_shift_factor": 1,
+        "effective_video_shift": 12,
+        "exact_sigma_parity": true
+      },
+      "e1": {
+        "area_ratio": 1.3533333333333333,
+        "extra_shift_factor": 1.163328557774343,
+        "effective_video_shift": 13.959942693292117,
+        "shared_av_coordinate": true
+      }
+    },
+    "media_gate": "Compare E1 against E0 for fast-motion/disocclusion, clothing, newly revealed grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, Continuum seams, and decoded audio. A video gain that harms audio or global dynamics fails.",
+    "no_sweep_rule": "Do not tune strength or use calibrated mode before the E0/E1 matched pair is decoded.",
+    "follow_up_if_positive": "Only after a clear E1 win, test the resolution remap combined with the accepted D10 progressive+temporal path.",
+    "follow_up_if_negative": "Leave resolution-aware sigmas experimental/off and do not sweep strength from one negative/neutral pair."
   }
 }
