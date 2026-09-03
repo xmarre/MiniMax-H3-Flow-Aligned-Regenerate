@@ -53,6 +53,7 @@ class FlowBinding:
     metrics: H3FlowMetrics = field(default_factory=H3FlowMetrics)
     capture_enabled: bool = False
     capture_forecasts: bool = False
+    guidance_conditioning_signature: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
@@ -151,27 +152,6 @@ def _tensor_signature(tensor: torch.Tensor, *, max_values: int = 128) -> bytes:
     return digest.digest()
 
 
-def _update_keyframe_digest(digest, value: Any, *, depth: int) -> None:
-    """Hash keyframe semantics while ignoring expected target-grid resize fields."""
-    if not isinstance(value, (list, tuple)):
-        _update_conditioning_digest(digest, value, depth=depth + 1)
-        return
-    digest.update(f"keyframes:{len(value)}:".encode())
-    for block in value:
-        if not isinstance(block, dict):
-            _update_conditioning_digest(digest, block, depth=depth + 1)
-            continue
-        latent = block.get("latent")
-        if torch.is_tensor(latent):
-            leading_shape = tuple(int(size) for size in latent.shape[:-2])
-            digest.update(f"latent-leading:{leading_shape}|{latent.dtype}|{latent.layout}:".encode())
-        for key in sorted(block, key=lambda item: str(item)):
-            if str(key) in {"latent", "latent_h", "latent_w"}:
-                continue
-            digest.update(f"kf-key:{key!s}:".encode())
-            _update_conditioning_digest(digest, block[key], depth=depth + 1)
-
-
 def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     if depth > 8:
         digest.update(f"<depth:{type(value).__module__}.{type(value).__qualname__}>".encode())
@@ -188,10 +168,7 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
             if str(key) == "uuid":
                 continue
             digest.update(f"key:{key!s}:".encode())
-            if str(key) == "minimax_keyframes":
-                _update_keyframe_digest(digest, value[key], depth=depth)
-            else:
-                _update_conditioning_digest(digest, value[key], depth=depth + 1)
+            _update_conditioning_digest(digest, value[key], depth=depth + 1)
         return
     if isinstance(value, (list, tuple)):
         digest.update(f"{type(value).__name__}:{len(value)}:".encode())
@@ -204,11 +181,32 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     digest.update(f"type:{type(value).__module__}.{type(value).__qualname__}:".encode())
 
 
-def _conditioning_signature(guider: Any) -> str:
+def _conditioning_signature_from_original(original: dict[str, Any]) -> str:
     digest = hashlib.sha256()
-    original = getattr(guider, "original_conds", {}) or {}
     _update_conditioning_digest(digest, original)
     return digest.hexdigest()[:32]
+
+
+def conditioning_signature_from_conditioning(conditioning: list[Any]) -> str:
+    """Match CFGGuider.convert_cond without its execution-only UUID."""
+    converted = []
+    for entry in conditioning:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2 or not isinstance(entry[1], dict):
+            raise TypeError("conditioning entries must contain tensor/context plus metadata dictionary")
+        metadata = entry[1].copy()
+        model_conds = metadata.get("model_conds", {})
+        if entry[0] is not None:
+            metadata["cross_attn"] = entry[0]
+        metadata["model_conds"] = model_conds
+        converted.append(metadata)
+    return _conditioning_signature_from_original({"positive": converted})
+
+
+def _conditioning_signature(guider: Any) -> str:
+    original = getattr(guider, "original_conds", {}) or {}
+    if not isinstance(original, dict):
+        raise TypeError("guider original_conds must be a dictionary")
+    return _conditioning_signature_from_original(original)
 
 
 def _resolve_binding(guider: Any) -> FlowBinding | None:
@@ -403,7 +401,8 @@ def flow_outer_wrapper(
         run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
         if run.geometry.latent_t != int(latent_shapes[0][2]):
             raise ValueError("trajectory and target video temporal geometry differ")
-        if run.conditioning_signature != _conditioning_signature(guider):
+        expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+        if run.conditioning_signature != expected_signature:
             raise ValueError("trajectory conditioning signature does not match the regeneration run")
         binding.active_guidance_run = run
     if not is_progressive:
@@ -839,7 +838,8 @@ def _run_progressive(
         run = binding.trajectory.select(chunk_id=chunk_id, session_id=session_id)
         if run.geometry.latent_t != int(target_shapes[0][2]):
             raise ValueError("trajectory and target video temporal geometry differ")
-        if run.conditioning_signature != _conditioning_signature(guider):
+        expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+        if run.conditioning_signature != expected_signature:
             raise ValueError("trajectory conditioning signature does not match the regeneration run")
         binding.active_guidance_run = run
 
