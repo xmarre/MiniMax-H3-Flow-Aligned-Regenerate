@@ -64,5 +64,44 @@
     "run_storage": "off for first media validation; persistence must be validated separately before enabling",
     "decoded_media_required": true,
     "protected_noise": "target-input protected regions retain Continuum's original sampler noise for MiniMax H3 scale_latent_inpaint"
+  },
+  "smoke_validation": {
+    "purpose": "Reuse the accepted difficult-motion C4 graph before formal 1024x768 matrix runs.",
+    "continuum_target_pixels": [
+      928,
+      928
+    ],
+    "continuum_target_latent_wh": [
+      58,
+      58
+    ],
+    "internal_source_pixels": [
+      768,
+      768
+    ],
+    "internal_source_latent_wh": [
+      48,
+      48
+    ],
+    "full_outer_steps": 7,
+    "handoff_coordinate": 0.35,
+    "keep_identical": [
+      "seed",
+      "prompt",
+      "references",
+      "DiffAid",
+      "Untwist",
+      "Spectrum",
+      "sampler",
+      "scheduler",
+      "chunking",
+      "audio behavior",
+      "decode"
+    ],
+    "remove": [
+      "separate learned latent upscale",
+      "separate high-resolution refine"
+    ],
+    "run_storage": "Off"
   }
 }
