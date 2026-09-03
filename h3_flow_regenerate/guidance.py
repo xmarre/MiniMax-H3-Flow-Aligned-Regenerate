@@ -256,7 +256,11 @@ def _local_correspondence(
     # media smoke showed repetitive grass with high cosine scores but margins
     # far below this threshold; allowing those ambiguous matches to retain a
     # small nonzero weight produced patterned texture transport.
-    margin_confidence = (margin / (margin + min_margin)).clamp(0.0, 1.0)
+    margin_confidence = torch.where(
+        torch.isfinite(margin),
+        (margin / (margin + min_margin)).clamp(0.0, 1.0),
+        torch.ones_like(margin),
+    )
     confidence = similarity_confidence * margin_confidence * unique.float()
     flow = torch.stack((best_dx, best_dy), dim=1).float()
     return flow, confidence, best, margin
