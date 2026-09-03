@@ -105,10 +105,11 @@ preserves the conditioning and any future/opaque state fields unchanged; it does
 LATENT mask path.
 
 The learned refine path legitimately resizes target-grid `minimax_keyframes` before sampler 2.
-Conditioning identity therefore canonicalizes only those keyframes' spatial latent bytes and H/W
-fields; non-spatial keyframe metadata, Qwen/context tensors, and independent `minimax_refs` remain
-in the fingerprint. This prevents expected low-to-high target geometry from being mistaken for
-semantic conditioning drift.
+The adapter computes the same content signature as CFGGuider conversion from the exact sampler-1
+`positive` object and stores it on the read-only guidance binding. Sampler 2 is checked against that
+source signature rather than against its resized conditioning. Global trajectory fingerprints remain
+strict over keyframe latent bytes/shape, Qwen/context tensors, and independent `minimax_refs`, so a
+real keyframe-content change cannot be hidden behind the geometry-transfer exception.
 
 ## Progressive handoff law
 
