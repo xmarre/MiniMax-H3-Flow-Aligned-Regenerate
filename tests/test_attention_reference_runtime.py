@@ -19,6 +19,7 @@ from h3_flow_regenerate.runtime import (
     PROBE_CONTEXT_KEY,
     PROGRESSIVE_KEY,
     SPECTRUM_ACTUAL_KEY,
+    SPECTRUM_BINDING_KEY,
     SPECTRUM_OUTER_STEP_KEY,
     SPECTRUM_PHASE_KEY,
     FlowBinding,
@@ -788,6 +789,60 @@ def test_progressive_flow_rejects_parallel_multigpu_even_without_active_capture(
             7,
         )
     assert not executor_called
+
+
+def test_outer_flow_wrapper_uses_completed_spectrum_mode_for_exact_provenance():
+    video = torch.full((1, 24, 1, 4, 4), 2.0)
+    audio = torch.full((1, 32, 2, 5), 3.0)
+    packed, shapes = pack_streams((video, audio))
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(trajectory=trajectory, capture_enabled=True, capture_forecasts=False)
+    spectrum_runtime = SimpleNamespace(
+        active_run_id=1,
+        last_completed_step_id=3,
+        last_completed_mode="forecast",
+    )
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            SPECTRUM_BINDING_KEY: SimpleNamespace(runtime=spectrum_runtime),
+            "transformer_options": {},
+        },
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+
+    def native():
+        pass
+
+    native.__name__ = "sample_sa_solver_pece"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    _begin_capture(binding, guider, sampler, torch.tensor([1.0, 0.5, 0.0]), list(shapes))
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            spectrum_runtime.last_completed_step_id = 4
+            spectrum_runtime.last_completed_mode = "actual"
+            return packed
+
+    stale_outer_options = {
+        "transformer_options": {
+            SPECTRUM_ACTUAL_KEY: False,
+            SPECTRUM_PHASE_KEY: "corrected",
+            SPECTRUM_OUTER_STEP_KEY: 99,
+        }
+    }
+    flow_predict_wrapper(Executor(), packed, torch.tensor([0.5]), stale_outer_options, 7)
+    _finish_capture(binding)
+
+    run = trajectory.latest
+    assert len(run.samples) == 1
+    assert run.samples[0].provenance == "actual"
+    assert run.samples[0].phase == "predicted"
+    assert run.samples[0].outer_step == 0
+    assert binding.metrics.counters["transformer_actual_nfe"] == 1
+    assert binding.metrics.counters.get("spectrum_forecast_calls", 0) == 0
 
 
 def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
