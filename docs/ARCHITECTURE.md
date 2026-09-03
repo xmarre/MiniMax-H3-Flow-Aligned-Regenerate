@@ -60,9 +60,12 @@ inside Spectrum's PREDICT wrapper, so Spectrum's call-local copied model options
 step. Failed outer sampling records a bounded incomplete diagnostic run. Only complete runs are
 selectable. CPU storage detaches, copies as fp32, and pins when CUDA is available; VRAM storage clones.
 
-Trajectory selection is newest-attempt strict: an aborted or invalidated run for a requested
-session/chunk blocks fallback to an older successful run. This prevents a failed regeneration attempt
-from silently reactivating stale low-resolution guidance state.
+Trajectory selection is newest-attempt strict within the requested session/chunk/conditioning identity:
+an aborted or invalidated run for that identity blocks fallback to an older successful run. Conditioning
+is part of selection rather than only a post-selection assertion, so two independent Continuum branches
+that share a trajectory handle cannot steal each other's same-index chunk merely because current
+Continuum interop metadata does not expose a unique sequence/session identifier. This also prevents a
+failed regeneration attempt from silently reactivating stale low-resolution guidance state.
 
 Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
 The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
