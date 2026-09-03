@@ -143,8 +143,9 @@ Decision:
 Row E does not generate a low-resolution first pass. Its resolution reference is the documented
 **H3-Base 768p regime**, not the arbitrary private source grid used by progressive D10. MiniMax's
 public H3 documentation states that H3-Base produces 768p and that the shorter output side is 768
-pixels by default. For the current 896x928 target, preserving aspect ratio at a 768px short side and
-snapping to H3's 32px VAE+DiT alignment yields a 768x800 analytic reference grid.
+pixels by default. Pinned ComfyUI expresses the same native canvas rule as `BASE_SHORT_EDGE=768`,
+`CANVAS_MULTIPLE=32`, and `adapt_canvas()`. For the current 896x928 target, that exact rule yields a
+768x800 analytic reference grid.
 
 This distinction matters. SD3 Eq. 23 maps between two resolution *observation regimes*; it does not
 require that a low-resolution sampling pass actually run. Using D10's 736x768 private source here
