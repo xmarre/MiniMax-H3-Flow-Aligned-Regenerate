@@ -77,6 +77,8 @@ def resolution_aware_sigmas(
         factor = _positive_shift(calibrated_factor)
     else:
         raise ValueError(f"unsupported resolution shift mode {mode!r}")
+    if factor == 1.0:
+        return sigmas.clone()
     base = inverse_flow_shift(sigmas, video_shift)
     mapped = flow_shift(flow_shift(base, factor), video_shift).to(sigmas)
     mapped[0] = sigmas.new_tensor(1.0) if float(sigmas[0]) == 1.0 else mapped[0]
