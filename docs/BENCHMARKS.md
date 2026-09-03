@@ -215,7 +215,11 @@ A two-chunk 10-outer-step PECE run should still produce **38 sampler logical cal
 
 Do **not** require the same actual-NFE/forecast split between E0 and E1. Spectrum sees different sigma
 coordinates in E1 and may legitimately change forecast decisions. Record the split instead of forcing
-parity.
+parity. SA-Solver's default stochastic interval also remains tied to effective model sigma: ComfyUI
+computes its 20%-80% thresholds from the native model-sampling object and evaluates them against the
+supplied remapped sigma. E1 may therefore move the outer indices on which stochastic SA dynamics are
+active; that is an intended consequence of changing effective flow time, not a separately tuned
+sampler setting.
 
 The media gate is specifically E1 versus E0: fast-motion clothing, newly revealed grass/background,
 limb/disocclusion boundaries, anatomy, detail, shot continuity/dynamics, prompt/reference fidelity,
