@@ -300,6 +300,31 @@ def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
     assert ("double_block", 0) in patched.model_options["transformer_options"]["patches_replace"]["dit"]
 
 
+def test_repatch_replaces_prior_flow_attention_override_without_nesting(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    first, _ = patch_flow_model(
+        FakePatcher(),
+        attention=AttentionConfig(mode="diagnostic", layers=(0,)),
+    )
+    first_override = first.model_options["transformer_options"]["optimized_attention_override"]
+    assert first_override._h3_flow_attention_override
+
+    second, _ = patch_flow_model(
+        first,
+        attention=AttentionConfig(mode="diagnostic", layers=(0,)),
+    )
+    second_override = second.model_options["transformer_options"]["optimized_attention_override"]
+    assert second_override is not first_override
+    assert second_override._h3_flow_previous_override is None
+
+
 def test_repatch_preserves_existing_flow_attention_context_wrapper(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
