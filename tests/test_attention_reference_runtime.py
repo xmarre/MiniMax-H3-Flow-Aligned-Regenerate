@@ -600,6 +600,7 @@ def test_standalone_regenerate_can_bind_low_pass_source_conditioning(monkeypatch
             },
         ]
     ]
+    source_negative = [[torch.zeros_like(low_cross), {"tag": "negative"}]]
     patched, _metrics = H3FlowAlignedRegenerate().patch(
         FakePatcher(),
         H3FlowTrajectory(),
@@ -609,13 +610,30 @@ def test_standalone_regenerate_can_bind_low_pass_source_conditioning(monkeypatch
         0.0,
         0.25,
         source_conditioning,
+        source_negative,
     )
     binding = patched.model_options[FLOW_BINDING_KEY]
     assert binding.guidance_conditioning_signature == conditioning_signature_from_conditioning(
-        source_conditioning
+        source_conditioning,
+        source_negative,
     )
     assert not binding.capture_enabled
     assert not binding.capture_forecasts
+
+
+def test_standalone_source_negative_requires_source_conditioning():
+    with pytest.raises(ValueError, match="source_negative requires source_conditioning"):
+        H3FlowAlignedRegenerate().patch(
+            FakePatcher(),
+            H3FlowTrajectory(),
+            "direction",
+            0.35,
+            0.0,
+            0.0,
+            0.25,
+            None,
+            [[torch.zeros(1, 2, 4), {}]],
+        )
 
 
 def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(monkeypatch):
