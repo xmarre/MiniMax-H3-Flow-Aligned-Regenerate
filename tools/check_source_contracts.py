@@ -133,6 +133,15 @@ def main() -> None:
         '"noise_mask": noise_mask',
     )
     require(
+        args.continuum / "v3/driving_nodes.py",
+        "def _attach_refine_masks(",
+        'record.get("noise_mask")',
+        'video_item["noise_mask"]',
+        'audio_item["noise_mask"]',
+        '"model": _fresh_refine_model',
+        '"positive": positive',
+    )
+    require(
         args.diffaid / "spectrum_h3_compat.py",
         '"h3_refinement"',
         '"sigma_reference"',
