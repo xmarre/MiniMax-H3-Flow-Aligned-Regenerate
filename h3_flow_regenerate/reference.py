@@ -84,6 +84,10 @@ def apply_reference_budget(
                 if mode == "decoupled_direct_experimental":
                     fitted = _fit_reference(latent, max_direct_video_rows, resize_mode)
                     ref["latent"] = fitted
+                    ref["latent_h"] = int(fitted.shape[-2])
+                    ref["latent_w"] = int(fitted.shape[-1])
+                    if "latent_t" in ref:
+                        ref["latent_t"] = int(fitted.shape[2])
                     changed += int(fitted.shape != latent.shape)
                     latent = fitted
                 after += int(latent.shape[2]) * (int(latent.shape[-2]) // 2) * (int(latent.shape[-1]) // 2)
