@@ -742,9 +742,15 @@ def _run_progressive(
     )
 
     def low_callback(step, x0, x, _total):
-        if callback is not None:
-            return callback(step, x0, x, len(sigmas) - 1)
-        return None
+        if callback is None:
+            return None
+        if target_input:
+            # CFGGuider's packed callback closure was created against the caller's
+            # target latent_shapes. Feed it target-shaped preview/state tensors even
+            # though this private sampler lifetime runs on source_shapes.
+            x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
+            x = _resize_packed_latent_image(x, source_shapes, target_shapes)
+        return callback(step, x0, x, len(sigmas) - 1)
 
     _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     try:
