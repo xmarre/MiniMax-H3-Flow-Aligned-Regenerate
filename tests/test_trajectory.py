@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -89,6 +91,26 @@ def test_newer_incomplete_run_blocks_stale_complete_fallback():
         trajectory.select(session_id="session", chunk_id="chunk")
     with pytest.raises(RuntimeError, match="latest trajectory run is incomplete"):
         _ = trajectory.latest
+
+
+def test_completed_forecast_only_run_is_not_selectable_for_guidance():
+    trajectory = H3FlowTrajectory()
+    run_id = trajectory.begin(
+        session_id="s",
+        chunk_id="0",
+        sampler="euler",
+        scheduler="schedule",
+        geometry=geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
+        audio_shape=(1, 32, 2, 8),
+        layout_signature="layout",
+        conditioning_signature="cond",
+    )
+    forecast = sample(1)
+    trajectory.append(run_id, replace(forecast, provenance="forecast"))
+    trajectory.commit(run_id)
+    assert trajectory.runs[-1].complete
+    with pytest.raises(RuntimeError, match="no exact anchors"):
+        trajectory.select(session_id="s", chunk_id="0", conditioning_signature="cond")
 
 
 def test_conditioning_signature_isolates_interleaved_chunk_runs():
