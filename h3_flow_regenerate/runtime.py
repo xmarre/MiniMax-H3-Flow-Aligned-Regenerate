@@ -15,7 +15,13 @@ import torch
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import GuidanceConfig, GuidanceState, apply_guidance
-from .handoff import ProgressiveHandoffConfig, build_handoff_state, select_handoff_index
+from .handoff import (
+    ProgressiveHandoffConfig,
+    ProgressiveTargetInputConfig,
+    build_handoff_state,
+    deterministic_video_noise,
+    select_handoff_index,
+)
 from .metrics import H3FlowMetrics
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
 
@@ -380,7 +386,7 @@ def flow_outer_wrapper(
     binding.guidance_state.reset()
     binding.active_guidance_run = None
     progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
-    is_progressive = isinstance(progressive, ProgressiveHandoffConfig)
+    is_progressive = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
     if not is_progressive and binding.guidance is not None and binding.guidance.mode != "off":
         if binding.trajectory is None:
             raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
@@ -618,7 +624,7 @@ def _run_progressive(
     executor,
     guider,
     binding: FlowBinding,
-    config: ProgressiveHandoffConfig,
+    config: ProgressiveHandoffConfig | ProgressiveTargetInputConfig,
     noise,
     latent_image,
     sampler,
@@ -637,9 +643,9 @@ def _run_progressive(
         float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
     ):
         raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
-    source_shapes = list(latent_shapes)
-    if source_shapes[0][-2] % 2 or source_shapes[0][-1] % 2:
-        raise ValueError("source H3 geometry is not patch-safe")
+    input_shapes = list(latent_shapes)
+    if input_shapes[0][-2] % 2 or input_shapes[0][-1] % 2:
+        raise ValueError("input H3 geometry is not patch-safe")
     model_options = getattr(guider, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("progressive handoff requires mutable model options")
@@ -647,10 +653,34 @@ def _run_progressive(
     if not isinstance(transformer, dict):
         raise RuntimeError("progressive handoff requires mutable transformer options")
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
-    source_h, source_w = source_shapes[0][-2:]
-    target_h, target_w = config.resolve_target(source_h, source_w)
-    if target_h * target_w <= source_h * source_w:
-        raise ValueError("progressive handoff target must increase the video latent area")
+
+    target_input = isinstance(config, ProgressiveTargetInputConfig)
+    if target_input:
+        target_shapes = input_shapes
+        target_h, target_w = target_shapes[0][-2:]
+        source_h, source_w = config.resolve_source(target_h, target_w)
+        source_shapes = list(target_shapes)
+        source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
+        target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
+        source_video_noise = deterministic_video_noise(
+            (*target_video_noise.shape[:-2], source_h, source_w),
+            seed=int(seed or 0) + config.source_noise_offset,
+            device=target_video_noise.device,
+            dtype=target_video_noise.dtype,
+        )
+        low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
+        low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+        low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+    else:
+        source_shapes = input_shapes
+        source_h, source_w = source_shapes[0][-2:]
+        target_h, target_w = config.resolve_target(source_h, source_w)
+        if target_h * target_w <= source_h * source_w:
+            raise ValueError("progressive handoff target must increase the video latent area")
+        target_shapes = None
+        low_noise = noise
+        low_latent_image = latent_image
+        low_mask = denoise_mask
     selected_coordinate = config.resolve_coordinate(
         source_shapes[0][-2],
         source_shapes[0][-1],
@@ -674,6 +704,7 @@ def _run_progressive(
         requested_coordinate=config.handoff_coordinate,
         selected_coordinate=selected_coordinate,
         selection=config.handoff_selection,
+        input_mode="target_grid" if target_input else "source_grid",
         source_shape=source_shapes[0],
         target_hw=(target_h, target_w),
     )
@@ -685,15 +716,18 @@ def _run_progressive(
 
     _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     try:
-        _reset_guider_conds(guider)
+        _reset_guider_conds(
+            guider,
+            target_video_hw=(source_h, source_w) if target_input else None,
+        )
         low_started = time.perf_counter()
         try:
             low_result = executor(
-                noise,
-                latent_image,
+                low_noise,
+                low_latent_image,
                 sampler,
                 low_sigmas,
-                denoise_mask,
+                low_mask,
                 low_callback,
                 disable_pbar,
                 seed,
@@ -703,7 +737,7 @@ def _run_progressive(
             binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
         base_model = guider.model_patcher.model
         source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
-        source_latent_internal = _process_latent_in(base_model, latent_image, source_shapes)
+        source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
         active = binding.active_capture
         if active is not None:
             active.phases = (*active.phases, (index, "handoff_probe"))
@@ -712,7 +746,10 @@ def _run_progressive(
         previous_probe = transformer.get(PROBE_CONTEXT_KEY)
         transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
         try:
-            _reset_guider_conds(guider)
+            _reset_guider_conds(
+                guider,
+                target_video_hw=(source_h, source_w) if target_input else None,
+            )
             # The probe is a one-call sampler lifetime, but model-level patches such
             # as DiffAid must still see the full H3 sigma reference. The explicit
             # refinement contract provides that reference without carrying solver or
@@ -720,10 +757,10 @@ def _run_progressive(
             with _high_stage_contract(guider):
                 source_x0 = executor(
                     probe_noise,
-                    latent_image,
+                    low_latent_image,
                     _make_probe_sampler(),
                     sigmas[index : index + 1],
-                    denoise_mask,
+                    low_mask,
                     None,
                     disable_pbar,
                     seed,
@@ -752,12 +789,16 @@ def _run_progressive(
         seed=int(seed or 0) + config.seed_offset,
         transfer_mode=config.transfer_mode,
     )
-    target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
+    if target_input:
+        target_latent_image = latent_image
+        target_mask = denoise_mask
+    else:
+        target_latent_image = _resize_packed_latent_image(latent_image, source_shapes, target_shapes)
+        target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
+        latent_shapes[:] = target_shapes
     target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
-    target_mask = _resize_packed_mask(denoise_mask, source_shapes, target_shapes)
     target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
     binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
-    latent_shapes[:] = target_shapes
 
     if binding.guidance is not None and binding.guidance.mode != "off":
         if binding.trajectory is None:
@@ -776,7 +817,10 @@ def _run_progressive(
         return None
 
     high_started = time.perf_counter()
-    _reset_guider_conds(guider, target_video_hw=(target_h, target_w))
+    _reset_guider_conds(
+        guider,
+        target_video_hw=None if target_input else (target_h, target_w),
+    )
     with _high_stage_contract(guider):
         result = executor(
             target_noise,
@@ -799,6 +843,7 @@ def _run_progressive(
         exact_probe_performed=True,
         high_stage_exact_prefix_requested=1,
         conditioning_rebuilt_for_high_grid=True,
+        input_mode="target_grid" if target_input else "source_grid",
     )
     return result
 
