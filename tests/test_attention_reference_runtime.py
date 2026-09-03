@@ -632,7 +632,22 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
 def test_reference_native_parity_and_direct_only_decoupling():
     cross = torch.randn(1, 9, 12)
     ref = torch.randn(1, 24, 2, 16, 16)
-    conditioning = [[cross, {"minimax_refs": [{"kind": "video", "latent": ref}]}]]
+    conditioning = [
+        [
+            cross,
+            {
+                "minimax_refs": [
+                    {
+                        "kind": "video",
+                        "latent_t": 2,
+                        "latent_h": 16,
+                        "latent_w": 16,
+                        "latent": ref,
+                    }
+                ]
+            },
+        ]
+    ]
     native, native_report = apply_reference_budget(conditioning, mode="native", max_direct_video_rows=16)
     assert native is conditioning
     assert native_report.qwen_rows == 9
@@ -643,9 +658,14 @@ def test_reference_native_parity_and_direct_only_decoupling():
     )
     assert changed is not conditioning
     assert changed[0][0] is cross
-    changed_shape = changed[0][1]["minimax_refs"][0]["latent"].shape[-2:]
+    changed_ref = changed[0][1]["minimax_refs"][0]
+    changed_shape = changed_ref["latent"].shape[-2:]
     assert changed_shape[0] % 2 == changed_shape[1] % 2 == 0
+    assert changed_ref["latent_t"] == changed_ref["latent"].shape[2]
+    assert changed_ref["latent_h"] == changed_shape[0]
+    assert changed_ref["latent_w"] == changed_shape[1]
     assert conditioning[0][1]["minimax_refs"][0]["latent"] is ref
+    assert conditioning[0][1]["minimax_refs"][0]["latent_h"] == 16
     assert report.direct_video_rows_after <= 16
 
 
