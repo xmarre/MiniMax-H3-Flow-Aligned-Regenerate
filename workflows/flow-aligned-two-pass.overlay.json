@@ -12,7 +12,7 @@
     "node": "H3FlowTrajectory",
     "widgets": {
       "storage": "system_ram",
-      "max_runs": 8
+      "max_runs": 16
     }
   },
   "base_model_patch": {
@@ -62,6 +62,7 @@
       48
     ],
     "forecast_anchors": false,
-    "decoded_media_required": true
+    "decoded_media_required": true,
+    "trajectory_history": "max_runs >= physical refine item count; default 16 covers current Continuum maximum"
   }
 }
