@@ -22,6 +22,7 @@ from h3_flow_regenerate.runtime import (
     FlowBinding,
     _begin_capture,
     _conditioning_signature,
+    conditioning_signature_from_conditioning,
     _finish_capture,
     _merge_preserved_noise,
     _noise_argument,
@@ -301,7 +302,7 @@ def test_conditioning_signature_tracks_content_across_tensor_clones():
     assert signature != _conditioning_signature(guider(cross, ref + 1))
 
 
-def test_conditioning_signature_allows_expected_keyframe_spatial_resize():
+def test_conditioning_signature_is_strict_for_keyframe_content_and_geometry():
     cross = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
     low = torch.arange(1 * 24 * 1 * 4 * 4, dtype=torch.float32).reshape(1, 24, 1, 4, 4)
     high = torch.nn.functional.interpolate(
@@ -311,28 +312,41 @@ def test_conditioning_signature_allows_expected_keyframe_spatial_resize():
         align_corners=False,
     ).reshape(1, 24, 1, 8, 8)
 
-    def guider(keyframe, frame_index=0):
+    def guider(keyframe):
         return SimpleNamespace(
             original_conds={
                 "positive": [
                     {
                         "cross_attn": cross,
-                        "minimax_keyframes": [
-                            {
-                                "latent": keyframe,
-                                "latent_h": keyframe.shape[-2],
-                                "latent_w": keyframe.shape[-1],
-                                "frame_index": frame_index,
-                            }
-                        ],
+                        "model_conds": {},
+                        "minimax_keyframes": [{"latent": keyframe}],
                     }
                 ]
             }
         )
 
     signature = _conditioning_signature(guider(low))
-    assert signature == _conditioning_signature(guider(high))
-    assert signature != _conditioning_signature(guider(high, frame_index=1))
+    assert signature != _conditioning_signature(guider(high))
+    assert signature != _conditioning_signature(guider(low + 1))
+
+
+def test_raw_conditioning_signature_matches_cfg_guider_conversion():
+    cross = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
+    keyframe = torch.randn(1, 24, 1, 4, 4)
+    raw = [[cross, {"minimax_keyframes": [{"latent": keyframe}], "tag": "chunk"}]]
+    converted = SimpleNamespace(
+        original_conds={
+            "positive": [
+                {
+                    "cross_attn": cross,
+                    "model_conds": {},
+                    "minimax_keyframes": [{"latent": keyframe}],
+                    "tag": "chunk",
+                }
+            ]
+        }
+    )
+    assert conditioning_signature_from_conditioning(raw) == _conditioning_signature(converted)
 
 
 def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(monkeypatch):
@@ -365,6 +379,7 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert binding.trajectory is trajectory
     assert binding.guidance.mode == "direction"
     assert not binding.capture_enabled
+    assert binding.guidance_conditioning_signature == conditioning_signature_from_conditioning(positive)
     assert binding.metrics is metrics
 
 
