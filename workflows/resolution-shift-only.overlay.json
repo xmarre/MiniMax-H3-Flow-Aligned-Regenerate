@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Matched E0/E1 direct-target test of the SD3-derived relative resolution shift on MiniMax H3, using the user's existing MP -> Scale(1.20) geometry path while isolating learned upscale/refine.",
+  "purpose": "Matched E0/E1 direct-target test of the SD3-derived relative resolution shift on MiniMax H3. The user's existing MP node still determines the normal sampler-1 base canvas; a new geometry-only helper mirrors the downstream refine node's scale=1.20 target before Continuum so E can sample directly at the post-refine canvas without executing learned upscale/refine.",
   "model_chain": {
     "keep": "existing DiffAid -> Untwist -> Spectrum MODEL chain, then H3RuntimeMetricsProbe, then H3 Continuum Sampler V3.4",
     "remove_or_bypass": [
@@ -10,7 +10,7 @@
       "H3TrajectoryCapture",
       "H3FlowAlignedRegenerate",
       "H3FlowAlignedRefineState",
-      "separate learned latent upscale/refine"
+      "MiniMax H3 Latent Upscaler + Refine (3D) execution"
     ]
   },
   "sigma_path": {
@@ -32,13 +32,13 @@
       },
       "inputs": {
         "metrics": "metrics_probe.metrics",
-        "target_width": "existing Scale.width",
-        "target_height": "existing Scale.height"
+        "target_width": "H3RefineTargetGeometry.target_width",
+        "target_height": "H3RefineTargetGeometry.target_height"
       }
     }
   },
   "reference_basis": {
-    "source_role": "analytic H3-Base/native resolution regime; auto-derived from the connected target aspect ratio; no source-resolution pass is executed",
+    "source_role": "analytic H3-Base/native resolution regime; auto-derived from the geometry-only pre-sampler target; no source-resolution pass is executed",
     "official_basis": "H3-Base is documented as 768p and H3 output shorter side defaults to 768 px",
     "aspect_matching": "source_width=source_height=0 invokes the pinned H3 native canvas rule: 768px short edge, 768*1344 area cap, per-axis round to 32. For the current 896x928 target this resolves to 768x800.",
     "source_latent_wh": [
@@ -69,7 +69,7 @@
       768,
       800
     ],
-    "note": "The numeric 896x928 -> 768x800 values are the current example only; the graph is dynamic through MP -> Scale(1.20)."
+    "note": "Current example: MP base 736x768 -> geometry-only refine scale 1.20 -> direct E target 896x928 -> auto H3-native reference 768x800. All target dimensions remain dynamic."
   },
   "runs": [
     {
@@ -83,7 +83,8 @@
         "base_video_shift": 12,
         "effective_video_shift": 12,
         "shared_av_coordinate": true,
-        "reference_mode": "h3_native_auto"
+        "reference_mode": "h3_native_auto",
+        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
       },
       "invariant": "Resolution-Aware Sigmas output must be bit-exact equal to its input SIGMAS."
     },
@@ -100,7 +101,8 @@
         "effective_video_shift": 13.959942693292117,
         "shared_av_coordinate": true,
         "reference_mode": "h3_native_auto",
-        "note": "For the current 896x928 target. Other picture aspects/sizes derive their own H3-native reference automatically."
+        "note": "For the current 896x928 target. Other picture aspects/sizes derive their own H3-native reference automatically.",
+        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
       },
       "only_intended_change_from_E0": "mode off -> resolution_aware and strength 0 -> 1"
     }
@@ -108,12 +110,12 @@
   "continuum": {
     "node": "H3 Continuum Sampler V3.4",
     "widgets": {
-      "width": "Scale.width",
-      "height": "Scale.height",
+      "width": "H3RefineTargetGeometry.target_width",
+      "height": "H3RefineTargetGeometry.target_height",
       "run_storage": "Off"
     },
     "keep_existing": [
-      "Scale node at 1.20 for target geometry",
+      "H3RefineTargetGeometry at scale 1.20 / align 32 / keep_proportion true",
       "MP sizing node",
       "chunking",
       "conditioning",
@@ -127,7 +129,8 @@
     "forbidden_for_this_gate": "MiniMaxH3TRTVAE w4a16_awq"
   },
   "matched_invariants": [
-    "Scale=1.20 target geometry",
+    "MP sizing inputs/base dimensions",
+    "refine target geometry scale=1.20 / align=32 / keep_proportion=true",
     "MP sizing",
     "seed",
     "prompt",
@@ -175,20 +178,48 @@
     "placement": "after Spectrum and before H3 Continuum Sampler V3.4",
     "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
     "output": {
-      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics",
+      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics; leave the probe's optional metrics input unconnected",
       "autosave": "retain the same metrics JSON capture used by D10"
     }
   },
   "target_geometry": {
-    "sizing_path": "Keep the existing MP sizing node and existing Scale node.",
-    "scale": 1.2,
-    "execution_role": "The Scale node is geometry-only for E: its target width/height drive direct target-grid generation. Do not execute the learned Latent Upscale Refine node.",
-    "wiring": [
-      "Scale.width -> H3 Continuum Sampler V3.4.width",
-      "Scale.height -> H3 Continuum Sampler V3.4.height",
-      "Scale.width -> H3ResolutionAwareSigmas.target_width",
-      "Scale.height -> H3ResolutionAwareSigmas.target_height"
-    ],
-    "requirement": "No per-image manual width/height calculation."
+    "base_source": "existing pre-Continuum MP sizing node outputs",
+    "insert": {
+      "node": "H3RefineTargetGeometry",
+      "display_name": "MiniMax H3 Refine Target Geometry [Experimental]",
+      "placement": "between the existing MP width/height outputs and the dimensions used by Continuum for E",
+      "widgets": {
+        "scale": 1.2,
+        "align": 32,
+        "keep_proportion": true
+      },
+      "inputs": {
+        "base_width": "existing MP width",
+        "base_height": "existing MP height"
+      },
+      "outputs": {
+        "target_width": [
+          "H3 Continuum Sampler V3.4.width",
+          "H3ResolutionAwareSigmas.target_width"
+        ],
+        "target_height": [
+          "H3 Continuum Sampler V3.4.height",
+          "H3ResolutionAwareSigmas.target_height"
+        ]
+      }
+    },
+    "semantics": "Mirrors the integrated LBH refine node's scale-by-multiplier sizing before sampler 1. It performs no learned upscale and no refinement sampling.",
+    "current_example": {
+      "mp_base_wh": [
+        736,
+        768
+      ],
+      "scale": 1.2,
+      "resolved_target_wh": [
+        896,
+        928
+      ]
+    },
+    "requirement": "No manual per-image resolution calculation."
   }
 }
