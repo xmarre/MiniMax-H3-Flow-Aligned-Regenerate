@@ -40,10 +40,7 @@ class GuidanceConfig:
             raise ValueError("cutoff must be in (0, 1]")
         if type(self.temporal_search_radius) is not int or self.temporal_search_radius < 1:
             raise ValueError("temporal_search_radius must be a positive integer")
-        if (
-            not math.isfinite(float(self.temporal_min_similarity))
-            or not -1.0 <= self.temporal_min_similarity < 1.0
-        ):
+        if not math.isfinite(float(self.temporal_min_similarity)) or not -1.0 <= self.temporal_min_similarity < 1.0:
             raise ValueError("temporal_min_similarity must be finite and in [-1, 1)")
         if not math.isfinite(float(self.temporal_min_margin)) or self.temporal_min_margin <= 0:
             raise ValueError("temporal_min_margin must be finite and positive")
@@ -310,16 +307,12 @@ def _build_temporal_correspondence(
     reverse_forward = _gather_at_integer_flow(forward, backward)
     reverse_forward_confidence = _gather_at_integer_flow(forward_base.unsqueeze(1), backward).squeeze(1)
     backward_cycle = (backward + reverse_forward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
-    backward_confidence = (
-        (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt() * backward_cycle.float()
-    )
+    backward_confidence = (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt() * backward_cycle.float()
 
     reverse_backward = _gather_at_integer_flow(backward, forward)
     reverse_backward_confidence = _gather_at_integer_flow(backward_base.unsqueeze(1), forward).squeeze(1)
     forward_cycle = (forward + reverse_backward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
-    forward_confidence = (
-        (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt() * forward_cycle.float()
-    )
+    forward_confidence = (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt() * forward_cycle.float()
 
     all_confidence = torch.cat((backward_confidence.reshape(-1), forward_confidence.reshape(-1)))
     valid = all_confidence > 0.0
@@ -410,11 +403,7 @@ def _warp_video_pairs(video: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
     grid_y = ((yy.unsqueeze(0) + offsets[:, 1] + 0.5) * (2.0 / height)) - 1.0
     grid = torch.stack((grid_x, grid_y), dim=-1)
     warped = F.grid_sample(frames, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
-    return (
-        warped.reshape(batch, pairs, channels, height, width)
-        .permute(0, 2, 1, 3, 4)
-        .to(video)
-    )
+    return warped.reshape(batch, pairs, channels, height, width).permute(0, 2, 1, 3, 4).to(video)
 
 
 def _temporal_alignment_correction(
@@ -442,9 +431,9 @@ def _temporal_alignment_correction(
     previous_reference = _warp_video_pairs(work_reference[:, :, :-1], backward_source)
     previous_innovation = work_reference[:, :, 1:] - previous_reference
     previous_target = _warp_video_pairs(work_high[:, :, :-1], backward_target)
-    previous_target = previous_target + resize_video(
-        previous_innovation, target_h, target_w, mode=transfer_mode
-    ).float()
+    previous_target = (
+        previous_target + resize_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
+    )
     previous_delta = previous_target - work_high[:, :, 1:]
 
     next_reference = _warp_video_pairs(work_reference[:, :, 1:], forward_source)
@@ -453,12 +442,12 @@ def _temporal_alignment_correction(
     next_target = next_target + resize_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
     next_delta = next_target - work_high[:, :, :-1]
 
-    backward_confidence = _resize_pairwise_confidence(
-        correspondence.backward_confidence, target_h, target_w
-    ).permute(0, 2, 1, 3, 4)
-    forward_confidence = _resize_pairwise_confidence(
-        correspondence.forward_confidence, target_h, target_w
-    ).permute(0, 2, 1, 3, 4)
+    backward_confidence = _resize_pairwise_confidence(correspondence.backward_confidence, target_h, target_w).permute(
+        0, 2, 1, 3, 4
+    )
+    forward_confidence = _resize_pairwise_confidence(correspondence.forward_confidence, target_h, target_w).permute(
+        0, 2, 1, 3, 4
+    )
 
     weighted = torch.zeros_like(work_high)
     weight = torch.zeros(
