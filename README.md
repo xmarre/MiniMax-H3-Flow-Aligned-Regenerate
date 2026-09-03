@@ -66,9 +66,19 @@ component and is used upstream when desired.
 2. Patch the low-resolution H3 model with **Trajectory Capture** and run the base sample.
 3. Perform the existing learned latent upscale, or another explicit initialization step.
 4. Patch the high-resolution H3 model with **Flow-Aligned Regenerate**, using the same trajectory.
+   If that initialization path resizes/rebuilds H3 conditioning (for example target keyframes), connect
+   the **low-pass CONDITIONING** to the node's optional **source_conditioning** input. This binds
+   trajectory identity to the conditioning that actually produced pass one instead of comparing it
+   against the resized high-pass conditioning.
 5. For one combined benchmark log, also feed the **Trajectory Capture** metrics output into the
    downstream regenerate/refine adapter's optional `metrics` input.
 6. Keep pass-one audio locked in the surrounding workflow.
+
+Trajectory conditioning identity remains strict. The standalone regenerate node therefore accepts an
+optional **source_conditioning** identity input for workflows whose high-pass conditioning legitimately
+changes geometry after the low pass. If it is omitted, the high guider's conditioning is used and must
+match the captured run. The Continuum refine-state adapter already derives this identity from sampler
+1's exact captured positive conditioning.
 
 The high-resolution model call is guided only in low spatial frequencies. Its control schedule is
 normalized to the first coordinate of that high-resolution invocation, so low-sigma refinement starts
