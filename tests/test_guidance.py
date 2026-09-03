@@ -37,6 +37,30 @@ def run(values=(1.0, 0.0), coords=(0.8, 0.2), provenance=("actual", "actual")):
     )
 
 
+def run_video(video, coords=(0.8, 0.2)):
+    samples = tuple(
+        TrajectorySample(c, c, c, i, i, "corrected", "actual", video.clone())
+        for i, c in enumerate(coords)
+    )
+    return TrajectoryRun(
+        1,
+        "r",
+        "s",
+        "0",
+        "sa",
+        "sched",
+        geometry_from_video(video),
+        (video.shape[0], 32, 2, 8),
+        "layout",
+        "cond",
+        "system_ram",
+        samples,
+        0,
+        1,
+        True,
+    )
+
+
 def test_guidance_config_rejects_nonfinite_correction_bound():
     with pytest.raises(ValueError, match="finite and positive"):
         GuidanceConfig(max_correction_rms_ratio=float("nan"))
@@ -360,3 +384,114 @@ def test_conditional_renoise_is_rectified_flow_law():
     noise = torch.zeros(1, 24, 1, 8, 8)
     state = conditional_renoise_alignment(x0, target_h=8, target_w=8, sigma=0.25, noise=noise)
     assert torch.allclose(state, torch.full_like(state, 0.75))
+
+
+def test_temporal_guidance_is_exact_parity_when_high_matches_reference():
+    torch.manual_seed(11)
+    reference = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(reference)
+    high = reference.clone()
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=2,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.01,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+
+    assert torch.allclose(result, high, atol=1e-5, rtol=1e-5)
+    assert state.last_temporal_valid_fraction is not None
+    assert state.last_temporal_valid_fraction > 0.0
+    assert state.last_temporal_rms_ratio == pytest.approx(0.0, abs=1e-6)
+    assert state.last_temporal_cache_hit is False
+
+
+def test_temporal_guidance_reuses_same_coordinate_correspondence():
+    torch.manual_seed(12)
+    reference = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(reference)
+    high = reference.clone()
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=2,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.01,
+        max_correction_rms_ratio=10.0,
+    )
+
+    apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+    cached = state.temporal_cache
+    assert cached is not None
+
+    apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+    assert state.temporal_cache is cached
+    assert state.last_temporal_cache_hit is True
+
+    apply_guidance(high, run=trajectory, coordinate=0.4, config=config, state=state)
+    assert state.temporal_cache is not cached
+    assert state.last_temporal_cache_hit is False
+
+
+def test_temporal_guidance_falls_back_on_disoccluded_unmatched_content():
+    torch.manual_seed(13)
+    reference = torch.randn(1, 24, 2, 8, 8)
+    reference[:, :, 1] = torch.randn_like(reference[:, :, 1])
+    trajectory = run_video(reference)
+    high = torch.randn_like(reference)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.5,
+        temporal_search_radius=1,
+        temporal_min_similarity=0.9999,
+        temporal_min_margin=0.5,
+        temporal_cycle_tolerance=0.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+
+    assert torch.equal(result, high)
+    assert state.last_temporal_valid_fraction == pytest.approx(0.0)
+    assert state.last_temporal_disocclusion_fraction == pytest.approx(1.0)
+    assert state.last_temporal_confidence_mean == pytest.approx(0.0)
+
+
+def test_temporal_guidance_recovers_known_adjacent_translation():
+    torch.manual_seed(14)
+    frame0 = torch.randn(1, 24, 1, 10, 10)
+    frame1 = torch.zeros_like(frame0)
+    frame1[:, :, :, :, 1:] = frame0[:, :, :, :, :-1]
+    reference = torch.cat((frame0, frame1), dim=2)
+    trajectory = run_video(reference)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=2,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.01,
+        temporal_cycle_tolerance=0.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    apply_guidance(reference, run=trajectory, coordinate=0.5, config=config, state=state)
+
+    cached = state.temporal_cache
+    assert cached is not None
+    interior_dx = cached.backward_flow[:, :, 0, 2:-2, 2:-2]
+    interior_dy = cached.backward_flow[:, :, 1, 2:-2, 2:-2]
+    assert torch.median(interior_dx).item() == pytest.approx(-1.0)
+    assert torch.median(interior_dy).item() == pytest.approx(0.0)
+    assert state.last_temporal_flow_magnitude_mean is not None
+    assert state.last_temporal_flow_magnitude_mean > 0.5
