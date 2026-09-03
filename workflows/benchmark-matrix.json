@@ -1,0 +1,450 @@
+{
+  "schema_version": 3,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, fixed seeds, and a 7-step first pass. Refine-step reduction is the only B/C7/C6/C5 step-count variable.",
+  "seed_set": [
+    0,
+    1,
+    2
+  ],
+  "matrix_axes": {
+    "area_regimes": [
+      {
+        "id": "base_0p55mp",
+        "source_grid": [
+          54,
+          40
+        ],
+        "source_pixels": [
+          864,
+          640
+        ],
+        "source_megapixels": 0.55296,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      },
+      {
+        "id": "base_0p70mp",
+        "source_grid": [
+          62,
+          44
+        ],
+        "source_pixels": [
+          992,
+          704
+        ],
+        "source_megapixels": 0.698368,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      }
+    ],
+    "refine_denoise": [
+      {
+        "value": 0.25,
+        "role": "primary"
+      },
+      {
+        "value": 0.3,
+        "role": "secondary"
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "motion_scene_change",
+        "requirement": "difficult motion with at least one scene or shot change"
+      },
+      {
+        "id": "small_people_faces",
+        "requirement": "small or distant people/faces whose structure is visible in the final decode"
+      },
+      {
+        "id": "fine_text",
+        "requirement": "legible fine text or similarly high-frequency structured detail"
+      },
+      {
+        "id": "reference_heavy",
+        "requirement": "multiple image/video/reference inputs with prompt-dependent identity or composition constraints"
+      }
+    ]
+  },
+  "fixed": [
+    "continuum_chunks",
+    "loras",
+    "diffaid",
+    "untwist",
+    "sampler",
+    "scheduler",
+    "audio_lock",
+    "decode"
+  ],
+  "run_axis_rules": {
+    "A": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "B": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C7": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C6": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C5": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "D": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "E": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    }
+  },
+  "runs": [
+    {
+      "id": "A",
+      "mode": "native",
+      "generation_grid": "area_regime.target_grid",
+      "target_grid": "area_regime.target_grid"
+    },
+    {
+      "id": "B",
+      "mode": "learned_upscale_baseline",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C7",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C6",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 6,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C5",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 5,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "D",
+      "mode": "progressive_target_input",
+      "continuum_grid": "area_regime.target_grid",
+      "internal_source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "handoff_coordinate": 0.35
+    },
+    {
+      "id": "E",
+      "mode": "resolution_shift_only",
+      "generation_grid": "area_regime.target_grid",
+      "shift_reference_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "resolution_shift": "resolution_aware"
+    }
+  ],
+  "temporal_correspondence_smoke": {
+    "id": "D10-temporal-v2-rerun",
+    "status": "clean_media_tentative_positive",
+    "base_reference": "accepted difficult-motion D10 direction-only run",
+    "vae": {
+      "decoder": "standard MiniMaxH3VideoVAE",
+      "trt": false,
+      "prior_w4a16_awq_runs_confounded": true
+    },
+    "configuration": {
+      "outer_steps": 10,
+      "guidance_mode": "direction+temporal",
+      "direction_weight": 0.25,
+      "temporal_weight": 0.2,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25,
+      "source_mode": "scale",
+      "source_scale": 0.83,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed"
+    },
+    "structure": {
+      "logical_calls": 38,
+      "actual_nfe": 28,
+      "spectrum_forecasts": 10,
+      "low_logical": 22,
+      "probe_logical": 2,
+      "high_logical": 14,
+      "high_actual": 10,
+      "high_forecast": 4,
+      "progressive_sampler_invocations": 6,
+      "progressive_history_boundaries": 4,
+      "handoff_exact_probe_nfe": 2,
+      "clamp_activations": 0
+    },
+    "temporal_telemetry": {
+      "chunk_1": {
+        "valid_fraction": 0.0015984654892235994,
+        "confidence_mean": 0.000816209299955517,
+        "similarity_mean": 0.892415463924408,
+        "margin_mean": 0.03558775782585144,
+        "flow_magnitude_mean": 2.757479190826416,
+        "flow_magnitude_max": 5.656854152679443,
+        "temporal_rms_ratio_mean": 0.0011878941981454513,
+        "temporal_rms_ratio_max": 0.0022059499751776457
+      },
+      "chunk_2": {
+        "valid_fraction": 0.0005419933586381376,
+        "confidence_mean": 0.0002954935480374843,
+        "similarity_mean": 0.9495378136634827,
+        "margin_mean": 0.030557069927453995,
+        "flow_magnitude_mean": 3.000811815261841,
+        "flow_magnitude_max": 5.656854152679443,
+        "temporal_rms_ratio_mean": 0.00061124526005837,
+        "temporal_rms_ratio_max": 0.0011624410981312394
+      },
+      "mean_temporal_rms_ratio": 0.0008995697291019107,
+      "mean_direction_rms_ratio": 0.024258687626570463,
+      "cache_hits": 12,
+      "clamped_reference_calls": 12,
+      "guidance_calls": 14
+    },
+    "media_verdict": "good; maybe slightly better than the non-temporal D10 control",
+    "decision": "retain conservative direction+temporal v2 as experimental candidate at temporal_weight=0.20; no general quality claim and no parameter sweep from one weak positive",
+    "next_feature_path": "E",
+    "confirmation_if_promoting": "use a later matched second-seed direction-only vs direction+temporal pair"
+  },
+  "required_outputs": [
+    "workflow_json",
+    "metrics_json",
+    "decoded_media",
+    "decoded_sha256",
+    "sampler_timing",
+    "peak_vram",
+    "host_ram",
+    "review_sheet"
+  ],
+  "step_reduction_gate": {
+    "baseline": "C7",
+    "status": "complete",
+    "validated_smoke": [
+      "C7",
+      "C6",
+      "C5",
+      "C4"
+    ],
+    "exploratory_lower_step": "C4",
+    "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
+    "next_feature_path": "E10-smoke"
+  },
+  "feature_path_smoke": {
+    "id": "D-smoke",
+    "mode": "progressive_target_input",
+    "purpose": "Validate progressive topology against the already-used difficult-motion workflow before spending the formal matrix.",
+    "continuum_grid": [
+      58,
+      58
+    ],
+    "internal_source_grid": [
+      48,
+      48
+    ],
+    "target_pixels": [
+      928,
+      928
+    ],
+    "internal_source_pixels": [
+      768,
+      768
+    ],
+    "outer_steps": 7,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "guidance_mode": "direction",
+    "direction_weight": 0.25,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "remove_separate_learned_refine": true,
+    "run_storage": "off"
+  },
+  "resolution_shift_smoke": {
+    "id": "E10-smoke",
+    "status": "ready_for_matched_pair",
+    "purpose": "Isolate the SD3-derived relative resolution shift on direct target-grid H3 sampling while retaining the user's MP -> Scale(1.20) automatic geometry path.",
+    "research_basis": {
+      "h3_reference": "MiniMax-H3 H3-Base is documented as 768p with shorter side 768 by default.",
+      "reference_geometry_rule": "source_width=source_height=0 auto-derives the pinned H3 native canvas from the connected target aspect ratio (768px short edge, 768*1344 area cap, 32px alignment).",
+      "sd3_mapping": "alpha=sqrt(m/n); compose relative alpha with H3's native video shift 12 rather than replacing it.",
+      "simple_diffusion_cross_check": "higher resolution requires a lower-SNR/more-noisy schedule at comparable global structure scale."
+    },
+    "geometry": {
+      "reference_pixels_wh": [
+        768,
+        800
+      ],
+      "target_generation_pixels_wh": [
+        896,
+        928
+      ],
+      "reference_latent_wh": [
+        48,
+        50
+      ],
+      "target_generation_latent_wh": [
+        56,
+        58
+      ],
+      "reference_video_patch_wh": [
+        24,
+        25
+      ],
+      "target_video_patch_wh": [
+        28,
+        29
+      ],
+      "target_to_reference_area_ratio": 1.3533333333333333,
+      "relative_shift_factor": 1.163328557774343,
+      "native_h3_video_shift": 12,
+      "effective_video_shift_strength_1": 13.959942693292117,
+      "note": "896x928 target and 768x800 reference are the current example. E executes direct target-grid sampling; Scale(1.20) supplies geometry only and the learned Latent Upscale Refine node is bypassed.",
+      "dynamic_target_source": "existing MP sizing -> Scale node at 1.20",
+      "manual_per_image_dimensions": false
+    },
+    "common": {
+      "outer_steps": 10,
+      "sampler": "sa_solver_pece",
+      "scheduler": "MiniMax H3 SA-Solver Scheduler / simple_control",
+      "generation_grid": "target only",
+      "progressive_handoff": false,
+      "trajectory_guidance": false,
+      "learned_upscale_refine": false,
+      "run_storage": "off",
+      "vae": "standard MiniMaxH3VideoVAE",
+      "keep_identical": [
+        "seed",
+        "prompt",
+        "references",
+        "LoRAs",
+        "DiffAid",
+        "Untwist",
+        "Spectrum",
+        "sampler",
+        "scheduler base schedule",
+        "Continuum chunking",
+        "audio behavior",
+        "decode"
+      ],
+      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON",
+      "target_geometry": "existing MP -> Scale(1.20) outputs",
+      "scale_node_execution_role": "geometry only"
+    },
+    "runs": [
+      {
+        "id": "E0-direct-control",
+        "resolution_sigma_mode": "off",
+        "reference_width": 0,
+        "reference_height": 0,
+        "target_width": "Scale.width",
+        "target_height": "Scale.height",
+        "strength": 0,
+        "role": "exact SIGMAS parity control through the same Resolution-Aware Sigmas node; target geometry comes from MP -> Scale(1.20)",
+        "reference_mode": "h3_native_auto"
+      },
+      {
+        "id": "E1-resolution-aware",
+        "resolution_sigma_mode": "resolution_aware",
+        "reference_width": 0,
+        "reference_height": 0,
+        "target_width": "Scale.width",
+        "target_height": "Scale.height",
+        "strength": 1,
+        "expected_extra_shift_factor": 1.163328557774343,
+        "expected_effective_video_shift": 13.959942693292117,
+        "role": "single analytic SD3-derived relative remap candidate; target geometry comes from MP -> Scale(1.20), native reference auto-resolves from target aspect",
+        "reference_mode": "h3_native_auto"
+      }
+    ],
+    "expected_structure": {
+      "sampler_logical_calls": 38,
+      "progressive_sampler_invocations": 0,
+      "progressive_history_boundaries": 0,
+      "handoff_exact_probe_nfe": 0,
+      "guidance_events": 0,
+      "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions",
+      "metrics_source": "H3RuntimeMetricsProbe",
+      "sa_solver_timing": "default native tau_func; remapped effective sigmas may move stochastic outer indices",
+      "resolution_sigma_map_events": 1
+    },
+    "diagnostics_gate": {
+      "e0": {
+        "extra_shift_factor": 1,
+        "effective_video_shift": 12,
+        "exact_sigma_parity": true,
+        "reference_mode": "h3_native_auto"
+      },
+      "e1": {
+        "shared_av_coordinate": true,
+        "reference_mode": "h3_native_auto",
+        "current_example_area_ratio": 1.3533333333333333,
+        "current_example_extra_shift_factor": 1.163328557774343,
+        "current_example_effective_video_shift": 13.959942693292117
+      }
+    },
+    "media_gate": "Compare E1 against E0 for fast-motion/disocclusion, clothing, newly revealed grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, Continuum seams, and decoded audio. A video gain that harms audio or global dynamics fails.",
+    "no_sweep_rule": "Do not tune strength or use calibrated mode before the E0/E1 matched pair is decoded.",
+    "follow_up_if_positive": "Only after a clear E1 win, test the resolution remap combined with the accepted D10 progressive+temporal path.",
+    "follow_up_if_negative": "Leave resolution-aware sigmas experimental/off and do not sweep strength from one negative/neutral pair."
+  }
+}
