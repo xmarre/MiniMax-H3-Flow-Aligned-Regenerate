@@ -51,7 +51,7 @@
       "SAMPLER",
       "partial SIGMAS"
     ],
-    "note": "The flow adapter patches refine_state.model; it does not replace the integrated learned upscale or its mask/audio handling."
+    "note": "The flow adapter patches refine_state.model and preserves refine_state.positive/noise_mask. The integrated refiner still derives its actual denoise mask from the parallel LATENT inputs, so those video/audio LATENT wires remain direct."
   },
   "invariants": {
     "audio": "locked_by_existing_refine_graph",
