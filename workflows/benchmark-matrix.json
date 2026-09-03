@@ -3,7 +3,7 @@
   "project": "MiniMax-H3-Flow-Aligned-Regenerate",
   "media_gate": "decoded_video_and_audio",
   "grid_order": "width,height",
-  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, and fixed seeds.",
+  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, fixed seeds, and a 7-step first pass. Refine-step reduction is the only B/C7/C6/C5 step-count variable.",
   "seed_set": [
     0,
     1,
@@ -106,6 +106,12 @@
       "seed": true,
       "refine_denoise": true
     },
+    "C7": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
     "C6": {
       "area_regime": true,
       "scenario": true,
@@ -113,12 +119,6 @@
       "refine_denoise": true
     },
     "C5": {
-      "area_regime": true,
-      "scenario": true,
-      "seed": true,
-      "refine_denoise": true
-    },
-    "C4": {
       "area_regime": true,
       "scenario": true,
       "seed": true,
@@ -149,7 +149,17 @@
       "mode": "learned_upscale_baseline",
       "source_grid": "area_regime.source_grid",
       "target_grid": "area_regime.target_grid",
-      "outer_steps": 6,
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C7",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
       "denoise": "refine_denoise.value"
     },
     {
@@ -157,7 +167,8 @@
       "mode": "flow_aligned",
       "source_grid": "area_regime.source_grid",
       "target_grid": "area_regime.target_grid",
-      "outer_steps": 6,
+      "base_outer_steps": 7,
+      "refine_outer_steps": 6,
       "denoise": "refine_denoise.value"
     },
     {
@@ -165,15 +176,8 @@
       "mode": "flow_aligned",
       "source_grid": "area_regime.source_grid",
       "target_grid": "area_regime.target_grid",
-      "outer_steps": 5,
-      "denoise": "refine_denoise.value"
-    },
-    {
-      "id": "C4",
-      "mode": "flow_aligned",
-      "source_grid": "area_regime.source_grid",
-      "target_grid": "area_regime.target_grid",
-      "outer_steps": 4,
+      "base_outer_steps": 7,
+      "refine_outer_steps": 5,
       "denoise": "refine_denoise.value"
     },
     {
@@ -202,5 +206,14 @@
     "peak_vram",
     "host_ram",
     "review_sheet"
-  ]
+  ],
+  "step_reduction_gate": {
+    "baseline": "C7",
+    "already_validated_smoke": "C7",
+    "sequence": [
+      "C6",
+      "C5"
+    ],
+    "stopping_rule": "Run C6 next. Run C5 only if C6 decoded video/audio remains acceptable. Further reductions are exploratory rather than a required gate."
+  }
 }
