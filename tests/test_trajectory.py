@@ -91,6 +91,47 @@ def test_newer_incomplete_run_blocks_stale_complete_fallback():
         _ = trajectory.latest
 
 
+def test_conditioning_signature_isolates_interleaved_chunk_runs():
+    trajectory = H3FlowTrajectory(max_runs=8)
+
+    first = trajectory.begin(
+        session_id="continuum",
+        chunk_id="0",
+        sampler="euler",
+        scheduler="schedule",
+        geometry=geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
+        audio_shape=(1, 32, 2, 8),
+        layout_signature="layout",
+        conditioning_signature="cond-a",
+    )
+    trajectory.append(first, sample(1))
+    trajectory.commit(first)
+
+    second = trajectory.begin(
+        session_id="continuum",
+        chunk_id="0",
+        sampler="euler",
+        scheduler="schedule",
+        geometry=geometry_from_video(torch.zeros(1, 24, 1, 4, 4)),
+        audio_shape=(1, 32, 2, 8),
+        layout_signature="layout",
+        conditioning_signature="cond-b",
+    )
+    trajectory.append(second, sample(2))
+    trajectory.commit(second)
+
+    assert trajectory.select(
+        session_id="continuum",
+        chunk_id="0",
+        conditioning_signature="cond-a",
+    ).samples[0].video_x0.mean() == 1
+    assert trajectory.select(
+        session_id="continuum",
+        chunk_id="0",
+        conditioning_signature="cond-b",
+    ).samples[0].video_x0.mean() == 2
+
+
 def test_chunk_and_session_isolation():
     trajectory = H3FlowTrajectory()
     for session, chunk, value in [("a", "0", 1), ("a", "1", 2), ("b", "0", 3)]:
