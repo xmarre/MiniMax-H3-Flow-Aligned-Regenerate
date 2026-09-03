@@ -110,11 +110,7 @@ def patch_flow_model(
         guidance_run_id=(
             None
             if clear_guidance_run_id
-            else (
-                guidance_run_id
-                if guidance_run_id is not None
-                else (prior.guidance_run_id if prior else None)
-            )
+            else (guidance_run_id if guidance_run_id is not None else (prior.guidance_run_id if prior else None))
         ),
     )
     if clear_guidance_conditioning_signature and guidance_conditioning_signature is not None:
