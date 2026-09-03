@@ -939,11 +939,13 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         "cross_attn": torch.zeros(1, 2, 4),
         "minimax_keyframes": [{"latent": target_video.clone(), "latent_h": 8, "latent_w": 6}],
     }
+    runtime_cond = original_cond.copy()
+    runtime_cond["hooks"] = "filtered-runtime-hooks"
     guider = SimpleNamespace(
         model_options={"transformer_options": {}},
         model_patcher=SimpleNamespace(model=MiniMaxH3()),
         original_conds={"positive": [original_cond]},
-        conds={"positive": [original_cond.copy()]},
+        conds={"positive": [runtime_cond]},
     )
     calls = []
 
