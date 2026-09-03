@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[test]' build
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest
+      - run: python -m compileall -q .
+      - run: python -m build
+      - name: Validate built wheel in an isolated environment
+        run: |
+          WHEEL="$(pwd)/$(ls dist/*.whl | head -n 1)"
+          python -m venv --system-site-packages /tmp/h3-flow-wheel
+          /tmp/h3-flow-wheel/bin/python -m pip install --upgrade pip
+          /tmp/h3-flow-wheel/bin/python -m pip install --no-deps "$WHEEL"
+          (cd /tmp && /tmp/h3-flow-wheel/bin/python -c "import h3_flow_regenerate; assert h3_flow_regenerate.H3FlowTrajectory.api_version == 1")
+
+  source-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch pinned integration sources
+        run: |
+          git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyUI
+          git -C .contracts/ComfyUI checkout 1af040bf022569d7a890241c8dd79b296cda483f
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
+          git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
+          git -C .contracts/Continuum checkout bf25353d8bec44afea22c89717c4301ce13c2036
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-DiffAid-Patches.git .contracts/DiffAid
+          git -C .contracts/DiffAid checkout ba9d9efbcf7e64c755e068cb76547d8cc85481eb
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-MiniMax-H3-RefDelta-Solver.git .contracts/RefDelta
+          git -C .contracts/RefDelta checkout 034e4c4c14c56bf76813cee4765e7164b0c7e0db
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
+          git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
+          git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
+          git -C .contracts/Upscaler checkout 2c707492084962f7ed665e8817a05a11b14dab27
+      - name: Validate native and sibling contracts
+        run: >-
+          python tools/check_source_contracts.py
+          --comfy .contracts/ComfyUI
+          --spectrum .contracts/Spectrum
+          --continuum .contracts/Continuum
+          --diffaid .contracts/DiffAid
+          --refdelta .contracts/RefDelta
+          --untwist .contracts/Untwist
+          --upscaler .contracts/Upscaler
