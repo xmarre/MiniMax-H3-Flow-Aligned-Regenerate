@@ -59,6 +59,8 @@ jobs:
           git -C .contracts/RefDelta checkout 034e4c4c14c56bf76813cee4765e7164b0c7e0db
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
+          git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
+          git -C .contracts/Upscaler checkout 2c707492084962f7ed665e8817a05a11b14dab27
       - name: Validate native and sibling contracts
         run: >-
           python tools/check_source_contracts.py
@@ -68,3 +70,4 @@ jobs:
           --diffaid .contracts/DiffAid
           --refdelta .contracts/RefDelta
           --untwist .contracts/Untwist
+          --upscaler .contracts/Upscaler
