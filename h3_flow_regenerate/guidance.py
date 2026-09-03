@@ -42,6 +42,9 @@ class GuidanceConfig:
 @dataclass(slots=True)
 class GuidanceState:
     start_coordinate: float | None = None
+    current_coordinate: float | None = None
+    current_high_velocity: torch.Tensor | None = None
+    current_reference_velocity: torch.Tensor | None = None
     previous_coordinate: float | None = None
     previous_high_velocity: torch.Tensor | None = None
     previous_reference_velocity: torch.Tensor | None = None
@@ -50,9 +53,16 @@ class GuidanceState:
     last_baseline_rms: float | None = None
     last_correction_rms_ratio: float | None = None
     last_clamp_scale: float | None = None
+    last_direction_rms_ratio: float | None = None
+    last_acceleration_rms_ratio: float | None = None
+    last_acceleration_applied: bool = False
+    last_same_coordinate_refinement: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
+        self.current_coordinate = None
+        self.current_high_velocity = None
+        self.current_reference_velocity = None
         self.previous_coordinate = None
         self.previous_high_velocity = None
         self.previous_reference_velocity = None
@@ -61,6 +71,10 @@ class GuidanceState:
         self.last_baseline_rms = None
         self.last_correction_rms_ratio = None
         self.last_clamp_scale = None
+        self.last_direction_rms_ratio = None
+        self.last_acceleration_rms_ratio = None
+        self.last_acceleration_applied = False
+        self.last_same_coordinate_refinement = False
 
 
 _PHASE_PRIORITY = {
@@ -126,6 +140,13 @@ def low_frequency_projection(video: torch.Tensor, cutoff: float) -> torch.Tensor
     padded = F.pad(work, (radius, radius, radius, radius), mode="replicate")
     filtered = F.avg_pool2d(padded, kernel_size=kernel, stride=1)
     return filtered.reshape(video.shape[0], video.shape[2], video.shape[1], h, w).permute(0, 2, 1, 3, 4).to(video)
+
+
+def _rms_ratio(correction: torch.Tensor, reference: torch.Tensor) -> float:
+    dims = tuple(range(1, correction.ndim))
+    corr_rms = correction.float().square().mean(dim=dims, keepdim=True).sqrt()
+    ref_rms = reference.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
+    return float((corr_rms / ref_rms).mean().detach().to(device="cpu", dtype=torch.float64).item())
 
 
 def _bounded(
@@ -210,24 +231,43 @@ def apply_guidance(
         error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
         correction = correction + schedule * config.consistency_weight * error
 
-    guided = high_x0 + correction
+    direction_correction = correction
+    acceleration_correction = torch.zeros_like(high_x0)
+    guided = high_x0 + direction_correction
     reference_velocity = None
+    same_coordinate_refinement = False
+    acceleration_applied = False
     if acceleration_active:
         assert high_state is not None
         assert sigma_value is not None
         reference_velocity = (high_state - ref) / sigma_value
         high_velocity = (high_state - guided) / sigma_value
+
+        if state.current_coordinate is not None:
+            same_coordinate_refinement = math.isclose(
+                coordinate,
+                state.current_coordinate,
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            if not same_coordinate_refinement:
+                state.previous_coordinate = state.current_coordinate
+                state.previous_high_velocity = state.current_high_velocity
+                state.previous_reference_velocity = state.current_reference_velocity
+
         if (
             state.previous_coordinate is not None
             and state.previous_high_velocity is not None
             and state.previous_reference_velocity is not None
-            and abs(coordinate - state.previous_coordinate) > 1e-8
         ):
             acceleration_delta = (
                 reference_velocity - state.previous_reference_velocity - high_velocity + state.previous_high_velocity
             )
             high_velocity = high_velocity + schedule * config.acceleration_weight * acceleration_delta
-            guided = high_state - sigma_value * high_velocity
+            acceleration_guided = high_state - sigma_value * high_velocity
+            acceleration_correction = acceleration_guided - guided
+            guided = acceleration_guided
+            acceleration_applied = True
         correction = guided - high_x0
 
     correction, correction_stats = _bounded(correction, high_x0, config.max_correction_rms_ratio)
@@ -237,15 +277,22 @@ def apply_guidance(
     state.last_baseline_rms = correction_stats["baseline_rms"]
     state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
     state.last_clamp_scale = correction_stats["clamp_scale"]
+    state.last_direction_rms_ratio = _rms_ratio(direction_correction, high_x0)
+    state.last_acceleration_rms_ratio = _rms_ratio(acceleration_correction, high_x0)
+    state.last_acceleration_applied = acceleration_applied
+    state.last_same_coordinate_refinement = same_coordinate_refinement
 
     if acceleration_active:
         assert high_state is not None
         assert sigma_value is not None
         assert reference_velocity is not None
-        state.previous_coordinate = float(coordinate)
-        state.previous_high_velocity = ((high_state - result) / sigma_value).detach()
-        state.previous_reference_velocity = reference_velocity.detach()
+        state.current_coordinate = float(coordinate)
+        state.current_high_velocity = ((high_state - result) / sigma_value).detach()
+        state.current_reference_velocity = reference_velocity.detach()
     else:
+        state.current_coordinate = None
+        state.current_high_velocity = None
+        state.current_reference_velocity = None
         state.previous_coordinate = None
         state.previous_high_velocity = None
         state.previous_reference_velocity = None

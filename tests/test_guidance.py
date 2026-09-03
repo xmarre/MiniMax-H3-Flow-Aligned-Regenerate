@@ -136,6 +136,9 @@ def test_non_acceleration_guidance_does_not_retain_full_video_state():
         config=GuidanceConfig(mode="direction"),
         state=state,
     )
+    assert state.current_coordinate is None
+    assert state.current_high_velocity is None
+    assert state.current_reference_velocity is None
     assert state.previous_coordinate is None
     assert state.previous_high_velocity is None
     assert state.previous_reference_velocity is None
@@ -244,6 +247,114 @@ def test_acceleration_matches_hiflow_velocity_alignment():
         sigma=current_sigma,
     )
     assert torch.allclose(actual, expected_x0)
+
+
+def test_pece_corrector_reuses_previous_distinct_velocity_anchor():
+    trajectory = run(values=(0.9, 0.5, 0.1), coords=(0.8, 0.5, 0.2), provenance=("actual",) * 3)
+    config = GuidanceConfig(
+        mode="direction+acceleration",
+        direction_weight=0.0,
+        acceleration_weight=0.4,
+        max_correction_rms_ratio=10.0,
+    )
+    state = GuidanceState()
+
+    first_x0 = torch.full((1, 24, 1, 4, 4), 0.25)
+    first_state = torch.full_like(first_x0, 0.8)
+    first_sigma = 0.9
+    first_coordinate = 0.7
+    first_ref = time_matched_reference(trajectory, first_coordinate)
+    first = apply_guidance(
+        first_x0,
+        run=trajectory,
+        coordinate=first_coordinate,
+        config=config,
+        state=state,
+        high_state=first_state,
+        sigma=first_sigma,
+    )
+    previous_high_velocity = (first_state - first) / first_sigma
+    previous_reference_velocity = (first_state - first_ref) / first_sigma
+
+    predictor_x0 = torch.full_like(first_x0, 0.15)
+    predictor_state = torch.full_like(first_x0, 0.6)
+    current_sigma = 0.7
+    current_coordinate = 0.4
+    current_ref = time_matched_reference(trajectory, current_coordinate)
+    predictor_high_velocity = (predictor_state - predictor_x0) / current_sigma
+    predictor_reference_velocity = (predictor_state - current_ref) / current_sigma
+    schedule = current_coordinate / first_coordinate
+    expected_predictor_velocity = predictor_high_velocity + schedule * config.acceleration_weight * (
+        predictor_reference_velocity
+        - previous_reference_velocity
+        - predictor_high_velocity
+        + previous_high_velocity
+    )
+    expected_predictor_x0 = predictor_state - current_sigma * expected_predictor_velocity
+    predictor = apply_guidance(
+        predictor_x0,
+        run=trajectory,
+        coordinate=current_coordinate,
+        config=config,
+        state=state,
+        high_state=predictor_state,
+        sigma=current_sigma,
+    )
+    assert torch.allclose(predictor, expected_predictor_x0)
+    assert state.last_same_coordinate_refinement is False
+    assert state.last_acceleration_applied is True
+
+    corrector_x0 = torch.full_like(first_x0, 0.10)
+    corrector_state = torch.full_like(first_x0, 0.55)
+    corrector_high_velocity = (corrector_state - corrector_x0) / current_sigma
+    corrector_reference_velocity = (corrector_state - current_ref) / current_sigma
+    expected_corrector_velocity = corrector_high_velocity + schedule * config.acceleration_weight * (
+        corrector_reference_velocity
+        - previous_reference_velocity
+        - corrector_high_velocity
+        + previous_high_velocity
+    )
+    expected_corrector_x0 = corrector_state - current_sigma * expected_corrector_velocity
+    corrector = apply_guidance(
+        corrector_x0,
+        run=trajectory,
+        coordinate=current_coordinate,
+        config=config,
+        state=state,
+        high_state=corrector_state,
+        sigma=current_sigma,
+    )
+    assert torch.allclose(corrector, expected_corrector_x0)
+    assert state.last_same_coordinate_refinement is True
+    assert state.last_acceleration_applied is True
+
+    next_x0 = torch.full_like(first_x0, 0.05)
+    next_state = torch.full_like(first_x0, 0.4)
+    next_sigma = 0.5
+    next_coordinate = 0.2
+    next_ref = time_matched_reference(trajectory, next_coordinate)
+    next_high_velocity = (next_state - next_x0) / next_sigma
+    next_reference_velocity = (next_state - next_ref) / next_sigma
+    corrected_current_velocity = (corrector_state - corrector) / current_sigma
+    corrected_reference_velocity = (corrector_state - current_ref) / current_sigma
+    next_schedule = next_coordinate / first_coordinate
+    expected_next_velocity = next_high_velocity + next_schedule * config.acceleration_weight * (
+        next_reference_velocity
+        - corrected_reference_velocity
+        - next_high_velocity
+        + corrected_current_velocity
+    )
+    expected_next_x0 = next_state - next_sigma * expected_next_velocity
+    next_result = apply_guidance(
+        next_x0,
+        run=trajectory,
+        coordinate=next_coordinate,
+        config=config,
+        state=state,
+        high_state=next_state,
+        sigma=next_sigma,
+    )
+    assert torch.allclose(next_result, expected_next_x0)
 
 
 def test_acceleration_fails_closed_without_three_exact_anchors():

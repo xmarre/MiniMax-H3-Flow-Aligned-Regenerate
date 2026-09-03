@@ -137,10 +137,14 @@ v_i^{HR}\leftarrow v_i^{HR}+\beta_i
 
 followed by \(\hat x_{0,i}^{HR}=x_t^{HR}-\sigma_i v_i^{HR}\). Unlike direction guidance, this
 acceleration term is deliberately **not** low-pass filtered: HiFlow uses velocity acceleration to
-recover detail fidelity. The schedule uses the same normalized \((t/\tau)^p\) decay. A same-coordinate
-PECE corrector call does not apply a zero-time acceleration delta; it replaces the stored velocity
-endpoint so the next coordinate starts from the latest corrected state. The final returned correction,
-including direction plus acceleration, remains subject to the RMS guard.
+recover detail fidelity. The schedule uses the same normalized \((t/\tau)^p\) decay. SA-Solver-PECE evaluates a predictor
+and corrector at the same coordinate. Both are estimates of the current-time velocity, so both are
+aligned against the **previous distinct-coordinate** velocity pair; the corrector then replaces the
+current endpoint used as history at the next coordinate. Treating the predictor as the previous
+timestep would incorrectly collapse the corrector's acceleration interval to zero. The final returned
+correction, including direction plus acceleration, remains subject to the RMS guard. Guidance telemetry
+separates direction and acceleration RMS ratios and records whether a call is exact or a Spectrum
+forecast so this interaction remains auditable.
 
 Downsample consistency forms the low-grid residual before lifting it.
 

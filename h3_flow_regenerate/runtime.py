@@ -486,6 +486,11 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             baseline_rms=binding.guidance_state.last_baseline_rms,
             correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
             clamp_scale=binding.guidance_state.last_clamp_scale,
+            direction_rms_ratio=binding.guidance_state.last_direction_rms_ratio,
+            acceleration_rms_ratio=binding.guidance_state.last_acceleration_rms_ratio,
+            acceleration_applied=binding.guidance_state.last_acceleration_applied,
+            same_coordinate_refinement=binding.guidance_state.last_same_coordinate_refinement,
+            actual=actual,
         )
     return result
 
