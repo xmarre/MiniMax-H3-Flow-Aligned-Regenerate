@@ -23,7 +23,7 @@ class GuidanceConfig:
     temporal_search_radius: int = 4
     temporal_min_similarity: float = 0.35
     temporal_min_margin: float = 0.02
-    temporal_cycle_tolerance: float = 1.0
+    temporal_cycle_tolerance: float = 0.0
     schedule_power: float = 1.0
     transfer_mode: str = "bicubic"
     max_correction_rms_ratio: float = 0.5
@@ -96,6 +96,8 @@ class GuidanceState:
     last_temporal_flow_magnitude_mean: float | None = None
     last_temporal_flow_magnitude_max: float | None = None
     last_temporal_cache_hit: bool = False
+    last_temporal_reference_coordinate: float | None = None
+    last_temporal_reference_clamped: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -125,6 +127,8 @@ class GuidanceState:
         self.last_temporal_flow_magnitude_mean = None
         self.last_temporal_flow_magnitude_max = None
         self.last_temporal_cache_hit = False
+        self.last_temporal_reference_coordinate = None
+        self.last_temporal_reference_clamped = False
 
 
 _PHASE_PRIORITY = {
@@ -165,17 +169,24 @@ def trustworthy_samples(run: TrajectoryRun) -> tuple[TrajectorySample, ...]:
     return tuple(deduplicated)
 
 
-def time_matched_reference(run: TrajectoryRun, coordinate: float) -> torch.Tensor:
+def time_matched_reference_info(run: TrajectoryRun, coordinate: float) -> tuple[torch.Tensor, float, bool]:
     samples = trustworthy_samples(run)
-    if coordinate >= samples[0].coordinate:
-        return samples[0].video_x0
-    if coordinate <= samples[-1].coordinate:
-        return samples[-1].video_x0
+    requested = float(coordinate)
+    if requested >= samples[0].coordinate:
+        resolved = float(samples[0].coordinate)
+        return samples[0].video_x0, resolved, not math.isclose(requested, resolved, rel_tol=0.0, abs_tol=1e-12)
+    if requested <= samples[-1].coordinate:
+        resolved = float(samples[-1].coordinate)
+        return samples[-1].video_x0, resolved, not math.isclose(requested, resolved, rel_tol=0.0, abs_tol=1e-12)
     for left, right in pairwise(samples):
-        if left.coordinate >= coordinate >= right.coordinate:
-            weight = interpolate_coordinate(left.coordinate, right.coordinate, coordinate)
-            return torch.lerp(left.video_x0, right.video_x0, weight)
+        if left.coordinate >= requested >= right.coordinate:
+            weight = interpolate_coordinate(left.coordinate, right.coordinate, requested)
+            return torch.lerp(left.video_x0, right.video_x0, weight), requested, False
     raise RuntimeError("trajectory interpolation support is inconsistent")
+
+
+def time_matched_reference(run: TrajectoryRun, coordinate: float) -> torch.Tensor:
+    return time_matched_reference_info(run, coordinate)[0]
 
 
 def low_frequency_projection(video: torch.Tensor, cutoff: float) -> torch.Tensor:
@@ -240,8 +251,13 @@ def _local_correspondence(
 
     margin = best - second
     similarity_confidence = ((best - min_similarity) / (1.0 - min_similarity)).clamp(0.0, 1.0)
-    margin_confidence = (margin / min_margin).clamp(0.0, 1.0)
-    confidence = similarity_confidence * margin_confidence
+    unique = (best >= min_similarity) & (margin >= min_margin)
+    # min_margin is a rejection threshold, not merely a soft scale. The first
+    # media smoke showed repetitive grass with high cosine scores but margins
+    # far below this threshold; allowing those ambiguous matches to retain a
+    # small nonzero weight produced patterned texture transport.
+    margin_confidence = (margin / (margin + min_margin)).clamp(0.0, 1.0)
+    confidence = similarity_confidence * margin_confidence * unique.float()
     flow = torch.stack((best_dx, best_dy), dim=1).float()
     return flow, confidence, best, margin
 
@@ -529,7 +545,8 @@ def apply_guidance(
     else:
         sigma_value = None
 
-    source_ref = time_matched_reference(run, coordinate).to(device=high_x0.device, dtype=high_x0.dtype)
+    source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
+    source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
     ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
@@ -557,7 +574,7 @@ def apply_guidance(
     if temporal_active:
         temporal_match, temporal_cache_hit = _temporal_correspondence(
             source_ref,
-            coordinate=coordinate,
+            coordinate=reference_coordinate,
             config=config,
             state=state,
         )
@@ -625,6 +642,8 @@ def apply_guidance(
     state.last_same_coordinate_refinement = same_coordinate_refinement
     state.last_acceleration_anchor_coordinate = state.previous_coordinate if acceleration_applied else None
     state.last_temporal_cache_hit = temporal_cache_hit
+    state.last_temporal_reference_coordinate = reference_coordinate if temporal_active else None
+    state.last_temporal_reference_clamped = reference_clamped if temporal_active else False
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0
         state.last_temporal_valid_fraction = 0.0
