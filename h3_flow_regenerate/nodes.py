@@ -112,6 +112,7 @@ class H3FlowAlignedRegenerate:
             guidance=guidance,
             clear_progressive=True,
             capture_enabled=False,
+            capture_forecasts=False,
             clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
@@ -176,6 +177,7 @@ class H3FlowAlignedRefineState:
             guidance=guidance,
             clear_progressive=True,
             capture_enabled=False,
+            capture_forecasts=False,
             guidance_conditioning_signature=source_signature,
             metrics=metrics,
         )
@@ -247,6 +249,7 @@ class H3ProgressiveHandoff:
             guidance=guidance,
             progressive=progressive,
             capture_enabled=True,
+            capture_forecasts=False,
             clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
@@ -316,6 +319,7 @@ class H3ProgressiveTargetInputHandoff:
             guidance=guidance,
             progressive=progressive,
             capture_enabled=True,
+            capture_forecasts=False,
             clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
