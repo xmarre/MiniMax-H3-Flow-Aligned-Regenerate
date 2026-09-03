@@ -322,63 +322,60 @@
   "resolution_shift_smoke": {
     "id": "E10-smoke",
     "status": "ready_for_matched_pair",
-    "purpose": "Isolate the SD3-derived relative resolution shift on direct target-grid H3 sampling while preserving the user's normal MP-driven base geometry and exactly mirroring the downstream refine node's scale=1.20 target before sampler 1.",
+    "purpose": "Isolate the SD3-derived relative resolution shift on the existing downstream learned-refine pass. Continuum stays at its ordinary MP-driven base resolution; E1 remaps only the refine SIGMAS.",
     "research_basis": {
       "h3_reference": "MiniMax-H3 H3-Base is documented as 768p with shorter side 768 by default.",
-      "reference_geometry_rule": "source_width=source_height=0 auto-derives the pinned H3 native canvas from the connected target aspect ratio (768px short edge, 768*1344 area cap, 32px alignment).",
+      "reference_geometry_rule": "source_width=source_height=0 auto-derives the pinned H3 native canvas from the downstream refine target aspect ratio (768px short edge, 768*1344 area cap, 32px alignment).",
       "sd3_mapping": "alpha=sqrt(m/n); compose relative alpha with H3's native video shift 12 rather than replacing it.",
       "simple_diffusion_cross_check": "higher resolution requires a lower-SNR/more-noisy schedule at comparable global structure scale."
     },
+    "topology": {
+      "continuum": "unchanged; MP width/height continue to drive Continuum directly",
+      "learned_refine": "enabled in both E0 and E1",
+      "sigma_placement": "existing refine scheduler -> H3ResolutionAwareSigmas -> MiniMax H3 Latent Upscaler + Refine (3D).sigmas",
+      "forbidden_placement": "H3ResolutionAwareSigmas must not feed Continuum.sigmas",
+      "geometry_helper": "same MP width/height -> H3RefineTargetGeometry(scale=1.20, align=32, keep_proportion=true) -> Resolution-Aware Sigmas target width/height only"
+    },
     "geometry": {
-      "reference_pixels_wh": [
-        768,
-        800
+      "current_example_mp_base_pixels_wh": [
+        736,
+        768
       ],
-      "target_generation_pixels_wh": [
+      "current_example_refine_target_pixels_wh": [
         896,
         928
       ],
-      "reference_latent_wh": [
-        48,
-        50
-      ],
-      "target_generation_latent_wh": [
-        56,
-        58
-      ],
-      "reference_video_patch_wh": [
-        24,
-        25
-      ],
-      "target_video_patch_wh": [
-        28,
-        29
+      "current_example_reference_pixels_wh": [
+        768,
+        800
       ],
       "target_to_reference_area_ratio": 1.3533333333333333,
       "relative_shift_factor": 1.163328557774343,
       "native_h3_video_shift": 12,
       "effective_video_shift_strength_1": 13.959942693292117,
-      "note": "Current example: MP base 736x768 resolves through the exact downstream-refine sizing semantics to direct target 896x928; 768x800 is then auto-derived as the H3-native resolution reference. The actual learned Latent Upscaler + Refine node is bypassed.",
-      "dynamic_target_source": "existing MP width/height -> H3RefineTargetGeometry(scale=1.20, align=32, keep_proportion=true)",
-      "manual_per_image_dimensions": false,
-      "current_example_mp_base_pixels_wh": [
-        736,
-        768
-      ]
+      "manual_per_image_dimensions": false
     },
     "common": {
-      "outer_steps": 10,
-      "sampler": "sa_solver_pece",
-      "scheduler": "MiniMax H3 SA-Solver Scheduler / simple_control",
-      "generation_grid": "target only",
+      "continuum_settings": "keep the current baseline exactly; do not change outer steps, sampler, scheduler, MP sizing, chunking, references, masks, or audio behavior",
+      "refine_settings": {
+        "enabled": true,
+        "mode": "scale by multiplier",
+        "scale": 1.2,
+        "align": 32,
+        "keep_proportion": true,
+        "lock_audio": true,
+        "sampler": "existing refine sampler unchanged",
+        "scheduler": "existing refine scheduler unchanged"
+      },
       "progressive_handoff": false,
       "trajectory_guidance": false,
-      "learned_upscale_refine": false,
-      "run_storage": "off",
+      "run_storage": "unchanged from matched baseline",
       "vae": "standard MiniMaxH3VideoVAE",
       "keep_identical": [
+        "Continuum output/base geometry",
+        "Continuum sampler/scheduler/outer steps",
+        "refine sampler and base refine schedule",
         "H3RefineTargetGeometry scale/align/proportion",
-        "MP base geometry",
         "seed",
         "prompt",
         "references",
@@ -386,31 +383,26 @@
         "DiffAid",
         "Untwist",
         "Spectrum",
-        "sampler",
-        "scheduler base schedule",
         "Continuum chunking",
-        "audio behavior",
+        "lock_audio",
         "decode"
       ],
-      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON",
-      "target_geometry": "existing MP outputs -> H3RefineTargetGeometry(scale=1.20)",
-      "scale_node_execution_role": "none; scale=1.20 normally lives inside the downstream refine node, so E mirrors its geometry in H3RefineTargetGeometry before Continuum",
-      "geometry_helper": "H3RefineTargetGeometry; geometry only, no learned upscale/refine"
+      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON"
     },
     "runs": [
       {
-        "id": "E0-direct-control",
+        "id": "E0-refine-control",
         "resolution_sigma_mode": "off",
         "reference_width": 0,
         "reference_height": 0,
         "target_width": "H3RefineTargetGeometry.target_width",
         "target_height": "H3RefineTargetGeometry.target_height",
         "strength": 0,
-        "role": "exact SIGMAS parity control on the direct post-refine-size target; target canvas comes from MP base -> geometry-only mirror of refine scale 1.20",
+        "role": "exact parity control on the existing refine SIGMAS path",
         "reference_mode": "h3_native_auto"
       },
       {
-        "id": "E1-resolution-aware",
+        "id": "E1-refine-resolution-aware",
         "resolution_sigma_mode": "resolution_aware",
         "reference_width": 0,
         "reference_height": 0,
@@ -419,20 +411,20 @@
         "strength": 1,
         "expected_extra_shift_factor": 1.163328557774343,
         "expected_effective_video_shift": 13.959942693292117,
-        "role": "single analytic SD3-derived relative remap candidate on the same direct post-refine-size target; native reference auto-resolves from that target aspect",
+        "role": "same learned-refine workflow with only the refine sigma coordinates remapped",
         "reference_mode": "h3_native_auto"
       }
     ],
     "expected_structure": {
-      "sampler_logical_calls": 38,
+      "base_continuum": "identical E0/E1; remap is downstream",
+      "total_sampler_logical_calls": "record from E0 rather than hard-code the obsolete direct-target 38-call value",
       "progressive_sampler_invocations": 0,
       "progressive_history_boundaries": 0,
       "handoff_exact_probe_nfe": 0,
       "guidance_events": 0,
-      "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions",
-      "metrics_source": "H3RuntimeMetricsProbe",
-      "sa_solver_timing": "default native tau_func; remapped effective sigmas may move stochastic outer indices",
-      "resolution_sigma_map_events": 1
+      "refine_transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity because refine sigma coordinates change",
+      "resolution_sigma_map_events": 1,
+      "final_audio": "with lock_audio=true the refine node restores pass-1 audio; final audio should remain unchanged"
     },
     "diagnostics_gate": {
       "e0": {
@@ -449,9 +441,9 @@
         "current_example_effective_video_shift": 13.959942693292117
       }
     },
-    "media_gate": "Compare E1 against E0 for fast-motion/disocclusion, clothing, newly revealed grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, Continuum seams, and decoded audio. A video gain that harms audio or global dynamics fails.",
+    "media_gate": "Compare E1 against E0 for fast-motion/disocclusion, clothing, newly revealed grass/background, anatomy, detail, learned-upscale/refine quality, shot behavior, prompt/reference fidelity, and Continuum seams.",
     "no_sweep_rule": "Do not tune strength or use calibrated mode before the E0/E1 matched pair is decoded.",
-    "follow_up_if_positive": "Only after a clear E1 win, test the resolution remap combined with the accepted D10 progressive+temporal path.",
+    "follow_up_if_positive": "Only after a clear E1 win, test the refine-sigma remap combined with the accepted D10 progressive+temporal path.",
     "follow_up_if_negative": "Leave resolution-aware sigmas experimental/off and do not sweep strength from one negative/neutral pair."
   }
 }
