@@ -58,7 +58,9 @@ The important change is **where this operation is allowed**. V2 applies it only 
 unique and mutually consistent; otherwise the ordinary same-time low-frequency direction term remains
 the only guidance.
 
-This remains a research hypothesis. The earlier v1/v2 decoded-media verdicts are invalid for temporal attribution because both used the unintended VAE decoder. The conservative v2 implementation is restored and requires one clean matched rerun using the corrected VAE. Only that run can decide whether the latent nearest-neighbor transport path should be retained or abandoned; do not tune weights or thresholds before it.
+The clean standard-VAE D10-temporal-v2 rerun is now complete. It preserved the expected 38 logical / 28 actual / 10 forecast topology and the conservative v2 matcher remained sparse: ~0.1598% valid support in chunk 1 and ~0.0542% in chunk 2, with mean temporal RMS ratio ~0.00090 across the 14 high-stage guidance calls. The decoded result was good, the VAE-induced repeated pattern was absent, and the user's perceptual verdict was **maybe slightly better than the non-temporal D10 control**. This is the first clean positive evidence for the hypothesis, but the effect is small and only one corrected-VAE case has been judged, so the result remains tentative rather than a general claim.
+
+The experimental path is therefore retained at temporal weight 0.20 without a parameter sweep. The next active gate is the orthogonal resolution-shift-only experiment; if temporal promotion is considered later, use an additional matched seed/control pair rather than inferring broad benefit from this single weak positive.
 
 This direction is consistent with the broader source evidence: FrescoDiffusion explicitly warns that
 an unreliable prior can propagate incorrect structure or motion and decays/releases prior strength;
