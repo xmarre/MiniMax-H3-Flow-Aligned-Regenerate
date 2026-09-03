@@ -26,6 +26,7 @@ from h3_flow_regenerate.runtime import (
     _conditioning_signature,
     _finish_capture,
     _high_stage_contract,
+    _make_probe_sampler,
     _merge_preserved_noise,
     _noise_argument,
     _resize_packed_mask,
@@ -903,11 +904,31 @@ def test_preserved_noise_merge_keeps_native_noise_only_under_mask():
     assert torch.equal(merged[..., 3:5], generated[..., 3:5])
 
 
+def test_exact_probe_preserves_sampler_inpaint_options(monkeypatch):
+    class KSampler:
+        def __init__(self, function, inpaint_options=None):
+            self.sampler_function = function
+            self.inpaint_options = dict(inpaint_options or {})
+
+    fake_samplers = ModuleType("comfy.samplers")
+    fake_samplers.KSAMPLER = KSampler
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.samplers = fake_samplers
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake_samplers)
+
+    source = SimpleNamespace(inpaint_options={"random": True, "custom": "keep"})
+    probe = _make_probe_sampler(source)
+    assert probe.inpaint_options == source.inpaint_options
+    assert probe.inpaint_options is not source.inpaint_options
+
+
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
     class KSampler:
-        def __init__(self, function):
+        def __init__(self, function, inpaint_options=None):
             self.sampler_function = function
             self.extra_options = {}
+            self.inpaint_options = dict(inpaint_options or {})
 
     fake_samplers = ModuleType("comfy.samplers")
     fake_samplers.KSAMPLER = KSampler
@@ -1089,9 +1110,10 @@ def test_progressive_rejects_explicit_stateful_noise_sampler():
 
 def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     class KSampler:
-        def __init__(self, function):
+        def __init__(self, function, inpaint_options=None):
             self.sampler_function = function
             self.extra_options = {}
+            self.inpaint_options = dict(inpaint_options or {})
 
     fake_samplers = ModuleType("comfy.samplers")
     fake_samplers.KSAMPLER = KSampler
@@ -1243,9 +1265,10 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
 
 def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):
     class KSampler:
-        def __init__(self, function):
+        def __init__(self, function, inpaint_options=None):
             self.sampler_function = function
             self.extra_options = {}
+            self.inpaint_options = dict(inpaint_options or {})
 
     fake_samplers = ModuleType("comfy.samplers")
     fake_samplers.KSAMPLER = KSampler
