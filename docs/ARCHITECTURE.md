@@ -173,11 +173,13 @@ benchmark setting until decoded runs establish a better policy.
   entire Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
   target-input topology so Continuum's output/session/native-mask geometry stays final-sized.
 - **Failure:** low capture aborts; guidance state clears in `finally`.
-- **Denoise masks:** current ComfyUI inpainting semantics combine the mask with a preserved sampler
-  `latent_image`. Progressive mode resizes only the single-channel video mask, preserves the audio
-  mask, spatially transfers the external latent image, converts it through H3's normal latent-in
+- **Denoise masks:** current ComfyUI prepares each user mask to full latent-channel AV geometry before
+  OUTER_SAMPLE wrappers run. Progressive mode resizes only the prepared video portion, preserves the
+  audio portion, spatially transfers the external latent image, converts it through H3's normal latent-in
   transform, and solves `noise = (x_sigma - (1-sigma) * latent_image) / (sigma * noise_scale)` so
-  the next sampler invocation starts from the exact carried state even in protected regions.
+  the next sampler invocation starts from the exact carried state. In target-input mode, mask-protected
+  regions retain the caller's original target-grid sampler noise because MiniMax H3's
+  `scale_latent_inpaint` explicitly mixes that noise into preserved video context at timestep 0.999.
 
 ## Reference budget
 
