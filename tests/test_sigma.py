@@ -69,3 +69,64 @@ def test_normalized_coordinate_is_full_unshifted_trajectory():
 def test_bad_schedule_fails_closed(bad):
     with pytest.raises(ValueError):
         resolution_aware_sigmas(bad, source_area=1, target_area=2)
+
+
+def test_resolution_mapping_composes_relative_shift_with_native_h3_shift():
+    base = torch.linspace(1.0, 0.0, 17)
+    native = flow_shift(base, 12.0)
+    factor = resolution_shift_factor(768 * 800, 896 * 928)
+    mapped = resolution_aware_sigmas(
+        native,
+        source_area=768 * 800,
+        target_area=896 * 928,
+    )
+    expected = flow_shift(base, 12.0 * factor)
+    assert torch.allclose(mapped, expected, atol=1e-6)
+
+
+def test_resolution_mapping_moves_shared_av_coordinate_not_video_only():
+    base = torch.tensor([0.8, 0.5, 0.2])
+    native_video = flow_shift(base, 12.0)
+    factor = resolution_shift_factor(768 * 800, 896 * 928)
+    mapped_video = resolution_aware_sigmas(
+        native_video,
+        source_area=768 * 800,
+        target_area=896 * 928,
+    )
+    mapped_base = inverse_flow_shift(mapped_video, 12.0)
+    expected_base = flow_shift(base, factor)
+    assert torch.allclose(mapped_base, expected_base, atol=1e-6)
+    assert torch.allclose(audio_sigma(mapped_video), flow_shift(expected_base, 3.0), atol=1e-6)
+
+
+def test_equal_reference_and_target_resolution_is_exact_parity():
+    sigmas = flow_shift(torch.linspace(1.0, 0.0, 11), 12.0)
+    mapped = resolution_aware_sigmas(
+        sigmas,
+        source_area=768 * 800,
+        target_area=768 * 800,
+    )
+    assert torch.equal(mapped, sigmas)
+
+
+def test_resolution_node_diagnostics_expose_relative_and_effective_shift():
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = flow_shift(torch.tensor([1.0, 0.5, 0.0]), 12.0)
+    node = H3ResolutionAwareSigmas()
+    _, diagnostics = node.map(
+        sigmas,
+        "resolution_aware",
+        768,
+        800,
+        896,
+        928,
+        1.0,
+        1.0,
+    )
+    factor = resolution_shift_factor(768 * 800, 896 * 928)
+    assert diagnostics["area_ratio"] == pytest.approx((896 * 928) / (768 * 800))
+    assert diagnostics["extra_shift_factor"] == pytest.approx(factor)
+    assert diagnostics["base_video_shift"] == pytest.approx(12.0)
+    assert diagnostics["effective_video_shift"] == pytest.approx(12.0 * factor)
+    assert diagnostics["shared_av_coordinate"] is True
