@@ -25,6 +25,22 @@ def test_joint_av_mapping_preserves_common_base_coordinate():
     assert torch.allclose(inverse_flow_shift(video, 12.0), inverse_flow_shift(audio, 3.0), atol=1e-6)
 
 
+def test_resolution_node_reports_effective_shift_factor():
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = torch.tensor([1.0, 0.7, 0.0])
+    node = H3ResolutionAwareSigmas()
+    _, off = node.map(sigmas, "off", 864, 640, 1024, 768, 1.0, 2.5)
+    _, calibrated = node.map(sigmas, "calibrated", 864, 640, 1024, 768, 1.0, 2.5)
+    _, derived = node.map(sigmas, "resolution_aware", 864, 640, 1024, 768, 1.0, 2.5)
+
+    assert off["extra_shift_factor"] == 1.0
+    assert calibrated["extra_shift_factor"] == 2.5
+    assert derived["extra_shift_factor"] == pytest.approx(
+        resolution_shift_factor(864 * 640, 1024 * 768)
+    )
+
+
 def test_resolution_mapping_is_ordered_finite_and_exact_at_endpoints():
     sigmas = flow_shift(torch.linspace(1, 0, 21), 12.0)
     mapped = resolution_aware_sigmas(sigmas, source_area=864 * 640, target_area=1024 * 768)
