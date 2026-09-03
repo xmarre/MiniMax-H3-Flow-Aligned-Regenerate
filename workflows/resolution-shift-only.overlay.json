@@ -1,30 +1,88 @@
 {
   "schema_version": 2,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Matched E0/E1 direct-target test of the SD3-derived relative resolution shift on MiniMax H3. The user's existing MP node still determines the normal sampler-1 base canvas; a new geometry-only helper mirrors the downstream refine node's scale=1.20 target before Continuum so E can sample directly at the post-refine canvas without executing learned upscale/refine.",
+  "purpose": "Matched E0/E1 test of the SD3-derived relative resolution shift on the existing downstream MiniMax H3 learned-refine pass. Continuum remains at its ordinary MP-driven base resolution; only the refine SIGMAS are remapped in E1.",
   "model_chain": {
-    "keep": "existing DiffAid -> Untwist -> Spectrum MODEL chain, then H3RuntimeMetricsProbe, then H3 Continuum Sampler V3.4",
+    "keep": "existing DiffAid -> Untwist -> Spectrum -> H3RuntimeMetricsProbe -> H3 Continuum Sampler V3.4, followed by the existing MiniMax H3 Latent Upscaler + Refine (3D)",
     "remove_or_bypass": [
       "H3ProgressiveTargetInputHandoff",
       "H3ProgressiveHandoff",
       "H3TrajectoryCapture",
       "H3FlowAlignedRegenerate",
-      "H3FlowAlignedRefineState",
-      "MiniMax H3 Latent Upscaler + Refine (3D) execution"
+      "H3FlowAlignedRefineState"
     ]
   },
-  "sigma_path": {
-    "upstream_scheduler": {
-      "node": "MiniMax H3 SA-Solver Scheduler",
-      "widgets": {
-        "steps": 10,
-        "denoise": 1,
-        "mode": "simple_control"
-      }
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "geometry": "unchanged; existing MP width/height stay connected directly to Continuum width/height",
+    "sigmas": "unchanged; do not insert H3ResolutionAwareSigmas into Continuum",
+    "keep_existing": [
+      "MP sizing",
+      "sampler",
+      "scheduler",
+      "outer steps",
+      "chunking",
+      "conditioning",
+      "references",
+      "native masks",
+      "audio behavior",
+      "Run Storage policy"
+    ]
+  },
+  "refine": {
+    "node": "MiniMax H3 Latent Upscaler + Refine (3D)",
+    "enabled": true,
+    "keep_existing_connections": [
+      "Continuum.video_latents -> refine.latent",
+      "Continuum.audio_latents -> refine.audio_latent",
+      "Continuum.refine_state -> refine.refine_state",
+      "existing refine noise -> refine.noise",
+      "existing refine sampler -> refine.sampler"
+    ],
+    "widgets": {
+      "mode": "scale by multiplier",
+      "scale": 1.2,
+      "align": 32,
+      "keep_proportion": true,
+      "lock_audio": true
     },
+    "sigmas": "H3ResolutionAwareSigmas.sigmas -> refine.sigmas"
+  },
+  "target_geometry": {
+    "node": "H3RefineTargetGeometry",
+    "display_name": "MiniMax H3 Refine Target Geometry [Experimental]",
+    "purpose": "Mirror only the downstream refine node's target-size calculation so the refine sigma map knows the true target canvas automatically.",
+    "placement": "parallel metadata branch from the same MP width/height already used by Continuum; never feed helper outputs into Continuum",
+    "inputs": {
+      "base_width": "existing MP width",
+      "base_height": "existing MP height"
+    },
+    "widgets": {
+      "scale": 1.2,
+      "align": 32,
+      "keep_proportion": true
+    },
+    "outputs": {
+      "target_width": "H3ResolutionAwareSigmas.target_width",
+      "target_height": "H3ResolutionAwareSigmas.target_height"
+    },
+    "current_example": {
+      "mp_base_wh": [
+        736,
+        768
+      ],
+      "resolved_refine_target_wh": [
+        896,
+        928
+      ]
+    },
+    "requirement": "No manual per-image resolution calculation."
+  },
+  "sigma_path": {
+    "upstream_scheduler": "existing refine scheduler SIGMAS; leave the scheduler and its widgets unchanged",
     "insert": {
       "node": "H3ResolutionAwareSigmas",
-      "placement": "between the SA-Solver scheduler SIGMAS output and H3 Continuum Sampler V3.4 SIGMAS input",
+      "placement": "between the existing refine scheduler SIGMAS output and MiniMax H3 Latent Upscaler + Refine (3D).sigmas",
       "common_widgets": {
         "source_width": 0,
         "source_height": 0,
@@ -38,29 +96,9 @@
     }
   },
   "reference_basis": {
-    "source_role": "analytic H3-Base/native resolution regime; auto-derived from the geometry-only pre-sampler target; no source-resolution pass is executed",
+    "source_role": "analytic H3-Base/native resolution regime; auto-derived from the downstream refine target aspect; no source-resolution pass is executed",
     "official_basis": "H3-Base is documented as 768p and H3 output shorter side defaults to 768 px",
-    "aspect_matching": "source_width=source_height=0 invokes the pinned H3 native canvas rule: 768px short edge, 768*1344 area cap, per-axis round to 32. For the current 896x928 target this resolves to 768x800.",
-    "source_latent_wh": [
-      48,
-      50
-    ],
-    "target_latent_wh": [
-      56,
-      58
-    ],
-    "source_spatial_patch_wh": [
-      24,
-      25
-    ],
-    "target_spatial_patch_wh": [
-      28,
-      29
-    ],
-    "target_to_source_area_ratio": 1.3533333333333333,
-    "relative_shift_factor": 1.163328557774343,
-    "native_video_shift": 12,
-    "effective_video_shift_strength_1": 13.959942693292117,
+    "aspect_matching": "source_width=source_height=0 invokes the pinned H3 native canvas rule: 768px short edge, 768*1344 area cap, per-axis round to 32. For the current 896x928 refine target this resolves to 768x800.",
     "current_example_target_wh": [
       896,
       928
@@ -69,11 +107,14 @@
       768,
       800
     ],
-    "note": "Current example: MP base 736x768 -> geometry-only refine scale 1.20 -> direct E target 896x928 -> auto H3-native reference 768x800. All target dimensions remain dynamic."
+    "target_to_source_area_ratio": 1.3533333333333333,
+    "relative_shift_factor": 1.163328557774343,
+    "native_video_shift": 12,
+    "effective_video_shift_strength_1": 13.959942693292117
   },
   "runs": [
     {
-      "id": "E0-direct-control",
+      "id": "E0-refine-control",
       "widgets": {
         "mode": "off",
         "strength": 0
@@ -83,13 +124,12 @@
         "base_video_shift": 12,
         "effective_video_shift": 12,
         "shared_av_coordinate": true,
-        "reference_mode": "h3_native_auto",
-        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
+        "reference_mode": "h3_native_auto"
       },
-      "invariant": "Resolution-Aware Sigmas output must be bit-exact equal to its input SIGMAS."
+      "invariant": "Resolution-Aware Sigmas output must be bit-exact equal to the existing refine SIGMAS."
     },
     {
-      "id": "E1-resolution-aware",
+      "id": "E1-refine-resolution-aware",
       "widgets": {
         "mode": "resolution_aware",
         "strength": 1
@@ -101,37 +141,17 @@
         "effective_video_shift": 13.959942693292117,
         "shared_av_coordinate": true,
         "reference_mode": "h3_native_auto",
-        "note": "For the current 896x928 target. Other picture aspects/sizes derive their own H3-native reference automatically.",
-        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
+        "note": "Numeric values are for the current 896x928 refine target; target geometry remains dynamic."
       },
-      "only_intended_change_from_E0": "mode off -> resolution_aware and strength 0 -> 1"
+      "only_intended_change_from_E0": "refine sigma mode off -> resolution_aware and strength 0 -> 1"
     }
   ],
-  "continuum": {
-    "node": "H3 Continuum Sampler V3.4",
-    "widgets": {
-      "width": "H3RefineTargetGeometry.target_width",
-      "height": "H3RefineTargetGeometry.target_height",
-      "run_storage": "Off"
-    },
-    "keep_existing": [
-      "H3RefineTargetGeometry at scale 1.20 / align 32 / keep_proportion true",
-      "MP sizing node",
-      "chunking",
-      "conditioning",
-      "audio behavior",
-      "native masks",
-      "decode"
-    ]
-  },
-  "vae": {
-    "required": "standard MiniMaxH3VideoVAE via native VAELoader",
-    "forbidden_for_this_gate": "MiniMaxH3TRTVAE w4a16_awq"
-  },
   "matched_invariants": [
-    "MP sizing inputs/base dimensions",
-    "refine target geometry scale=1.20 / align=32 / keep_proportion=true",
-    "MP sizing",
+    "Continuum MP/base geometry",
+    "Continuum sampler/scheduler/outer steps",
+    "refine node enabled",
+    "refine scale=1.20 / align=32 / keep_proportion=true",
+    "refine sampler and base refine schedule",
     "seed",
     "prompt",
     "references",
@@ -139,23 +159,29 @@
     "DiffAid",
     "Untwist",
     "Spectrum",
-    "sampler",
-    "scheduler base schedule",
     "Continuum chunking",
-    "audio behavior",
+    "lock_audio=true",
     "VAE",
     "decode"
   ],
   "expected_structure": {
-    "sampler_logical_calls": 38,
+    "base_continuum": "must be identical between E0 and E1 because the remap is downstream",
+    "total_logical_calls": "record E0; do not reuse the earlier direct-target 38-call expectation",
+    "refine_actual_nfe_and_spectrum_forecasts": "record rather than force parity; remapped refine coordinates may legitimately change Spectrum decisions",
     "progressive_sampler_invocations": 0,
     "progressive_history_boundaries": 0,
     "handoff_exact_probe_nfe": 0,
     "guidance_events": 0,
-    "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change.",
-    "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON",
-    "sa_solver_timing": "Default tau window stays tied to effective supplied sigma; remapping may move which outer indices are stochastic without changing any sampler widget.",
-    "resolution_event": "exactly one resolution_sigma_map event per graph execution with mode/factor/effective shift/sigma delta"
+    "resolution_event": "exactly one resolution_sigma_map event per graph execution",
+    "audio": "with lock_audio=true the refine node restores sampler-1 audio after refinement; final audio should remain unchanged"
+  },
+  "metrics_probe": {
+    "node": "H3RuntimeMetricsProbe",
+    "placement": "after Spectrum and before Continuum; Continuum refine_state clones the sampled MODEL for the downstream refine pass",
+    "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
+    "output": {
+      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics; leave the probe's optional metrics input unconnected"
+    }
   },
   "media_gate": [
     "fast-motion clothing",
@@ -163,63 +189,14 @@
     "limb and disocclusion boundaries",
     "anatomy",
     "detail",
+    "learned-upscale/refine quality",
     "shot continuity and dynamics",
     "prompt/reference fidelity",
-    "Continuum seams",
-    "decoded audio"
+    "Continuum seams"
   ],
   "decision_rule": {
     "before_decoding": "Do not tune strength or calibrated_factor.",
-    "if_positive": "Only then test the same remap combined with accepted D10 progressive+temporal.",
+    "if_positive": "Only then test the same refine-sigma remap with the accepted progressive+temporal path.",
     "if_neutral_or_negative": "Leave resolution-aware sigmas experimental/off; do not start a strength sweep from this pair."
-  },
-  "metrics_probe": {
-    "node": "H3RuntimeMetricsProbe",
-    "placement": "after Spectrum and before H3 Continuum Sampler V3.4",
-    "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
-    "output": {
-      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics; leave the probe's optional metrics input unconnected",
-      "autosave": "retain the same metrics JSON capture used by D10"
-    }
-  },
-  "target_geometry": {
-    "base_source": "existing pre-Continuum MP sizing node outputs",
-    "insert": {
-      "node": "H3RefineTargetGeometry",
-      "display_name": "MiniMax H3 Refine Target Geometry [Experimental]",
-      "placement": "between the existing MP width/height outputs and the dimensions used by Continuum for E",
-      "widgets": {
-        "scale": 1.2,
-        "align": 32,
-        "keep_proportion": true
-      },
-      "inputs": {
-        "base_width": "existing MP width",
-        "base_height": "existing MP height"
-      },
-      "outputs": {
-        "target_width": [
-          "H3 Continuum Sampler V3.4.width",
-          "H3ResolutionAwareSigmas.target_width"
-        ],
-        "target_height": [
-          "H3 Continuum Sampler V3.4.height",
-          "H3ResolutionAwareSigmas.target_height"
-        ]
-      }
-    },
-    "semantics": "Mirrors the integrated LBH refine node's scale-by-multiplier sizing before sampler 1. It performs no learned upscale and no refinement sampling.",
-    "current_example": {
-      "mp_base_wh": [
-        736,
-        768
-      ],
-      "scale": 1.2,
-      "resolved_target_wh": [
-        896,
-        928
-      ]
-    },
-    "requirement": "No manual per-image resolution calculation."
   }
 }
