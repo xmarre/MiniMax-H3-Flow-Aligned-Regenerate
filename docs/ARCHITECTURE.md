@@ -201,7 +201,7 @@ direction+temporal correction still passes through the same per-sample RMS guard
 
 Telemetry exposes temporal RMS ratio, mean confidence, strict valid/disocclusion fractions, similarity
 and uniqueness-margin statistics, low-grid flow magnitude, cache-hit state, resolved reference
-coordinate, and clamp state. Structural telemetry can show that the mechanism is active and conservative; only a matched decoded-media comparison using the corrected VAE establishes quality. The prior v1/v2 media verdicts are invalid for attribution.
+coordinate, and clamp state. Structural telemetry can show that the mechanism is active and conservative; decoded media remains decisive. The earlier TensorRT-`w4a16_awq` runs are invalid for attribution, but the clean standard-VAE v2 rerun is now complete: media was good and judged maybe slightly better than the non-temporal D10 control. That weak positive retains the mechanism as experimental without promoting it as a general quality improvement.
 
 Downsample consistency forms the low-grid residual before lifting it.
 
