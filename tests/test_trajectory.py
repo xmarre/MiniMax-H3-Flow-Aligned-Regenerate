@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import H3FlowTrajectory, TrajectorySample
-from h3_flow_regenerate.nodes import H3FlowTrajectoryNode
 from h3_flow_regenerate.geometry import geometry_from_video
+from h3_flow_regenerate.nodes import H3FlowTrajectoryNode
 
 
 def sample(value=1.0, provenance="actual", phase="corrected"):
