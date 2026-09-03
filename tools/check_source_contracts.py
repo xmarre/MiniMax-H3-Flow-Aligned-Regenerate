@@ -15,17 +15,13 @@ def require(path: Path, *needles: str) -> None:
 def require_symbols(path: Path, *, functions: tuple[str, ...] = (), classes: tuple[str, ...] = ()) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found_functions = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     found_classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
     missing_functions = sorted(set(functions) - found_functions)
     missing_classes = sorted(set(classes) - found_classes)
     if missing_functions or missing_classes:
-        raise SystemExit(
-            f"{path}: missing structural symbols functions={missing_functions} classes={missing_classes}"
-        )
+        raise SystemExit(f"{path}: missing structural symbols functions={missing_functions} classes={missing_classes}")
 
 
 def main() -> None:
@@ -132,7 +128,7 @@ def main() -> None:
     require(
         args.upscaler / "nodes/minimax_h3_refine.py",
         '"H3_CONTINUUM_REFINE_STATE"',
-        'transformer_options[H3_REFINEMENT_REQUEST_KEY]',
+        "transformer_options[H3_REFINEMENT_REQUEST_KEY]",
         "resize_h3_target_conditioning",
         "denoise_mask=noise_mask",
     )
