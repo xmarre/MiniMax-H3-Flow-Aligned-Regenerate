@@ -211,9 +211,10 @@ adds no H3 transformer evaluations. Its 0.20 weight remains a conservative exper
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
-an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware
-sigmas move H3's shared AV flow coordinate, so they also change the derived audio sigma schedule;
-the probe is not a video-only schedule modifier and requires decoded-audio validation. For E10, leave `source_width/source_height` at 0/0: the node derives the analytic H3-Base/native
+an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware sigmas move H3's shared AV flow coordinate, so the refine model also sees the
+corresponding derived audio sigma. In the E workflow `lock_audio=true`: the refine node zeroes audio
+noise/masks audio refinement and restores sampler-1 audio after sampling, so final audio is an exact
+invariant even though audio tokens still participate inside the refine model. For E10, leave `source_width/source_height` at 0/0: the node derives the analytic H3-Base/native
 reference from the downstream refine target aspect ratio with the pinned 768-short-edge / 768*1344 cap
 / 32px alignment rule. Feed the existing MP width/height into **Refine Target Geometry**, set scale
 1.20 / align 32 / keep_proportion true, and feed its outputs only to Resolution-Aware Sigmas
