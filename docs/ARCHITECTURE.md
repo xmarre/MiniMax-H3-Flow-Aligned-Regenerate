@@ -175,7 +175,10 @@ benchmark setting until decoded runs establish a better policy.
   raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
   entire Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
   target-input topology so Continuum's output/session/native-mask geometry stays final-sized.
-- **Failure:** low capture aborts; guidance state clears in `finally`.
+- **Failure:** low/probe failure aborts the active trajectory transaction. The low run must be committed
+  before same-invocation high guidance can select it; if transfer or the high stage then fails, that
+  committed run is immediately invalidated and becomes ineligible for future trajectory selection.
+  Guidance state clears in `finally`.
 - **Denoise masks:** current ComfyUI prepares each user mask to full latent-channel AV geometry before
   OUTER_SAMPLE wrappers run. Progressive mode resizes only the prepared video portion, preserves the
   audio portion, spatially transfers the external latent image, converts it through H3's normal latent-in
