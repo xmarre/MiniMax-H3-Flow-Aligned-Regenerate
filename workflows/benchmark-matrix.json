@@ -198,9 +198,47 @@
     }
   ],
   "temporal_correspondence_smoke": {
-    "id": "D10-temporal",
-    "status": "pending_media",
+    "id": "D10-temporal-v2",
+    "status": "pending_media_after_v1_regression",
     "base_reference": "accepted difficult-motion D10 direction-only run",
+    "previous_attempt": {
+      "id": "D10-temporal-v1",
+      "status": "failed_media",
+      "topology": {
+        "logical_calls": 38,
+        "actual_nfe": 28,
+        "spectrum_forecasts": 10,
+        "low_logical": 22,
+        "probe_logical": 2,
+        "high_logical": 14
+      },
+      "media_verdict": "patterned/repeated grass texture and different/more-bugged motion artifacts",
+      "telemetry": {
+        "chunk_1": {
+          "valid_fraction": 0.4598030149936676,
+          "confidence_mean": 0.056206490844488144,
+          "similarity_mean": 0.9378970265388489,
+          "margin_mean": 0.0038141219411045313,
+          "flow_magnitude_mean": 2.554915428161621,
+          "flow_magnitude_max": 5.656854152679443
+        },
+        "chunk_2": {
+          "valid_fraction": 0.5126551389694214,
+          "confidence_mean": 0.048280809074640274,
+          "similarity_mean": 0.9590392708778381,
+          "margin_mean": 0.0026867843698710203,
+          "flow_magnitude_mean": 2.5734305381774902,
+          "flow_magnitude_max": 5.656854152679443
+        }
+      },
+      "finding": "v1 soft-scaled matches below temporal_min_margin instead of rejecting them; post-handoff low-grid reference also clamps to the same ~0.4 anchor"
+    },
+    "v2_changes": [
+      "temporal_min_margin is a hard uniqueness gate",
+      "default reverse-cycle tolerance is 0 latent cells",
+      "correspondence cache is keyed by resolved low-grid reference coordinate",
+      "telemetry exposes resolved temporal reference coordinate and clamp state"
+    ],
     "outer_steps": 10,
     "guidance_mode": "direction+temporal",
     "direction_weight": 0.25,
@@ -233,7 +271,14 @@
       "probe_logical": 2,
       "high_logical": 14
     },
-    "primary_media_question": "Does occlusion-aware video-time correspondence reduce fast-motion clothing and newly revealed background artifacts without freezing motion or copying stale content?"
+    "expected_v2_telemetry": [
+      "post-handoff requests below ~0.4 resolve temporal_reference_coordinate to ~0.4",
+      "temporal_reference_clamped is true below the final exact low-grid anchor",
+      "after the first map build, later clamped predictor/corrector calls reuse the resolved-anchor cache",
+      "temporal_valid_fraction counts only hard uniqueness + cycle valid matches"
+    ],
+    "primary_media_question": "Does conservative occlusion-aware correspondence remove the v1 patterned copying and improve fast-motion clothing/newly revealed background without freezing, ghosting, or smearing?",
+    "stop_condition": "If v2 still fails the media gate, stop latent nearest-neighbor transport rather than sweeping weights or thresholds."
   },
   "required_outputs": [
     "workflow_json",
@@ -256,7 +301,7 @@
     ],
     "exploratory_lower_step": "C4",
     "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
-    "next_feature_path": "D10-temporal"
+    "next_feature_path": "D10-temporal-v2"
   },
   "feature_path_smoke": {
     "id": "D-smoke",
