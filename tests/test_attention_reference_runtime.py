@@ -403,6 +403,7 @@ def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
     binding.active_capture = object()
     binding.active_guidance_run = object()
     binding.guidance_state.start_coordinate = 0.5
+    binding.guidance_state.temporal_cache = object()
 
     cloned = patched.clone()
     cloned_binding = cloned.model_options[FLOW_BINDING_KEY]
@@ -417,6 +418,7 @@ def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
     assert cloned_binding.active_capture is None
     assert cloned_binding.active_guidance_run is None
     assert cloned_binding.guidance_state.start_coordinate is None
+    assert cloned_binding.guidance_state.temporal_cache is None
 
 
 def test_patch_can_explicitly_disable_inherited_capture(monkeypatch):
