@@ -31,6 +31,9 @@
         "target_width": 896,
         "target_height": 928,
         "calibrated_factor": 1
+      },
+      "inputs": {
+        "metrics": "metrics_probe.metrics"
       }
     }
   },
@@ -132,7 +135,8 @@
     "guidance_events": 0,
     "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change.",
     "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON",
-    "sa_solver_timing": "Default tau window stays tied to effective supplied sigma; remapping may move which outer indices are stochastic without changing any sampler widget."
+    "sa_solver_timing": "Default tau window stays tied to effective supplied sigma; remapping may move which outer indices are stochastic without changing any sampler widget.",
+    "resolution_event": "exactly one resolution_sigma_map event per graph execution with mode/factor/effective shift/sigma delta"
   },
   "media_gate": [
     "fast-motion clothing",
@@ -155,7 +159,7 @@
     "placement": "after Spectrum and before H3 Continuum Sampler V3.4",
     "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
     "output": {
-      "metrics": "connect to H3MetricsJSON.metrics",
+      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics",
       "autosave": "retain the same metrics JSON capture used by D10"
     }
   }
