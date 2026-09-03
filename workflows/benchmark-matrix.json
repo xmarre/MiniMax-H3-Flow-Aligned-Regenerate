@@ -198,10 +198,76 @@
     }
   ],
   "temporal_correspondence_smoke": {
-    "id": "D10-temporal",
-    "status": "closed_failed_media_retired",
+    "id": "D10-temporal-v2-rerun",
+    "status": "pending_clean_media_after_vae_confounded_runs",
     "base_reference": "accepted difficult-motion D10 direction-only run",
-    "invariant_topology": {
+    "confound": {
+      "component": "ComfyUI-H3VAE_TRT",
+      "unintended_decoder": "w4a16_awq",
+      "effect": "user identified decoder as source of repeated/patterned output",
+      "consequence": "prior v1/v2 decoded-media verdicts are invalid for temporal attribution",
+      "structural_metrics_still_valid": true
+    },
+    "prior_attempts": [
+      {
+        "id": "D10-temporal-v1",
+        "status": "media_confounded_by_vae",
+        "structural_finding": "soft uniqueness scaling admitted ambiguous repetitive-texture matches"
+      },
+      {
+        "id": "D10-temporal-v2",
+        "status": "media_confounded_by_vae",
+        "structural_telemetry": {
+          "logical_calls": 38,
+          "actual_nfe": 28,
+          "spectrum_forecasts": 10,
+          "low_logical": 22,
+          "probe_logical": 2,
+          "high_logical": 14,
+          "chunk_1_valid_fraction": 0.002202330157160759,
+          "chunk_2_valid_fraction": 0.002234794432297349,
+          "chunk_1_confidence_mean": 0.0011777953477576375,
+          "chunk_2_confidence_mean": 0.0012022219598293304,
+          "mean_temporal_rms_ratio": 0.0013664566483514915,
+          "cache_hits": 12,
+          "clamped_reference_calls": 12,
+          "guidance_calls": 14
+        },
+        "structural_finding": "hard uniqueness/cycle gating and resolved-anchor cache behaved as intended"
+      }
+    ],
+    "runtime_status": "public direction+temporal mode restored",
+    "outer_steps": 10,
+    "guidance_mode": "direction+temporal",
+    "direction_weight": 0.25,
+    "temporal_weight": 0.2,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "source_mode": "scale",
+    "source_scale": 0.83,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "vae_requirement": {
+      "decoder": "corrected decoder selected by user",
+      "forbidden_decoder": "w4a16_awq",
+      "record_exact_decoder_and_engine": true
+    },
+    "keep_identical": [
+      "seed",
+      "prompt",
+      "references",
+      "LoRAs",
+      "DiffAid",
+      "Untwist",
+      "Spectrum",
+      "sampler",
+      "scheduler",
+      "Continuum chunking",
+      "audio behavior",
+      "decode settings"
+    ],
+    "expected_transformer_topology": {
       "logical_calls": 38,
       "actual_nfe": 28,
       "spectrum_forecasts": 10,
@@ -209,63 +275,8 @@
       "probe_logical": 2,
       "high_logical": 14
     },
-    "attempts": [
-      {
-        "id": "D10-temporal-v1",
-        "status": "failed_media",
-        "media_verdict": "patterned/repeated grass texture and different/more-bugged motion artifacts",
-        "telemetry": {
-          "chunk_1": {
-            "valid_fraction": 0.4598030149936676,
-            "confidence_mean": 0.056206490844488144,
-            "similarity_mean": 0.9378970265388489,
-            "margin_mean": 0.0038141219411045313,
-            "flow_magnitude_mean": 2.554915428161621,
-            "flow_magnitude_max": 5.656854152679443
-          },
-          "chunk_2": {
-            "valid_fraction": 0.5126551389694214,
-            "confidence_mean": 0.048280809074640274,
-            "similarity_mean": 0.9590392708778381,
-            "margin_mean": 0.0026867843698710203,
-            "flow_magnitude_mean": 2.5734305381774902,
-            "flow_magnitude_max": 5.656854152679443
-          }
-        },
-        "finding": "soft uniqueness scaling admitted ambiguous repetitive-texture matches"
-      },
-      {
-        "id": "D10-temporal-v2",
-        "status": "failed_media",
-        "media_verdict": "same visible patterned grass remained after conservative gating",
-        "telemetry": {
-          "chunk_1": {
-            "valid_fraction": 0.002202330157160759,
-            "confidence_mean": 0.0011777953477576375,
-            "similarity_mean": 0.9046893119812012,
-            "margin_mean": 0.03985006362199783,
-            "flow_magnitude_mean": 3.1190474033355713,
-            "flow_magnitude_max": 5.656854152679443
-          },
-          "chunk_2": {
-            "valid_fraction": 0.002234794432297349,
-            "confidence_mean": 0.0012022219598293304,
-            "similarity_mean": 0.9479576945304871,
-            "margin_mean": 0.03009813465178013,
-            "flow_magnitude_mean": 0.9846562147140503,
-            "flow_magnitude_max": 5.656854152679443
-          },
-          "mean_temporal_rms_ratio": 0.0013664566483514915,
-          "cache_hits": 12,
-          "clamped_reference_calls": 12,
-          "guidance_calls": 14
-        },
-        "finding": "strict hard gating reduced temporal support to ~0.22% but did not remove the visible pattern"
-      }
-    ],
-    "decision": "retire adjacent-frame nearest-neighbor latent transport; do not sweep weight/radius/margin/cycle settings",
-    "runtime_status": "public direction+temporal mode removed",
-    "next_feature_path": "E"
+    "primary_media_question": "Does conservative direction+temporal improve fast-motion clothing/newly revealed grass/background on the corrected VAE without freezing, stale copying, repetition, ghosting, or smearing?",
+    "no_sweep_rule": "Do not tune temporal weight/search radius/margin/cycle tolerance before the clean corrected-VAE rerun."
   },
   "required_outputs": [
     "workflow_json",
@@ -288,7 +299,7 @@
     ],
     "exploratory_lower_step": "C4",
     "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
-    "next_feature_path": "E"
+    "next_feature_path": "D10-temporal-v2-rerun"
   },
   "feature_path_smoke": {
     "id": "D-smoke",
@@ -323,8 +334,8 @@
   },
   "resolution_shift_smoke": {
     "id": "E10-smoke",
-    "status": "pending_matched_pair",
-    "purpose": "Isolate resolution-aware shared AV sigma remapping on the same difficult-motion target-grid workflow after retiring temporal transport.",
+    "status": "pending_after_clean_temporal_rerun",
+    "purpose": "Isolate resolution-aware shared AV sigma remapping after the corrected-VAE temporal rerun resolves the current confound.",
     "geometry": {
       "source_reference_pixels_wh": [
         736,
