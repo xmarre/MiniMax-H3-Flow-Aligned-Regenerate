@@ -529,27 +529,48 @@ def _resize_packed_latent_image(
     return pack_streams((video, audio))[0]
 
 
-def _mask_shapes(latent_shapes: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
-    if len(latent_shapes) != 2:
-        raise ValueError("H3 denoise-mask geometry requires video and audio latent shapes")
-    return [(shape[0], 1, *shape[2:]) for shape in latent_shapes]
-
-
 def _resize_packed_mask(
     mask: torch.Tensor | None,
     source_shapes: list[tuple[int, ...]],
     target_shapes: list[tuple[int, ...]],
 ) -> torch.Tensor | None:
+    """Resize ComfyUI's already-prepared packed AV denoise mask.
+
+    CFGGuider expands each user mask to the corresponding latent channel count
+    before OUTER_SAMPLE wrappers run, so this boundary sees the same packed shape
+    as the AV sampler state rather than the original single-channel mask.
+    """
     if mask is None:
         return None
-    source_mask_shapes = _mask_shapes(source_shapes)
-    video_mask, audio_mask = unpack_streams(mask, source_mask_shapes)
+    if tuple(mask.shape) != (source_shapes[0][0], 1, sum(math.prod(shape[1:]) for shape in source_shapes)):
+        raise ValueError("prepared H3 denoise mask does not match source packed AV geometry")
+    video_mask, audio_mask = unpack_streams(mask, source_shapes)
     target_h, target_w = target_shapes[0][-2:]
     video_mask = resize_spatial_5d(video_mask, target_h, target_w, mode="nearest")
     packed, packed_shapes = pack_streams((video_mask, audio_mask))
-    if packed_shapes != _mask_shapes(target_shapes):
-        raise RuntimeError("resized H3 denoise mask does not match target AV geometry")
+    if packed_shapes != target_shapes:
+        raise RuntimeError("resized H3 denoise mask does not match target packed AV geometry")
     return packed
+
+
+def _merge_preserved_noise(
+    generated_noise: torch.Tensor,
+    preserved_noise: torch.Tensor,
+    denoise_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    """Keep native inpaint noise in protected regions.
+
+    MiniMax H3's scale_latent_inpaint uses the sampler's original noise for its
+    0.999 visual-conditioning injection. Replacing that noise in mask==0 regions
+    changes the protected context seen by the transformer even though ComfyUI
+    restores the clean latent after every denoised prediction.
+    """
+    if denoise_mask is None:
+        return generated_noise
+    if generated_noise.shape != preserved_noise.shape or generated_noise.shape != denoise_mask.shape:
+        raise ValueError("H3 handoff noise/mask shapes differ")
+    mask = denoise_mask.to(device=generated_noise.device, dtype=generated_noise.dtype)
+    return generated_noise * mask + preserved_noise.to(generated_noise) * (1.0 - mask)
 
 
 def _resize_target_keyframes(entry: dict[str, Any], target_h: int, target_w: int) -> dict[str, Any]:
@@ -807,6 +828,8 @@ def _run_progressive(
         latent_shapes[:] = target_shapes
     target_latent_internal = _process_latent_in(base_model, target_latent_image, target_shapes)
     target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
+    if target_input:
+        target_noise = _merge_preserved_noise(target_noise, noise, target_mask)
     binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
 
     if binding.guidance is not None and binding.guidance.mode != "off":
