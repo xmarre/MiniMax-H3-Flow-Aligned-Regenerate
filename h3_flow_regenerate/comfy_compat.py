@@ -10,11 +10,13 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .runtime import (
+    CLONE_CALLBACK_KEY,
     FLOW_BINDING_KEY,
     OUTER_WRAPPER_KEY,
     PREDICT_WRAPPER_KEY,
     PROGRESSIVE_KEY,
     FlowBinding,
+    flow_model_clone_callback,
     flow_outer_wrapper,
     flow_predict_wrapper,
 )
@@ -126,6 +128,9 @@ def patch_flow_model(
         PREDICT_WRAPPER_KEY,
         flow_predict_wrapper,
     )
+    callback_type = comfy.patcher_extension.CallbacksMP.ON_CLONE
+    patched.remove_callbacks_with_key(callback_type, CLONE_CALLBACK_KEY)
+    patched.add_callback_with_key(callback_type, CLONE_CALLBACK_KEY, flow_model_clone_callback)
     _install_layout_metrics(patched, binding.metrics)
     if attention is not None and attention.mode != "native":
         _install_attention(patched, attention, binding.metrics)
