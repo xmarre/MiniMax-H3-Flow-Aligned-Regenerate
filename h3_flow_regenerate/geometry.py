@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,33 @@ H3_VAE_SPATIAL_DOWNSAMPLE = 16
 H3_PATCH_H = 2
 H3_PATCH_W = 2
 H3_PIXEL_ALIGNMENT = H3_VAE_SPATIAL_DOWNSAMPLE * H3_PATCH_H
+H3_NATIVE_BASE_SHORT_EDGE = 768
+H3_NATIVE_CANVAS_MULTIPLE = 32
+H3_NATIVE_MAX_PIXELS = 768 * 1344
+
+
+def h3_native_reference_canvas(width: int, height: int) -> tuple[int, int]:
+    """Mirror ComfyUI MiniMax H3 adapt_canvas() for an arbitrary target aspect ratio."""
+    if isinstance(width, bool) or isinstance(height, bool):
+        raise TypeError("canvas width/height must be integers")
+    width = int(width)
+    height = int(height)
+    if width <= 0 or height <= 0:
+        raise ValueError("canvas width/height must be positive")
+    ratio = width / height
+    if ratio >= 1.0:
+        nominal_w, nominal_h = H3_NATIVE_BASE_SHORT_EDGE * ratio, H3_NATIVE_BASE_SHORT_EDGE
+    else:
+        nominal_w, nominal_h = H3_NATIVE_BASE_SHORT_EDGE, H3_NATIVE_BASE_SHORT_EDGE / ratio
+    if nominal_w * nominal_h > H3_NATIVE_MAX_PIXELS:
+        scale = math.sqrt(H3_NATIVE_MAX_PIXELS / (nominal_w * nominal_h))
+        nominal_w *= scale
+        nominal_h *= scale
+    multiple = H3_NATIVE_CANVAS_MULTIPLE
+    return (
+        max(multiple, round(nominal_w / multiple) * multiple),
+        max(multiple, round(nominal_h / multiple) * multiple),
+    )
 
 
 @dataclass(frozen=True, slots=True)
