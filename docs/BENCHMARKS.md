@@ -140,38 +140,87 @@ Decision:
   is needed.
 
 
-Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
-regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
-The source and target observations therefore differ in both regimes, keeping the resolution mapping
-non-identity while isolating it from trajectory guidance and progressive handoff.
+Row E does not generate a low-resolution first pass. Its resolution reference is the documented
+**H3-Base 768p regime**, not the arbitrary private source grid used by progressive D10. MiniMax's
+public H3 documentation states that H3-Base produces 768p and that the shorter output side is 768
+pixels by default. For the current 896x928 target, preserving aspect ratio at a 768px short side and
+snapping to H3's 32px VAE+DiT alignment yields a 768x800 analytic reference grid.
+
+This distinction matters. SD3 Eq. 23 maps between two resolution *observation regimes*; it does not
+require that a low-resolution sampling pass actually run. Using D10's 736x768 private source here
+would silently couple E to an implementation detail of the progressive experiment and would overstate
+the relative shift.
 
 ### E10 resolution-shift smoke
 
-Before spending the formal E matrix, use one matched difficult-motion pair on the user's current
-working geometry. This is a **direct target-grid** experiment, not another progressive handoff:
+Use one matched difficult-motion pair on the current standard-VAE workflow. E is a **direct
+target-grid** experiment:
 
-- source reference geometry for the analytic mapping: 736x768 pixels (46x48 latent W/H);
-- actual generation geometry: 896x928 pixels (56x58 latent W/H);
-- target/source area ratio: ~1.47101449;
-- strength-1 SD3-derived factor: ~1.21285386;
-- 10 SA-Solver-PECE outer steps;
+- analytic H3-Base reference regime: 768x800 pixels (48x50 latent W/H, 24x25 H3 spatial patches);
+- actual generation: 896x928 pixels (56x58 latent W/H, 28x29 spatial patches);
+- target/reference area ratio: ~1.35333333;
+- SD3 relative factor `alpha=sqrt(m/n)`: ~1.16332856;
+- H3 native video shift remains 12; composition gives effective video shift ~13.95994269 at strength 1;
+- 10 SA-Solver-PECE outer steps with the same `MiniMax H3 SA-Solver Scheduler / simple_control`;
 - same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
-  and decode;
-- no progressive handoff, trajectory guidance, or separate learned upscale/refine;
+  standard MiniMax H3 VAE, and decode;
+- no progressive handoff, trajectory capture/guidance, temporal guidance, or learned upscale/refine;
 - Continuum Run Storage off.
 
-Run **E0-direct-control** first with Resolution-Aware Sigmas set to `off`. Then run
-**E1-resolution-aware** with mode `resolution_aware`, strength 1.0, source 736x768 and target
-896x928. Do not tune strength before decoding this pair.
+Wire **MiniMax H3 Resolution-Aware Sigmas** directly between the existing SA-Solver scheduler SIGMAS
+output and Continuum's SIGMAS input. Keep the MODEL chain unchanged
+(DiffAid -> Untwist -> Spectrum -> Continuum).
 
-A two-chunk 10-outer-step PECE run should still produce 38 sampler logical calls, but there must be
-zero progressive sampler invocations/history boundaries and zero handoff probes. Do **not** require
-the same actual-NFE/forecast split between E0 and E1: changing the sigma coordinates can legitimately
-change Spectrum's policy decisions, so record that difference rather than forcing parity.
+Run **E0-direct-control** first through the same node with:
 
-The media gate includes motion/disocclusion, clothing, grass/background texture, anatomy, detail,
-shot dynamics, prompt/reference fidelity, and decoded audio. The resolution remap moves H3's shared AV
-coordinate; a video improvement that damages audio is not a pass.
+- `mode=off`
+- source/reference width 768, height 800
+- target width 896, height 928
+- strength 0
+
+The output SIGMAS must be bit-exact parity with the input schedule. Diagnostics should report
+`extra_shift_factor=1`, `base_video_shift=12`, and `effective_video_shift=12`.
+
+Then run **E1-resolution-aware** with only:
+
+- `mode=resolution_aware`
+- strength 1.0
+
+changed. Diagnostics should report area ratio ~1.35333333, relative factor ~1.16332856,
+effective video shift ~13.95994269, and `shared_av_coordinate=true`.
+
+The implementation first inverts H3's native video shift, applies only the **relative** SD3 map, and
+then restores H3's native video shift:
+
+[
+\sigma_v' = f_{12}\!\left(f_{\alpha}\!\left(f_{12}^{-1}(\sigma_v)\right)\right),
+\qquad
+f_s(t)=\frac{s t}{1+(s-1)t}.
+]
+
+This is not a replacement of H3's shift 12. Because H3 derives audio sigma from the same shared base
+coordinate, E1 also changes the audio schedule. That is deliberate for this isolated SIGMAS-only
+probe and makes decoded audio part of the pass/fail criterion.
+
+A two-chunk 10-outer-step PECE run should still produce **38 sampler logical calls**, but there must be:
+
+- 0 progressive sampler invocations;
+- 0 progressive history boundaries;
+- 0 exact handoff probes;
+- 0 flow/temporal guidance events.
+
+Do **not** require the same actual-NFE/forecast split between E0 and E1. Spectrum sees different sigma
+coordinates in E1 and may legitimately change forecast decisions. Record the split instead of forcing
+parity.
+
+The media gate is specifically E1 versus E0: fast-motion clothing, newly revealed grass/background,
+limb/disocclusion boundaries, anatomy, detail, shot continuity/dynamics, prompt/reference fidelity,
+Continuum seams, and decoded audio. A video improvement that damages audio or global motion is a
+failure.
+
+Do not tune strength or use `calibrated` mode before this pair is decoded. If E1 is clearly better,
+the next experiment is a **combination** test on the accepted D10 progressive+temporal path. If E1 is
+neutral/worse, leave resolution-aware sigmas experimental/off rather than beginning a strength sweep.
 
 ## Required metrics
 
