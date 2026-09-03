@@ -101,6 +101,24 @@ def test_direction_schedule_is_normalized_to_refine_start_coordinate():
     assert torch.allclose(second, expected)
 
 
+def test_guidance_state_records_bounded_correction_telemetry():
+    high = torch.full((1, 24, 1, 4, 4), 0.2)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction",
+        direction_weight=10.0,
+        cutoff=1.0,
+        max_correction_rms_ratio=0.25,
+    )
+    apply_guidance(high, run=run(values=(1.0, 0.0), coords=(0.8, 0.2)), coordinate=0.5, config=config, state=state)
+    assert state.last_schedule == pytest.approx(1.0)
+    assert state.last_correction_rms is not None
+    assert state.last_reference_rms is not None
+    assert state.last_correction_rms_ratio == pytest.approx(0.25, rel=1e-5)
+    assert state.last_clamp_scale is not None
+    assert 0.0 < state.last_clamp_scale < 1.0
+
+
 def test_low_frequency_projection_does_not_change_constant():
     constant = torch.ones(1, 24, 1, 8, 8)
     assert torch.allclose(low_frequency_projection(constant, 0.25), constant)
