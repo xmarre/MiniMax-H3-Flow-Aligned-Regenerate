@@ -131,15 +131,26 @@ This supplies high-frequency stochastic degrees of freedom without an arbitrary 
 It is a training-free conditional state, not RALU's nearest-neighbor correlated-noise formula, whose
 specific assumptions do not transfer unchanged to arbitrary H3 geometry and packed AV state.
 
-Audio's packed sampler slice is copied exactly. Target shape metadata is mutated in place so ComfyUI's
-final unpack/callback uses new geometry. Before each independent low/probe/high outer invocation,
-raw conditioning is reconstructed from `guider.original_conds`; current ComfyUI can then resolve
-percentage areas, masks, and other shape-dependent conditions against that stage's live geometry.
-For the high stage, target-grid `minimax_keyframes` are spatially resized to the new even H3 grid
-while independent `minimax_refs` retain their own geometry. H3 rebuilds layout and MM-RoPE when the
+Audio's packed sampler slice is copied exactly. Source-input mode mutates the caller's final shape
+metadata at the handoff. Target-input mode instead starts with final-grid metadata, creates a private
+low-grid AV shape for the early invocation, and returns to the caller's original final-grid shape for
+the high invocation. This second topology is required for Continuum: its session and native-masked
+continuation contracts validate spatial geometry across chunks and therefore must never observe a
+54x40 output chunk when the sequence is configured for 64x48.
+
+Before each independent low/probe/high outer invocation, raw conditioning is reconstructed from
+`guider.original_conds`; current ComfyUI can then resolve percentage areas, masks, and other
+shape-dependent conditions against that stage's live geometry. Source-input mode resizes target
+keyframes on the high stage. Target-input mode does the inverse: it temporarily downsizes
+`minimax_keyframes` for low/probe and restores the original target-grid conditioning for high.
+Independent `minimax_refs` retain their own geometry. H3 rebuilds layout and MM-RoPE when the
 signature changes.
-An isolated CPU generator, seeded by graph seed plus a fixed domain offset, makes retries reproducible
-without perturbing sampler RNG.
+
+Target-input mode also cannot reuse the caller's target-grid video noise directly as a lower-grid
+Gaussian sample without changing its distribution. It therefore derives a separate deterministic
+standard-Gaussian low-grid video tensor from the graph seed while preserving the caller's audio noise.
+The handoff high-frequency video noise uses a separate domain offset. Both generators are isolated
+from the sampler RNG.
 
 `auto_compute` is a deterministic, bounded handoff heuristic that moves the base coordinate later
 as the target/source area ratio grows. It uses no model calls and is reported in metrics. It is a
@@ -157,7 +168,8 @@ benchmark setting until decoded runs establish a better policy.
   do not renormalize the split coordinate to the probe invocation's first sigma.
 - **Continuum:** selection includes session/chunk identity and a bounded content fingerprint of
   raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
-  entire Qwen/reference tensors back from the GPU.
+  entire Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
+  target-input topology so Continuum's output/session/native-mask geometry stays final-sized.
 - **Failure:** low capture aborts; guidance state clears in `finally`.
 - **Denoise masks:** current ComfyUI inpainting semantics combine the mask with a preserved sampler
   `latent_image`. Progressive mode resizes only the single-channel video mask, preserves the audio
