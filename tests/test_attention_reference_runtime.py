@@ -562,7 +562,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     packed_mask, _ = pack_streams((video_mask, audio_mask))
     source_video = torch.randn(1, 24, 1, 4, 4)
     source_audio = target_audio.clone()
-    source_raw, source_shapes = pack_streams((source_video, source_audio))
+    source_raw, _source_shapes = pack_streams((source_video, source_audio))
     source_x0 = source_raw.clone()
     sigmas = torch.tensor([1.0, 0.9, 0.7, 0.4, 0.0])
 
@@ -593,7 +593,10 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                     tensor.shape
                     for tensor in unpack_streams(
                         mask,
-                        [(latent_shapes[0][0], 1, *latent_shapes[0][2:]), (latent_shapes[1][0], 1, *latent_shapes[1][2:])],
+                        [
+                            (latent_shapes[0][0], 1, *latent_shapes[0][2:]),
+                            (latent_shapes[1][0], 1, *latent_shapes[1][2:]),
+                        ],
                     )
                 )
             calls.append(
