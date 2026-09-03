@@ -806,6 +806,9 @@ def _run_progressive(
         target_hw=(target_h, target_w),
     )
 
+    sampler_invocation_count = 0
+    history_boundary_count = 0
+
     def low_callback(step, x0, x, _total):
         if callback is None:
             return None
@@ -826,6 +829,7 @@ def _run_progressive(
         )
         low_started = time.perf_counter()
         try:
+            sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
             with _flow_stage_contract(guider, "low"):
                 low_result = executor(
@@ -861,6 +865,8 @@ def _run_progressive(
             # as DiffAid must still see the full H3 sigma reference. The explicit
             # refinement contract provides that reference without carrying solver or
             # Spectrum history across the split.
+            sampler_invocation_count += 1
+            history_boundary_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
             binding.metrics.increment("progressive_history_boundaries")
             with _flow_stage_contract(guider, "probe"), _high_stage_contract(guider):
@@ -940,6 +946,8 @@ def _run_progressive(
             template=conditioning_template,
             target_video_hw=None if target_input else (target_h, target_w),
         )
+        sampler_invocation_count += 1
+        history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
         with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
@@ -967,8 +975,8 @@ def _run_progressive(
             target_shape=target_shapes[0],
             audio_state_copied=True,
             separate_sampler_invocations=True,
-            sampler_invocation_count=binding.metrics.counters.get("progressive_sampler_invocations", 0),
-            history_boundary_count=binding.metrics.counters.get("progressive_history_boundaries", 0),
+            sampler_invocation_count=sampler_invocation_count,
+            history_boundary_count=history_boundary_count,
             exact_probe_performed=True,
             high_stage_exact_prefix_requested=1,
             high_stage_first_call_actual=first_high_actual,
