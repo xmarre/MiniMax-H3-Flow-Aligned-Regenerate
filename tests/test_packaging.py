@@ -19,3 +19,17 @@ def test_custom_node_root_registration_smoke():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
+
+
+def test_progressive_nodes_expose_all_selectable_guidance_controls():
+    from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
+
+    for node in (H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff):
+        required = node.INPUT_TYPES()["required"]
+        assert {
+            "guidance_mode",
+            "direction_weight",
+            "acceleration_weight",
+            "consistency_weight",
+            "low_frequency_cutoff",
+        }.issubset(required)
