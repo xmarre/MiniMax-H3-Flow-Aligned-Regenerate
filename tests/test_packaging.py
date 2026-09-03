@@ -1,4 +1,6 @@
 import importlib.util
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -33,3 +35,34 @@ def test_progressive_nodes_expose_all_selectable_guidance_controls():
             "consistency_weight",
             "low_frequency_cutoff",
         }.issubset(required)
+
+
+def test_metrics_json_output_node_saves_unique_json(monkeypatch, tmp_path):
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.nodes import H3MetricsJSON
+
+    def get_save_image_path(filename_prefix, output_dir, image_width=0, image_height=0):
+        del image_width, image_height
+        subfolder = "bench"
+        folder = tmp_path / subfolder
+        folder.mkdir(parents=True, exist_ok=True)
+        return str(folder), "metrics", 1, subfolder, filename_prefix
+
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(
+            get_output_directory=lambda: str(tmp_path),
+            get_save_image_path=get_save_image_path,
+        ),
+    )
+
+    metrics = H3FlowMetrics()
+    metrics.event("guidance", correction_rms=0.125)
+    output = H3MetricsJSON().render(metrics, "bench/metrics")
+
+    saved = tmp_path / "bench" / "metrics_00001_.json"
+    assert saved.exists()
+    assert '"correction_rms": 0.125' in saved.read_text(encoding="utf-8")
+    assert output["result"] == (metrics.to_json(),)
+    assert output["ui"]["text"] == ["Saved metrics JSON: bench/metrics_00001_.json"]
