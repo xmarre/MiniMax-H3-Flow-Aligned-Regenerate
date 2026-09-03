@@ -98,6 +98,14 @@ Therefore the SIGMAS-only experiment moves the **shared AV coordinate** and chan
 well. A video-only shift would require a different joint-state formulation and is intentionally not
 smuggled into this probe. Decoded audio is part of the E pass/fail gate.
 
+The supplied SA-Solver-PECE path remains coherent under this remap. Pinned ComfyUI builds its default
+SA stochastic interval from `model_sampling.percent_to_sigma(0.2/0.8)` and evaluates that gate against
+the supplied `sigmas[i+1]`; RefDelta forwards the default `tau_func` contract to native SA-Solver.
+Therefore E1 may move which *outer index* lies inside the stochastic interval, but it does so because
+the model's effective shared time has moved. That is part of the resolution-time remap, not an
+independent sampler knob. Spectrum likewise sees the remapped coordinates, so its exact/forecast split
+is recorded rather than forced to match E0.
+
 The node diagnostics expose the relative area ratio, extra shift factor, native video shift, effective
 video shift, and shared-AV status. Analytic tests cover exact-off parity, endpoint/monotonicity,
 native-shift composition, and the resulting AV common-coordinate law.
