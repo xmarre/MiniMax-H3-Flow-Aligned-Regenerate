@@ -159,3 +159,61 @@ def test_e_resolution_overlay_matches_analytic_contract():
     assert smoke["geometry"]["relative_shift_factor"] == pytest.approx(factor)
     assert smoke["diagnostics_gate"]["e0"]["exact_sigma_parity"] is True
     assert smoke["diagnostics_gate"]["e1"]["shared_av_coordinate"] is True
+
+
+def test_resolution_node_records_self_describing_metrics_event():
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = flow_shift(torch.linspace(1.0, 0.0, 11), 12.0)
+    metrics = H3FlowMetrics()
+    mapped, diagnostics = H3ResolutionAwareSigmas().map(
+        sigmas,
+        "resolution_aware",
+        768,
+        800,
+        896,
+        928,
+        1.0,
+        1.0,
+        metrics,
+    )
+    event = metrics.events[-1]
+    assert event.kind == "resolution_sigma_map"
+    assert event.fields["source_width"] == 768
+    assert event.fields["source_height"] == 800
+    assert event.fields["target_width"] == 896
+    assert event.fields["target_height"] == 928
+    assert event.fields["extra_shift_factor"] == pytest.approx(diagnostics["extra_shift_factor"])
+    assert event.fields["effective_video_shift"] == pytest.approx(diagnostics["effective_video_shift"])
+    assert event.fields["shared_av_coordinate"] is True
+    assert event.fields["sigma_points"] == 11
+    assert event.fields["max_abs_sigma_delta"] > 0
+    assert event.fields["exact_identity"] is False
+    assert not torch.equal(mapped, sigmas)
+
+
+def test_resolution_node_records_exact_identity_for_off_control():
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = flow_shift(torch.linspace(1.0, 0.0, 11), 12.0)
+    metrics = H3FlowMetrics()
+    mapped, _ = H3ResolutionAwareSigmas().map(
+        sigmas,
+        "off",
+        768,
+        800,
+        896,
+        928,
+        0.0,
+        1.0,
+        metrics,
+    )
+    event = metrics.events[-1]
+    assert torch.equal(mapped, sigmas)
+    assert event.kind == "resolution_sigma_map"
+    assert event.fields["extra_shift_factor"] == pytest.approx(1.0)
+    assert event.fields["effective_video_shift"] == pytest.approx(12.0)
+    assert event.fields["max_abs_sigma_delta"] == pytest.approx(0.0)
+    assert event.fields["exact_identity"] is True
