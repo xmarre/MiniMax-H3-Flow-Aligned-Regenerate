@@ -40,12 +40,15 @@ complete. It preserved the exact D10 topology and removed the patterned-VAE arti
 good and judged **maybe slightly better than the non-temporal D10 control**, but the perceptual gain is
 small enough to remain tentative rather than promoted as a proven improvement. The conservative
 `direction+temporal` path is retained as an experimental candidate at temporal weight 0.20.
-Resolution-shift-only validation is now the next active feature path. Its E10 gate keeps the existing
-MP sizing -> Scale(1.20) geometry path, but generates directly on that target grid and bypasses the
-learned Latent Upscale Refine pass. The Resolution-Aware Sigmas target width/height are driven by the
-Scale node; source width/height stay at 0/0 so the node auto-derives the aspect-matched H3-Base 768p
-reference regime. For the current 896x928 example this resolves to 768x800. The SD3-derived factor is
-composed with H3's native shift rather than replacing it. The safe default
+Resolution-shift-only validation is now the next active feature path. In the real workflow the
+1.20 scale is inside the downstream MiniMax H3 Latent Upscaler + Refine node, after Continuum sampler
+1, so it cannot supply Continuum's direct-target dimensions. E therefore keeps the existing MP node as
+the base-resolution authority and inserts a geometry-only **Refine Target Geometry** helper before
+Continuum. That helper mirrors the pinned LBH refine node's scale-by-multiplier rounding exactly at
+scale 1.20 / align 32 / keep_proportion true, but performs no latent upscale or sampling. For the
+current MP base 736x768 it resolves the direct E target to 896x928; source width/height stay at 0/0 so
+Resolution-Aware Sigmas auto-derives the aspect-matched H3-Base reference 768x800. The SD3-derived
+factor is composed with H3's native shift rather than replacing it. The safe default
 for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
@@ -70,6 +73,7 @@ component and is used upstream when desired.
 | MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine_state for the integrated learned-upscale/refine node | Conservative direction term |
 | MiniMax H3 Progressive Handoff | Low-grid input grows to the target grid during one full schedule | Experimental |
 | MiniMax H3 Progressive Handoff (Target Input) | Keeps the workflow/session on the final grid but runs the early H3 stage internally on a smaller grid | Experimental; Continuum-compatible topology |
+| MiniMax H3 Refine Target Geometry | Geometry-only mirror of the downstream learned-refine scale-by-multiplier sizing, for direct-target E tests | Experimental |
 | MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift; optionally records the applied map into H3 metrics | Off |
 | MiniMax H3 Reference Budget | Token diagnostics and direct-reference-only cap | Native |
 | MiniMax H3 Attention Lab | Sampled diagnostics and guarded H3-local attention | Native |
@@ -209,11 +213,14 @@ direct latent-reference rows; already encoded Qwen3-VL tokens are measured and l
 Sparse attention retains global text/reference/audio paths and global temporal video reach, but is
 an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware
 sigmas move H3's shared AV flow coordinate, so they also change the derived audio sigma schedule;
-the probe is not a video-only schedule modifier and requires decoded-audio validation. For E10,
-leave `source_width/source_height` at 0/0: the node derives the analytic H3-Base/native reference
-from the connected target aspect ratio with the pinned 768-short-edge / 768*1344 cap / 32px alignment
-rule. The target dimensions come from the existing MP -> Scale(1.20) path, and the learned Latent
-Upscale Refine node is bypassed. The current 896x928 target therefore auto-resolves to 768x800.
+the probe is not a video-only schedule modifier and requires decoded-audio validation. For E10, leave `source_width/source_height` at 0/0: the node derives the analytic H3-Base/native
+reference from the connected target aspect ratio with the pinned 768-short-edge / 768*1344 cap / 32px
+alignment rule. The target dimensions do **not** come from the downstream refine node directly. Feed
+the existing MP width/height into **Refine Target Geometry**, set scale 1.20 / align 32 /
+keep_proportion true, and feed its outputs to both Continuum width/height and Resolution-Aware Sigmas
+target_width/target_height. The actual learned Latent Upscaler + Refine node is bypassed for E. The
+current MP base 736x768 therefore resolves to direct target 896x928, which auto-resolves the H3-native
+reference to 768x800.
 
 ## Metrics and benchmarking
 
