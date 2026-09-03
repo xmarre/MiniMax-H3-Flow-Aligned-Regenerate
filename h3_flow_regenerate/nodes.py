@@ -403,13 +403,65 @@ class H3ResolutionAwareSigmas:
         return {
             "required": {
                 "sigmas": ("SIGMAS",),
-                "mode": (["off", "resolution_aware", "calibrated"], {"default": "off"}),
-                "source_width": ("INT", {"default": 864, "min": 32, "max": 8192}),
-                "source_height": ("INT", {"default": 640, "min": 32, "max": 8192}),
+                "mode": (
+                    ["off", "resolution_aware", "calibrated"],
+                    {
+                        "default": "off",
+                        "tooltip": (
+                            "off is exact SIGMAS parity. resolution_aware applies the SD3-derived "
+                            "relative area map on H3's shared AV coordinate. calibrated is research-only."
+                        ),
+                    },
+                ),
+                "source_width": (
+                    "INT",
+                    {
+                        "default": 864,
+                        "min": 32,
+                        "max": 8192,
+                        "tooltip": (
+                            "Reference/native resolution width for the uncertainty map. This does not "
+                            "cause a source-resolution sampling pass."
+                        ),
+                    },
+                ),
+                "source_height": (
+                    "INT",
+                    {
+                        "default": 640,
+                        "min": 32,
+                        "max": 8192,
+                        "tooltip": (
+                            "Reference/native resolution height for the uncertainty map. This does not "
+                            "cause a source-resolution sampling pass."
+                        ),
+                    },
+                ),
                 "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192}),
                 "target_height": ("INT", {"default": 768, "min": 32, "max": 8192}),
-                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "calibrated_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01}),
+                "strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.01,
+                        "tooltip": (
+                            "0 = no relative resolution shift; 1 = analytic sqrt(target_area/reference_area). "
+                            "Do not tune before a matched off/1.0 media pair."
+                        ),
+                    },
+                ),
+                "calibrated_factor": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.01,
+                        "max": 8.0,
+                        "step": 0.01,
+                        "tooltip": "Direct relative shift factor for controlled research only.",
+                    },
+                ),
             }
         }
 
@@ -450,6 +502,13 @@ class H3ResolutionAwareSigmas:
             ),
             "shared_av_coordinate": True,
         }
+
+
+    DESCRIPTION = (
+        "Experimental H3 shared-AV SIGMAS remap. In resolution_aware mode, source dimensions "
+        "describe the reference/native resolution regime; the node does not run a low-resolution pass. "
+        "The relative SD3 Eq.23 factor is composed with H3's native video shift rather than replacing it."
+    )
 
 
 class H3ReferenceBudget:
