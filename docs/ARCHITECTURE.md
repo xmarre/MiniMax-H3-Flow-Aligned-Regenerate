@@ -89,10 +89,12 @@ dedicated handoff probe takes precedence at the split coordinate.
 Standalone two-pass workflows may legitimately rebuild target-grid conditioning between sampler 1
 and sampler 2 (the learned H3 upscaler resizes target keyframes). The trajectory fingerprint is not
 weakened to accommodate that geometry change. Instead, **Flow-Aligned Regenerate** accepts an optional
-`source_conditioning` input and stores its bounded signature as the expected trajectory identity.
-When the input is absent, selection uses sampler 2's live guider conditioning and therefore requires
-true conditioning parity. Continuum's refine-state adapter obtains the same source identity directly
-from the exact sampler-1 positive conditioning captured in `H3_CONTINUUM_REFINE_STATE`.
+`source_conditioning` input and optional `source_negative` input, then stores the exact guider-key
+shape (`positive`, and `negative` when supplied) in the bounded signature expected from sampler 1.
+A negative without source positive is rejected. When source conditioning is absent, selection uses
+sampler 2's live guider conditioning and therefore requires true conditioning parity. Continuum's
+refine-state adapter uses a positive-only BasicGuider and obtains that source identity directly from
+the exact sampler-1 positive conditioning captured in `H3_CONTINUUM_REFINE_STATE`.
 
 ## Two-pass flow guidance
 
