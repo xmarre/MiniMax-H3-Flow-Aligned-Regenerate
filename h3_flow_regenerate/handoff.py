@@ -48,13 +48,19 @@ class ProgressiveHandoffConfig:
 
     def resolve_target(self, source_h: int, source_w: int) -> tuple[int, int]:
         if self.target_scale is not None:
-            return normalize_target_geometry(
+            target_h, target_w = normalize_target_geometry(
                 source_h=source_h,
                 source_w=source_w,
                 scale=self.target_scale,
                 policy="nearest",
             )
-        return int(self.target_latent_h), int(self.target_latent_w)
+        else:
+            target_h, target_w = int(self.target_latent_h), int(self.target_latent_w)
+        if target_h < int(source_h) or target_w < int(source_w):
+            raise ValueError("progressive handoff target must not shrink either video axis")
+        if target_h == int(source_h) and target_w == int(source_w):
+            raise ValueError("progressive handoff target must increase at least one video axis")
+        return target_h, target_w
 
     def resolve_coordinate(self, source_h: int, source_w: int, target_h: int, target_w: int) -> float:
         if self.handoff_selection == "fixed":
@@ -119,8 +125,10 @@ class ProgressiveTargetInputConfig:
             )
         else:
             source_h, source_w = int(self.source_latent_h), int(self.source_latent_w)
-        if source_h * source_w >= int(target_h) * int(target_w):
-            raise ValueError("target-input progressive source area must be smaller than the target area")
+        if source_h > int(target_h) or source_w > int(target_w):
+            raise ValueError("target-input progressive source must not exceed either target video axis")
+        if source_h == int(target_h) and source_w == int(target_w):
+            raise ValueError("target-input progressive source must reduce at least one video axis")
         return source_h, source_w
 
     def resolve_coordinate(self, source_h: int, source_w: int, target_h: int, target_w: int) -> float:
