@@ -85,66 +85,40 @@ global acceleration-weight tuning from this smoke result. If that artifact class
 the next research target should be video-time correspondence/occlusion-aware guidance rather than
 additional denoising-time acceleration strength.
 
-### D10 video-time correspondence gate
+### D10 video-time correspondence experiment — closed negative result
 
-The first `direction+temporal` smoke (**D10-temporal-v1**) completed with the expected topology:
-38 logical / 28 actual / 10 Spectrum forecast calls, 22 low + 2 exact probes + 14 high. Both
-progressive sampler walls completed without failure, geometry remained 48x46 -> 58x56, the fixed
-handoff remained schedule index 6 / coordinate ~0.400000016 / sigma ~0.888888896, and no guidance
-correction hit the RMS clamp.
+Two matched `direction+temporal` runs were completed against the accepted D10 direction-only control.
+Both preserved the expected structural topology: 38 logical / 28 actual / 10 Spectrum forecast calls,
+22 low + 2 exact probes + 14 high, 48x46 -> 58x56 geometry, handoff index 6 at coordinate
+~0.400000016 / sigma ~0.888888896, no sampler failures, and no RMS clamp activation.
 
-Decoded media **failed the quality gate**. The user observed a new repeated/patterned texture in parts
-of the grass and motion artifacts that were different and more broken than the accepted D10
-direction-only control. This is negative evidence for the v1 correspondence implementation, not a
-reason to tune the temporal weight upward.
+**D10-temporal-v1** failed decoded media with a new repeated/patterned grass texture and
+different/more-broken motion artifacts. Its telemetry showed high cosine similarity but weak
+best-vs-second-best uniqueness, so ambiguous repetitive-texture matches were still being transported.
 
-The telemetry exposed two concrete implementation problems:
+V2 therefore made the gate intentionally conservative:
 
-- per-chunk temporal similarity was high (~0.938 and ~0.959) but the best-vs-second-best match margin
-  was only ~0.00381 and ~0.00269, far below the configured `temporal_min_margin=0.02`;
-- v1 treated `temporal_min_margin` as a soft denominator rather than a rejection threshold, so
-  ambiguous repetitive-texture matches retained small nonzero weights. This produced nominal
-  `temporal_valid_fraction` values of ~0.460 and ~0.513 despite mean confidence of only ~0.056 and
-  ~0.048;
-- valid-flow magnitude averaged ~2.55-2.57 low-grid latent cells and reached the radius-4 diagonal
-  maximum ~5.657, which is implausibly aggressive for large portions of the grass/background and is
-  consistent with ambiguous repetitive-texture matching;
-- after the exact handoff probe, the captured low-grid trajectory has no support below coordinate
-  ~0.4. Requests at ~0.3/~0.2/~0.1 therefore clamp to the same ~0.4 clean-state reference. v1 keyed
-  its cache by the requested coordinate, needlessly recomputing the same correspondence map and
-  obscuring that the post-handoff temporal prior was frozen.
+- minimum similarity and uniqueness margin became hard admission criteria;
+- reverse-cycle tolerance became exact (0 latent cells);
+- post-handoff requests below the final exact low-grid anchor reused the resolved ~0.4 correspondence
+  map instead of recomputing it for each requested coordinate;
+- telemetry exposed the resolved/clamped reference coordinate.
 
-The v2 fix is deliberately narrow rather than another weight sweep:
+**D10-temporal-v2 still failed the media gate with the same visible grass pattern.** The v2 telemetry
+confirms that the new gate actually took effect: valid temporal support fell to only
+~0.2202% / ~0.2235% for the two chunks, mean confidence to ~0.00118 / ~0.00120, and mean temporal
+RMS ratio across the 14 guidance calls to ~0.00137. Post-handoff cache behavior also worked as designed:
+12/14 calls reused the resolved ~0.4 map and 12/14 calls explicitly reported a clamped reference.
+Despite that very sparse global support, the visible pattern remained.
 
-- `temporal_min_margin` is now a **hard uniqueness gate**;
-- the default reverse-cycle tolerance is exact (0 latent cells) instead of allowing a one-cell
-  round-trip discrepancy;
-- cache identity uses the resolved reference coordinate, so all post-handoff calls that clamp to the
-  same exact anchor reuse one correspondence map;
-- telemetry reports the resolved temporal reference coordinate and whether it was clamped.
+This closes the nearest-neighbor latent-transport hypothesis for this PR. Do **not** sweep
+`temporal_weight`, search radius, margin, or cycle tolerance further. The public
+`direction+temporal` mode and its runtime machinery are removed. The negative result remains
+documented because it establishes that tiny sparse high-resolution detail transport can still create
+localized visible repetition and that structural correspondence telemetry alone is not a quality gate.
 
-Run exactly one matched **D10-temporal-v2** sample before any further temporal tuning:
-
-- 10 SA-Solver-PECE outer steps;
-- Target Input `source_mode=scale`, `source_scale=0.83`;
-- fixed handoff request 0.35;
-- `guidance_mode=direction+temporal`;
-- direction 0.25, temporal 0.20, acceleration 0, consistency 0;
-- low-frequency cutoff 0.25;
-- same seed, prompt, references, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior, and
-  decode as the accepted D10 direction-only reference;
-- Continuum Run Storage off.
-
-The expected transformer topology remains 38 logical / 28 actual / 10 forecasts. On v2, post-handoff
-predictor calls below ~0.4 should normally report `temporal_reference_coordinate~=0.4`,
-`temporal_reference_clamped=true`, and `temporal_cache_hit=true` after the first map is built.
-The corrected `temporal_valid_fraction` should now describe only uniqueness- and cycle-valid matches,
-not every weakly weighted candidate.
-
-The media question is unchanged: fast-motion clothing and newly revealed grass/background must improve
-without motion freezing, stale-content copying, repeated texture, ghosting, or temporal smearing.
-If v2 still fails this gate, stop latent nearest-neighbor transport rather than continuing a parameter
-sweep.
+The active next feature path returns to **E: resolution-shift-only**, while any later motion-specific
+research must use a different non-copying/global-local formulation rather than this transport design.
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
