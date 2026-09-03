@@ -572,4 +572,3 @@ def test_temporal_correspondence_handles_single_spatial_candidate():
     assert torch.isfinite(similarity).all()
     assert torch.isinf(margin).all()
     assert torch.all(confidence > 0)
-
