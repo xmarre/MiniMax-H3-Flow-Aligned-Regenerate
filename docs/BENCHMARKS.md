@@ -242,8 +242,10 @@ borders, audio, and Continuum seams. Full clips are required; preview frames are
 The machine-readable plan is [`workflows/benchmark-matrix.json`](../workflows/benchmark-matrix.json).
 Store each workflow, metrics JSON, decoded checksum, timing log, and review sheet together.
 
-The two configuration overlays are
-[`flow-aligned-two-pass.overlay.json`](../workflows/flow-aligned-two-pass.overlay.json) and
-[`progressive-handoff.overlay.json`](../workflows/progressive-handoff.overlay.json). They deliberately
-describe the new nodes and graph insertion points instead of embedding model filenames, prompts, or
-third-party node IDs that would silently diverge from the user's canonical Continuum workflow.
+The configuration overlays are
+[`flow-aligned-two-pass.overlay.json`](../workflows/flow-aligned-two-pass.overlay.json),
+[`progressive-handoff.overlay.json`](../workflows/progressive-handoff.overlay.json), and
+[`resolution-shift-only.overlay.json`](../workflows/resolution-shift-only.overlay.json). They
+deliberately describe the new nodes and graph insertion points instead of embedding model filenames,
+prompts, or third-party node IDs that would silently diverge from the user's canonical Continuum
+workflow.
