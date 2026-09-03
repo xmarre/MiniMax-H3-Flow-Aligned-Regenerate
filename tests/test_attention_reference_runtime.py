@@ -22,13 +22,13 @@ from h3_flow_regenerate.runtime import (
     FlowBinding,
     _begin_capture,
     _conditioning_signature,
-    conditioning_signature_from_conditioning,
     _finish_capture,
     _merge_preserved_noise,
     _noise_argument,
     _resize_packed_mask,
     _run_progressive,
     _sampler_phases,
+    conditioning_signature_from_conditioning,
     flow_predict_wrapper,
 )
 
