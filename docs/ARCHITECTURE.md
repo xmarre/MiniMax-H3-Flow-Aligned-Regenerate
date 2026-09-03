@@ -135,7 +135,9 @@ Audio's packed sampler slice is copied exactly. Target shape metadata is mutated
 final unpack/callback uses new geometry. Before each independent low/probe/high outer invocation,
 raw conditioning is reconstructed from `guider.original_conds`; current ComfyUI can then resolve
 percentage areas, masks, and other shape-dependent conditions against that stage's live geometry.
-H3 rebuilds layout and MM-RoPE when the signature changes.
+For the high stage, target-grid `minimax_keyframes` are spatially resized to the new even H3 grid
+while independent `minimax_refs` retain their own geometry. H3 rebuilds layout and MM-RoPE when the
+signature changes.
 An isolated CPU generator, seeded by graph seed plus a fixed domain offset, makes retries reproducible
 without perturbing sampler RNG.
 
@@ -157,9 +159,11 @@ benchmark setting until decoded runs establish a better policy.
   raw conditioning. The fingerprint samples deterministic tensor positions rather than reading
   entire Qwen/reference tensors back from the GPU.
 - **Failure:** low capture aborts; guidance state clears in `finally`.
-- **Denoise masks:** progressive mode fails closed. Current ComfyUI inpainting semantics combine the
-  mask with a preserved sampler `latent_image`; transforming the mask without carrying that latent
-  state to the new spatial grid would inject the wrong preserved-region values.
+- **Denoise masks:** current ComfyUI inpainting semantics combine the mask with a preserved sampler
+  `latent_image`. Progressive mode resizes only the single-channel video mask, preserves the audio
+  mask, spatially transfers the external latent image, converts it through H3's normal latent-in
+  transform, and solves `noise = (x_sigma - (1-sigma) * latent_image) / (sigma * noise_scale)` so
+  the next sampler invocation starts from the exact carried state even in protected regions.
 
 ## Reference budget
 
