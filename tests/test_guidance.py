@@ -492,3 +492,63 @@ def test_temporal_guidance_recovers_known_adjacent_translation():
     assert torch.median(interior_dy).item() == pytest.approx(0.0)
     assert state.last_temporal_flow_magnitude_mean is not None
     assert state.last_temporal_flow_magnitude_mean > 0.5
+
+
+def test_temporal_min_margin_is_a_hard_rejection_threshold():
+    torch.manual_seed(15)
+    reference = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(reference)
+    high = torch.randn_like(reference)
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.5,
+        temporal_search_radius=2,
+        temporal_min_similarity=-1.0,
+        temporal_min_margin=10.0,
+        temporal_cycle_tolerance=0.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(high, run=trajectory, coordinate=0.5, config=config, state=state)
+
+    assert torch.equal(result, high)
+    assert state.last_temporal_valid_fraction == pytest.approx(0.0)
+    assert state.last_temporal_confidence_mean == pytest.approx(0.0)
+    assert state.last_temporal_rms_ratio == pytest.approx(0.0)
+
+
+def test_temporal_cache_keys_resolved_clamped_reference_coordinate():
+    torch.manual_seed(16)
+    reference = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(reference, coords=(0.8, 0.4))
+    high = reference.clone()
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=2,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.01,
+        max_correction_rms_ratio=10.0,
+    )
+
+    apply_guidance(high, run=trajectory, coordinate=0.3, config=config, state=state)
+    cached = state.temporal_cache
+    assert cached is not None
+    assert cached.coordinate == pytest.approx(0.4)
+    assert state.last_temporal_reference_coordinate == pytest.approx(0.4)
+    assert state.last_temporal_reference_clamped is True
+    assert state.last_temporal_cache_hit is False
+
+    apply_guidance(high, run=trajectory, coordinate=0.2, config=config, state=state)
+    assert state.temporal_cache is cached
+    assert state.last_temporal_reference_coordinate == pytest.approx(0.4)
+    assert state.last_temporal_reference_clamped is True
+    assert state.last_temporal_cache_hit is True
+
+
+def test_temporal_default_requires_exact_reverse_cycle():
+    assert GuidanceConfig().temporal_cycle_tolerance == pytest.approx(0.0)
