@@ -73,6 +73,7 @@ def patch_flow_model(
     attention: AttentionConfig | None = None,
     capture_enabled: bool | None = None,
     capture_forecasts: bool | None = None,
+    guidance_conditioning_signature: str | None = None,
     metrics: H3FlowMetrics | None = None,
 ) -> tuple[Any, FlowBinding]:
     validate_h3_model(model)
@@ -90,6 +91,11 @@ def patch_flow_model(
         ),
         capture_forecasts=(
             prior.capture_forecasts if capture_forecasts is None and prior is not None else bool(capture_forecasts)
+        ),
+        guidance_conditioning_signature=(
+            guidance_conditioning_signature
+            if guidance_conditioning_signature is not None
+            else (prior.guidance_conditioning_signature if prior else None)
         ),
     )
     patched.model_options[FLOW_BINDING_KEY] = binding
@@ -164,7 +170,13 @@ def _install_layout_metrics(model: Any, metrics: H3FlowMetrics) -> None:
 
 
 def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
-    allowed = {"trajectory", "guidance", "capture_enabled", "capture_forecasts"}
+    allowed = {
+        "trajectory",
+        "guidance",
+        "capture_enabled",
+        "capture_forecasts",
+        "guidance_conditioning_signature",
+    }
     unknown = set(changes) - allowed
     if unknown:
         raise TypeError(f"unknown binding fields: {sorted(unknown)}")
@@ -174,6 +186,7 @@ def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
         "metrics": binding.metrics,
         "capture_enabled": binding.capture_enabled,
         "capture_forecasts": binding.capture_forecasts,
+        "guidance_conditioning_signature": binding.guidance_conditioning_signature,
     }
     values.update(changes)
     return FlowBinding(**values)
