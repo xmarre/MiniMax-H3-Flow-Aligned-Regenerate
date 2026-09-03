@@ -78,12 +78,13 @@ The resolution node can derive this reference automatically. With source_width=s
 mirrors the pinned ComfyUI H3 `adapt_canvas()` contract from the connected target dimensions: 768px
 short edge, 768*1344 area cap, then per-axis 32px rounding.
 
-The target dimensions themselves require a separate topology fix. In the real workflow, scale=1.20 is
-inside the downstream learned Latent Upscaler + Refine node, which runs only after Continuum sampler 1.
-E therefore cannot read that target before sampling. `H3RefineTargetGeometry` mirrors the pinned LBH
-`scale by multiplier` sizing rule before Continuum: it receives the existing MP base width/height,
-applies scale 1.20 with the same LCM(align,16) grid and aspect-preserving candidate search, and outputs
-only target width/height. It performs no latent transform and no H3 sampling.
+The target dimensions themselves are metadata for the downstream refine schedule, not a new Continuum
+canvas. In the real workflow, scale=1.20 is inside the learned Latent Upscaler + Refine node after
+Continuum sampler 1. `H3RefineTargetGeometry` therefore reads the same MP base width/height in
+parallel, applies the pinned LBH `scale by multiplier` sizing rule with the same LCM(align,16) grid
+and aspect-preserving candidate search, and outputs only the target width/height needed by
+Resolution-Aware Sigmas. Those outputs must not be fed into Continuum. The helper performs no latent
+transform and no H3 sampling.
 
 For the current 896x928 target, that automatic rule gives a 768x800 analytic reference:
 
@@ -94,8 +95,9 @@ For the current 896x928 target, that automatic rule gives a 768x800 analytic ref
 - effective video shift at strength 1: ~13.95994269.
 
 The reference dimensions describe an uncertainty/resolution **regime only**. E does not execute a
-768x800 low-resolution pass. The normal learned Latent Upscale Refine node is bypassed for E; only its
-target-geometry semantics are mirrored by `H3RefineTargetGeometry` before sampler 1.
+768x800 low-resolution pass. The real learned Latent Upscale + Refine node remains enabled in both E0
+and E1; only its refine SIGMAS differ. `H3RefineTargetGeometry` mirrors only the target-size
+calculation so the sigma map can be parameterized automatically.
 
 H3 still derives audio from the resulting shared base coordinate:
 
