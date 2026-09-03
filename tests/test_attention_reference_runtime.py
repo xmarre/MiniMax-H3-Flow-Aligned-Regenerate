@@ -542,6 +542,39 @@ def test_active_flow_state_rejects_parallel_multigpu_model_calls():
     _finish_capture(binding, error=RuntimeError("multigpu unsupported"))
 
 
+def test_progressive_flow_rejects_parallel_multigpu_even_without_active_capture():
+    video = torch.zeros(1, 24, 1, 4, 4)
+    audio = torch.zeros(1, 32, 2, 5)
+    packed, _ = pack_streams((video, audio))
+    binding = FlowBinding(trajectory=H3FlowTrajectory(), capture_enabled=True)
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PROGRESSIVE_KEY: ProgressiveHandoffConfig(target_scale=1.2),
+            "transformer_options": {},
+        }
+    )
+    executor_called = False
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            nonlocal executor_called
+            executor_called = True
+            return packed
+
+    with pytest.raises(RuntimeError, match="parallel multi-GPU"):
+        flow_predict_wrapper(
+            Executor(),
+            packed,
+            torch.tensor([0.5]),
+            {"multigpu_clones": {"cuda:1": object()}, "transformer_options": {}},
+            7,
+        )
+    assert not executor_called
+
+
 def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     video = torch.full((1, 24, 1, 4, 4), 2.0)
     audio = torch.full((1, 32, 2, 5), 3.0)
