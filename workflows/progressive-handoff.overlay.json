@@ -33,7 +33,6 @@
       "guidance_mode": "direction",
       "direction_weight": 0.25,
       "acceleration_weight": 0,
-      "temporal_weight": 0,
       "consistency_weight": 0,
       "low_frequency_cutoff": 0.25
     },
