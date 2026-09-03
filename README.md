@@ -1,5 +1,205 @@
 # MiniMax H3 Flow-Aligned Regenerate
 
-Research repository for H3-native coarse-to-fine and progressive-resolution generation in ComfyUI.
+Research-grade ComfyUI nodes for H3-native coarse-to-fine generation: transactional low-resolution trajectory capture, time-aligned high-resolution guidance, and an in-flight spatial-resolution handoff.
 
-Implementation is under active development. No release is available yet.
+> [!IMPORTANT]
+> This project is an independent, training-free approximation informed by public research. It does **not** reproduce MiniMax's closed H3-Regenerate-2K model or its unreleased sparse-attention topology. Decoded media, not latent telemetry alone, is the quality gate.
+
+## Why this exists
+
+Native H3 generation at the final high-resolution grid can be weaker than a lower-resolution generation followed by learned latent upscale/refinement, but the latter repeats part of the denoising trajectory. This repository tests whether H3 can reuse low-resolution trajectory information or change spatial resolution during one schedule without paying for a full second pass.
+
+H3 is treated as its actual joint AV model: 24-channel video, 32-channel two-track audio, 16x spatial VAE compression, a `(1, 2, 2)` DiT patch, video/audio flow shifts 12/3, and a packed `text | conditioning/reference | audio | video` transformer sequence.
+
+## Status
+
+The implementation, guards, instrumentation, workflow specifications, and synthetic test suite are complete. Real decoded-media validation has now covered the integrated two-pass path and the important public Progressive Target Input settings.
+
+### Validated media results
+
+- **Integrated two-pass flow guidance:** C7=7+7, C6=7+6, C5=7+5, and exploratory C4=7+4 all completed acceptable difficult-motion smokes. This path remains useful when keeping the learned latent upscaler/refiner.
+- **Progressive Target Input:** the accepted D10 direction-only run validated the Continuum-safe split topology and restored quality to roughly baseline level after the earlier under-budgeted 7-step progressive attempt.
+- **Step-budget sweep:** on the later matched square difficult-motion setup (736x736 private source -> 896x896 target), direction-only improved perceptually from 10 -> 12 -> 14 SA-Solver-PECE outer steps. The 14-step run is the current tested quality operating point.
+- **14-step topology:** fixed handoff 0.35 snapped to unshifted coordinate ~0.358 / index 9, giving 54 logical calls, 36 actual H3 NFEs, and 18 Spectrum forecasts across two chunks. The split is effectively 9 low-grid + 5 high-grid outer steps per chunk.
+- **Auto handoff:** functional. On the matched 46x46 -> 56x56 latent setup, `auto_compute` selected 0.2875 and snapped to ~0.30/index 7, reallocating work toward the low grid. Media changed but showed no clear quality advantage over fixed 0.35.
+- **Downsample consistency:** functional at weight 0.25 and produced measurable latent corrections, but no meaningful decoded-media improvement. Do not prefer it over direction guidance from current evidence.
+- **HiFlow-style acceleration:** corrected PECE semantics are validated, but the decoded-media result is neutral/inconclusive for the fast-motion clothing/newly revealed background artifact class.
+- **Temporal correspondence:** the final matched 14-step standard-VAE `direction+temporal` run was perceptually indistinguishable from 14-step direction-only. The matcher was active but extremely sparse, so temporal remains experimental and is not promoted.
+- **Resolution-aware refine SIGMAS:** matched E0/E1 learned-refine runs completed. The mapping worked structurally, but E1 showed no relevant quality improvement over the exact-identity control. Keep this mode off/experimental.
+
+The current practical recommendation from the tested difficult-motion workflow is therefore:
+
+```text
+outer_steps = 14
+source_mode = scale
+source_scale = 0.83
+handoff_selection = fixed
+handoff_coordinate = 0.35
+guidance_mode = direction
+direction_weight = 0.25
+acceleration_weight = 0
+temporal_weight = 0
+consistency_weight = 0
+low_frequency_cutoff = 0.25
+```
+
+This is a **tested operating point**, not a universal optimum. For lower latency, 10 or 12 outer steps remain valid operating points; 12 was already perceptually better than 10 in the matched quality sweep.
+
+## Install
+
+From `ComfyUI/custom_nodes`:
+
+```bash
+git clone https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate.git
+```
+
+Restart ComfyUI. PyTorch is supplied by ComfyUI. Sibling custom nodes are not imported by this package, although the benchmark workflow uses the surrounding H3 ecosystem described below.
+
+## Nodes
+
+| Node | Purpose | Posture |
+|---|---|---|
+| MiniMax H3 Flow Trajectory | Explicit `H3_FLOW_TRAJECTORY` handle with RAM/VRAM policy | Stable infrastructure |
+| MiniMax H3 Trajectory Capture | Transactionally records denoised estimates and provenance | Stable infrastructure |
+| MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for an explicit second pass | Direction is conservative default |
+| MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine state for integrated learned refinement | Direction is conservative default |
+| MiniMax H3 Progressive Handoff | Source-grid sampler input grows to target grid during one schedule | Experimental |
+| MiniMax H3 Progressive Handoff (Target Input) | Continuum-safe target-sized topology with a private low-grid early stage | Validated experimental path |
+| MiniMax H3 Refine Target Geometry | Mirrors downstream learned-refine target sizing for sigma experiments | Experimental |
+| MiniMax H3 Resolution-Aware Sigmas | Relative H3-native resolution/time remap | Off / experimental |
+| MiniMax H3 Reference Budget | Direct-reference row diagnostics/cap | Native |
+| MiniMax H3 Attention Lab | Packed-layout diagnostics and guarded sparse-attention experiment | Native |
+| MiniMax H3 Runtime Metrics Probe | Passive sampler/model-call instrumentation | On demand |
+| MiniMax H3 Metrics JSON | Structured counters/events and autosaved benchmark artifact | On demand |
+
+## Progressive Target Input wiring
+
+For Continuum, use the Target Input node rather than the source-input progressive node:
+
+```text
+DiffAid
+  -> Untwist
+  -> Spectrum
+  -> Progressive Handoff (Target Input)
+  -> Continuum
+```
+
+Create one **Flow Trajectory** handle and connect it to Progressive Handoff (Target Input). The progressive node captures the low-grid trajectory internally; a separate **Trajectory Capture** node is not required on this path.
+
+Continuum remains configured on the final target grid. The wrapper creates a private low-grid video state for the early stage, performs an exact low-grid handoff probe, rebuilds target-grid conditioning, and starts a fresh sampler lifetime on the high grid. Audio is never spatially transformed. SA/PECE Adams history and Spectrum feature history are deliberately reset across the geometry boundary, and the first high-grid H3 call is forced actual.
+
+Use a complete 1-to-0 H3 sigma schedule. Partial low-sigma refinement schedules are rejected because their absolute flow origin is ambiguous for a progressive split.
+
+## Two-pass flow-aligned use
+
+1. Create one **Flow Trajectory** handle.
+2. Patch the low-resolution H3 model with **Trajectory Capture** and run the base sample.
+3. Perform the existing learned latent upscale/initialization.
+4. Patch the high-resolution model with **Flow-Aligned Regenerate**, or patch each Continuum `refine_state` with **Flow-Aligned Refine State** when using the integrated learned upscaler/refiner.
+5. Feed the capture metrics object into the downstream adapter's optional `metrics` input when one combined benchmark artifact is desired.
+6. Keep pass-one audio locked in the surrounding workflow.
+
+Trajectory identity includes bounded conditioning fingerprints. Exact H3 evaluations are preferred as trajectory anchors; Spectrum forecasts retain provenance and are excluded from trustworthy anchors by default.
+
+## Experimental guidance modes
+
+### `direction`
+
+The currently preferred mode. It aligns the target predicted-clean estimate toward the matched low-resolution trajectory only in low spatial frequencies and decays the correction through the high stage.
+
+### `direction+acceleration`
+
+Adapts HiFlow's adjacent velocity-difference idea to H3 by reconstructing native flow velocity from `x0 = x - sigma * v`. The PECE implementation explicitly keeps the previous **distinct-coordinate** anchor across predictor and same-coordinate corrector calls. The implementation is structurally correct, but current decoded-media evidence does not show a meaningful advantage over direction-only.
+
+### `direction+temporal`
+
+Uses bounded local adjacent-frame correspondence on captured low-grid H3 clean-state latents. Minimum similarity, best-vs-second-best margin, and exact reverse-cycle consistency are hard gates; ambiguous/disoccluded locations receive no temporal copy.
+
+The final matched D14 temporal run kept the same 54 logical / 36 actual / 18 forecast topology as D14 direction-only, but valid correspondence support was only ~0.295% in chunk 1 and ~0.084% in chunk 2. Mean temporal correction RMS was ~0.104% of baseline RMS versus ~2.19% for direction. The user saw no perceptual difference, so temporal stays experimental at reference weight 0.20 rather than being promoted or weight-swept.
+
+Earlier patterned temporal media from the TensorRT `w4a16_awq` VAE is excluded from attribution; that decoder, not temporal guidance, caused the repeated pattern.
+
+### `downsample_consistency`
+
+Compares the downsampled target predicted-clean estimate against the matched low-grid clean state and lifts the error back to the target grid. It is implemented and measurable, but the 0.25 decoded-media smoke was neutral.
+
+## Resolution-aware refine SIGMAS
+
+The resolution-aware node is a downstream learned-refine experiment. Correct placement is:
+
+```text
+existing refine scheduler SIGMAS
+            -> Resolution-Aware Sigmas
+            -> MiniMax H3 Latent Upscaler + Refine (3D).sigmas
+```
+
+Do **not** feed its output into Continuum SIGMAS. Continuum keeps its ordinary MP/base geometry. **Refine Target Geometry** may mirror the downstream refine node's scale/align calculation to supply target metadata only.
+
+The mapping composes a relative area-derived factor with H3's native video shift 12 while deriving audio sigma from the same shared flow coordinate. E0/E1 matched media showed no relevant improvement, so `mode=off` remains the recommendation.
+
+## Metrics and benchmarking
+
+Runtime events distinguish:
+
+- sampler logical calls;
+- actual H3 transformer evaluations;
+- Spectrum forecasts and promotions;
+- low/probe/high progressive stage;
+- sigma and unshifted coordinate;
+- packed layout rows;
+- trajectory transactions;
+- guidance mode/component RMS ratios;
+- handoff plan and exact probe;
+- history/reset boundaries;
+- sampler/stage wall time;
+- resolution sigma maps and fallbacks.
+
+Use [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [workflows/benchmark-matrix.json](workflows/benchmark-matrix.json) for the evidence ledger and the broader optional formal matrix. Decoded video and audio remain the pass/fail criterion.
+
+## Compatibility
+
+- **ComfyUI:** fails closed if the native H3 24/32-channel, `(1,2,2)`, shift-12/3 contract is absent.
+- **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; progressive low/probe/high stages use independent sampler lifetimes.
+- **Spectrum:** no import dependency. Actual/forecast and solver phase/outer-step metadata are consumed when available.
+- **Continuum V3.4:** multi-chunk progressive use should use Target Input so session/native-mask geometry stays target-sized.
+- **DiffAid / Untwisting RoPE:** patches stay upstream of the progressive wrapper. The high stage publishes the `h3_refinement` exact-anchor contract.
+- **Parallel multi-GPU model calls:** mutable capture/guidance/progressive state currently fails closed until an ordering contract is reviewed.
+
+## Validated source revisions
+
+Pinned executable/source contracts:
+
+- ComfyUI `1af040bf022569d7a890241c8dd79b296cda483f`
+- Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`
+- Continuum `bf25353d8bec44afea22c89717c4301ce13c2036`
+- DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
+- RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
+- Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
+- integrated H3 latent upscaler/refine `2c707492084962f7ed665e8817a05a11b14dab27`
+
+MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`.
+
+## Development
+
+```bash
+python -m pip install -e '.[test]' build
+ruff check .
+ruff format --check .
+pytest
+python -m compileall -q .
+python -m build
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RESEARCH.md](docs/RESEARCH.md), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## Limitations
+
+- The current quality recommendation comes from a limited difficult-motion workflow and is not a broad cross-prompt benchmark claim.
+- The 14-step quality sweep used the later matched square 736x736 -> 896x896 progressive setup; the earlier rectangular D10 reference remains a separate validated topology case.
+- The progressive exact handoff probe costs one visible H3 NFE per chunk.
+- Target Input derives private low-grid **video** noise from a documented standard-Gaussian CPU generator keyed by graph seed; arbitrary custom/non-Gaussian private-grid video-noise semantics cannot be preserved.
+- Progressive handoff rejects sampler objects with an explicit external `noise_sampler` closure because mutable RNG/history cannot safely cross the geometry reset.
+- Masked progressive behavior is synthetic-tested but still has less decoded-media coverage than the unmasked difficult-motion path.
+- Reference budgeting cannot retroactively change already-encoded Qwen3-VL tokens.
+- Sparse attention remains investigative and is not a reconstruction of MiniMax's proprietary sparse topology.
+- Model assets and sibling custom nodes are not bundled.

@@ -1,0 +1,258 @@
+{
+  "schema_version": 4,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "evidence_scope": "PR closure uses completed difficult-motion smoke evidence; the broader formal matrix remains optional for publication-grade claims.",
+  "seed_set": [
+    0,
+    1,
+    2
+  ],
+  "matrix_axes": {
+    "area_regimes": [
+      {
+        "id": "base_0p55mp",
+        "source_grid": [54, 40],
+        "source_pixels": [864, 640],
+        "source_megapixels": 0.55296,
+        "target_grid": [64, 48],
+        "target_pixels": [1024, 768],
+        "target_megapixels": 0.786432
+      },
+      {
+        "id": "base_0p70mp",
+        "source_grid": [62, 44],
+        "source_pixels": [992, 704],
+        "source_megapixels": 0.698368,
+        "target_grid": [64, 48],
+        "target_pixels": [1024, 768],
+        "target_megapixels": 0.786432
+      }
+    ],
+    "refine_denoise": [
+      {"value": 0.25, "role": "primary"},
+      {"value": 0.3, "role": "secondary"}
+    ],
+    "scenarios": [
+      {"id": "motion_scene_change", "requirement": "difficult motion with at least one scene or shot change"},
+      {"id": "small_people_faces", "requirement": "small or distant people/faces whose structure is visible in the final decode"},
+      {"id": "fine_text", "requirement": "legible fine text or similarly high-frequency structured detail"},
+      {"id": "reference_heavy", "requirement": "multiple image/video/reference inputs with prompt-dependent identity or composition constraints"}
+    ]
+  },
+  "fixed": ["continuum_chunks", "loras", "diffaid", "untwist", "sampler", "scheduler", "audio_behavior", "vae", "decode"],
+  "runs": [
+    {"id": "A", "mode": "native", "generation_grid": "area_regime.target_grid", "target_grid": "area_regime.target_grid"},
+    {"id": "B", "mode": "learned_upscale_baseline", "source_grid": "area_regime.source_grid", "target_grid": "area_regime.target_grid", "base_outer_steps": 7, "refine_outer_steps": 7, "denoise": "refine_denoise.value"},
+    {"id": "C7", "mode": "flow_aligned", "source_grid": "area_regime.source_grid", "target_grid": "area_regime.target_grid", "base_outer_steps": 7, "refine_outer_steps": 7, "denoise": "refine_denoise.value"},
+    {"id": "C6", "mode": "flow_aligned", "source_grid": "area_regime.source_grid", "target_grid": "area_regime.target_grid", "base_outer_steps": 7, "refine_outer_steps": 6, "denoise": "refine_denoise.value"},
+    {"id": "C5", "mode": "flow_aligned", "source_grid": "area_regime.source_grid", "target_grid": "area_regime.target_grid", "base_outer_steps": 7, "refine_outer_steps": 5, "denoise": "refine_denoise.value"},
+    {"id": "D", "mode": "progressive_target_input", "continuum_grid": "area_regime.target_grid", "internal_source_grid": "area_regime.source_grid", "target_grid": "area_regime.target_grid", "handoff_coordinate": 0.35},
+    {"id": "E", "mode": "resolution_shift_on_learned_refine", "continuum_grid": "unchanged baseline MP grid", "refine_target_grid": "downstream learned-refine target", "resolution_shift": "resolution_aware"}
+  ],
+  "completed_smokes": {
+    "two_pass_step_reduction": {
+      "status": "complete",
+      "validated": ["C7", "C6", "C5", "C4"],
+      "note": "C4=7+4 is an accepted exploratory difficult-motion smoke and remains outside the primary formal matrix."
+    },
+    "progressive_d10_rectangular": {
+      "status": "accepted",
+      "source_pixels_wh": [736, 768],
+      "target_pixels_wh": [896, 928],
+      "outer_steps": 10,
+      "handoff_selection": "fixed",
+      "handoff_coordinate": 0.35,
+      "guidance_mode": "direction",
+      "direction_weight": 0.25,
+      "topology": {
+        "logical_calls": 38,
+        "actual_nfe": 28,
+        "spectrum_forecasts": 10,
+        "low_logical": 22,
+        "low_actual": 16,
+        "low_forecast": 6,
+        "probe_actual": 2,
+        "high_logical": 14,
+        "high_actual": 10,
+        "high_forecast": 4
+      },
+      "media_verdict": "good / roughly baseline-level; fast-motion clothing and newly revealed background artifacts remained"
+    },
+    "acceleration": {
+      "status": "complete_neutral",
+      "implementation": "PECE corrected to preserve previous distinct-coordinate acceleration anchor through predictor/corrector",
+      "media_verdict": "no clear fast-motion quality improvement",
+      "decision": "retain experimental; do not tune global acceleration weight from this smoke"
+    },
+    "downsample_consistency": {
+      "status": "complete_neutral",
+      "tested_weight": 0.25,
+      "topology": "38 logical / 28 actual / 10 forecast",
+      "correction_rms_ratio_range": [0.015, 0.068],
+      "media_verdict": "looked the same; no help for fast-motion clothing smear",
+      "decision": "functional but not preferred over direction"
+    },
+    "auto_compute_handoff": {
+      "status": "complete_inconclusive",
+      "source_latent_wh": [46, 46],
+      "target_latent_wh": [56, 56],
+      "nominal_coordinate": 0.35,
+      "selected_coordinate": 0.2875,
+      "snapped_coordinate": 0.29999997223417163,
+      "snapped_index": 7,
+      "topology": {
+        "logical_calls": 38,
+        "actual_nfe": 28,
+        "spectrum_forecasts": 10,
+        "low_logical": 26,
+        "low_actual": 18,
+        "low_forecast": 8,
+        "probe_actual": 2,
+        "high_logical": 10,
+        "high_actual": 8,
+        "high_forecast": 2
+      },
+      "media_verdict": "different but no clear quality advantage over fixed 0.35",
+      "decision": "retain optional; fixed 0.35 remains quality reference"
+    },
+    "progressive_quality_sweep_square": {
+      "status": "complete",
+      "source_pixels_wh": [736, 736],
+      "source_latent_wh": [46, 46],
+      "target_pixels_wh": [896, 896],
+      "target_latent_wh": [56, 56],
+      "common": {
+        "source_mode": "scale",
+        "source_scale": 0.83,
+        "handoff_selection": "fixed",
+        "handoff_coordinate": 0.35,
+        "guidance_mode": "direction",
+        "direction_weight": 0.25,
+        "acceleration_weight": 0,
+        "temporal_weight": 0,
+        "consistency_weight": 0,
+        "low_frequency_cutoff": 0.25,
+        "sampler": "SA-Solver-PECE",
+        "vae": "standard MiniMaxH3VideoVAE"
+      },
+      "runs": [
+        {"outer_steps": 12, "handoff_index": 8, "handoff_coordinate_actual": 0.3340000817667999, "logical_calls": 46, "actual_nfe": 32, "spectrum_forecasts": 14, "media_verdict": "better than the 10-step matched setup"},
+        {"outer_steps": 14, "handoff_index": 9, "handoff_coordinate_actual": 0.35799987093732494, "handoff_sigma": 0.8699877858161926, "logical_calls": 54, "actual_nfe": 36, "spectrum_forecasts": 18, "low_logical": 34, "low_actual": 22, "low_forecast": 12, "probe_actual": 2, "high_logical": 18, "high_actual": 12, "high_forecast": 6, "media_verdict": "again slightly better; current tested quality point"}
+      ],
+      "decision": "recommend 14 fixed-0.35 direction for quality in this tested difficult-motion workflow; retain 10/12 as faster operating points and stop the step sweep at 14"
+    }
+  },
+  "temporal_correspondence_smoke": {
+    "id": "D14-temporal-final",
+    "status": "complete_neutral",
+    "base_reference": "matched D14 direction-only square quality run",
+    "vae": "standard MiniMaxH3VideoVAE",
+    "configuration": {
+      "outer_steps": 14,
+      "guidance_mode": "direction+temporal",
+      "direction_weight": 0.25,
+      "temporal_weight": 0.2,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "source_mode": "scale",
+      "source_scale": 0.83,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed"
+    },
+    "structure": {
+      "logical_calls": 54,
+      "actual_nfe": 36,
+      "spectrum_forecasts": 18,
+      "low_logical": 34,
+      "low_actual": 22,
+      "low_forecast": 12,
+      "probe_actual": 2,
+      "high_logical": 18,
+      "high_actual": 12,
+      "high_forecast": 6,
+      "progressive_sampler_invocations": 6,
+      "progressive_history_boundaries": 4
+    },
+    "temporal_telemetry": {
+      "chunk_1": {"valid_fraction": 0.0029467365238815546, "confidence_mean": 0.0015666940016672015, "similarity_mean": 0.921322762966156, "disocclusion_fraction": 0.9970532634761184},
+      "chunk_2": {"valid_fraction": 0.0008444637060165405, "confidence_mean": 0.00031434345874004066, "similarity_mean": 0.7435232400894165, "disocclusion_fraction": 0.9991555362939835},
+      "mean_temporal_rms_ratio": 0.0010393978146668007,
+      "max_temporal_rms_ratio": 0.0034803529269993305,
+      "mean_direction_rms_ratio": 0.021880870322800346
+    },
+    "media_verdict": "no perceptual difference from D14 direction-only",
+    "decision": "retain temporal as experimental only; do not promote and do not weight-sweep sparse support"
+  },
+  "step_reduction_gate": {
+    "baseline": "C7",
+    "status": "complete",
+    "validated_smoke": ["C7", "C6", "C5", "C4"],
+    "exploratory_lower_step": "C4",
+    "next_feature_path": "none_required_for_pr_closure"
+  },
+  "feature_path_smoke": {
+    "id": "D-quality-final",
+    "mode": "progressive_target_input",
+    "status": "complete",
+    "purpose": "Final matched difficult-motion quality operating point after public-setting coverage.",
+    "continuum_grid": [56, 56],
+    "internal_source_grid": [46, 46],
+    "target_pixels": [896, 896],
+    "internal_source_pixels": [736, 736],
+    "outer_steps": 14,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "guidance_mode": "direction",
+    "direction_weight": 0.25,
+    "acceleration_weight": 0,
+    "temporal_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "remove_separate_learned_refine": true,
+    "run_storage": "off",
+    "media_verdict": "current tested quality recommendation"
+  },
+  "resolution_shift_smoke": {
+    "id": "E-refine-sigma-pair",
+    "status": "complete_neutral",
+    "purpose": "Isolate the SD3-derived relative resolution shift on the downstream learned-refine SIGMAS while keeping Continuum and the real learned refiner unchanged.",
+    "topology": {
+      "continuum": "unchanged; MP width/height continue to drive Continuum directly",
+      "learned_refine": "enabled in both E0 and E1",
+      "sigma_placement": "existing refine scheduler -> H3ResolutionAwareSigmas -> MiniMax H3 Latent Upscaler + Refine (3D).sigmas",
+      "forbidden_placement": "H3ResolutionAwareSigmas must not feed Continuum.sigmas",
+      "geometry_helper": "MP width/height -> H3RefineTargetGeometry(scale=1.20, align=32, keep_proportion=true) -> Resolution-Aware Sigmas target metadata only"
+    },
+    "common": {
+      "continuum_settings": "matched and unchanged between E0/E1",
+      "refine_settings": {"enabled": true, "mode": "scale by multiplier", "scale": 1.2, "align": 32, "keep_proportion": true, "lock_audio": true, "sampler": "existing refine sampler unchanged", "scheduler": "existing refine scheduler unchanged"},
+      "progressive_handoff": false,
+      "trajectory_guidance": false,
+      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON"
+    },
+    "runs": [
+      {"id": "E0-refine-control", "resolution_sigma_mode": "off", "role": "exact identity control on the existing refine SIGMAS path", "effective_video_shift": 12, "exact_identity": true},
+      {"id": "E1-refine-resolution-aware", "resolution_sigma_mode": "resolution_aware", "role": "same learned-refine workflow with only the refine sigma coordinates remapped", "target_pixels_wh": [928, 928], "reference_pixels_wh": [768, 768], "area_ratio": 1.4600694444444444, "extra_shift_factor": 1.2083333333333333, "effective_video_shift": 14.5, "max_abs_sigma_delta": 0.04666376, "shared_av_coordinate": true, "exact_identity": false, "note": "For a square 928 target, manual 768x768 is numerically identical to source_width=source_height=0 H3-native auto reference."}
+    ],
+    "observed_structure": {"sampler_logical_calls": 52, "transformer_actual_nfe": 34, "spectrum_forecasts": 18, "progressive_sampler_invocations": 0, "progressive_history_boundaries": 0, "handoff_exact_probe_nfe": 0, "guidance_events": 0},
+    "media_verdict": "E1 provided no relevant quality improvement over E0",
+    "decision": "leave resolution-aware sigmas experimental/off; no strength or calibrated sweep",
+    "separate_observation": "First Frame/start-composition recurrence appeared in both E0 and E1 and is not attributed to the resolution remap.",
+    "geometry": {
+      "role": "analytic dynamic-target contract example retained for source-contract regression tests; the completed media smoke itself was square 928x928",
+      "reference_pixels_wh": [768, 800],
+      "target_generation_pixels_wh": [896, 928],
+      "reference_latent_wh": [48, 50],
+      "target_latent_wh": [56, 58],
+      "relative_shift_factor": 1.163328557774343,
+      "effective_video_shift_strength_1": 13.959942693292117
+    },
+    "diagnostics_gate": {
+      "e0": {"exact_sigma_parity": true, "effective_video_shift": 12},
+      "e1": {"shared_av_coordinate": true, "analytic_example_extra_shift_factor": 1.163328557774343}
+    }
+  },
+  "required_outputs": ["workflow_json", "metrics_json", "decoded_media", "decoded_sha256", "sampler_timing", "peak_vram", "host_ram", "review_sheet"]
+}
