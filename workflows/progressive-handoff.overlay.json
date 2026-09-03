@@ -56,9 +56,10 @@
     ],
     "audio": "target-grid audio noise/latent/mask preserved; no spatial transform",
     "native_masked_continuation": "previous target-grid context remains exact in Continuum; only the private low-stage copy is downscaled",
-    "denoise_mask": "target mask retained for high stage; private single-channel video mask resized only for low/probe",
+    "denoise_mask": "ComfyUI-prepared full-channel target mask retained for high stage; prepared video mask privately resized for low/probe",
     "target_keyframes": "target originals retained for high stage; private copies resized only for low/probe; minimax_refs unchanged",
     "run_storage": "off for first media validation; persistence must be validated separately before enabling",
-    "decoded_media_required": true
+    "decoded_media_required": true,
+    "protected_noise": "target-input protected regions retain Continuum's original sampler noise for MiniMax H3 scale_latent_inpaint"
   }
 }
