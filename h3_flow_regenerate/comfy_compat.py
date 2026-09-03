@@ -74,6 +74,7 @@ def patch_flow_model(
     capture_enabled: bool | None = None,
     capture_forecasts: bool | None = None,
     guidance_conditioning_signature: str | None = None,
+    clear_guidance_conditioning_signature: bool = False,
     metrics: H3FlowMetrics | None = None,
 ) -> tuple[Any, FlowBinding]:
     validate_h3_model(model)
@@ -93,11 +94,17 @@ def patch_flow_model(
             prior.capture_forecasts if capture_forecasts is None and prior is not None else bool(capture_forecasts)
         ),
         guidance_conditioning_signature=(
-            guidance_conditioning_signature
-            if guidance_conditioning_signature is not None
-            else (prior.guidance_conditioning_signature if prior else None)
+            None
+            if clear_guidance_conditioning_signature
+            else (
+                guidance_conditioning_signature
+                if guidance_conditioning_signature is not None
+                else (prior.guidance_conditioning_signature if prior else None)
+            )
         ),
     )
+    if clear_guidance_conditioning_signature and guidance_conditioning_signature is not None:
+        raise ValueError("cannot set and clear guidance conditioning signature in the same model patch")
     patched.model_options[FLOW_BINDING_KEY] = binding
     if clear_progressive and progressive is not None:
         raise ValueError("cannot set and clear progressive handoff in the same model patch")
