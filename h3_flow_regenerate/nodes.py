@@ -53,8 +53,11 @@ class H3TrajectoryCapture:
         patched, _ = patch_flow_model(
             model,
             trajectory=trajectory,
+            guidance=GuidanceConfig(mode="off"),
+            clear_progressive=True,
             capture_enabled=True,
             capture_forecasts=capture_forecasts,
+            clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -109,6 +112,7 @@ class H3FlowAlignedRegenerate:
             guidance=guidance,
             clear_progressive=True,
             capture_enabled=False,
+            clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -243,6 +247,7 @@ class H3ProgressiveHandoff:
             guidance=guidance,
             progressive=progressive,
             capture_enabled=True,
+            clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
         return patched, metrics
@@ -311,6 +316,7 @@ class H3ProgressiveTargetInputHandoff:
             guidance=guidance,
             progressive=progressive,
             capture_enabled=True,
+            clear_guidance_conditioning_signature=True,
             metrics=metrics,
         )
         return patched, metrics
