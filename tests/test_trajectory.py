@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import H3FlowTrajectory, TrajectorySample
+from h3_flow_regenerate.nodes import H3FlowTrajectoryNode
 from h3_flow_regenerate.geometry import geometry_from_video
 
 
@@ -31,6 +32,14 @@ def begin(trajectory, session="s", chunk="0"):
         layout_signature="layout",
         conditioning_signature="cond",
     )
+
+
+def test_trajectory_node_forces_fresh_prompt_local_handle():
+    changed = H3FlowTrajectoryNode.IS_CHANGED("system_ram", 16)
+    assert changed != changed  # NaN is ComfyUI's always-changed cache fingerprint.
+    first = H3FlowTrajectoryNode().create("system_ram", 16)[0]
+    second = H3FlowTrajectoryNode().create("system_ram", 16)[0]
+    assert first is not second
 
 
 def test_commit_publishes_exact_provenance_and_copies_storage():
