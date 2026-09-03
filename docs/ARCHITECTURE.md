@@ -92,6 +92,20 @@ stays inactive until prior exact state exists. This is an experimental first-dif
 not reproduce HiFlow's acceleration formulation, which is derived from changes in the reference-flow
 velocity field. Downsample consistency forms the low-grid residual before lifting it.
 
+### Continuum integrated-refine adapter
+
+Current Continuum V3.4 exposes a per-chunk `H3_CONTINUUM_REFINE_STATE` containing the fresh sampled
+MODEL, exact positive conditioning, and optional mask state. The learned H3 upscaler/refine consumes
+that state internally, so there is no external high-resolution MODEL wire to patch. The
+**Flow-Aligned Refine State** node shallow-copies the state, patches only its MODEL with read-only
+trajectory guidance, and preserves the conditioning/mask objects unchanged.
+
+The learned refine path legitimately resizes target-grid `minimax_keyframes` before sampler 2.
+Conditioning identity therefore canonicalizes only those keyframes' spatial latent bytes and H/W
+fields; non-spatial keyframe metadata, Qwen/context tensors, and independent `minimax_refs` remain
+in the fingerprint. This prevents expected low-to-high target geometry from being mistaken for
+semantic conditioning drift.
+
 ## Progressive handoff law
 
 The flow wrapper is first in ComfyUI's outer-sample chain. Progressive mode accepts only a complete
