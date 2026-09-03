@@ -86,6 +86,14 @@ topology but are stored only when explicitly requested. Exact anchors drive guid
 SA-Solver-PECE coordinates, corrected exact endpoints take precedence over predicted endpoints; a
 dedicated handoff probe takes precedence at the split coordinate.
 
+Standalone two-pass workflows may legitimately rebuild target-grid conditioning between sampler 1
+and sampler 2 (the learned H3 upscaler resizes target keyframes). The trajectory fingerprint is not
+weakened to accommodate that geometry change. Instead, **Flow-Aligned Regenerate** accepts an optional
+`source_conditioning` input and stores its bounded signature as the expected trajectory identity.
+When the input is absent, selection uses sampler 2's live guider conditioning and therefore requires
+true conditioning parity. Continuum's refine-state adapter obtains the same source identity directly
+from the exact sampler-1 positive conditioning captured in `H3_CONTINUUM_REFINE_STATE`.
+
 ## Two-pass flow guidance
 
 HiFlow's published initialization alignment changes the high-resolution sampler state before the
