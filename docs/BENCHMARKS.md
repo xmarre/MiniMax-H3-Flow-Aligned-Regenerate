@@ -11,7 +11,8 @@ Attach **MiniMax H3 Metrics JSON** to each experimental path. The output node al
 (default: `h3_flow_regenerate/metrics`), writes the current snapshot immediately, and keeps that
 same file registered as a live sink. Each later sampler completion refreshes it atomically, so a
 node that executes before the learned-refine sampler still ends with the post-refine guidance/counter
-state. The JSON string output remains available for downstream nodes. In the two-pass path, route the
+state. The file is therefore the authoritative final artifact; the node's STRING output is the
+registration-time snapshot retained for compatibility. In the two-pass path, route the
 Trajectory Capture metrics object into the Flow-Aligned Regenerate/Refine State optional `metrics`
 input so low-pass capture and high-pass guidance share one sink. Capture sampler-only wall time around
 KSampler and node time around upscaler/handoff; total prompt time is secondary.
