@@ -174,12 +174,12 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
         digest.update(_tensor_signature(value))
         return
     if isinstance(value, dict):
-        digest.update(f"dict:{len(value)}:".encode())
-        for key in sorted(value, key=lambda item: str(item)):
-            # ComfyUI's convert_cond creates a fresh UUID on each conversion.
-            # It is execution identity, not conditioning identity.
-            if str(key) == "uuid":
-                continue
+        # ComfyUI's convert_cond creates a fresh UUID on each conversion. It is
+        # execution identity, not conditioning identity, so it must be excluded
+        # from both the keyed payload *and the structural field count*.
+        keys = [key for key in value if str(key) != "uuid"]
+        digest.update(f"dict:{len(keys)}:".encode())
+        for key in sorted(keys, key=lambda item: str(item)):
             digest.update(f"key:{key!s}:".encode())
             _update_conditioning_digest(digest, value[key], depth=depth + 1)
         return
