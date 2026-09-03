@@ -63,7 +63,7 @@ def test_refine_scale_target_matches_lbh_alignment_semantics(base_width, base_he
 
 
 def test_refine_scale_target_rejects_invalid_inputs():
-    with pytest.raises(ValueError, match=">= 1.0"):
+    with pytest.raises(ValueError, match=r">= 1\.0"):
         h3_refine_scale_target_canvas(736, 768, 0.99)
     with pytest.raises(ValueError, match="positive"):
         h3_refine_scale_target_canvas(0, 768, 1.20)
