@@ -520,10 +520,14 @@ def test_active_flow_state_rejects_parallel_multigpu_model_calls():
         list(shapes),
     )
 
+    executor_called = False
+
     class Executor:
         class_obj = guider
 
         def __call__(self, x, timestep, model_options=None, seed=None):
+            nonlocal executor_called
+            executor_called = True
             return packed
 
     with pytest.raises(RuntimeError, match="parallel multi-GPU"):
@@ -534,6 +538,7 @@ def test_active_flow_state_rejects_parallel_multigpu_model_calls():
             {"multigpu_clones": {"cuda:1": object()}, "transformer_options": {}},
             7,
         )
+    assert not executor_called
     _finish_capture(binding, error=RuntimeError("multigpu unsupported"))
 
 
