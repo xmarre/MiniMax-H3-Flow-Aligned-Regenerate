@@ -25,6 +25,7 @@ from h3_flow_regenerate.runtime import (
     _begin_capture,
     _conditioning_signature,
     _finish_capture,
+    _high_stage_contract,
     _merge_preserved_noise,
     _noise_argument,
     _resize_packed_mask,
@@ -892,6 +893,37 @@ def test_reference_budget_handles_thin_aspect_ratios():
     fitted = changed[0][1]["minimax_refs"][0]["latent"]
     assert fitted.shape[-2] == 2
     assert report.direct_video_rows_after <= 5
+
+
+def test_high_stage_contract_preserves_compatible_provider_metadata():
+    previous = {
+        "api": 1,
+        "active": True,
+        "min_actual_prefix_steps": 1,
+        "sigma_reference": 1.0,
+        "source": "h3_flow_progressive_handoff",
+        "provider_note": "keep-me",
+    }
+    guider = SimpleNamespace(model_options={"transformer_options": {"h3_refinement": previous}})
+    with _high_stage_contract(guider):
+        active = guider.model_options["transformer_options"]["h3_refinement"]
+        assert active["provider_note"] == "keep-me"
+        assert active is not previous
+    assert guider.model_options["transformer_options"]["h3_refinement"] is previous
+
+
+def test_high_stage_contract_rejects_conflicting_provider_contract():
+    previous = {
+        "api": 1,
+        "active": True,
+        "min_actual_prefix_steps": 2,
+        "sigma_reference": 1.0,
+    }
+    guider = SimpleNamespace(model_options={"transformer_options": {"h3_refinement": previous}})
+    with pytest.raises(RuntimeError, match="conflicts with progressive handoff"):
+        with _high_stage_contract(guider):
+            pass
+    assert guider.model_options["transformer_options"]["h3_refinement"] is previous
 
 
 def test_progressive_rejects_explicit_stateful_noise_sampler():
