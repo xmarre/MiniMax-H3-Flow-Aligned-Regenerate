@@ -72,6 +72,8 @@ def main() -> None:
         "preprocess_conds_hooks(self.conds)",
         "filter_registered_hooks_on_conds(self.conds, self.model_options)",
         "self.conds = process_conds(",
+        "noise = noise.to(device=device, dtype=torch.float32)",
+        "latent_image = latent_image.to(device=device, dtype=torch.float32)",
     )
     require(
         args.comfy / "comfy/sampler_helpers.py",
