@@ -64,6 +64,17 @@ def sampler_name(sampler: Any) -> str:
     return str(getattr(function, "__name__", type(sampler).__name__))
 
 
+def _validate_progressive_sampler_state(sampler: Any) -> None:
+    options = getattr(sampler, "extra_options", {}) or {}
+    if not isinstance(options, dict):
+        raise TypeError("progressive handoff requires sampler extra_options to be a dictionary")
+    if options.get("noise_sampler") is not None:
+        raise ValueError(
+            "progressive handoff does not support an explicit sampler noise_sampler; "
+            "its mutable RNG/history cannot be proven reset across low/probe/high lifetimes"
+        )
+
+
 def _sampler_phases(sampler: Any, sigmas: torch.Tensor) -> tuple[tuple[int, str], ...]:
     name = sampler_name(sampler)
     outer_steps = max(0, int(sigmas.numel()) - 1)
@@ -681,6 +692,7 @@ def _run_progressive(
 ):
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    _validate_progressive_sampler_state(sampler)
     if sigmas.ndim != 1 or sigmas.numel() < 4:
         raise ValueError("progressive handoff requires a full H3 sigma schedule")
     if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
