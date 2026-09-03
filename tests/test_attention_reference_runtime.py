@@ -723,7 +723,7 @@ def test_noise_reconstruction_includes_preserved_latent_image():
     sigma = 0.4
     noise = _noise_argument(base_model, state, sigma, latent)
     reconstructed = sigma * 2.0 * noise + (1.0 - sigma) * latent
-    assert torch.allclose(reconstructed, state)
+    assert torch.allclose(reconstructed, state, atol=1e-6, rtol=1e-6)
 
 
 def test_progressive_mask_resize_uses_prepared_full_channel_av_geometry():
@@ -920,9 +920,8 @@ def test_high_stage_contract_rejects_conflicting_provider_contract():
         "sigma_reference": 1.0,
     }
     guider = SimpleNamespace(model_options={"transformer_options": {"h3_refinement": previous}})
-    with pytest.raises(RuntimeError, match="conflicts with progressive handoff"):
-        with _high_stage_contract(guider):
-            pass
+    with pytest.raises(RuntimeError, match="conflicts with progressive handoff"), _high_stage_contract(guider):
+        pass
     assert guider.model_options["transformer_options"]["h3_refinement"] is previous
 
 
