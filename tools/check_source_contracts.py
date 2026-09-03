@@ -81,6 +81,15 @@ def main() -> None:
         "callback(self, n)",
     )
     require(
+        args.comfy / "comfy/sampler_helpers.py",
+        'merge_nested_dicts(model_options["transformer_options"].setdefault("wrappers", {}), model.wrappers',
+    )
+    require(
+        args.comfy / "comfy/patcher_extension.py",
+        "for w in wrappers.get(wrapper_type, {}).values():",
+        "return self.wrappers[self.idx](self, *args, **kwargs)",
+    )
+    require(
         args.spectrum / "comfyui_spectrum_h3/refinement_compat.py",
         'REFINEMENT_REQUEST_KEY = "h3_refinement"',
         'request.get("min_actual_prefix_steps")',
