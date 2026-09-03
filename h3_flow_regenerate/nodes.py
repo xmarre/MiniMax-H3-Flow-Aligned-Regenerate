@@ -28,6 +28,13 @@ class H3FlowTrajectoryNode:
     FUNCTION = "create"
     CATEGORY = "MiniMax H3/flow regenerate"
 
+    @classmethod
+    def IS_CHANGED(cls, storage, max_runs):
+        # The trajectory is mutable execution state, not a reusable cached value.
+        # Returning NaN makes Comfy create one fresh handle for each prompt while
+        # still sharing that single handle across all downstream nodes in it.
+        return float("nan")
+
     def create(self, storage, max_runs):
         return (H3FlowTrajectory(storage=storage, max_runs=max_runs),)
 
