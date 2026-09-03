@@ -11,7 +11,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
-from h3_flow_regenerate.nodes import H3FlowAlignedRefineState, H3FlowAlignedRegenerate
+from h3_flow_regenerate.nodes import H3FlowAlignedRefineState, H3FlowAlignedRegenerate, H3RuntimeMetricsProbe
 from h3_flow_regenerate.reference import apply_reference_budget
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
@@ -282,6 +282,27 @@ class FakePatcher:
 
     def add_callback_with_key(self, callback_type, key, callback):
         self.callbacks.setdefault(callback_type, {}).setdefault(key, []).append(callback)
+
+
+def test_runtime_metrics_probe_is_observational(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    patched, metrics = H3RuntimeMetricsProbe().patch(FakePatcher())
+    binding = patched.model_options[FLOW_BINDING_KEY]
+    assert binding.metrics is metrics
+    assert binding.trajectory is None
+    assert binding.guidance is None
+    assert binding.capture_enabled is False
+    assert binding.capture_forecasts is False
+    assert PROGRESSIVE_KEY not in patched.model_options
+    assert next(iter(patched.wrappers["outer_sample"])) == "h3_flow_regenerate.outer.v1"
+    assert list(patched.wrappers["predict_noise"])[-1] == "h3_flow_regenerate.predict.v1"
 
 
 def test_model_patch_preserves_existing_wrapper_order_and_binding(monkeypatch):
