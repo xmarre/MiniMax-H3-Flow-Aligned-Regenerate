@@ -21,6 +21,15 @@ def test_custom_node_root_registration_smoke():
     assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
 
 
+def test_mutable_metrics_nodes_have_prompt_and_execution_barriers():
+    from h3_flow_regenerate.nodes import H3AttentionExperiment, H3MetricsJSON
+
+    changed = H3AttentionExperiment.IS_CHANGED(None, "diagnostic", "0", 4, 8, 8192)
+    assert changed != changed
+    required = H3MetricsJSON.INPUT_TYPES()["required"]
+    assert required["after"] == ("*",)
+
+
 def test_progressive_nodes_expose_all_selectable_guidance_controls():
     from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
 
