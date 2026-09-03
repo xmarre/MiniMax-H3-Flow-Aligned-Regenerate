@@ -327,9 +327,7 @@ def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None)
 
 
 def _active_spectrum_runtime(guider: Any) -> Any | None:
-    spectrum_binding = (getattr(guider, "model_options", None) or {}).get(
-        SPECTRUM_BINDING_KEY
-    )
+    spectrum_binding = (getattr(guider, "model_options", None) or {}).get(SPECTRUM_BINDING_KEY)
     runtime = getattr(spectrum_binding, "runtime", None)
     if runtime is None or getattr(runtime, "active_run_id", None) is None:
         return None
@@ -351,9 +349,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         )
     spectrum_runtime = _active_spectrum_runtime(guider) if binding is not None else None
     spectrum_completed_before = (
-        getattr(spectrum_runtime, "last_completed_step_id", None)
-        if spectrum_runtime is not None
-        else None
+        getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
@@ -365,9 +361,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
     spectrum_completed_after = (
-        getattr(spectrum_runtime, "last_completed_step_id", None)
-        if spectrum_runtime is not None
-        else None
+        getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
     spectrum_completed_here = (
         spectrum_runtime is not None
