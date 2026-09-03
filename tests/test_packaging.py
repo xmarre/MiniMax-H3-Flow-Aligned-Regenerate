@@ -37,7 +37,7 @@ def test_progressive_nodes_expose_all_selectable_guidance_controls():
         }.issubset(required)
 
 
-def test_metrics_json_output_node_saves_unique_json(monkeypatch, tmp_path):
+def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(monkeypatch, tmp_path):
     from h3_flow_regenerate.metrics import H3FlowMetrics
     from h3_flow_regenerate.nodes import H3MetricsJSON
 
@@ -58,11 +58,24 @@ def test_metrics_json_output_node_saves_unique_json(monkeypatch, tmp_path):
     )
 
     metrics = H3FlowMetrics()
-    metrics.event("guidance", correction_rms=0.125)
+    metrics.event("trajectory_commit", samples=8)
     output = H3MetricsJSON().render(metrics, "bench/metrics")
 
     saved = tmp_path / "bench" / "metrics_00001_.json"
     assert saved.exists()
-    assert '"correction_rms": 0.125' in saved.read_text(encoding="utf-8")
-    assert output["result"] == (metrics.to_json(),)
-    assert output["ui"]["text"] == ["Saved metrics JSON: bench/metrics_00001_.json"]
+    initial = saved.read_text(encoding="utf-8")
+    assert '"trajectory_commit"' in initial
+    assert '"guidance"' not in initial
+
+    metrics.increment("transformer_actual_nfe", 7)
+    metrics.event("guidance", correction_rms=0.125)
+    assert '"guidance"' not in saved.read_text(encoding="utf-8")
+
+    metrics.event("sampler_wall", elapsed_ms=123.0, failed=False, progressive=False)
+    final = saved.read_text(encoding="utf-8")
+    assert '"guidance"' in final
+    assert '"correction_rms": 0.125' in final
+    assert '"transformer_actual_nfe": 7' in final
+    assert '"sampler_wall"' in final
+    assert output["result"] != (metrics.to_json(),)
+    assert output["ui"]["text"] == ["Saving metrics JSON: bench/metrics_00001_.json"]
