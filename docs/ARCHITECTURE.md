@@ -60,6 +60,10 @@ inside Spectrum's PREDICT wrapper, so Spectrum's call-local copied model options
 step. Failed outer sampling records a bounded incomplete diagnostic run. Only complete runs are
 selectable. CPU storage detaches, copies as fp32, and pins when CUDA is available; VRAM storage clones.
 
+Trajectory selection is newest-attempt strict: an aborted or invalidated run for a requested
+session/chunk blocks fallback to an older successful run. This prevents a failed regeneration attempt
+from silently reactivating stale low-resolution guidance state.
+
 Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
 The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
 a guided target pass cannot become the next source trajectory by accident. Forecast calls advance
