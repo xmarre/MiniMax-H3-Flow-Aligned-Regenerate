@@ -309,8 +309,8 @@ class H3ProgressiveTargetInputHandoff:
             "required": {
                 "model": ("MODEL",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
-                "source_mode": (["pixels", "scale"], {"default": "pixels"}),
-                "source_scale": ("FLOAT", {"default": 0.84, "min": 0.1, "max": 0.99, "step": 0.01}),
+                "source_mode": (["scale", "pixels"], {"default": "scale"}),
+                "source_scale": ("FLOAT", {"default": 0.83, "min": 0.1, "max": 0.99, "step": 0.01}),
                 "source_width": ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32}),
                 "source_height": ("INT", {"default": 640, "min": 32, "max": 8192, "step": 32}),
                 "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
