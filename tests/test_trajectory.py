@@ -71,7 +71,7 @@ def test_committed_run_can_be_invalidated_after_downstream_failure():
     invalid = trajectory.invalidate(run_id, "high stage failed")
     assert not invalid.complete
     assert invalid.abort_reason == "high stage failed"
-    with pytest.raises(RuntimeError, match="no committed trajectory"):
+    with pytest.raises(RuntimeError, match="no completed run"):
         _ = trajectory.latest
 
 
