@@ -23,6 +23,7 @@ from h3_flow_regenerate.runtime import (
     _begin_capture,
     _conditioning_signature,
     _finish_capture,
+    _merge_preserved_noise,
     _noise_argument,
     _resize_packed_mask,
     _run_progressive,
@@ -428,17 +429,28 @@ def test_noise_reconstruction_includes_preserved_latent_image():
     assert torch.allclose(reconstructed, state)
 
 
-def test_progressive_mask_resize_uses_single_channel_av_geometry():
+def test_progressive_mask_resize_uses_prepared_full_channel_av_geometry():
     source_shapes = [(1, 24, 1, 4, 4), (1, 32, 2, 5)]
     target_shapes = [(1, 24, 1, 8, 6), (1, 32, 2, 5)]
-    video_mask = torch.arange(16, dtype=torch.float32).reshape(1, 1, 1, 4, 4)
-    audio_mask = torch.arange(10, dtype=torch.float32).reshape(1, 1, 2, 5)
+    video_mask = torch.arange(16, dtype=torch.float32).reshape(1, 1, 1, 4, 4).repeat(1, 24, 1, 1, 1)
+    audio_mask = torch.arange(10, dtype=torch.float32).reshape(1, 1, 2, 5).repeat(1, 32, 1, 1)
     packed_mask, _ = pack_streams((video_mask, audio_mask))
 
     resized = _resize_packed_mask(packed_mask, source_shapes, target_shapes)
-    out_video, out_audio = unpack_streams(resized, [(1, 1, 1, 8, 6), (1, 1, 2, 5)])
-    assert out_video.shape == (1, 1, 1, 8, 6)
+    out_video, out_audio = unpack_streams(resized, target_shapes)
+    assert out_video.shape == (1, 24, 1, 8, 6)
     assert torch.equal(out_audio, audio_mask)
+
+
+def test_preserved_noise_merge_keeps_native_noise_only_under_mask():
+    generated = torch.full((1, 1, 8), 7.0)
+    native = torch.arange(8, dtype=torch.float32).reshape(1, 1, 8)
+    mask = torch.tensor([0.0, 0.0, 0.5, 1.0, 1.0, 0.25, 0.75, 0.0]).reshape(1, 1, 8)
+    merged = _merge_preserved_noise(generated, native, mask)
+    expected = generated * mask + native * (1.0 - mask)
+    assert torch.equal(merged, expected)
+    assert torch.equal(merged[..., :2], native[..., :2])
+    assert torch.equal(merged[..., 3:5], generated[..., 3:5])
 
 
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
@@ -581,9 +593,9 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     target_audio = torch.randn(1, 32, 2, 5)
     target_latent, target_shapes = pack_streams((target_video, target_audio))
     target_noise = torch.randn_like(target_latent)
-    video_mask = torch.ones(1, 1, 1, 8, 6)
+    video_mask = torch.ones(1, 24, 1, 8, 6)
     video_mask[:, :, :, :2] = 0
-    audio_mask = torch.ones(1, 1, 2, 5)
+    audio_mask = torch.ones(1, 32, 2, 5)
     packed_mask, _ = pack_streams((video_mask, audio_mask))
     source_video = torch.randn(1, 24, 1, 4, 4)
     source_audio = target_audio.clone()
@@ -618,10 +630,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                     tensor.shape
                     for tensor in unpack_streams(
                         mask,
-                        [
-                            (latent_shapes[0][0], 1, *latent_shapes[0][2:]),
-                            (latent_shapes[1][0], 1, *latent_shapes[1][2:]),
-                        ],
+                        latent_shapes,
                     )
                 )
             calls.append(
@@ -663,8 +672,8 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     ]
     assert [call["shapes"][0][-2:] for call in calls] == [(4, 4), (4, 4), (8, 6)]
     assert [call["keyframe_hw"] for call in calls] == [(4, 4), (4, 4), (8, 6)]
-    assert calls[0]["mask_shapes"] == (torch.Size([1, 1, 1, 4, 4]), torch.Size([1, 1, 2, 5]))
-    assert calls[2]["mask_shapes"] == (torch.Size([1, 1, 1, 8, 6]), torch.Size([1, 1, 2, 5]))
+    assert calls[0]["mask_shapes"] == (torch.Size([1, 24, 1, 4, 4]), torch.Size([1, 32, 2, 5]))
+    assert calls[2]["mask_shapes"] == (torch.Size([1, 24, 1, 8, 6]), torch.Size([1, 32, 2, 5]))
     assert mutable_shapes == target_shapes
     assert result.shape == target_latent.shape
     assert binding.trajectory.latest.geometry.latent_h == 4
