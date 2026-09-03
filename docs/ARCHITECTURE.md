@@ -125,14 +125,14 @@ velocity field. Downsample consistency forms the low-grid residual before liftin
 
 The trajectory history is a delayed-consumer buffer in this topology: Continuum samples its base chunk list before downstream list-mapped refinement consumes the matching runs. `max_runs` therefore must be at least the number of physical refine items; the public node default is 16, matching Continuum's current maximum configured chunk count. Eviction remains bounded and deterministic. Initial validation keeps Continuum Run Storage off because cache reuse can return a previously sampled chunk without executing the current capture wrapper, leaving no fresh trajectory transaction corresponding to that refine item.
 
-Current Continuum V3.4 exposes a per-chunk `H3_CONTINUUM_REFINE_STATE` containing the fresh sampled
-MODEL, exact positive conditioning, and the sampler-boundary `noise_mask`. Native continuation masks
-are also carried on the parallel video/audio LATENT outputs. The learned H3 upscaler/refine consumes
-MODEL + positive from the refine state, but derives its refinement `denoise_mask` from the LATENT
+Current Continuum V3.4 internally captures MODEL, positive conditioning, and the sampler-boundary
+`noise_mask` for every freshly sampled chunk. Its public `H3_CONTINUUM_REFINE_STATE` deliberately
+emits only API + a fresh per-chunk MODEL + exact positive conditioning; the captured mask is split and
+reattached to the parallel video/audio LATENT outputs instead. The learned H3 upscaler/refine consumes
+MODEL + positive from the refine state and derives its refinement `denoise_mask` from the LATENT
 input. There is therefore no external high-resolution MODEL wire to patch, and the LATENT mask path
-must remain intact. The **Flow-Aligned Refine State** node shallow-copies the state, patches only its
-MODEL with read-only trajectory guidance, and preserves positive, `noise_mask`, and any future/opaque
-state fields unchanged.
+must remain intact. The **Flow-Aligned Refine State** node shallow-copies the public state, patches only
+its MODEL with read-only trajectory guidance, and preserves positive plus any future/opaque fields.
 
 The learned refine path legitimately resizes target-grid `minimax_keyframes` before sampler 2.
 The adapter computes the same content signature as CFGGuider conversion from the exact sampler-1
