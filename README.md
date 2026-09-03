@@ -164,9 +164,10 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 - No decoded-media claim is made yet.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
-- Progressive handoff currently rejects non-null denoise masks. ComfyUI's mask path also carries a
-  preserved `latent_image`; resizing only the mask would silently corrupt preserved regions at the
-  grid transition, so masked handoff remains disabled until that state transfer is implemented.
+- Progressive handoff carries ComfyUI denoise-mask semantics across the grid transition by resizing
+  the single-channel video mask, preserving the audio mask, spatially transferring the sampler
+  `latent_image`, and reconstructing the exact noise argument against that preserved latent state.
+  This path is synthetic-tested but still requires real masked Continuum media validation.
 - Reference decoupling cannot retroactively change Qwen3-VL tokens.
 - The sparse path uses bounded query chunks and may not improve wall time on every backend.
 - Model assets, the optional learned upscaler, and sibling custom nodes are not bundled.
