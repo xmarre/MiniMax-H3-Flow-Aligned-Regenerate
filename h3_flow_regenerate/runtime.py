@@ -283,6 +283,12 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     binding = _resolve_binding(guider)
     if binding is None:
         return result
+    if "multigpu_clones" in (model_options or {}) and (
+        binding.active_capture is not None or binding.active_guidance_run is not None
+    ):
+        raise RuntimeError(
+            "H3 flow trajectory capture/guidance does not support parallel multi-GPU model calls"
+        )
     transformer = (model_options or {}).get("transformer_options") or {}
     probe_context = transformer.get(PROBE_CONTEXT_KEY)
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
