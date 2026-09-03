@@ -603,9 +603,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                 {
                     "name": call_sampler.sampler_function.__name__,
                     "shapes": list(latent_shapes),
-                    "keyframe_hw": tuple(
-                        guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]
-                    ),
+                    "keyframe_hw": tuple(guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]),
                     "mask_shapes": mask_shapes,
                 }
             )
@@ -646,6 +644,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert result.shape == target_latent.shape
     assert binding.trajectory.latest.geometry.latent_h == 4
     assert binding.trajectory.latest.geometry.latent_w == 4
+
 
 @pytest.mark.parametrize(
     ("name", "calls", "phases"),
