@@ -15,6 +15,7 @@ from h3_flow_regenerate.nodes import H3FlowAlignedRefineState
 from h3_flow_regenerate.reference import apply_reference_budget
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
+    PROBE_CONTEXT_KEY,
     PROGRESSIVE_KEY,
     SPECTRUM_ACTUAL_KEY,
     SPECTRUM_OUTER_STEP_KEY,
@@ -545,6 +546,45 @@ def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     assert run.samples[0].call_index == 1
     assert binding.metrics.counters["spectrum_forecast_calls"] == 1
     assert binding.metrics.counters["transformer_actual_nfe"] == 1
+
+
+def test_progressive_probe_rejects_explicit_spectrum_forecast():
+    video = torch.full((1, 24, 1, 4, 4), 2.0)
+    audio = torch.full((1, 32, 2, 5), 3.0)
+    packed, shapes = pack_streams((video, audio))
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(trajectory=trajectory, capture_enabled=True)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding, "transformer_options": {}},
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+
+    def native():
+        pass
+
+    native.__name__ = "sample_euler"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    _begin_capture(binding, guider, sampler, torch.tensor([1.0, 0.5, 0.0]), list(shapes))
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options=None, seed=None):
+            return packed
+
+    options = {
+        "transformer_options": {
+            PROBE_CONTEXT_KEY: {"outer_step": 1},
+            SPECTRUM_ACTUAL_KEY: False,
+            SPECTRUM_PHASE_KEY: "predicted",
+            SPECTRUM_OUTER_STEP_KEY: 1,
+        }
+    }
+    with pytest.raises(RuntimeError, match="exact probe was forecast"):
+        flow_predict_wrapper(Executor(), packed, torch.tensor([0.5]), options, 7)
+    _finish_capture(binding, error=RuntimeError("probe forecast"))
+    assert not trajectory.runs[-1].complete
+    assert trajectory.runs[-1].samples == ()
 
 
 def test_noise_reconstruction_includes_preserved_latent_image():
