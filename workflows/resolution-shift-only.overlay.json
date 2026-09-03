@@ -1,0 +1,225 @@
+{
+  "schema_version": 2,
+  "kind": "comfyui_workflow_overlay",
+  "purpose": "Matched E0/E1 direct-target test of the SD3-derived relative resolution shift on MiniMax H3. The user's existing MP node still determines the normal sampler-1 base canvas; a new geometry-only helper mirrors the downstream refine node's scale=1.20 target before Continuum so E can sample directly at the post-refine canvas without executing learned upscale/refine.",
+  "model_chain": {
+    "keep": "existing DiffAid -> Untwist -> Spectrum MODEL chain, then H3RuntimeMetricsProbe, then H3 Continuum Sampler V3.4",
+    "remove_or_bypass": [
+      "H3ProgressiveTargetInputHandoff",
+      "H3ProgressiveHandoff",
+      "H3TrajectoryCapture",
+      "H3FlowAlignedRegenerate",
+      "H3FlowAlignedRefineState",
+      "MiniMax H3 Latent Upscaler + Refine (3D) execution"
+    ]
+  },
+  "sigma_path": {
+    "upstream_scheduler": {
+      "node": "MiniMax H3 SA-Solver Scheduler",
+      "widgets": {
+        "steps": 10,
+        "denoise": 1,
+        "mode": "simple_control"
+      }
+    },
+    "insert": {
+      "node": "H3ResolutionAwareSigmas",
+      "placement": "between the SA-Solver scheduler SIGMAS output and H3 Continuum Sampler V3.4 SIGMAS input",
+      "common_widgets": {
+        "source_width": 0,
+        "source_height": 0,
+        "calibrated_factor": 1
+      },
+      "inputs": {
+        "metrics": "metrics_probe.metrics",
+        "target_width": "H3RefineTargetGeometry.target_width",
+        "target_height": "H3RefineTargetGeometry.target_height"
+      }
+    }
+  },
+  "reference_basis": {
+    "source_role": "analytic H3-Base/native resolution regime; auto-derived from the geometry-only pre-sampler target; no source-resolution pass is executed",
+    "official_basis": "H3-Base is documented as 768p and H3 output shorter side defaults to 768 px",
+    "aspect_matching": "source_width=source_height=0 invokes the pinned H3 native canvas rule: 768px short edge, 768*1344 area cap, per-axis round to 32. For the current 896x928 target this resolves to 768x800.",
+    "source_latent_wh": [
+      48,
+      50
+    ],
+    "target_latent_wh": [
+      56,
+      58
+    ],
+    "source_spatial_patch_wh": [
+      24,
+      25
+    ],
+    "target_spatial_patch_wh": [
+      28,
+      29
+    ],
+    "target_to_source_area_ratio": 1.3533333333333333,
+    "relative_shift_factor": 1.163328557774343,
+    "native_video_shift": 12,
+    "effective_video_shift_strength_1": 13.959942693292117,
+    "current_example_target_wh": [
+      896,
+      928
+    ],
+    "current_example_auto_reference_wh": [
+      768,
+      800
+    ],
+    "note": "Current example: MP base 736x768 -> geometry-only refine scale 1.20 -> direct E target 896x928 -> auto H3-native reference 768x800. All target dimensions remain dynamic."
+  },
+  "runs": [
+    {
+      "id": "E0-direct-control",
+      "widgets": {
+        "mode": "off",
+        "strength": 0
+      },
+      "required_diagnostics": {
+        "extra_shift_factor": 1,
+        "base_video_shift": 12,
+        "effective_video_shift": 12,
+        "shared_av_coordinate": true,
+        "reference_mode": "h3_native_auto",
+        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
+      },
+      "invariant": "Resolution-Aware Sigmas output must be bit-exact equal to its input SIGMAS."
+    },
+    {
+      "id": "E1-resolution-aware",
+      "widgets": {
+        "mode": "resolution_aware",
+        "strength": 1
+      },
+      "required_diagnostics": {
+        "area_ratio": 1.3533333333333333,
+        "extra_shift_factor": 1.163328557774343,
+        "base_video_shift": 12,
+        "effective_video_shift": 13.959942693292117,
+        "shared_av_coordinate": true,
+        "reference_mode": "h3_native_auto",
+        "note": "For the current 896x928 target. Other picture aspects/sizes derive their own H3-native reference automatically.",
+        "target_geometry": "MP base -> H3RefineTargetGeometry(scale=1.20)"
+      },
+      "only_intended_change_from_E0": "mode off -> resolution_aware and strength 0 -> 1"
+    }
+  ],
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "widgets": {
+      "width": "H3RefineTargetGeometry.target_width",
+      "height": "H3RefineTargetGeometry.target_height",
+      "run_storage": "Off"
+    },
+    "keep_existing": [
+      "H3RefineTargetGeometry at scale 1.20 / align 32 / keep_proportion true",
+      "MP sizing node",
+      "chunking",
+      "conditioning",
+      "audio behavior",
+      "native masks",
+      "decode"
+    ]
+  },
+  "vae": {
+    "required": "standard MiniMaxH3VideoVAE via native VAELoader",
+    "forbidden_for_this_gate": "MiniMaxH3TRTVAE w4a16_awq"
+  },
+  "matched_invariants": [
+    "MP sizing inputs/base dimensions",
+    "refine target geometry scale=1.20 / align=32 / keep_proportion=true",
+    "MP sizing",
+    "seed",
+    "prompt",
+    "references",
+    "LoRAs",
+    "DiffAid",
+    "Untwist",
+    "Spectrum",
+    "sampler",
+    "scheduler base schedule",
+    "Continuum chunking",
+    "audio behavior",
+    "VAE",
+    "decode"
+  ],
+  "expected_structure": {
+    "sampler_logical_calls": 38,
+    "progressive_sampler_invocations": 0,
+    "progressive_history_boundaries": 0,
+    "handoff_exact_probe_nfe": 0,
+    "guidance_events": 0,
+    "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change.",
+    "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON",
+    "sa_solver_timing": "Default tau window stays tied to effective supplied sigma; remapping may move which outer indices are stochastic without changing any sampler widget.",
+    "resolution_event": "exactly one resolution_sigma_map event per graph execution with mode/factor/effective shift/sigma delta"
+  },
+  "media_gate": [
+    "fast-motion clothing",
+    "newly revealed grass/background",
+    "limb and disocclusion boundaries",
+    "anatomy",
+    "detail",
+    "shot continuity and dynamics",
+    "prompt/reference fidelity",
+    "Continuum seams",
+    "decoded audio"
+  ],
+  "decision_rule": {
+    "before_decoding": "Do not tune strength or calibrated_factor.",
+    "if_positive": "Only then test the same remap combined with accepted D10 progressive+temporal.",
+    "if_neutral_or_negative": "Leave resolution-aware sigmas experimental/off; do not start a strength sweep from this pair."
+  },
+  "metrics_probe": {
+    "node": "H3RuntimeMetricsProbe",
+    "placement": "after Spectrum and before H3 Continuum Sampler V3.4",
+    "purpose": "passive model/sampler-call telemetry only; no capture, guidance, progressive, or attention behavior",
+    "output": {
+      "metrics": "connect to both H3ResolutionAwareSigmas.metrics and H3MetricsJSON.metrics; leave the probe's optional metrics input unconnected",
+      "autosave": "retain the same metrics JSON capture used by D10"
+    }
+  },
+  "target_geometry": {
+    "base_source": "existing pre-Continuum MP sizing node outputs",
+    "insert": {
+      "node": "H3RefineTargetGeometry",
+      "display_name": "MiniMax H3 Refine Target Geometry [Experimental]",
+      "placement": "between the existing MP width/height outputs and the dimensions used by Continuum for E",
+      "widgets": {
+        "scale": 1.2,
+        "align": 32,
+        "keep_proportion": true
+      },
+      "inputs": {
+        "base_width": "existing MP width",
+        "base_height": "existing MP height"
+      },
+      "outputs": {
+        "target_width": [
+          "H3 Continuum Sampler V3.4.width",
+          "H3ResolutionAwareSigmas.target_width"
+        ],
+        "target_height": [
+          "H3 Continuum Sampler V3.4.height",
+          "H3ResolutionAwareSigmas.target_height"
+        ]
+      }
+    },
+    "semantics": "Mirrors the integrated LBH refine node's scale-by-multiplier sizing before sampler 1. It performs no learned upscale and no refinement sampling.",
+    "current_example": {
+      "mp_base_wh": [
+        736,
+        768
+      ],
+      "scale": 1.2,
+      "resolved_target_wh": [
+        896,
+        928
+      ]
+    },
+    "requirement": "No manual per-image resolution calculation."
+  }
+}
