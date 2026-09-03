@@ -422,8 +422,9 @@ class H3RefineTargetGeometry:
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
     DESCRIPTION = (
         "Geometry-only mirror of the integrated MiniMax H3 Latent Upscaler + Refine "
-        "scale-by-multiplier sizing. Feed the existing pre-Continuum MP width/height here, "
-        "then use the outputs as the direct Continuum target for E0/E1. This node performs "
+        "scale-by-multiplier sizing. Feed the same MP width/height that already drive Continuum, "
+        "then use these target dimensions only to parameterize Resolution-Aware Sigmas on the "
+        "downstream refine SIGMAS path. Do not feed them back into Continuum. This node performs "
         "no latent upscale and no sampling."
     )
 
@@ -446,7 +447,10 @@ class H3RefineTargetGeometry:
                 "keep_proportion": bool(keep_proportion),
                 "target_width": int(target_width),
                 "target_height": int(target_height),
-                "semantics": "LBH refine scale-by-multiplier geometry only; no upscale/refine execution",
+                "semantics": (
+                    "LBH refine scale-by-multiplier geometry only; target metadata for the "
+                    "downstream refine sigma map, never a Continuum resize"
+                ),
             },
         )
 
