@@ -53,7 +53,8 @@ component and is used upstream when desired.
 | MiniMax H3 Trajectory Capture | Transactionally records exact denoised estimates | Stable infrastructure |
 | MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for an explicit second-pass MODEL | Conservative direction term |
 | MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine_state for the integrated learned-upscale/refine node | Conservative direction term |
-| MiniMax H3 Progressive Handoff | Low-grid early steps, exact probe, conditional re-noise, high-grid late steps | Experimental |
+| MiniMax H3 Progressive Handoff | Low-grid input grows to the target grid during one full schedule | Experimental |
+| MiniMax H3 Progressive Handoff (Target Input) | Keeps the workflow/session on the final grid but runs the early H3 stage internally on a smaller grid | Experimental; Continuum-compatible topology |
 | MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift | Off |
 | MiniMax H3 Reference Budget | Token diagnostics and direct-reference-only cap | Native |
 | MiniMax H3 Attention Lab | Sampled diagnostics and guarded H3-local attention | Native |
@@ -94,22 +95,30 @@ H/W metadata while retaining their non-spatial metadata; Qwen/context tensors an
 
 ### Progressive handoff use
 
-Patch the model with **Progressive Handoff** before the sampler. The node requires a complete
-H3 1-to-0 sigma schedule, splits it at the closest valid unshifted coordinate, invokes the
-selected native sampler for the low stage, performs one explicit H3 clean-state probe, creates
-the target-grid conditional state, and starts a fresh sampler invocation on the high grid.
-Partial low-sigma refinement schedules are rejected because their absolute flow origin is
-ambiguous for a progressive split.
+Both progressive nodes require a complete H3 1-to-0 sigma schedule, split it at the closest valid
+unshifted coordinate, invoke the selected native sampler for the low stage, perform one explicit H3
+clean-state probe, create the target-grid conditional state, and start a fresh sampler invocation on
+the high grid. Partial low-sigma refinement schedules are rejected because their absolute flow origin
+is ambiguous for a progressive split.
+
+Use **Progressive Handoff** when the sampler input itself is the low grid and changing the workflow's
+output latent geometry is acceptable. Use **Progressive Handoff (Target Input)** for Continuum V3.4:
+configure Continuum at the final 1024x768 target, set the progressive source to 864x640, and patch the
+MODEL entering Continuum. The wrapper derives a fresh low-grid video noise tensor, downsizes the
+target-grid latent/mask/keyframes for the low and probe stages, then returns to the untouched target
+latent/mask/keyframe contract for the high stage. Continuum therefore always receives and stores
+64x48 output chunks, so native masked continuation and session geometry remain target-sized across
+multiple chunks.
 
 The split invocation is the reset contract: SA/PECE Adams history and Spectrum hidden-feature
 history cannot cross the geometry boundary. The exact probe and high stage advertise
-`h3_refinement` API v1 with a full-schedule sigma reference; the high stage additionally
-requests a mandatory actual prefix. Audio is copied without a
-spatial transform. Handoff noise comes from a documented CPU generator derived from the graph
-seed, so retries reproduce the same state.
+`h3_refinement` API v1 with a full-schedule sigma reference; the high stage additionally requests
+a mandatory actual prefix. Audio is never spatially transformed. In target-input mode the original
+audio noise/latent/mask are preserved while only the early video grid is reduced. Handoff and
+low-grid source noise use isolated documented CPU generators derived from the graph seed.
 
-Target latent height and width are normalized to even values. H3's native circular padding is
-never used as an alignment mechanism; this prevents the known odd-grid flashing-border failure.
+All source/target latent H/W are normalized to even values. H3's native circular padding is never
+used as an alignment mechanism; this prevents the known odd-grid flashing-border failure.
 
 ## Compatibility
 
@@ -120,7 +129,8 @@ never used as an alignment mechanism; this prevents the known odd-grid flashing-
 - **Spectrum:** no import dependency. Actual/forecast, solver-phase, and outer-step metadata are
   consumed when present. A new downstream outer-sample execution is used per geometry.
 - **Continuum:** session/chunk metadata is part of trajectory selection. A different chunk cannot
-  silently consume the prior chunk's trajectory.
+  silently consume the prior chunk's trajectory. Multi-chunk progressive use must use the Target
+  Input node so Continuum's latent/session geometry remains on the final grid.
 - **DiffAid / Untwisting RoPE:** patches stay in the downstream path. The `h3_refinement` exact-anchor
   contract is published during the high stage.
 - **Other attention overrides:** experimental sparse attention delegates to the existing provider.
