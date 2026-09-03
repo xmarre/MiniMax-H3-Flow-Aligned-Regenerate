@@ -683,7 +683,6 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert layout_wrapper._h3_flow_metrics is metrics
 
 
-
 def test_continuum_refine_state_requires_exact_capture_provenance(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
