@@ -164,8 +164,12 @@ private low-stage callback tensors are spatially lifted back to the target video
 closure is invoked. This keeps previews and any callback consumer from trying to unpack a private
 source-grid tensor with target-grid metadata.
 
-Before each independent low/probe/high outer invocation, raw conditioning is reconstructed from
-`guider.original_conds`; current ComfyUI can then resolve percentage areas, masks, and other
+Before each independent low/probe/high inner sampling invocation, conditioning is reconstructed from
+a pristine snapshot of `guider.conds` taken at progressive-wrapper entry. Current ComfyUI has already
+run `preprocess_conds_hooks` and `filter_registered_hooks_on_conds` before entering OUTER_SAMPLE, so
+rebuilding directly from `guider.original_conds` here would silently discard ControlNet/registered-hook
+preprocessing. The preserved snapshot is still pre-`process_conds`, allowing each geometry lifetime to
+resolve percentage areas, masks, and other
 shape-dependent conditions against that stage's live geometry. Source-input mode resizes target
 keyframes on the high stage. Target-input mode does the inverse: it temporarily downsizes
 `minimax_keyframes` for low/probe and restores the original target-grid conditioning for high.
