@@ -113,7 +113,7 @@ def test_guidance_state_records_bounded_correction_telemetry():
     apply_guidance(high, run=run(values=(1.0, 0.0), coords=(0.8, 0.2)), coordinate=0.5, config=config, state=state)
     assert state.last_schedule == pytest.approx(1.0)
     assert state.last_correction_rms is not None
-    assert state.last_reference_rms is not None
+    assert state.last_baseline_rms is not None
     assert state.last_correction_rms_ratio == pytest.approx(0.25, rel=1e-5)
     assert state.last_clamp_scale is not None
     assert 0.0 < state.last_clamp_scale < 1.0
