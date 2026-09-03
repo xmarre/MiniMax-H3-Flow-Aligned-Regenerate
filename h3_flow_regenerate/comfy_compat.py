@@ -151,7 +151,7 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
     existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).copy()
     for layer in range(num_layers):
         previous = existing.get(("double_block", layer))
-        if getattr(previous, "_h3_flow_layout_wrapper", False):
+        while getattr(previous, "_h3_flow_layout_wrapper", False):
             previous = getattr(previous, "_h3_flow_previous", None)
         wrapper = make_layout_block_wrapper(
             layer,
@@ -159,7 +159,12 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
             previous,
             record_layout=layer == 0,
         )
-        wrapper = mark_layout_wrapper(wrapper, metrics=metrics, previous=previous)
+        wrapper = mark_layout_wrapper(
+            wrapper,
+            metrics=metrics,
+            previous=previous,
+            scope="attention",
+        )
         model.set_model_patch_replace(
             wrapper,
             "dit",
@@ -171,12 +176,24 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
 def _install_layout_metrics(model: Any, metrics: H3FlowMetrics) -> None:
     transformer = model.model_options["transformer_options"]
     existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).get(("double_block", 0))
-    if getattr(existing, "_h3_flow_layout_wrapper", False):
-        if getattr(existing, "_h3_flow_metrics", None) is metrics:
-            return
+    if (
+        getattr(existing, "_h3_flow_layout_wrapper", False)
+        and getattr(existing, "_h3_flow_layout_scope", "layout") == "layout"
+        and getattr(existing, "_h3_flow_metrics", None) is metrics
+    ):
+        return
+    while (
+        getattr(existing, "_h3_flow_layout_wrapper", False)
+        and getattr(existing, "_h3_flow_layout_scope", "layout") == "layout"
+    ):
         existing = getattr(existing, "_h3_flow_previous", None)
     wrapper = make_layout_block_wrapper(0, metrics, existing)
-    marked = mark_layout_wrapper(wrapper, metrics=metrics, previous=existing)
+    marked = mark_layout_wrapper(
+        wrapper,
+        metrics=metrics,
+        previous=existing,
+        scope="layout",
+    )
     model.set_model_patch_replace(marked, "dit", "double_block", 0)
 
 
