@@ -35,6 +35,7 @@ CLONE_CALLBACK_KEY = "h3_flow_regenerate.clone.v1"
 PROBE_MARKER = "_h3_flow_exact_probe"
 PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
 FLOW_STAGE_KEY = "h3_flow_stage"
+SPECTRUM_BINDING_KEY = "spectrum_h3_binding"
 SPECTRUM_ACTUAL_KEY = "spectrum_h3_actual"
 SPECTRUM_PHASE_KEY = "spectrum_h3_solver_phase"
 SPECTRUM_OUTER_STEP_KEY = "spectrum_h3_outer_step_id"
@@ -325,6 +326,14 @@ def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None)
     return run
 
 
+def _active_spectrum_runtime(guider: Any) -> Any | None:
+    spectrum_binding = (getattr(guider, "model_options", None) or {}).get(SPECTRUM_BINDING_KEY)
+    runtime = getattr(spectrum_binding, "runtime", None)
+    if runtime is None or getattr(runtime, "active_run_id", None) is None:
+        return None
+    return runtime
+
+
 def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     guider = executor.class_obj
     binding = _resolve_binding(guider)
@@ -338,6 +347,12 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         raise RuntimeError(
             "H3 flow trajectory capture/guidance/progressive handoff does not support parallel multi-GPU model calls"
         )
+    spectrum_runtime = _active_spectrum_runtime(guider) if binding is not None else None
+    spectrum_completed_before = (
+        getattr(spectrum_runtime, "last_completed_step_id", None)
+        if spectrum_runtime is not None
+        else None
+    )
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
     if binding is None:
@@ -347,6 +362,24 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
+    spectrum_completed_after = (
+        getattr(spectrum_runtime, "last_completed_step_id", None)
+        if spectrum_runtime is not None
+        else None
+    )
+    spectrum_completed_here = (
+        spectrum_runtime is not None
+        and spectrum_completed_after is not None
+        and spectrum_completed_after != spectrum_completed_before
+    )
+    if spectrum_completed_here:
+        completed_mode = getattr(spectrum_runtime, "last_completed_mode", None)
+        if completed_mode == "actual":
+            actual = True
+        elif completed_mode == "forecast":
+            actual = False
+        else:
+            raise RuntimeError(f"unreviewed completed Spectrum H3 mode {completed_mode!r}")
     if isinstance(probe_context, dict) and not actual:
         raise RuntimeError("progressive handoff exact probe was forecast instead of evaluated")
     binding.metrics.increment("transformer_actual_nfe" if actual else "spectrum_forecast_calls")
@@ -375,8 +408,12 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             fallback_outer, fallback_phase = active.phases[active.call_index]
         else:
             fallback_outer, fallback_phase = active.call_index, "unclassified"
-        phase = str(transformer.get(SPECTRUM_PHASE_KEY, fallback_phase))
-        outer = int(transformer.get(SPECTRUM_OUTER_STEP_KEY, fallback_outer))
+        if spectrum_completed_here:
+            phase = fallback_phase
+            outer = fallback_outer
+        else:
+            phase = str(transformer.get(SPECTRUM_PHASE_KEY, fallback_phase))
+            outer = int(transformer.get(SPECTRUM_OUTER_STEP_KEY, fallback_outer))
         if isinstance(probe_context, dict):
             phase = "handoff_probe"
             outer = int(probe_context["outer_step"])
