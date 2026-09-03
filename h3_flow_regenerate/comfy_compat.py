@@ -77,6 +77,8 @@ def patch_flow_model(
     capture_forecasts: bool | None = None,
     guidance_conditioning_signature: str | None = None,
     clear_guidance_conditioning_signature: bool = False,
+    guidance_run_id: str | None = None,
+    clear_guidance_run_id: bool = False,
     metrics: H3FlowMetrics | None = None,
 ) -> tuple[Any, FlowBinding]:
     validate_h3_model(model)
@@ -104,9 +106,21 @@ def patch_flow_model(
                 else (prior.guidance_conditioning_signature if prior else None)
             )
         ),
+        captured_run_id=prior.captured_run_id if prior else None,
+        guidance_run_id=(
+            None
+            if clear_guidance_run_id
+            else (
+                guidance_run_id
+                if guidance_run_id is not None
+                else (prior.guidance_run_id if prior else None)
+            )
+        ),
     )
     if clear_guidance_conditioning_signature and guidance_conditioning_signature is not None:
         raise ValueError("cannot set and clear guidance conditioning signature in the same model patch")
+    if clear_guidance_run_id and guidance_run_id is not None:
+        raise ValueError("cannot set and clear guidance run id in the same model patch")
     patched.model_options[FLOW_BINDING_KEY] = binding
     if clear_progressive and progressive is not None:
         raise ValueError("cannot set and clear progressive handoff in the same model patch")
@@ -211,6 +225,8 @@ def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
         "capture_enabled",
         "capture_forecasts",
         "guidance_conditioning_signature",
+        "captured_run_id",
+        "guidance_run_id",
     }
     unknown = set(changes) - allowed
     if unknown:
@@ -222,6 +238,8 @@ def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
         "capture_enabled": binding.capture_enabled,
         "capture_forecasts": binding.capture_forecasts,
         "guidance_conditioning_signature": binding.guidance_conditioning_signature,
+        "captured_run_id": binding.captured_run_id,
+        "guidance_run_id": binding.guidance_run_id,
     }
     values.update(changes)
     return FlowBinding(**values)
