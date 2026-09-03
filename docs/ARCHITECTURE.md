@@ -74,10 +74,16 @@ so this is equivalent to an effective video shift \(12\alpha\) while preserving 
 parameterization. At strength 0 the factor is exactly 1; at strength 1 the SD3 relative factor is
 used; intermediate strengths interpolate multiplicatively in log-space.
 
-The node can derive this reference automatically. With source_width=source_height=0 it mirrors the
-pinned ComfyUI H3 `adapt_canvas()` contract from the connected target dimensions: 768px short edge,
-768*1344 area cap, then per-axis 32px rounding. This is the intended E workflow because the target
-width/height come dynamically from the user's existing MP -> Scale(1.20) sizing path.
+The resolution node can derive this reference automatically. With source_width=source_height=0 it
+mirrors the pinned ComfyUI H3 `adapt_canvas()` contract from the connected target dimensions: 768px
+short edge, 768*1344 area cap, then per-axis 32px rounding.
+
+The target dimensions themselves require a separate topology fix. In the real workflow, scale=1.20 is
+inside the downstream learned Latent Upscaler + Refine node, which runs only after Continuum sampler 1.
+E therefore cannot read that target before sampling. `H3RefineTargetGeometry` mirrors the pinned LBH
+`scale by multiplier` sizing rule before Continuum: it receives the existing MP base width/height,
+applies scale 1.20 with the same LCM(align,16) grid and aspect-preserving candidate search, and outputs
+only target width/height. It performs no latent transform and no H3 sampling.
 
 For the current 896x928 target, that automatic rule gives a 768x800 analytic reference:
 
@@ -88,8 +94,8 @@ For the current 896x928 target, that automatic rule gives a 768x800 analytic ref
 - effective video shift at strength 1: ~13.95994269.
 
 The reference dimensions describe an uncertainty/resolution **regime only**. E does not execute a
-768x800 low-resolution pass. The normal learned Latent Upscale Refine node is also bypassed for E;
-the existing Scale(1.20) node remains only to produce the target dimensions automatically.
+768x800 low-resolution pass. The normal learned Latent Upscale Refine node is bypassed for E; only its
+target-geometry semantics are mirrored by `H3RefineTargetGeometry` before sampler 1.
 
 H3 still derives audio from the resulting shared base coordinate:
 
