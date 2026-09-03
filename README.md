@@ -40,9 +40,12 @@ complete. It preserved the exact D10 topology and removed the patterned-VAE arti
 good and judged **maybe slightly better than the non-temporal D10 control**, but the perceptual gain is
 small enough to remain tentative rather than promoted as a proven improvement. The conservative
 `direction+temporal` path is retained as an experimental candidate at temporal weight 0.20.
-Resolution-shift-only validation is now the next active feature path. Its E10 gate is defined as a
-direct-target 896x928 matched pair against an aspect-matched H3-Base 768p reference regime (768x800);
-the SD3-derived factor is composed with H3's native shift rather than replacing it. The safe default
+Resolution-shift-only validation is now the next active feature path. Its E10 gate keeps the existing
+MP sizing -> Scale(1.20) geometry path, but generates directly on that target grid and bypasses the
+learned Latent Upscale Refine pass. The Resolution-Aware Sigmas target width/height are driven by the
+Scale node; source width/height stay at 0/0 so the node auto-derives the aspect-matched H3-Base 768p
+reference regime. For the current 896x928 example this resolves to 768x800. The SD3-derived factor is
+composed with H3's native shift rather than replacing it. The safe default
 for the schedule, reference budget, and attention lab remains `off`/`native`.
 
 ## Install
@@ -207,8 +210,10 @@ Sparse attention retains global text/reference/audio paths and global temporal v
 an investigative implementation rather than a reconstruction of MiniMax internals. Resolution-aware
 sigmas move H3's shared AV flow coordinate, so they also change the derived audio sigma schedule;
 the probe is not a video-only schedule modifier and requires decoded-audio validation. For E10,
-`source_width/source_height` mean the analytic H3-Base/native reference regime, not a low-resolution
-pass; the current 896x928 target uses 768x800 as the 32px-aligned aspect-matched 768p reference.
+leave `source_width/source_height` at 0/0: the node derives the analytic H3-Base/native reference
+from the connected target aspect ratio with the pinned 768-short-edge / 768*1344 cap / 32px alignment
+rule. The target dimensions come from the existing MP -> Scale(1.20) path, and the learned Latent
+Upscale Refine node is bypassed. The current 896x928 target therefore auto-resolves to 768x800.
 
 ## Metrics and benchmarking
 
