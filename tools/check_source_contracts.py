@@ -113,6 +113,13 @@ def main() -> None:
         '"refine_state"',
     )
     require(
+        args.continuum / "v2/sampling.py",
+        "def _record_chunk_refine_state(",
+        '"model": model',
+        '"positive": conditioning',
+        '"noise_mask": noise_mask',
+    )
+    require(
         args.diffaid / "spectrum_h3_compat.py",
         '"h3_refinement"',
         '"sigma_reference"',
