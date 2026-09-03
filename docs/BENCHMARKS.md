@@ -199,11 +199,11 @@ effective video shift ~13.95994269, and `shared_av_coordinate=true`.
 The implementation first inverts H3's native video shift, applies only the **relative** SD3 map, and
 then restores H3's native video shift:
 
-[
+\[
 \sigma_v' = f_{12}\!\left(f_{\alpha}\!\left(f_{12}^{-1}(\sigma_v)\right)\right),
 \qquad
 f_s(t)=\frac{s t}{1+(s-1)t}.
-]
+\]
 
 This is not a replacement of H3's shift 12. Because H3 derives audio sigma from the same shared base
 coordinate, E1 also changes the audio schedule. That is deliberate for this isolated SIGMAS-only
