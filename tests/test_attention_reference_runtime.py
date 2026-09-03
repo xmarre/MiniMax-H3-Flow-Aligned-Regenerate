@@ -33,6 +33,7 @@ from h3_flow_regenerate.runtime import (
     _sampler_phases,
     _validate_progressive_sampler_state,
     conditioning_signature_from_conditioning,
+    flow_model_clone_callback,
     flow_predict_wrapper,
 )
 
@@ -336,6 +337,21 @@ def test_repatch_preserves_existing_flow_attention_context_wrapper(monkeypatch):
     assert replacement._h3_flow_layout_scope == "attention"
     assert replacement._h3_flow_metrics is replacement_metrics
     assert not getattr(replacement._h3_flow_previous, "_h3_flow_layout_wrapper", False)
+
+
+def test_repatch_keeps_single_flow_clone_callback(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    first, _ = patch_flow_model(FakePatcher())
+    second, _ = patch_flow_model(first)
+    callbacks = second.callbacks["on_clone"]["h3_flow_regenerate.clone.v1"]
+    assert callbacks == [flow_model_clone_callback]
 
 
 def test_model_clone_gets_fresh_flow_execution_state(monkeypatch):
