@@ -38,7 +38,7 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 
 ## Validated source revisions
 
-CI checks the executable contracts at ComfyUI `567275141678c9fd65bafef6aa9dcb4ac9bd70e3`,
+CI checks the executable contracts at ComfyUI `1af040bf022569d7a890241c8dd79b296cda483f`,
 Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`, Continuum
 `bf25353d8bec44afea22c89717c4301ce13c2036`, DiffAid
 `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`, RefDelta
@@ -47,4 +47,5 @@ Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`, Continuum
 `2c707492084962f7ed665e8817a05a11b14dab27`. The audit also inspected current MiniMax-H3 main
 `d21241f0a4b3acbb34c97dae47fa417b7065e438`. Spectrum PR #98 and its companion Untwist PR #5
 were reviewed as open compatibility work; this package does not make either unmerged PR a dependency.
+ The only upstream delta from the previous audited ComfyUI pin was a compositor-node/test change; no H3, sampler, model-sampling, or ModelPatcher contract file changed.
 Updating a pin requires re-running the source audit and decoded-media compatibility matrix.
