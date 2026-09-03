@@ -197,5 +197,8 @@ and [benchmark instructions](docs/BENCHMARKS.md).
   `latent_image`, and reconstructing the exact noise argument against that preserved latent state.
   This path is synthetic-tested but still requires real masked Continuum media validation.
 - Reference decoupling cannot retroactively change Qwen3-VL tokens.
+- Trajectory capture and trajectory-guided regeneration currently fail closed when ComfyUI dispatches
+  parallel multi-GPU model calls. Their mutable transaction/guidance state is intentionally not shared
+  across concurrent device calls until a reviewed multi-GPU ordering contract exists.
 - The sparse path uses bounded query chunks and may not improve wall time on every backend.
 - Model assets, the optional learned upscaler, and sibling custom nodes are not bundled.
