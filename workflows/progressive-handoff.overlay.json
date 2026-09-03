@@ -24,8 +24,8 @@
       "trajectory": "shared_handle"
     },
     "widgets": {
-      "source_mode": "pixels",
-      "source_scale": 0.84,
+      "source_mode": "scale",
+      "source_scale": 0.83,
       "source_width": 864,
       "source_height": 640,
       "handoff_coordinate": 0.35,
@@ -36,7 +36,8 @@
       "consistency_weight": 0,
       "low_frequency_cutoff": 0.25
     },
-    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the Continuum MODEL input"
+    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the Continuum MODEL input",
+    "note": "Use scale mode for normal operation so the private source follows the live Continuum target aspect ratio automatically. Explicit source_width/source_height are fallback controls only when source_mode=pixels."
   },
   "sampler": {
     "reuse_existing_sampler_and_full_sigma_schedule": true,
@@ -102,6 +103,9 @@
       "separate learned latent upscale",
       "separate high-resolution refine"
     ],
-    "run_storage": "Off"
+    "run_storage": "Off",
+    "source_mode": "scale",
+    "source_scale": 0.83,
+    "note": "Do not derive the progressive source from reference-image preprocessing dimensions. Scale mode derives it from the live target latent geometry."
   }
 }
