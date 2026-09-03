@@ -24,8 +24,9 @@ only the sampler SIGMAS while generating directly at the target grid.
 
 The reference resolution is now tied to the public H3 contract rather than to D10's private low grid.
 MiniMax documents H3-Base as a 768p generator and states that the shorter output side defaults to
-768 pixels. For the current 896x928 target, preserving aspect ratio at a 768px short side and snapping
-to H3's 32px VAE+DiT alignment yields a 768x800 analytic reference regime.
+768 pixels. The pinned ComfyUI H3 node contract matches this exactly (`BASE_SHORT_EDGE=768`,
+`CANVAS_MULTIPLE=32`, `adapt_canvas`). For the current 896x928 target, preserving aspect ratio at a
+768px short side and applying that 32px canvas alignment yields a 768x800 analytic reference regime.
 
 SD3 Eq. 23 derives the relative flow-time shift
 
