@@ -35,7 +35,9 @@ class AttentionConfig:
 
 def layout_summary(layout: Any) -> dict[str, Any]:
     segments = tuple((int(a), int(b), str(kind)) for a, b, kind in layout.segments)
-    counts = {kind: b - a for a, b, kind in segments}
+    counts: dict[str, int] = {}
+    for start, stop, kind in segments:
+        counts[kind] = counts.get(kind, 0) + (stop - start)
     signature = tuple(int(v) for v in layout.signature)
     return {
         "signature": signature,
