@@ -67,7 +67,7 @@ component and is used upstream when desired.
 | MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine_state for the integrated learned-upscale/refine node | Conservative direction term |
 | MiniMax H3 Progressive Handoff | Low-grid input grows to the target grid during one full schedule | Experimental |
 | MiniMax H3 Progressive Handoff (Target Input) | Keeps the workflow/session on the final grid but runs the early H3 stage internally on a smaller grid | Experimental; Continuum-compatible topology |
-| MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift | Off |
+| MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift; optionally records the applied map into H3 metrics | Off |
 | MiniMax H3 Reference Budget | Token diagnostics and direct-reference-only cap | Native |
 | MiniMax H3 Attention Lab | Sampled diagnostics and guarded H3-local attention | Native |
 | MiniMax H3 Runtime Metrics Probe | Passive sampler/model-call instrumentation without capture/guidance | On demand |
