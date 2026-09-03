@@ -18,13 +18,15 @@ KSampler and node time around upscaler/handoff; total prompt time is secondary.
 | C6 | Flow-aligned learned-upscale refine | 54x40 -> 64x48 | 6 | 0.25 |
 | C5 | Flow-aligned learned-upscale refine | 54x40 -> 64x48 | 5 | 0.25 |
 | C4 | Flow-aligned learned-upscale refine | 54x40 -> 64x48 | 4 | 0.25 |
-| D | Progressive handoff | 54x40 -> 64x48 | one split schedule | n/a |
+| D | Progressive target-input handoff | workflow stays 64x48; early stage internally 54x40 | one split schedule | n/a |
 | E | Resolution-shift-only native | shift reference 54x40 -> generation 64x48 | base schedule | n/a |
 
 Run the same set of at least three fixed seeds for every paired row. The primary learned-refine
 comparison remains denoise 0.25. Repeat the relevant learned-refine rows at denoise 0.30 only after
 the 0.25 behavior is understood. Repeat the matrix at a ~0.5 MP base and nominal ~0.7 MP base, and
 include difficult motion/scene changes, small people/faces, fine text, and reference-heavy conditioning.
+
+Row D must use **Progressive Handoff (Target Input)** in the two-chunk Continuum graph: Continuum is configured at 64x48 while the wrapper's internal source is 54x40. This preserves target-sized session and native-mask geometry between chunks. The source-input progressive node is a standalone control and is not the Continuum benchmark topology.
 
 Row E does not generate a low-resolution first pass. Its 54x40 value is the spatial reference used to
 derive the experimental resolution-dependent coordinate shift while H3 itself samples directly on the
