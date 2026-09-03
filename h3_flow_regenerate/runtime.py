@@ -313,9 +313,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     if isinstance(probe_context, dict) and not actual:
         raise RuntimeError("progressive handoff exact probe was forecast instead of evaluated")
     binding.metrics.increment("transformer_actual_nfe" if actual else "spectrum_forecast_calls")
-    binding.metrics.increment(
-        f"transformer_actual_nfe_{stage}" if actual else f"spectrum_forecast_calls_{stage}"
-    )
+    binding.metrics.increment(f"transformer_actual_nfe_{stage}" if actual else f"spectrum_forecast_calls_{stage}")
     binding.metrics.increment("sampler_logical_calls")
     binding.metrics.increment(f"sampler_logical_calls_{stage}")
     sigma = float(timestep.detach().reshape(-1)[0].item())
