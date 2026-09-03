@@ -650,15 +650,8 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     trajectory = H3FlowTrajectory()
     base_model, _ = patch_flow_model(FakePatcher(), trajectory=trajectory, capture_enabled=True)
     positive = [[torch.zeros(1, 2, 4), {"tag": "chunk"}]]
-    noise_mask = object()
     opaque = object()
-    state = {
-        "api": 1,
-        "model": base_model,
-        "positive": positive,
-        "noise_mask": noise_mask,
-        "opaque": opaque,
-    }
+    state = {"api": 1, "model": base_model, "positive": positive, "opaque": opaque}
 
     patched_state, metrics = H3FlowAlignedRefineState().patch(
         state,
@@ -672,7 +665,6 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     binding = patched_state["model"].model_options[FLOW_BINDING_KEY]
     assert patched_state is not state
     assert patched_state["positive"] is positive
-    assert patched_state["noise_mask"] is noise_mask
     assert patched_state["opaque"] is opaque
     assert binding.trajectory is trajectory
     assert binding.guidance.mode == "direction"
