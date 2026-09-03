@@ -80,7 +80,7 @@ def test_layout_summary_accumulates_repeated_reference_segments():
     )
     summary = layout_summary(repeated)
     assert summary["text_rows"] == 2
-    assert summary["reference_rows"] == 12
+    assert summary["reference_rows"] == 14
     assert summary["audio_rows"] == 4
     assert summary["video_rows"] == 12
 
