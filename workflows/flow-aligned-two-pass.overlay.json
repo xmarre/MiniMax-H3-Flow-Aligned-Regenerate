@@ -5,7 +5,8 @@
   "continuum": {
     "node": "H3 Continuum Sampler V3.4",
     "required_widget": {
-      "emit_refine_conditioning": true
+      "emit_refine_conditioning": true,
+      "run_storage": "Off"
     }
   },
   "shared_handle": {
@@ -63,6 +64,7 @@
     ],
     "forecast_anchors": false,
     "decoded_media_required": true,
-    "trajectory_history": "max_runs >= physical refine item count; default 16 covers current Continuum maximum"
+    "trajectory_history": "max_runs >= physical refine item count; default 16 covers current Continuum maximum",
+    "run_storage": "off for initial trajectory/refine validation; reused chunks do not replay base trajectory capture"
   }
 }
