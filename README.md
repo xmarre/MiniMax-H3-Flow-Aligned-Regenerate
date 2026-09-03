@@ -51,7 +51,8 @@ component and is used upstream when desired.
 |---|---|---|
 | MiniMax H3 Flow Trajectory | Explicit `H3_FLOW_TRAJECTORY` handle with RAM/VRAM policy | RAM |
 | MiniMax H3 Trajectory Capture | Transactionally records exact denoised estimates | Stable infrastructure |
-| MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for a second pass | Conservative direction term |
+| MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for an explicit second-pass MODEL | Conservative direction term |
+| MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine_state for the integrated learned-upscale/refine node | Conservative direction term |
 | MiniMax H3 Progressive Handoff | Low-grid early steps, exact probe, conditional re-noise, high-grid late steps | Experimental |
 | MiniMax H3 Resolution-Aware Sigmas | Composed resolution/H3 flow shift | Off |
 | MiniMax H3 Reference Budget | Token diagnostics and direct-reference-only cap | Native |
@@ -76,6 +77,20 @@ source run cannot be silently replaced by its own guided output. HiFlow-style in
 alignment is not exposed as a two-pass guidance mode: its published operation changes the
 high-resolution sampler's starting state, whereas this node modifies denoised predictions.
 Use the explicit upstream initialization/refine step or the progressive handoff path instead.
+
+### Continuum V3.4 integrated-refine use
+
+For the current integrated **MiniMax H3 Latent Upscaler + Refine (3D)** path, do not look for a
+MODEL output from the learned upscaler. Enable Continuum's `emit_refine_conditioning`, pass each
+chunk's `refine_state` through **Flow-Aligned Refine State**, and connect that patched state to the
+integrated upscaler/refine node. Patch the MODEL entering Continuum with **Trajectory Capture**
+after the normal DiffAid/Untwist/Spectrum patches. The refine-state adapter preserves the exact
+chunk positive conditioning and mask payload while changing only its fresh per-chunk MODEL clone.
+
+Target-grid `minimax_keyframes` are expected to be spatially resized by the learned-refine node.
+The trajectory conditioning fence therefore ignores only those keyframes' spatial latent bytes and
+H/W metadata while retaining their non-spatial metadata; Qwen/context tensors and independent
+`minimax_refs` remain content-fingerprinted.
 
 ### Progressive handoff use
 
