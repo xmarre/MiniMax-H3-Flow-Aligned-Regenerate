@@ -462,6 +462,12 @@ class H3AttentionExperiment:
     FUNCTION = "patch"
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
 
+    @classmethod
+    def IS_CHANGED(cls, model, mode, layers, sparse_window, global_heads, max_sequence, metrics=None):
+        # A diagnostic/sparse patch closes over a mutable metrics sink. Rebuild it
+        # for every prompt instead of reusing a cached model+metrics pair.
+        return float("nan")
+
     def patch(self, model, mode, layers, sparse_window, global_heads, max_sequence, metrics=None):
         try:
             selected = tuple(sorted({int(value.strip()) for value in layers.split(",") if value.strip()}))
@@ -486,14 +492,22 @@ class H3AttentionExperiment:
 class H3MetricsJSON:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"metrics": ("H3_FLOW_METRICS",)}}
+        return {
+            "required": {
+                "metrics": ("H3_FLOW_METRICS",),
+                "after": ("*",),
+            }
+        }
 
     RETURN_TYPES = ("STRING",)
     FUNCTION = "render"
     OUTPUT_NODE = True
     CATEGORY = "MiniMax H3/flow regenerate"
 
-    def render(self, metrics):
+    def render(self, metrics, after):
+        # "after" is an execution barrier only. Connect it to the final sampler/
+        # decode artifact whose runtime the metrics are meant to describe.
+        del after
         return (metrics.to_json(),)
 
 
