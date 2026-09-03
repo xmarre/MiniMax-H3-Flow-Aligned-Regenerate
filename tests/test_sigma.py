@@ -130,3 +130,32 @@ def test_resolution_node_diagnostics_expose_relative_and_effective_shift():
     assert diagnostics["base_video_shift"] == pytest.approx(12.0)
     assert diagnostics["effective_video_shift"] == pytest.approx(12.0 * factor)
     assert diagnostics["shared_av_coordinate"] is True
+
+
+def test_e_resolution_overlay_matches_analytic_contract():
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    overlay = json.loads((root / "workflows" / "resolution-shift-only.overlay.json").read_text(encoding="utf-8"))
+    matrix = json.loads((root / "workflows" / "benchmark-matrix.json").read_text(encoding="utf-8"))
+    geometry = overlay["reference_basis"]
+    smoke = matrix["resolution_shift_smoke"]
+
+    source_width, source_height = 768, 800
+    target_width, target_height = 896, 928
+    factor = resolution_shift_factor(source_width * source_height, target_width * target_height)
+
+    assert geometry["source_latent_wh"] == [48, 50]
+    assert geometry["target_latent_wh"] == [56, 58]
+    assert geometry["source_spatial_patch_wh"] == [24, 25]
+    assert geometry["target_spatial_patch_wh"] == [28, 29]
+    assert geometry["target_to_source_area_ratio"] == pytest.approx((896 * 928) / (768 * 800))
+    assert geometry["relative_shift_factor"] == pytest.approx(factor)
+    assert geometry["effective_video_shift_strength_1"] == pytest.approx(12.0 * factor)
+
+    assert smoke["geometry"]["reference_pixels_wh"] == [source_width, source_height]
+    assert smoke["geometry"]["target_generation_pixels_wh"] == [target_width, target_height]
+    assert smoke["geometry"]["relative_shift_factor"] == pytest.approx(factor)
+    assert smoke["diagnostics_gate"]["e0"]["exact_sigma_parity"] is True
+    assert smoke["diagnostics_gate"]["e1"]["shared_av_coordinate"] is True
