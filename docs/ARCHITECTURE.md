@@ -259,6 +259,15 @@ Direct-reference budgeting updates the resized reference latent and its native `
 fields to allocate reference rows and positions, so leaving source-grid metadata attached to a resized
 latent would make the packed reference contract inconsistent.
 
+## Metrics execution lifetime
+
+Metrics are mutable runtime state. Trajectory-backed paths inherit the prompt-local trajectory cache
+barrier. Attention Lab has its own always-changed cache fingerprint because its patched MODEL closes
+over a metrics sink even when no trajectory exists. **Metrics JSON** additionally requires an arbitrary
+`after` input, which is ignored as data but creates an explicit dependency on the final artifact whose
+runtime is being reported. Without that edge, two independent Comfy output branches could legally
+render the JSON before the sampler branch had produced any events.
+
 ## Attention lab
 
 Diagnostics sample selected heads/queries and report entropy and modality mass without retaining full
