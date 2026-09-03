@@ -123,6 +123,8 @@ velocity field. Downsample consistency forms the low-grid residual before liftin
 
 ### Continuum integrated-refine adapter
 
+The public trajectory node returns an always-changed Comfy cache fingerprint because its output is mutable execution state. Each queued prompt therefore receives a fresh handle, while all nodes inside that prompt still share the same object. This prevents old completed/aborted runs and accumulated metrics from leaking into later prompt executions through Comfy's intermediate-node cache.
+
 The trajectory history is a delayed-consumer buffer in this topology: Continuum samples its base chunk list before downstream list-mapped refinement consumes the matching runs. `max_runs` therefore must be at least the number of physical refine items; the public node default is 16, matching Continuum's current maximum configured chunk count. Eviction remains bounded and deterministic. Initial validation keeps Continuum Run Storage off because cache reuse can return a previously sampled chunk without executing the current capture wrapper, leaving no fresh trajectory transaction corresponding to that refine item.
 
 Current Continuum V3.4 internally captures MODEL, positive conditioning, and the sampler-boundary
