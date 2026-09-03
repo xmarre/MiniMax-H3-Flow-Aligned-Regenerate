@@ -1,7 +1,7 @@
 import importlib.util
 import sys
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def test_package_import_without_comfyui():
