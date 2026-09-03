@@ -74,6 +74,10 @@ def main() -> None:
         "self.conds = process_conds(",
     )
     require(
+        args.comfy / "comfy/sampler_helpers.py",
+        'temp["uuid"] = uuid.uuid4()',
+    )
+    require(
         args.comfy / "comfy/model_patcher.py",
         "def add_callback_with_key(",
         "def remove_callbacks_with_key(",
