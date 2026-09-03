@@ -1,0 +1,399 @@
+{
+  "schema_version": 3,
+  "project": "MiniMax-H3-Flow-Aligned-Regenerate",
+  "media_gate": "decoded_video_and_audio",
+  "grid_order": "width,height",
+  "comparison_policy": "Within each scenario/area/denoise slice, all comparable rows use identical prompts, references, graph settings, fixed seeds, and a 7-step first pass. Refine-step reduction is the only B/C7/C6/C5 step-count variable.",
+  "seed_set": [
+    0,
+    1,
+    2
+  ],
+  "matrix_axes": {
+    "area_regimes": [
+      {
+        "id": "base_0p55mp",
+        "source_grid": [
+          54,
+          40
+        ],
+        "source_pixels": [
+          864,
+          640
+        ],
+        "source_megapixels": 0.55296,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      },
+      {
+        "id": "base_0p70mp",
+        "source_grid": [
+          62,
+          44
+        ],
+        "source_pixels": [
+          992,
+          704
+        ],
+        "source_megapixels": 0.698368,
+        "target_grid": [
+          64,
+          48
+        ],
+        "target_pixels": [
+          1024,
+          768
+        ],
+        "target_megapixels": 0.786432
+      }
+    ],
+    "refine_denoise": [
+      {
+        "value": 0.25,
+        "role": "primary"
+      },
+      {
+        "value": 0.3,
+        "role": "secondary"
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "motion_scene_change",
+        "requirement": "difficult motion with at least one scene or shot change"
+      },
+      {
+        "id": "small_people_faces",
+        "requirement": "small or distant people/faces whose structure is visible in the final decode"
+      },
+      {
+        "id": "fine_text",
+        "requirement": "legible fine text or similarly high-frequency structured detail"
+      },
+      {
+        "id": "reference_heavy",
+        "requirement": "multiple image/video/reference inputs with prompt-dependent identity or composition constraints"
+      }
+    ]
+  },
+  "fixed": [
+    "continuum_chunks",
+    "loras",
+    "diffaid",
+    "untwist",
+    "sampler",
+    "scheduler",
+    "audio_lock",
+    "decode"
+  ],
+  "run_axis_rules": {
+    "A": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "B": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C7": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C6": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "C5": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": true
+    },
+    "D": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    },
+    "E": {
+      "area_regime": true,
+      "scenario": true,
+      "seed": true,
+      "refine_denoise": false
+    }
+  },
+  "runs": [
+    {
+      "id": "A",
+      "mode": "native",
+      "generation_grid": "area_regime.target_grid",
+      "target_grid": "area_regime.target_grid"
+    },
+    {
+      "id": "B",
+      "mode": "learned_upscale_baseline",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C7",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 7,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C6",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 6,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "C5",
+      "mode": "flow_aligned",
+      "source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "base_outer_steps": 7,
+      "refine_outer_steps": 5,
+      "denoise": "refine_denoise.value"
+    },
+    {
+      "id": "D",
+      "mode": "progressive_target_input",
+      "continuum_grid": "area_regime.target_grid",
+      "internal_source_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "handoff_coordinate": 0.35
+    },
+    {
+      "id": "E",
+      "mode": "resolution_shift_only",
+      "generation_grid": "area_regime.target_grid",
+      "shift_reference_grid": "area_regime.source_grid",
+      "target_grid": "area_regime.target_grid",
+      "resolution_shift": "resolution_aware"
+    }
+  ],
+  "temporal_correspondence_smoke": {
+    "id": "D10-temporal",
+    "status": "closed_failed_media_retired",
+    "base_reference": "accepted difficult-motion D10 direction-only run",
+    "invariant_topology": {
+      "logical_calls": 38,
+      "actual_nfe": 28,
+      "spectrum_forecasts": 10,
+      "low_logical": 22,
+      "probe_logical": 2,
+      "high_logical": 14
+    },
+    "attempts": [
+      {
+        "id": "D10-temporal-v1",
+        "status": "failed_media",
+        "media_verdict": "patterned/repeated grass texture and different/more-bugged motion artifacts",
+        "telemetry": {
+          "chunk_1": {
+            "valid_fraction": 0.4598030149936676,
+            "confidence_mean": 0.056206490844488144,
+            "similarity_mean": 0.9378970265388489,
+            "margin_mean": 0.0038141219411045313,
+            "flow_magnitude_mean": 2.554915428161621,
+            "flow_magnitude_max": 5.656854152679443
+          },
+          "chunk_2": {
+            "valid_fraction": 0.5126551389694214,
+            "confidence_mean": 0.048280809074640274,
+            "similarity_mean": 0.9590392708778381,
+            "margin_mean": 0.0026867843698710203,
+            "flow_magnitude_mean": 2.5734305381774902,
+            "flow_magnitude_max": 5.656854152679443
+          }
+        },
+        "finding": "soft uniqueness scaling admitted ambiguous repetitive-texture matches"
+      },
+      {
+        "id": "D10-temporal-v2",
+        "status": "failed_media",
+        "media_verdict": "same visible patterned grass remained after conservative gating",
+        "telemetry": {
+          "chunk_1": {
+            "valid_fraction": 0.002202330157160759,
+            "confidence_mean": 0.0011777953477576375,
+            "similarity_mean": 0.9046893119812012,
+            "margin_mean": 0.03985006362199783,
+            "flow_magnitude_mean": 3.1190474033355713,
+            "flow_magnitude_max": 5.656854152679443
+          },
+          "chunk_2": {
+            "valid_fraction": 0.002234794432297349,
+            "confidence_mean": 0.0012022219598293304,
+            "similarity_mean": 0.9479576945304871,
+            "margin_mean": 0.03009813465178013,
+            "flow_magnitude_mean": 0.9846562147140503,
+            "flow_magnitude_max": 5.656854152679443
+          },
+          "mean_temporal_rms_ratio": 0.0013664566483514915,
+          "cache_hits": 12,
+          "clamped_reference_calls": 12,
+          "guidance_calls": 14
+        },
+        "finding": "strict hard gating reduced temporal support to ~0.22% but did not remove the visible pattern"
+      }
+    ],
+    "decision": "retire adjacent-frame nearest-neighbor latent transport; do not sweep weight/radius/margin/cycle settings",
+    "runtime_status": "public direction+temporal mode removed",
+    "next_feature_path": "E"
+  },
+  "required_outputs": [
+    "workflow_json",
+    "metrics_json",
+    "decoded_media",
+    "decoded_sha256",
+    "sampler_timing",
+    "peak_vram",
+    "host_ram",
+    "review_sheet"
+  ],
+  "step_reduction_gate": {
+    "baseline": "C7",
+    "status": "complete",
+    "validated_smoke": [
+      "C7",
+      "C6",
+      "C5",
+      "C4"
+    ],
+    "exploratory_lower_step": "C4",
+    "note": "C4=7+4 is an accepted difficult-motion smoke operating point but remains outside the required primary matrix.",
+    "next_feature_path": "E"
+  },
+  "feature_path_smoke": {
+    "id": "D-smoke",
+    "mode": "progressive_target_input",
+    "purpose": "Validate progressive topology against the already-used difficult-motion workflow before spending the formal matrix.",
+    "continuum_grid": [
+      58,
+      58
+    ],
+    "internal_source_grid": [
+      48,
+      48
+    ],
+    "target_pixels": [
+      928,
+      928
+    ],
+    "internal_source_pixels": [
+      768,
+      768
+    ],
+    "outer_steps": 7,
+    "handoff_coordinate": 0.35,
+    "handoff_selection": "fixed",
+    "guidance_mode": "direction",
+    "direction_weight": 0.25,
+    "acceleration_weight": 0,
+    "consistency_weight": 0,
+    "low_frequency_cutoff": 0.25,
+    "remove_separate_learned_refine": true,
+    "run_storage": "off"
+  },
+  "resolution_shift_smoke": {
+    "id": "E10-smoke",
+    "status": "pending_matched_pair",
+    "purpose": "Isolate resolution-aware shared AV sigma remapping on the same difficult-motion target-grid workflow after retiring temporal transport.",
+    "geometry": {
+      "source_reference_pixels_wh": [
+        736,
+        768
+      ],
+      "target_generation_pixels_wh": [
+        896,
+        928
+      ],
+      "source_reference_latent_wh": [
+        46,
+        48
+      ],
+      "target_generation_latent_wh": [
+        56,
+        58
+      ],
+      "target_to_source_area_ratio": 1.4710144927536233,
+      "derived_strength_1_factor": 1.2128538629008951
+    },
+    "common": {
+      "outer_steps": 10,
+      "sampler": "sa_solver_pece",
+      "generation_grid": "target only",
+      "progressive_handoff": false,
+      "trajectory_guidance": false,
+      "learned_upscale_refine": false,
+      "run_storage": "off",
+      "keep_identical": [
+        "seed",
+        "prompt",
+        "references",
+        "loras",
+        "DiffAid",
+        "Untwist",
+        "Spectrum",
+        "sampler",
+        "scheduler base schedule",
+        "Continuum chunking",
+        "audio behavior",
+        "decode"
+      ]
+    },
+    "runs": [
+      {
+        "id": "E0-direct-control",
+        "resolution_sigma_mode": "off",
+        "strength": 0,
+        "role": "matched direct-target control"
+      },
+      {
+        "id": "E1-resolution-aware",
+        "resolution_sigma_mode": "resolution_aware",
+        "strength": 1,
+        "source_width": 736,
+        "source_height": 768,
+        "target_width": 896,
+        "target_height": 928,
+        "role": "single analytic SD3-derived resolution remap candidate"
+      }
+    ],
+    "expected_structure": {
+      "sampler_logical_calls": 38,
+      "progressive_sampler_invocations": 0,
+      "progressive_history_boundaries": 0,
+      "handoff_exact_probe_nfe": 0,
+      "transformer_actual_nfe_and_spectrum_forecasts": "record, do not force equal; mapped sigmas can alter Spectrum decisions"
+    },
+    "media_gate": "Compare E1 against E0 for motion/disocclusion, clothing, grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, and decoded audio. Reject if video improves only by harming audio or global dynamics.",
+    "no_sweep_rule": "Do not tune strength before the E0/E1 matched pair is decoded."
+  }
+}
