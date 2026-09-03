@@ -120,7 +120,7 @@ when a refine pass begins at low sigma. A per-sample RMS bound limits the combin
 For acceleration alignment, let \(x_t^{HR}\) be the current high-grid sampler state, let
 \(\hat x_{0,i}^{HR}\) be the direction-corrected high-grid clean estimate, and let
 \(\hat x_{0,i}^{R}=U(\hat x_{0,i}^{LR})\) be the time-matched transferred reference. H3's
-\`CONST.calculate_denoised\` contract is \(\hat x_0=x_t-\sigma v\), so the two velocity fields are
+`CONST.calculate_denoised` contract is \(\hat x_0=x_t-\sigma v\), so the two velocity fields are
 reconstructed exactly in the sampler's shifted-sigma domain:
 
 \[
