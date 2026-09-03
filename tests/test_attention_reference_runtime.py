@@ -15,6 +15,7 @@ from h3_flow_regenerate.nodes import H3FlowAlignedRefineState
 from h3_flow_regenerate.reference import apply_reference_budget
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
+    PROGRESSIVE_KEY,
     SPECTRUM_ACTUAL_KEY,
     SPECTRUM_OUTER_STEP_KEY,
     SPECTRUM_PHASE_KEY,
