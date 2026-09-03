@@ -8,7 +8,7 @@ import torch
 from .attention import AttentionConfig
 from .comfy_compat import patch_flow_model
 from .contracts import H3FlowTrajectory
-from .geometry import pixel_to_safe_latent
+from .geometry import h3_native_reference_canvas, pixel_to_safe_latent
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
@@ -418,24 +418,26 @@ class H3ResolutionAwareSigmas:
                 "source_width": (
                     "INT",
                     {
-                        "default": 864,
-                        "min": 32,
+                        "default": 0,
+                        "min": 0,
                         "max": 8192,
                         "tooltip": (
-                            "Reference/native resolution width for the uncertainty map. This does not "
-                            "cause a source-resolution sampling pass."
+                            "0 together with source_height=0 derives the H3-native reference canvas "
+                            "automatically from target aspect ratio (768px short edge, 768*1344 area cap, "
+                            "32px alignment). Positive values select an explicit research reference."
                         ),
                     },
                 ),
                 "source_height": (
                     "INT",
                     {
-                        "default": 640,
-                        "min": 32,
+                        "default": 0,
+                        "min": 0,
                         "max": 8192,
                         "tooltip": (
-                            "Reference/native resolution height for the uncertainty map. This does not "
-                            "cause a source-resolution sampling pass."
+                            "0 together with source_width=0 derives the H3-native reference canvas "
+                            "automatically from target aspect ratio. Positive values select an explicit "
+                            "research reference."
                         ),
                     },
                 ),
@@ -485,6 +487,17 @@ class H3ResolutionAwareSigmas:
         calibrated_factor,
         metrics=None,
     ):
+        source_width = int(source_width)
+        source_height = int(source_height)
+        target_width = int(target_width)
+        target_height = int(target_height)
+        if source_width == 0 and source_height == 0:
+            source_width, source_height = h3_native_reference_canvas(target_width, target_height)
+            reference_mode = "h3_native_auto"
+        elif source_width <= 0 or source_height <= 0:
+            raise ValueError("source_width/source_height must both be 0 for auto or both be positive")
+        else:
+            reference_mode = "manual"
         source_area = source_width * source_height
         target_area = target_width * target_height
         mapped = resolution_aware_sigmas(
@@ -503,6 +516,11 @@ class H3ResolutionAwareSigmas:
             effective_factor = resolution_shift_factor(source_area, target_area, strength)
         diagnostics = {
             "mode": mode,
+            "reference_mode": reference_mode,
+            "source_width": source_width,
+            "source_height": source_height,
+            "target_width": target_width,
+            "target_height": target_height,
             "source_area": source_area,
             "target_area": target_area,
             "area_ratio": target_area / source_area,
@@ -510,9 +528,9 @@ class H3ResolutionAwareSigmas:
             "base_video_shift": H3_VIDEO_SHIFT,
             "effective_video_shift": H3_VIDEO_SHIFT * effective_factor,
             "reference_semantics": (
-                "source_width/source_height describe the reference/native resolution regime "
-                "whose uncertainty level is being mapped to the target resolution; they do not "
-                "imply that a low-resolution pass is executed"
+                "0/0 source dimensions resolve automatically to ComfyUI's H3-native canvas for "
+                "the target aspect ratio; positive source dimensions select an explicit research "
+                "reference. Neither mode implies a low-resolution sampling pass."
             ),
             "shared_av_coordinate": True,
         }
@@ -523,6 +541,7 @@ class H3ResolutionAwareSigmas:
             metrics.event(
                 "resolution_sigma_map",
                 mode=mode,
+                reference_mode=reference_mode,
                 source_width=int(source_width),
                 source_height=int(source_height),
                 target_width=int(target_width),
@@ -543,8 +562,9 @@ class H3ResolutionAwareSigmas:
         return mapped, diagnostics
 
     DESCRIPTION = (
-        "Experimental H3 shared-AV SIGMAS remap. In resolution_aware mode, source dimensions "
-        "describe the reference/native resolution regime; the node does not run a low-resolution pass. "
+        "Experimental H3 shared-AV SIGMAS remap. Leave source width/height at 0/0 to derive the "
+        "H3-native reference canvas automatically from the connected target dimensions. Positive source "
+        "dimensions remain available for explicit research references. No low-resolution pass is run. "
         "The relative SD3 Eq.23 factor is composed with H3's native video shift rather than replacing it."
     )
 
