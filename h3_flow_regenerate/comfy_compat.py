@@ -148,6 +148,8 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
         raise ValueError(f"H3 attention layers are outside the loaded model's {num_layers} blocks: {invalid}")
     transformer = model.model_options["transformer_options"]
     previous_override = transformer.get("optimized_attention_override")
+    while getattr(previous_override, "_h3_flow_attention_override", False):
+        previous_override = getattr(previous_override, "_h3_flow_previous_override", None)
     transformer["optimized_attention_override"] = make_attention_override(
         config,
         metrics,
