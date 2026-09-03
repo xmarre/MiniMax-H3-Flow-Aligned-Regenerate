@@ -173,7 +173,6 @@ def test_conditioning_signature_isolates_interleaved_chunk_runs():
     )
 
 
-
 def test_exact_run_id_selection_bypasses_recomputed_conditioning_identity():
     trajectory = H3FlowTrajectory(max_runs=8)
 
