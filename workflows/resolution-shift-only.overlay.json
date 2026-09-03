@@ -131,7 +131,8 @@
     "handoff_exact_probe_nfe": 0,
     "guidance_events": 0,
     "note": "Actual H3 NFE / Spectrum forecast split may differ between E0 and E1 because sigma coordinates change.",
-    "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON"
+    "metrics_source": "H3RuntimeMetricsProbe -> H3MetricsJSON",
+    "sa_solver_timing": "Default tau window stays tied to effective supplied sigma; remapping may move which outer indices are stochastic without changing any sampler widget."
   },
   "media_gate": [
     "fast-motion clothing",
