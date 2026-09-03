@@ -80,14 +80,13 @@ class H3FlowAlignedRegenerate:
                 "model": ("MODEL",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
                 "guidance_mode": (
-                    ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
-                "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {
                 "source_conditioning": ("CONDITIONING",),
@@ -113,7 +112,6 @@ class H3FlowAlignedRegenerate:
         source_conditioning=None,
         source_negative=None,
         metrics=None,
-        temporal_weight=0.20,
     ):
         metrics = metrics or H3FlowMetrics()
         if source_negative is not None and source_conditioning is None:
@@ -127,7 +125,6 @@ class H3FlowAlignedRegenerate:
             mode=guidance_mode,
             direction_weight=direction_weight,
             acceleration_weight=acceleration_weight,
-            temporal_weight=temporal_weight,
             consistency_weight=consistency_weight,
             cutoff=low_frequency_cutoff,
         )
@@ -154,14 +151,13 @@ class H3FlowAlignedRefineState:
                 "refine_state": ("H3_CONTINUUM_REFINE_STATE",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
                 "guidance_mode": (
-                    ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
-                "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -181,7 +177,6 @@ class H3FlowAlignedRefineState:
         consistency_weight,
         low_frequency_cutoff,
         metrics=None,
-        temporal_weight=0.20,
     ):
         if not isinstance(refine_state, dict):
             raise TypeError("H3 Continuum refine_state must be a dictionary")
@@ -195,7 +190,6 @@ class H3FlowAlignedRefineState:
             mode=guidance_mode,
             direction_weight=direction_weight,
             acceleration_weight=acceleration_weight,
-            temporal_weight=temporal_weight,
             consistency_weight=consistency_weight,
             cutoff=low_frequency_cutoff,
         )
@@ -239,14 +233,13 @@ class H3ProgressiveHandoff:
                 "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
                 "handoff_selection": (["fixed", "auto_compute"], {"default": "fixed"}),
                 "guidance_mode": (
-                    ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
-                "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -272,7 +265,6 @@ class H3ProgressiveHandoff:
         consistency_weight,
         low_frequency_cutoff,
         metrics=None,
-        temporal_weight=0.20,
     ):
         if target_mode == "scale":
             progressive = ProgressiveHandoffConfig(
@@ -292,7 +284,6 @@ class H3ProgressiveHandoff:
             mode=guidance_mode,
             direction_weight=direction_weight,
             acceleration_weight=acceleration_weight,
-            temporal_weight=temporal_weight,
             consistency_weight=consistency_weight,
             cutoff=low_frequency_cutoff,
         )
@@ -325,14 +316,13 @@ class H3ProgressiveTargetInputHandoff:
                 "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
                 "handoff_selection": (["fixed", "auto_compute"], {"default": "fixed"}),
                 "guidance_mode": (
-                    ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
+                    ["off", "direction", "direction+acceleration", "downsample_consistency"],
                     {"default": "direction"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
-                "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -358,7 +348,6 @@ class H3ProgressiveTargetInputHandoff:
         consistency_weight,
         low_frequency_cutoff,
         metrics=None,
-        temporal_weight=0.20,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -378,7 +367,6 @@ class H3ProgressiveTargetInputHandoff:
             mode=guidance_mode,
             direction_weight=direction_weight,
             acceleration_weight=acceleration_weight,
-            temporal_weight=temporal_weight,
             consistency_weight=consistency_weight,
             cutoff=low_frequency_cutoff,
         )
