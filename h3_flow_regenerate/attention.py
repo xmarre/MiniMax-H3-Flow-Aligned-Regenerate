@@ -191,6 +191,10 @@ def make_attention_override(
         )
         return result
 
+    override._h3_flow_attention_override = True
+    override._h3_flow_previous_override = previous_override
+    override._h3_flow_attention_config = config
+    override._h3_flow_metrics = metrics
     return override
 
 
