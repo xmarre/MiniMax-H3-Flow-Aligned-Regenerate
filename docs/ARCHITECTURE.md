@@ -62,10 +62,12 @@ selectable. CPU storage detaches, copies as fp32, and pins when CUDA is availabl
 
 Trajectory selection is newest-attempt strict within the requested session/chunk/conditioning identity:
 an aborted or invalidated run for that identity blocks fallback to an older successful run. Conditioning
-is part of selection rather than only a post-selection assertion, so two independent Continuum branches
-that share a trajectory handle cannot steal each other's same-index chunk merely because current
-Continuum interop metadata does not expose a unique sequence/session identifier. This also prevents a
-failed regeneration attempt from silently reactivating stale low-resolution guidance state.
+is part of selection rather than only a post-selection assertion. Current Continuum interop metadata
+does not expose a unique sequence/session identifier, so independent Continuum sequences should use
+separate trajectory handles. The conditioning filter prevents ordinary same-index cross-talk when their
+fingerprints differ, but it cannot disambiguate two independent sequences with identical relevant
+conditioning fingerprints. Newest-attempt strictness also prevents a failed regeneration attempt from
+silently reactivating stale low-resolution guidance state.
 
 Capture is an explicit binding capability rather than a side effect of holding a trajectory handle.
 The capture node and progressive handoff enable writes; the two-pass regenerate node is read-only so
@@ -182,8 +184,9 @@ benchmark setting until decoded runs establish a better policy.
   do not renormalize the split coordinate to the probe invocation's first sigma.
 - **Continuum:** selection includes the available session/chunk namespace and a bounded content
   fingerprint of raw conditioning. Current V3.4 interop exposes chunk index but no unique sequence
-  session ID; conditioning identity therefore also separates same-index runs from independent
-  branches. The fingerprint samples deterministic tensor positions rather than reading entire
+  session ID; independent sequences should therefore use separate trajectory handles. Conditioning
+  identity additionally separates same-index runs when their fingerprints differ. The fingerprint
+  samples deterministic tensor positions rather than reading entire
   Qwen/reference tensors back from the GPU. Multi-chunk progressive operation uses the
   target-input topology so Continuum's output/session/native-mask geometry stays final-sized.
 - **Failure:** low/probe failure aborts the active trajectory transaction. The low run must be committed
