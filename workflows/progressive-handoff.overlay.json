@@ -1,0 +1,108 @@
+{
+  "schema_version": 3,
+  "kind": "comfyui_workflow_overlay",
+  "purpose": "Continuum-safe progressive H3 sampling: keep the workflow/session on the final grid while running the early H3 trajectory internally at a smaller video grid.",
+  "placement": {
+    "chain": [
+      "DiffAid",
+      "Untwist",
+      "Spectrum",
+      "H3ProgressiveTargetInputHandoff",
+      "Continuum"
+    ],
+    "trajectory_capture": "internal to H3ProgressiveTargetInputHandoff; no separate H3TrajectoryCapture node is required"
+  },
+  "shared_handle": {
+    "node": "H3FlowTrajectory",
+    "widgets": {
+      "storage": "system_ram",
+      "max_runs": 16
+    }
+  },
+  "recommended_quality_operating_point": {
+    "evidence_scope": "matched difficult-motion square smoke; tested operating point, not a universal optimum",
+    "target_pixels_wh": [896, 896],
+    "target_latent_wh": [56, 56],
+    "source_pixels_wh": [736, 736],
+    "source_latent_wh": [46, 46],
+    "sampler": "SA-Solver-PECE",
+    "outer_steps": 14,
+    "widgets": {
+      "source_mode": "scale",
+      "source_scale": 0.83,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction",
+      "direction_weight": 0.25,
+      "acceleration_weight": 0,
+      "temporal_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25
+    },
+    "observed_handoff": {
+      "index": 9,
+      "coordinate": 0.35799987093732494,
+      "sigma": 0.8699877858161926
+    },
+    "observed_topology_two_chunks": {
+      "logical_calls": 54,
+      "actual_h3_nfe": 36,
+      "spectrum_forecasts": 18,
+      "low_logical": 34,
+      "low_actual": 22,
+      "low_forecast": 12,
+      "probe_logical": 2,
+      "probe_actual": 2,
+      "high_logical": 18,
+      "high_actual": 12,
+      "high_forecast": 6,
+      "progressive_sampler_invocations": 6,
+      "progressive_history_boundaries": 4
+    }
+  },
+  "faster_operating_points": [
+    {
+      "outer_steps": 10,
+      "note": "valid/baseline-level reference; lower quality than the later 12/14 matched square runs"
+    },
+    {
+      "outer_steps": 12,
+      "note": "matched square run was perceptually better than 10; 46 logical / 32 actual / 14 forecast calls"
+    }
+  ],
+  "optional_policies": {
+    "auto_compute_handoff": {
+      "status": "functional_not_preferred",
+      "matched_46_to_56_selected_coordinate": 0.2875,
+      "snapped_coordinate": 0.29999997223417163,
+      "snapped_index": 7,
+      "media": "different but no clear quality advantage over fixed 0.35"
+    },
+    "direction_plus_temporal": {
+      "status": "functional_neutral",
+      "reference_weight": 0.2,
+      "media": "no perceptual difference from D14 direction-only",
+      "reason_not_promoted": "extremely sparse trusted correspondence support"
+    },
+    "downsample_consistency": {
+      "status": "functional_neutral",
+      "tested_weight": 0.25,
+      "media": "no meaningful decoded-media improvement"
+    },
+    "direction_plus_acceleration": {
+      "status": "functional_neutral",
+      "media": "corrected PECE implementation showed no clear quality improvement"
+    }
+  },
+  "invariants": {
+    "continuum_grid": "final target grid for the whole sequence",
+    "audio": "caller audio noise/latent/mask preserved; no spatial transform",
+    "conditioning": "target-grid conditioning is rebuilt after handoff",
+    "exact_probe": "one explicit low-grid H3 probe per physical chunk",
+    "high_grid_actual_anchor": "mandatory first high-stage actual H3 evaluation",
+    "history_reset": "fresh sampler/Spectrum lifetime across the geometry boundary",
+    "native_masked_continuation": "target-grid session/native-mask geometry remains unchanged",
+    "run_storage": "off for matched validation unless persistence itself is the test",
+    "decoded_media_required": true
+  }
+}
