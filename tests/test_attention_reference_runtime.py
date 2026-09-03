@@ -62,6 +62,52 @@ def test_layout_summary_counts_packed_modalities():
     assert summary["sequence_rows"] == 20
 
 
+def test_sparse_attention_uses_query_key_additive_mask():
+    test_layout = layout()
+    q = torch.randn(1, 2, 20, 4)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    observed = []
+
+    def backend(q, _k, _v, heads, mask=None, skip_reshape=False, **_kwargs):
+        assert skip_reshape
+        b, h, q_len, d = q.shape
+        if mask is not None:
+            assert mask.dtype == q.dtype
+            assert mask.ndim == 2
+            assert mask.shape == (q_len, 20)
+            assert bool((mask <= 0).all())
+            observed.append(mask.detach().clone())
+        return torch.zeros(b, q_len, h * d, dtype=q.dtype)
+
+    config = AttentionConfig(
+        mode="experimental_sparse",
+        layers=(0,),
+        global_heads=1,
+        sparse_window=1,
+        query_chunk=7,
+        max_sequence=64,
+    )
+    metrics = H3FlowMetrics()
+    override = make_attention_override(config, metrics)
+    result = override(
+        backend,
+        q,
+        k,
+        v,
+        2,
+        mask=None,
+        skip_reshape=True,
+        transformer_options={"h3_flow_attention_context": {"layout": test_layout, "layer": 0}},
+    )
+    assert result.shape == (1, 20, 8)
+    assert [mask.shape[0] for mask in observed] == [7, 7, 6]
+    first_video = observed[1][1]
+    assert first_video[:8].eq(0).all()
+    assert first_video[8].item() == 0
+    assert first_video[13].item() < 0
+
+
 def test_attention_config_is_guarded():
     with pytest.raises(ValueError):
         AttentionConfig(mode="experimental_sparse", layers=(-1,))
