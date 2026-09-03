@@ -130,6 +130,7 @@ class ProgressiveTargetInputConfig:
         estimate = self.handoff_coordinate / math.sqrt(area_ratio)
         return min(self.auto_max_coordinate, max(self.auto_min_coordinate, estimate))
 
+
 def select_handoff_index(
     sigmas: torch.Tensor,
     coordinate: float,
