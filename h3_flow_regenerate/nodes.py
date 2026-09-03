@@ -503,7 +503,6 @@ class H3ResolutionAwareSigmas:
             "shared_av_coordinate": True,
         }
 
-
     DESCRIPTION = (
         "Experimental H3 shared-AV SIGMAS remap. In resolution_aware mode, source dimensions "
         "describe the reference/native resolution regime; the node does not run a low-resolution pass. "
