@@ -166,7 +166,8 @@ the probe is not a video-only schedule modifier and requires decoded-audio valid
 ## Metrics and benchmarking
 
 Runtime events distinguish H3 transformer calls from Spectrum forecasts and record sigma, the
-unshifted coordinate, sampler topology, packed layout rows, trajectory transactions, guidance,
+unshifted coordinate, sampler topology, progressive low/probe/high stage, packed layout rows,
+trajectory transactions, guidance,
 handoff decisions, exact probes, reset/re-anchor evidence, and attention fallbacks. Use the
 [benchmark protocol](docs/BENCHMARKS.md) and [machine-readable matrix](workflows/benchmark-matrix.json)
 for matched runs. The `workflows/` directory also includes two-pass and progressive graph overlays.
