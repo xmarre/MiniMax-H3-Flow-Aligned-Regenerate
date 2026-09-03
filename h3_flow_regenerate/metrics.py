@@ -58,10 +58,17 @@ class H3FlowMetrics:
     def to_json(self, *, indent: int = 2) -> str:
         return json.dumps(self.snapshot(), indent=indent, sort_keys=True, default=str)
 
-    def enable_autosave(self, path: str | Path) -> Path:
-        target = Path(path)
+    @property
+    def autosave_path(self) -> Path | None:
         with self._lock:
-            self._autosave_path = target
+            return self._autosave_path
+
+    def enable_autosave(self, path: str | Path) -> Path:
+        requested = Path(path)
+        with self._lock:
+            if self._autosave_path is None:
+                self._autosave_path = requested
+            target = self._autosave_path
         return self.write_json(target)
 
     def write_json(self, path: str | Path) -> Path:
