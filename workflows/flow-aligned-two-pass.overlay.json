@@ -30,7 +30,8 @@
     "node": "H3FlowAlignedRefineState",
     "inputs": {
       "trajectory": "shared_handle",
-      "refine_state": "matching Continuum chunk refine_state"
+      "refine_state": "matching Continuum chunk refine_state",
+      "metrics": "base_model_patch.metrics"
     },
     "widgets": {
       "guidance_mode": "direction",
@@ -65,6 +66,7 @@
     "forecast_anchors": false,
     "decoded_media_required": true,
     "trajectory_history": "max_runs >= physical refine item count; default 16 covers current Continuum maximum",
-    "run_storage": "off for initial trajectory/refine validation; reused chunks do not replay base trajectory capture"
+    "run_storage": "off for initial trajectory/refine validation; reused chunks do not replay base trajectory capture",
+    "metrics": "feed Trajectory Capture metrics into Flow-Aligned Refine State so base/refine events share one sink"
   }
 }
