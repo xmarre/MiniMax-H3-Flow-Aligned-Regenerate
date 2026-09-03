@@ -637,6 +637,7 @@ class H3RuntimeMetricsProbe:
         metrics = metrics or H3FlowMetrics()
         patched, _ = patch_flow_model(
             model,
+            clear_trajectory=True,
             guidance=GuidanceConfig(mode="off"),
             clear_progressive=True,
             capture_enabled=False,
