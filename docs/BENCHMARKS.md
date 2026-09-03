@@ -27,7 +27,7 @@ KSampler and node time around upscaler/handoff; total prompt time is secondary.
 | C6 | Flow-aligned learned-upscale refine, 54x40 -> 64x48 | 7 | 6 | 0.25 |
 | C5 | Flow-aligned learned-upscale refine, 54x40 -> 64x48 | 7 | 5 | 0.25 |
 | D | Progressive target-input handoff; workflow stays 64x48, early stage internally 54x40 | split schedule | split schedule | n/a |
-| E | Resolution-shift-only native; shift reference 54x40 -> generation 64x48 | base schedule | n/a | n/a |
+| E | Resolution-shift-only direct target; MP base -> geometry-only mirror of refine scale 1.20 -> direct generation target | base schedule | n/a | n/a |
 
 The machine-readable matrix fixes the seed set to `0, 1, 2` and expands every applicable row across
 four required content scenarios. The actual working workflow uses **7 first-pass steps and 7 refine
@@ -155,45 +155,55 @@ the relative shift.
 ### E10 resolution-shift smoke
 
 Use one matched difficult-motion pair on the current standard-VAE workflow. E is a **direct
-target-grid** experiment. Keep the user's normal automatic geometry chain:
+target-grid** experiment.
 
-`MP sizing -> Scale (1.20)`
+The real graph topology matters here: the 1.20 scale shown in the workflow belongs to the downstream
+**MiniMax H3 Latent Upscaler + Refine (3D)** node. That node executes only after Continuum sampler 1
+has already produced its base-resolution chunks. Its scale widget therefore cannot be wired backward
+to Continuum and cannot directly define E's first-pass canvas.
 
-The Scale node is retained **only as the target-dimension calculator for E**. Do not execute the
-learned **Latent Upscale Refine** node. Fan the Scale node's width/height outputs to both Continuum
-width/height and Resolution-Aware Sigmas target_width/target_height. Leave source_width/source_height
-at 0/0 so the resolution node derives the H3-native reference automatically for each target aspect
-ratio. No per-image manual width/height calculation is part of the experiment.
+For E, keep the existing pre-Continuum MP sizing node as the base-resolution authority and insert
+**MiniMax H3 Refine Target Geometry [Experimental]** between the MP dimensions and Continuum:
 
-For the current example, Scale produces 896x928, which auto-resolves the pinned H3 native reference
-to 768x800:
+- MP width -> Refine Target Geometry `base_width`
+- MP height -> Refine Target Geometry `base_height`
+- Refine Target Geometry: `scale=1.20`, `align=32`, `keep_proportion=true`
+- Refine Target Geometry `target_width` -> Continuum `width`
+- Refine Target Geometry `target_height` -> Continuum `height`
+- the same target width/height -> Resolution-Aware Sigmas `target_width/target_height`
+- Resolution-Aware Sigmas `source_width=0`, `source_height=0`
 
-- analytic H3-Base reference regime: 768x800 pixels (48x50 latent W/H, 24x25 H3 spatial patches);
-- actual generation: 896x928 pixels (56x58 latent W/H, 28x29 spatial patches);
-- target/reference area ratio: ~1.35333333;
-- SD3 relative factor `alpha=sqrt(m/n)`: ~1.16332856;
-- H3 native video shift remains 12; composition gives effective video shift ~13.95994269 at strength 1;
-- 10 SA-Solver-PECE outer steps with the same `MiniMax H3 SA-Solver Scheduler / simple_control`;
+The helper is geometry-only. It mirrors the pinned LBH refine node's exact scale-by-multiplier target
+calculation and 32px/H3 alignment, but performs no learned upscale and no refinement sampling. This
+preserves the user's automatic MP-driven aspect/size selection while making the **post-refine-size**
+canvas available before sampler 1 without manual per-image arithmetic.
+
+For the current example:
+
+- MP/base Continuum canvas: 736x768 pixels
+- downstream refine scale to mirror: 1.20
+- geometry-only resolved direct E target: 896x928 pixels
+- analytic H3-Base reference regime: 768x800 pixels
+- target/reference area ratio: ~1.35333333
+- SD3 relative factor `alpha=sqrt(m/n)`: ~1.16332856
+- H3 native video shift remains 12; composition gives effective video shift ~13.95994269 at strength 1
+- 10 SA-Solver-PECE outer steps with `MiniMax H3 SA-Solver Scheduler / simple_control`
 - same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
-  standard MiniMax H3 VAE, and decode;
-- no progressive handoff, trajectory capture/guidance, temporal guidance, or learned upscale/refine execution; the ordinary Scale(1.20) geometry node remains active;
-- Continuum Run Storage off.
+  standard MiniMax H3 VAE, and decode
+- no progressive handoff, trajectory capture/guidance, temporal guidance, learned upscale, or sampler-2 refine
+- Continuum Run Storage off
 
-Wire **MiniMax H3 Resolution-Aware Sigmas** directly between the existing SA-Solver scheduler SIGMAS
-output and Continuum's SIGMAS input. On the MODEL path keep DiffAid -> Untwist -> Spectrum, then insert
-**MiniMax H3 Runtime Metrics Probe** immediately before Continuum. Connect its metrics output to both
-**MiniMax H3 Resolution-Aware Sigmas → metrics** and **MiniMax H3 Metrics JSON**. The probe is
-observational: it installs the existing call/layout metrics wrappers but enables no trajectory capture,
-guidance, progressive handoff, or attention change. The sigma node records one
-`resolution_sigma_map` event containing the mode, reference/target geometry, relative/effective shift,
-point count, maximum sigma delta, and exact-identity flag. This keeps E's 38-call/NFE/forecast audit
-self-describing without contaminating the schedule experiment.
+Wire **MiniMax H3 Resolution-Aware Sigmas** between the existing SA-Solver scheduler SIGMAS output and
+Continuum's SIGMAS input. On the MODEL path keep DiffAid -> Untwist -> Spectrum, then insert
+**MiniMax H3 Runtime Metrics Probe** immediately before Continuum. Leave the probe's optional
+`metrics` input disconnected. Fan its `metrics` output to both Resolution-Aware Sigmas `metrics`
+and **MiniMax H3 Metrics JSON**.
 
-Run **E0-direct-control** first through the same node with:
+Run **E0-direct-control** first:
 
-- `mode=off`
-- source/reference width 0, height 0 (auto H3-native reference)
-- target width/height connected from the existing Scale(1.20) node
+- Resolution-Aware Sigmas `mode=off`
+- `source_width=0`, `source_height=0`
+- target width/height from Refine Target Geometry
 - strength 0
 
 The output SIGMAS must be bit-exact parity with the input schedule. Diagnostics should report
@@ -204,46 +214,39 @@ Then run **E1-resolution-aware** with only:
 - `mode=resolution_aware`
 - strength 1.0
 
-changed. For the current 896x928 example, diagnostics should resolve source 768x800 and report
-area ratio ~1.35333333, relative factor ~1.16332856, effective video shift ~13.95994269,
-`reference_mode=h3_native_auto`, and `shared_av_coordinate=true`. Other source images may produce
-different target/reference numbers through the same automatic MP -> Scale(1.20) geometry path.
+changed. For the current 896x928 target, diagnostics should resolve source 768x800 and report area
+ratio ~1.35333333, relative factor ~1.16332856, effective video shift ~13.95994269,
+`reference_mode=h3_native_auto`, and `shared_av_coordinate=true`.
 
 The implementation first inverts H3's native video shift, applies only the **relative** SD3 map, and
 then restores H3's native video shift:
 
-\[
-\sigma_v' = f_{12}\!\left(f_{\alpha}\!\left(f_{12}^{-1}(\sigma_v)\right)\right),
-\qquad
-f_s(t)=\frac{s t}{1+(s-1)t}.
-\]
+[
+sigma_v' = f_{12}!left(f_{alpha}!left(f_{12}^{-1}(sigma_v)ight)ight),
+qquad
+f_s(t)=rac{s t}{1+(s-1)t}.
+]
 
-This is not a replacement of H3's shift 12. Because H3 derives audio sigma from the same shared base
-coordinate, E1 also changes the audio schedule. That is deliberate for this isolated SIGMAS-only
-probe and makes decoded audio part of the pass/fail criterion.
+Because H3 derives audio sigma from the same shared base coordinate, E1 also changes the audio
+schedule. Decoded audio remains part of the pass/fail criterion.
 
-A two-chunk 10-outer-step PECE run should still produce **38 sampler logical calls**, but there must be:
+A two-chunk 10-outer-step PECE run should still produce **38 sampler logical calls**, with:
 
-- 0 progressive sampler invocations;
-- 0 progressive history boundaries;
-- 0 exact handoff probes;
-- 0 flow/temporal guidance events.
+- 0 progressive sampler invocations
+- 0 progressive history boundaries
+- 0 exact handoff probes
+- 0 flow/temporal guidance events
 
 Do **not** require the same actual-NFE/forecast split between E0 and E1. Spectrum sees different sigma
-coordinates in E1 and may legitimately change forecast decisions. Record the split instead of forcing
-parity. SA-Solver's default stochastic interval also remains tied to effective model sigma: ComfyUI
-computes its 20%-80% thresholds from the native model-sampling object and evaluates them against the
-supplied remapped sigma. E1 may therefore move the outer indices on which stochastic SA dynamics are
-active; that is an intended consequence of changing effective flow time, not a separately tuned
-sampler setting.
+coordinates in E1 and may legitimately change forecast decisions. SA-Solver's default stochastic
+interval also remains tied to effective supplied sigma.
 
-The media gate is specifically E1 versus E0: fast-motion clothing, newly revealed grass/background,
+The media gate is E1 versus E0: fast-motion clothing, newly revealed grass/background,
 limb/disocclusion boundaries, anatomy, detail, shot continuity/dynamics, prompt/reference fidelity,
-Continuum seams, and decoded audio. A video improvement that damages audio or global motion is a
-failure.
+Continuum seams, and decoded audio.
 
 Do not tune strength or use `calibrated` mode before this pair is decoded. If E1 is clearly better,
-the next experiment is a **combination** test on the accepted D10 progressive+temporal path. If E1 is
+the next experiment is a combination test on the accepted D10 progressive+temporal path. If E1 is
 neutral/worse, leave resolution-aware sigmas experimental/off rather than beginning a strength sweep.
 
 ## Required metrics
