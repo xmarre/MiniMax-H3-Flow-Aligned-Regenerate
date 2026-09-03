@@ -202,7 +202,9 @@ fresh-lifetime boundaries instead of reporting an unverified solver-reset boolea
   fails closed rather than being relabeled as an actual anchor.
   `h3_refinement` API v1 supplies the full-trajectory sigma reference; the high stage requests
   an actual prefix.
-- **External patches:** exact calls traverse the normal guider/model patch chain. The probe also
+- **External patches:** exact calls traverse the normal guider/model patch chain. A pre-existing
+  `h3_refinement` dictionary is preserved when compatible, including opaque provider fields; a
+  conflicting API/prefix/sigma/source contract fails closed rather than being overwritten. The probe also
   publishes the full-trajectory refinement reference so sigma-sensitive patches such as DiffAid
   do not renormalize the split coordinate to the probe invocation's first sigma.
 - **Continuum:** selection includes the available session/chunk namespace and a bounded content
