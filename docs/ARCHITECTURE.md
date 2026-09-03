@@ -195,5 +195,8 @@ rows while preserving aspect ratio and even H/W. Already encoded Qwen tokens rem
 Diagnostics sample selected heads/queries and report entropy and modality mass without retaining full
 matrices. Experimental sparse layers keep text/reference/audio global. Video queries retain non-video
 keys and all temporal positions inside a spatial patch window; configured heads remain fully global.
-Query chunking avoids a sequence-square mask. RoPE is untouched and block replacements are chained.
-If another optimized attention override exists, the experiment records a fallback and delegates to it.
+Query-local restrictions are passed to ComfyUI attention backends as numeric QxK additive masks,
+because Core's boolean-mask path is a batch/key mask and cannot represent per-query sparsity.
+Unsupported mask backends fall back to native attention. Query chunking avoids a sequence-square mask.
+RoPE is untouched and block replacements are chained. If another optimized attention override exists,
+the experiment records a fallback and delegates to it.
