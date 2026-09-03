@@ -224,10 +224,7 @@ def apply_guidance(
             and abs(coordinate - state.previous_coordinate) > 1e-8
         ):
             acceleration_delta = (
-                reference_velocity
-                - state.previous_reference_velocity
-                - high_velocity
-                + state.previous_high_velocity
+                reference_velocity - state.previous_reference_velocity - high_velocity + state.previous_high_velocity
             )
             high_velocity = high_velocity + schedule * config.acceleration_weight * acceleration_delta
             guided = high_state - sigma_value * high_velocity
@@ -253,6 +250,7 @@ def apply_guidance(
         state.previous_high_velocity = None
         state.previous_reference_velocity = None
     return result
+
 
 def conditional_renoise_alignment(
     reference_x0: torch.Tensor,

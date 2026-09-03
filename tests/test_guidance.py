@@ -230,10 +230,7 @@ def test_acceleration_matches_hiflow_velocity_alignment():
     current_reference_velocity = (current_state - current_ref) / current_sigma
     schedule = current_coordinate / first_coordinate
     expected_velocity = current_high_velocity + schedule * config.acceleration_weight * (
-        current_reference_velocity
-        - previous_reference_velocity
-        - current_high_velocity
-        + previous_high_velocity
+        current_reference_velocity - previous_reference_velocity - current_high_velocity + previous_high_velocity
     )
     expected_x0 = current_state - current_sigma * expected_velocity
 
