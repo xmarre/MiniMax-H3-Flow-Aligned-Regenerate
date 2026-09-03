@@ -86,10 +86,10 @@ def patch_flow_model(
     prior = model.model_options.get(FLOW_BINDING_KEY)
     if not isinstance(prior, FlowBinding):
         prior = None
-    patched = model.clone()
-    _copy_model_options(patched)
     if clear_trajectory and trajectory is not None:
         raise ValueError("cannot set and clear trajectory in the same model patch")
+    patched = model.clone()
+    _copy_model_options(patched)
     binding = FlowBinding(
         trajectory=(
             None
