@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from pathlib import Path
 
 
@@ -11,6 +12,22 @@ def require(path: Path, *needles: str) -> None:
         raise SystemExit(f"{path}: missing required contract fragments: {missing}")
 
 
+def require_symbols(path: Path, *, functions: tuple[str, ...] = (), classes: tuple[str, ...] = ()) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found_functions = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    found_classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    missing_functions = sorted(set(functions) - found_functions)
+    missing_classes = sorted(set(classes) - found_classes)
+    if missing_functions or missing_classes:
+        raise SystemExit(
+            f"{path}: missing structural symbols functions={missing_functions} classes={missing_classes}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate pinned H3 sibling-source contracts")
     parser.add_argument("--comfy", type=Path, required=True)
@@ -19,6 +36,7 @@ def main() -> None:
     parser.add_argument("--diffaid", type=Path, required=True)
     parser.add_argument("--refdelta", type=Path, required=True)
     parser.add_argument("--untwist", type=Path, required=True)
+    parser.add_argument("--upscaler", type=Path, required=True)
     args = parser.parse_args()
 
     require(
@@ -77,6 +95,17 @@ def main() -> None:
         '"chunk_index": int(chunk_index)',
         '"context_frames": int(context_frames)',
     )
+    require_symbols(
+        args.continuum / "v3/driving_nodes.py",
+        functions=("_refine_state_output", "_fresh_refine_model"),
+        classes=("H3ContinuumSamplerV34",),
+    )
+    require(
+        args.continuum / "v3/driving_nodes.py",
+        '"H3_CONTINUUM_REFINE_STATE"',
+        '"emit_refine_conditioning"',
+        '"refine_state"',
+    )
     require(
         args.diffaid / "spectrum_h3_compat.py",
         '"h3_refinement"',
@@ -89,6 +118,23 @@ def main() -> None:
         'VISUAL_PATCH_RUNTIME_KEY = "spectrum_h3_visual_reference_patch_runtime"',
         '"schedule_progress"',
         '"active"',
+    )
+    require_symbols(
+        args.upscaler / "nodes/minimax_h3_refine.py",
+        functions=(
+            "_resolve_refine_contract",
+            "_model_with_refinement_contract",
+            "build_clean_h3_upscale",
+            "run_h3_refinement",
+        ),
+        classes=("MinimaxH3LatentUpscaler3DRefine",),
+    )
+    require(
+        args.upscaler / "nodes/minimax_h3_refine.py",
+        '"H3_CONTINUUM_REFINE_STATE"',
+        'transformer_options[H3_REFINEMENT_REQUEST_KEY]',
+        "resize_h3_target_conditioning",
+        "denoise_mask=noise_mask",
     )
     refdelta_text = "\n".join(path.read_text(encoding="utf-8") for path in args.refdelta.rglob("*.py"))
     for name in ("sa_solver", "sa_solver_pece", "seeds_2", "seeds_3", "er_sde"):
