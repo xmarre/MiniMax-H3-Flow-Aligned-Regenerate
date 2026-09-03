@@ -452,6 +452,10 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert not binding.capture_enabled
     assert binding.guidance_conditioning_signature == conditioning_signature_from_conditioning(positive)
     assert binding.metrics is metrics
+    layout_wrapper = patched_state["model"].model_options["transformer_options"]["patches_replace"]["dit"][
+        ("double_block", 0)
+    ]
+    assert layout_wrapper._h3_flow_metrics is metrics
 
 
 def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
