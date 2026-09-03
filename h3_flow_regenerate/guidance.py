@@ -138,11 +138,20 @@ def _bounded(
     ref_rms = reference.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
     scale = torch.clamp(ref_rms * ratio / corr_rms.clamp_min(1e-8), max=1.0)
     bounded_rms = corr_rms * scale
+    summary = torch.stack(
+        (
+            bounded_rms.mean(),
+            ref_rms.mean(),
+            (bounded_rms / ref_rms).mean(),
+            scale.mean(),
+        )
+    ).detach().to(device="cpu", dtype=torch.float64)
+    correction_rms, baseline_rms, correction_rms_ratio, clamp_scale = map(float, summary.tolist())
     stats = {
-        "correction_rms": float(bounded_rms.mean().item()),
-        "baseline_rms": float(ref_rms.mean().item()),
-        "correction_rms_ratio": float((bounded_rms / ref_rms).mean().item()),
-        "clamp_scale": float(scale.mean().item()),
+        "correction_rms": correction_rms,
+        "baseline_rms": baseline_rms,
+        "correction_rms_ratio": correction_rms_ratio,
+        "clamp_scale": clamp_scale,
     }
     return correction * scale.to(correction), stats
 
@@ -197,13 +206,18 @@ def apply_guidance(
     state.last_baseline_rms = correction_stats["baseline_rms"]
     state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
     state.last_clamp_scale = correction_stats["clamp_scale"]
-    state.previous_coordinate = float(coordinate)
-    state.previous_high_x0 = high_x0.detach()
-    state.previous_reference = ref.detach()
+    if config.mode == "direction+acceleration" and config.acceleration_weight > 0:
+        state.previous_coordinate = float(coordinate)
+        state.previous_high_x0 = high_x0.detach()
+        state.previous_reference = ref.detach()
+    else:
+        state.previous_coordinate = None
+        state.previous_high_x0 = None
+        state.previous_reference = None
     return high_x0 + correction
 
 
-def initialization_alignment(
+def conditional_renoise_alignment(
     reference_x0: torch.Tensor,
     *,
     target_h: int,
