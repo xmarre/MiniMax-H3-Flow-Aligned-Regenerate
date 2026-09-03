@@ -63,6 +63,28 @@ def test_layout_summary_counts_packed_modalities():
     assert summary["sequence_rows"] == 20
 
 
+def test_layout_summary_accumulates_repeated_reference_segments():
+    repeated = SimpleNamespace(
+        segments=[
+            (0, 2, "text"),
+            (2, 5, "cond"),
+            (5, 7, "cond"),
+            (7, 11, "ref_img"),
+            (11, 14, "ref_img"),
+            (14, 16, "ref_audio"),
+            (16, 20, "audio"),
+            (20, 32, "video"),
+        ],
+        signature=(2, 1, 4, 6, 2),
+        seq_len=32,
+    )
+    summary = layout_summary(repeated)
+    assert summary["text_rows"] == 2
+    assert summary["reference_rows"] == 12
+    assert summary["audio_rows"] == 4
+    assert summary["video_rows"] == 12
+
+
 def test_sparse_attention_uses_query_key_additive_mask():
     test_layout = layout()
     q = torch.randn(1, 2, 20, 4)
