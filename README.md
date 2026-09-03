@@ -188,6 +188,10 @@ and [benchmark instructions](docs/BENCHMARKS.md).
 
 - No decoded-media claim is made yet.
 - The progressive probe intentionally costs one visible exact H3 NFE at the transition.
+- Target-input progressive mode intentionally derives its private low-grid **video** noise from a
+  documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
+  of an arbitrary custom/non-Gaussian video-noise node at that private grid. The caller's audio noise
+  and target-grid protected-region noise remain preserved.
 - Progressive handoff carries ComfyUI denoise-mask semantics across the grid transition by resizing
   ComfyUI's prepared packed video mask, preserving the audio mask, spatially transferring the sampler
   `latent_image`, and reconstructing the exact noise argument against that preserved latent state.
