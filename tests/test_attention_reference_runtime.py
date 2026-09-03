@@ -1045,6 +1045,22 @@ def test_noise_reconstruction_includes_preserved_latent_image():
     assert torch.allclose(reconstructed, state, atol=1e-6, rtol=1e-6)
 
 
+def test_noise_reconstruction_aligns_wrapper_latent_to_sampler_state_domain():
+    base_model = SimpleNamespace(model_sampling=SimpleNamespace(noise_scale=1.5))
+    state = torch.randn(1, 1, 32, dtype=torch.float64)
+    # OUTER_SAMPLE wrapper inputs can remain in host/default precision while a
+    # completed nested sampler result is already in the model's state domain.
+    latent = torch.randn(1, 1, 32, dtype=torch.float32)
+    sigma = 0.35
+
+    noise = _noise_argument(base_model, state, sigma, latent)
+
+    assert noise.dtype == state.dtype
+    aligned_latent = latent.to(state)
+    reconstructed = sigma * 1.5 * noise + (1.0 - sigma) * aligned_latent
+    assert torch.allclose(reconstructed, state, atol=1e-10, rtol=1e-10)
+
+
 def test_progressive_mask_resize_uses_prepared_full_channel_av_geometry():
     source_shapes = [(1, 24, 1, 4, 4), (1, 32, 2, 5)]
     target_shapes = [(1, 24, 1, 8, 6), (1, 32, 2, 5)]
