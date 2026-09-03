@@ -83,6 +83,10 @@ def main() -> None:
         'node["is_changed"] = float("NaN")',
     )
     require(
+        args.comfy / "comfy_execution/caching.py",
+        "signature = [class_type, await self.is_changed_cache.get(node_id)]",
+    )
+    require(
         args.comfy / "comfy/model_patcher.py",
         "def add_callback_with_key(",
         "def remove_callbacks_with_key(",
