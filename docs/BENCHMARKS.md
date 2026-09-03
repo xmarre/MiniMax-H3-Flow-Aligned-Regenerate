@@ -85,40 +85,51 @@ global acceleration-weight tuning from this smoke result. If that artifact class
 the next research target should be video-time correspondence/occlusion-aware guidance rather than
 additional denoising-time acceleration strength.
 
-### D10 video-time correspondence experiment — closed negative result
+### D10 video-time correspondence experiment — VAE-confounded, clean rerun pending
 
-Two matched `direction+temporal` runs were completed against the accepted D10 direction-only control.
-Both preserved the expected structural topology: 38 logical / 28 actual / 10 Spectrum forecast calls,
+Two matched `direction+temporal` runs were previously decoded against the accepted D10 direction-only
+control. Structurally they remained comparable: 38 logical / 28 actual / 10 Spectrum forecast calls,
 22 low + 2 exact probes + 14 high, 48x46 -> 58x56 geometry, handoff index 6 at coordinate
 ~0.400000016 / sigma ~0.888888896, no sampler failures, and no RMS clamp activation.
 
-**D10-temporal-v1** failed decoded media with a new repeated/patterned grass texture and
-different/more-broken motion artifacts. Its telemetry showed high cosine similarity but weak
-best-vs-second-best uniqueness, so ambiguous repetitive-texture matches were still being transported.
+Those **media verdicts are not valid temporal evidence**. The workflow had accidentally switched to
+`ComfyUI-H3VAE_TRT` and compiled the `w4a16_awq` decoder. The user later identified that decoder as
+the source of the repeated/patterned output. The console/runtime evidence confirms that the affected
+run used `MiniMaxH3TRTVAE`. Therefore the patterned grass cannot be attributed to
+`direction+temporal` from those runs.
 
-V2 therefore made the gate intentionally conservative:
+The structural findings remain useful:
 
-- minimum similarity and uniqueness margin became hard admission criteria;
-- reverse-cycle tolerance became exact (0 latent cells);
-- post-handoff requests below the final exact low-grid anchor reused the resolved ~0.4 correspondence
-  map instead of recomputing it for each requested coordinate;
-- telemetry exposed the resolved/clamped reference coordinate.
+- v1 exposed a real ambiguity bug: high cosine similarity but weak best-vs-second-best uniqueness
+  allowed repetitive regions to receive temporal transport;
+- v2 fixed that independently by making similarity/margin hard admission rules, requiring exact
+  reverse-cycle consistency, and caching by the resolved low-grid reference coordinate;
+- on the latest v2 run, strict valid support fell to ~0.2202% / ~0.2235%, mean confidence to
+  ~0.00118 / ~0.00120, and 12/14 guidance calls correctly reused the resolved/clamped ~0.4 anchor.
 
-**D10-temporal-v2 still failed the media gate with the same visible grass pattern.** The v2 telemetry
-confirms that the new gate actually took effect: valid temporal support fell to only
-~0.2202% / ~0.2235% for the two chunks, mean confidence to ~0.00118 / ~0.00120, and mean temporal
-RMS ratio across the 14 guidance calls to ~0.00137. Post-handoff cache behavior also worked as designed:
-12/14 calls reused the resolved ~0.4 map and 12/14 calls explicitly reported a clamped reference.
-Despite that very sparse global support, the visible pattern remained.
+Because the VAE changed at the same time as the temporal experiment, neither v1 nor v2 can answer the
+quality question. The public `direction+temporal` mode and conservative v2 implementation are restored.
 
-This closes the nearest-neighbor latent-transport hypothesis for this PR. Do **not** sweep
-`temporal_weight`, search radius, margin, or cycle tolerance further. The public
-`direction+temporal` mode and its runtime machinery are removed. The negative result remains
-documented because it establishes that tiny sparse high-resolution detail transport can still create
-localized visible repetition and that structural correspondence telemetry alone is not a quality gate.
+The next gate is exactly one clean **D10-temporal-v2-rerun** after the corrected VAE is installed:
 
-The active next feature path returns to **E: resolution-shift-only**, while any later motion-specific
-research must use a different non-copying/global-local formulation rather than this transport design.
+- 10 SA-Solver-PECE outer steps;
+- Target Input `source_mode=scale`, `source_scale=0.83`;
+- fixed handoff request 0.35;
+- `guidance_mode=direction+temporal`;
+- direction 0.25, temporal 0.20, acceleration 0, consistency 0;
+- low-frequency cutoff 0.25;
+- same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
+  and decode settings;
+- Continuum Run Storage off;
+- use the corrected VAE decoder, explicitly record the exact decoder/engine identifier, and do **not**
+  use `w4a16_awq`.
+
+Do not tune temporal weight, search radius, margin, or cycle tolerance before this clean rerun.
+The media gate returns to the original question: fast-motion clothing and newly revealed
+grass/background must improve without freezing, stale copying, repetition, ghosting, or smearing.
+
+Resolution-shift-only path E remains pending after this clean temporal rerun.
+
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
 regime's source grid (54x40 or 62x44), while H3 itself samples directly on the 64x48 target grid.
