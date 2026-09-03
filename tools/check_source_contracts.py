@@ -69,6 +69,16 @@ def main() -> None:
         "WrappersMP.PREDICT_NOISE",
         "#Returns denoised",
         "inverse_noise_scaling(sigmas[-1], samples)",
+        "preprocess_conds_hooks(self.conds)",
+        "filter_registered_hooks_on_conds(self.conds, self.model_options)",
+        "self.conds = process_conds(",
+    )
+    require(
+        args.comfy / "comfy/model_patcher.py",
+        "def add_callback_with_key(",
+        "def remove_callbacks_with_key(",
+        "self.get_all_callbacks(CallbacksMP.ON_CLONE)",
+        "callback(self, n)",
     )
     require(
         args.spectrum / "comfyui_spectrum_h3/refinement_compat.py",
