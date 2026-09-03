@@ -491,17 +491,6 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             acceleration_applied=binding.guidance_state.last_acceleration_applied,
             same_coordinate_refinement=binding.guidance_state.last_same_coordinate_refinement,
             acceleration_anchor_coordinate=binding.guidance_state.last_acceleration_anchor_coordinate,
-            temporal_rms_ratio=binding.guidance_state.last_temporal_rms_ratio,
-            temporal_confidence_mean=binding.guidance_state.last_temporal_confidence_mean,
-            temporal_valid_fraction=binding.guidance_state.last_temporal_valid_fraction,
-            temporal_disocclusion_fraction=binding.guidance_state.last_temporal_disocclusion_fraction,
-            temporal_similarity_mean=binding.guidance_state.last_temporal_similarity_mean,
-            temporal_margin_mean=binding.guidance_state.last_temporal_margin_mean,
-            temporal_flow_magnitude_mean=binding.guidance_state.last_temporal_flow_magnitude_mean,
-            temporal_flow_magnitude_max=binding.guidance_state.last_temporal_flow_magnitude_max,
-            temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
-            temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
-            temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
             actual=actual,
             solver_phase=(
                 spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
