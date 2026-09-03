@@ -467,7 +467,6 @@ def _noise_argument(base_model: Any, state: torch.Tensor, sigma: float) -> torch
     return state / (sigma * noise_scale)
 
 
-
 def _reset_guider_conds(guider: Any) -> None:
     """Recreate raw conditioning before each independent geometry/sampler lifetime.
 
