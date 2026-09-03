@@ -354,11 +354,17 @@ class H3ResolutionAwareSigmas:
             strength=strength,
             calibrated_factor=calibrated_factor,
         )
+        if mode == "off":
+            effective_factor = 1.0
+        elif mode == "calibrated":
+            effective_factor = float(calibrated_factor)
+        else:
+            effective_factor = resolution_shift_factor(source_area, target_area, strength)
         return mapped, {
             "mode": mode,
             "source_area": source_area,
             "target_area": target_area,
-            "extra_shift_factor": resolution_shift_factor(source_area, target_area, strength),
+            "extra_shift_factor": effective_factor,
         }
 
 
