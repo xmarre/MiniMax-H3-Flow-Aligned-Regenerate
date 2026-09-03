@@ -635,20 +635,27 @@ def _resize_target_keyframes(entry: dict[str, Any], target_h: int, target_w: int
     return out
 
 
-def _reset_guider_conds(guider: Any, *, target_video_hw: tuple[int, int] | None = None) -> None:
-    """Recreate raw conditioning before each independent geometry/sampler lifetime.
+def _reset_guider_conds(
+    guider: Any,
+    *,
+    template: dict[str, list[Any]] | None = None,
+    target_video_hw: tuple[int, int] | None = None,
+) -> None:
+    """Recreate conditioning before each independent geometry/sampler lifetime.
 
     ComfyUI resolves percentage areas, masks, and model conditions in-place on
     guider.conds. Reusing the processed low-resolution structure for the
     probe/high stage can therefore leak low-grid shape metadata across a
-    progressive handoff.
+    progressive handoff. The progressive caller supplies a pristine snapshot of
+    guider.conds taken *after* ComfyUI's hook preprocessing/filtering so those
+    call-boundary hook semantics are not lost when geometry is rebuilt.
     """
-    original = getattr(guider, "original_conds", None)
-    if not isinstance(original, dict):
+    source = template if template is not None else getattr(guider, "original_conds", None)
+    if not isinstance(source, dict):
         return
     target_h, target_w = target_video_hw if target_video_hw is not None else (None, None)
     rebuilt = {}
-    for key, entries in original.items():
+    for key, entries in source.items():
         copied_entries = []
         for entry in entries:
             copied = entry.copy() if isinstance(entry, dict) else copy.copy(entry)
@@ -734,6 +741,13 @@ def _run_progressive(
     transformer = model_options.setdefault("transformer_options", {})
     if not isinstance(transformer, dict):
         raise RuntimeError("progressive handoff requires mutable transformer options")
+    current_conds = getattr(guider, "conds", None)
+    if not isinstance(current_conds, dict):
+        raise RuntimeError("progressive handoff requires ComfyUI guider conditioning state")
+    conditioning_template = {
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
+        for key, entries in current_conds.items()
+    }
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
 
     target_input = isinstance(config, ProgressiveTargetInputConfig)
@@ -806,6 +820,7 @@ def _run_progressive(
     try:
         _reset_guider_conds(
             guider,
+            template=conditioning_template,
             target_video_hw=(source_h, source_w) if target_input else None,
         )
         low_started = time.perf_counter()
@@ -838,6 +853,7 @@ def _run_progressive(
         try:
             _reset_guider_conds(
                 guider,
+                template=conditioning_template,
                 target_video_hw=(source_h, source_w) if target_input else None,
             )
             # The probe is a one-call sampler lifetime, but model-level patches such
@@ -920,6 +936,7 @@ def _run_progressive(
         high_event_start = len(binding.metrics.events)
         _reset_guider_conds(
             guider,
+            template=conditioning_template,
             target_video_hw=None if target_input else (target_h, target_w),
         )
         binding.metrics.increment("progressive_sampler_invocations")
