@@ -31,7 +31,10 @@
       "handoff_coordinate": 0.35,
       "handoff_selection": "fixed",
       "guidance_mode": "direction",
-      "direction_weight": 0.25
+      "direction_weight": 0.25,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25
     },
     "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the Continuum MODEL input"
   },
