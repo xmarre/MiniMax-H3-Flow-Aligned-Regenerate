@@ -151,14 +151,15 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
     existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).copy()
     for layer in range(num_layers):
         previous = existing.get(("double_block", layer))
+        if getattr(previous, "_h3_flow_layout_wrapper", False):
+            previous = getattr(previous, "_h3_flow_previous", None)
         wrapper = make_layout_block_wrapper(
             layer,
             metrics,
             previous,
-            record_layout=not getattr(previous, "_h3_flow_layout_wrapper", False),
+            record_layout=layer == 0,
         )
-        if layer == 0:
-            wrapper = mark_layout_wrapper(wrapper, metrics=metrics)
+        wrapper = mark_layout_wrapper(wrapper, metrics=metrics, previous=previous)
         model.set_model_patch_replace(
             wrapper,
             "dit",
@@ -171,9 +172,12 @@ def _install_layout_metrics(model: Any, metrics: H3FlowMetrics) -> None:
     transformer = model.model_options["transformer_options"]
     existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).get(("double_block", 0))
     if getattr(existing, "_h3_flow_layout_wrapper", False):
-        return
+        if getattr(existing, "_h3_flow_metrics", None) is metrics:
+            return
+        existing = getattr(existing, "_h3_flow_previous", None)
     wrapper = make_layout_block_wrapper(0, metrics, existing)
-    model.set_model_patch_replace(mark_layout_wrapper(wrapper, metrics=metrics), "dit", "double_block", 0)
+    marked = mark_layout_wrapper(wrapper, metrics=metrics, previous=existing)
+    model.set_model_patch_replace(marked, "dit", "double_block", 0)
 
 
 def reconfigure_binding(binding: FlowBinding, **changes: Any) -> FlowBinding:
