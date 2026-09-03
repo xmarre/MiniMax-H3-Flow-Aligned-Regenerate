@@ -334,7 +334,9 @@ def _build_temporal_correspondence(
     confidence_mean = float(all_confidence.float().mean().detach().to(device="cpu", dtype=torch.float64).item())
     valid_fraction = float(valid.float().mean().detach().to(device="cpu", dtype=torch.float64).item())
     flow_magnitude_max = (
-        float(all_flow[valid].max().detach().to(device="cpu", dtype=torch.float64).item()) if bool(valid.any().item()) else 0.0
+        float(all_flow[valid].max().detach().to(device="cpu", dtype=torch.float64).item())
+        if bool(valid.any().item())
+        else 0.0
     )
 
     pair_count = frames - 1
@@ -430,7 +432,6 @@ def _temporal_alignment_correction(
     if frames < 2:
         return torch.zeros_like(high)
 
-    source_h, source_w = reference.shape[-2:]
     backward_source = correspondence.backward_flow
     forward_source = correspondence.forward_flow
     backward_target = _resize_pairwise_flow(backward_source, target_h, target_w)
