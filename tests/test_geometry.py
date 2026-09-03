@@ -3,6 +3,7 @@ import torch
 
 from h3_flow_regenerate.geometry import (
     geometry_from_video,
+    h3_refine_scale_target_canvas,
     normalize_target_geometry,
     pack_streams,
     pixel_to_safe_latent,
@@ -34,6 +35,38 @@ def test_known_76_by_57_regression_normalizes_even():
 
 def test_pixel_target_maps_to_safe_latent():
     assert pixel_to_safe_latent(768, 1024) == (48, 64)
+
+
+def test_refine_scale_target_matches_current_continuum_geometry():
+    assert h3_refine_scale_target_canvas(736, 768, 1.20, align=32, keep_proportion=True) == (
+        896,
+        928,
+    )
+
+
+@pytest.mark.parametrize(
+    ("base_width", "base_height", "expected"),
+    [
+        (768, 768, (928, 928)),
+        (864, 640, (1024, 768)),
+        (640, 864, (768, 1024)),
+    ],
+)
+def test_refine_scale_target_matches_lbh_alignment_semantics(base_width, base_height, expected):
+    assert h3_refine_scale_target_canvas(
+        base_width,
+        base_height,
+        1.20,
+        align=32,
+        keep_proportion=True,
+    ) == expected
+
+
+def test_refine_scale_target_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match=">= 1.0"):
+        h3_refine_scale_target_canvas(736, 768, 0.99)
+    with pytest.raises(ValueError, match="positive"):
+        h3_refine_scale_target_canvas(0, 768, 1.20)
 
 
 @pytest.mark.parametrize("shape", [(40, 54), (18, 102), (128, 26)])
