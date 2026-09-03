@@ -33,6 +33,7 @@ OUTER_WRAPPER_KEY = "h3_flow_regenerate.outer.v1"
 PREDICT_WRAPPER_KEY = "h3_flow_regenerate.predict.v1"
 PROBE_MARKER = "_h3_flow_exact_probe"
 PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
+FLOW_STAGE_KEY = "h3_flow_stage"
 SPECTRUM_ACTUAL_KEY = "spectrum_h3_actual"
 SPECTRUM_PHASE_KEY = "spectrum_h3_solver_phase"
 SPECTRUM_OUTER_STEP_KEY = "spectrum_h3_outer_step_id"
@@ -306,18 +307,24 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         return result
     transformer = (model_options or {}).get("transformer_options") or {}
     probe_context = transformer.get(PROBE_CONTEXT_KEY)
+    stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
     if isinstance(probe_context, dict) and not actual:
         raise RuntimeError("progressive handoff exact probe was forecast instead of evaluated")
     binding.metrics.increment("transformer_actual_nfe" if actual else "spectrum_forecast_calls")
+    binding.metrics.increment(
+        f"transformer_actual_nfe_{stage}" if actual else f"spectrum_forecast_calls_{stage}"
+    )
     binding.metrics.increment("sampler_logical_calls")
+    binding.metrics.increment(f"sampler_logical_calls_{stage}")
     sigma = float(timestep.detach().reshape(-1)[0].item())
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
     audio_shift = float(transformer.get("minimax_h3_sigma_shift_audio", H3_AUDIO_SHIFT))
     coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
     binding.metrics.event(
         "model_call",
+        stage=stage,
         sigma=sigma,
         coordinate=coordinate,
         actual=actual,
@@ -653,6 +660,25 @@ def _reset_guider_conds(guider: Any, *, target_video_hw: tuple[int, int] | None 
 
 
 @contextlib.contextmanager
+def _flow_stage_contract(guider: Any, stage: str):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("H3 flow stage tracking requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("H3 flow stage tracking requires mutable transformer options")
+    previous = transformer.get(FLOW_STAGE_KEY)
+    transformer[FLOW_STAGE_KEY] = str(stage)
+    try:
+        yield
+    finally:
+        if previous is None:
+            transformer.pop(FLOW_STAGE_KEY, None)
+        else:
+            transformer[FLOW_STAGE_KEY] = previous
+
+
+@contextlib.contextmanager
 def _high_stage_contract(guider: Any):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
@@ -784,17 +810,19 @@ def _run_progressive(
         )
         low_started = time.perf_counter()
         try:
-            low_result = executor(
-                low_noise,
-                low_latent_image,
-                sampler,
-                low_sigmas,
-                low_mask,
-                low_callback,
-                disable_pbar,
-                seed,
-                latent_shapes=source_shapes,
-            )
+            binding.metrics.increment("progressive_sampler_invocations")
+            with _flow_stage_contract(guider, "low"):
+                low_result = executor(
+                    low_noise,
+                    low_latent_image,
+                    sampler,
+                    low_sigmas,
+                    low_mask,
+                    low_callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=source_shapes,
+                )
         finally:
             binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
         base_model = guider.model_patcher.model
@@ -816,7 +844,9 @@ def _run_progressive(
             # as DiffAid must still see the full H3 sigma reference. The explicit
             # refinement contract provides that reference without carrying solver or
             # Spectrum history across the split.
-            with _high_stage_contract(guider):
+            binding.metrics.increment("progressive_sampler_invocations")
+            binding.metrics.increment("progressive_history_boundaries")
+            with _flow_stage_contract(guider, "probe"), _high_stage_contract(guider):
                 source_x0 = executor(
                     probe_noise,
                     low_latent_image,
@@ -892,7 +922,9 @@ def _run_progressive(
             guider,
             target_video_hw=None if target_input else (target_h, target_w),
         )
-        with _high_stage_contract(guider):
+        binding.metrics.increment("progressive_sampler_invocations")
+        binding.metrics.increment("progressive_history_boundaries")
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
             result = executor(
                 target_noise,
                 target_latent_image,
@@ -917,6 +949,8 @@ def _run_progressive(
             target_shape=target_shapes[0],
             audio_state_copied=True,
             separate_sampler_invocations=True,
+            sampler_invocation_count=binding.metrics.counters.get("progressive_sampler_invocations", 0),
+            history_boundary_count=binding.metrics.counters.get("progressive_history_boundaries", 0),
             exact_probe_performed=True,
             high_stage_exact_prefix_requested=1,
             high_stage_first_call_actual=first_high_actual,
