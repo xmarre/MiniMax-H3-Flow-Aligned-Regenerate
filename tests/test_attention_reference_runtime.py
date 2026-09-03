@@ -645,6 +645,8 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
                 return source_x0
             if len(calls) == 1:
                 return source_raw / (1.0 - call_sigmas[-1])
+            if len(calls) == 3:
+                binding.metrics.event("model_call", actual=True)
             return noise
 
     mutable_shapes = list(target_shapes)
