@@ -34,12 +34,13 @@ two-pass path has completed real decoded-media smoke validation through 7+4 refi
 correct Spectrum provenance and live guidance telemetry. Progressive Target Input has also completed
 the difficult-motion D10 smoke at 10 SA-Solver-PECE outer steps; decoded media is good/baseline-level,
 while the remaining fast-motion clothing/background disocclusion artifacts are not clearly improved by
-the tested HiFlow-style acceleration term. Two temporal-correspondence media runs previously showed a
-patterned-grass artifact, but those media verdicts are now **invalid for attribution**: the workflow had
-accidentally switched to the TensorRT H3 VAE and compiled the `w4a16_awq` decoder. The user identified
-that decoder as the source of the pattern. The conservative temporal v2 implementation is therefore
-restored and awaits one clean matched rerun with the corrected VAE before any quality conclusion.
-Resolution-shift-only validation remains pending behind that rerun. The safe default for the schedule,
+the tested HiFlow-style acceleration term. Earlier temporal-correspondence media was confounded by an
+accidental TensorRT `w4a16_awq` VAE decoder, but the clean standard-VAE D10-temporal-v2 rerun is now
+complete. It preserved the exact D10 topology and removed the patterned-VAE artifact; decoded media was
+good and judged **maybe slightly better than the non-temporal D10 control**, but the perceptual gain is
+small enough to remain tentative rather than promoted as a proven improvement. The conservative
+`direction+temporal` path is retained as an experimental candidate at temporal weight 0.20.
+Resolution-shift-only validation is now the next active feature path. The safe default for the schedule,
 reference budget, and attention lab remains `off`/`native`.
 
 ## Install
@@ -195,7 +196,7 @@ trajectory's structural innovation; ambiguous/disoccluded regions receive no tem
 the ordinary same-time direction guidance. After progressive handoff, low-grid reference lookup
 necessarily clamps to the final exact anchor; the resolved coordinate/clamp state is now explicit and
 the correspondence cache follows that resolved anchor. The matcher has no RAFT/GMFlow dependency and
-adds no H3 transformer evaluations. Its 0.20 weight remains only a controlled smoke-test operating point, not a validated recommendation. The next media verdict must use the corrected VAE.
+adds no H3 transformer evaluations. Its 0.20 weight remains a conservative experimental operating point. The clean standard-VAE rerun produced good media and was judged maybe slightly better than the non-temporal D10 control, but that benefit is still too small/uncertain to advertise as validated.
 
 `downsample_consistency` is an independent alternative. The direct reference cap changes only H3's
 direct latent-reference rows; already encoded Qwen3-VL tokens are measured and left unchanged.
