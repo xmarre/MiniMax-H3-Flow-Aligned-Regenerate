@@ -74,8 +74,12 @@ so this is equivalent to an effective video shift \(12\alpha\) while preserving 
 parameterization. At strength 0 the factor is exactly 1; at strength 1 the SD3 relative factor is
 used; intermediate strengths interpolate multiplicatively in log-space.
 
-For the current 896x928 target, aspect-matching H3-Base's 768px short side and snapping to the 32px
-VAE+DiT alignment gives a 768x800 analytic reference:
+The node can derive this reference automatically. With source_width=source_height=0 it mirrors the
+pinned ComfyUI H3 `adapt_canvas()` contract from the connected target dimensions: 768px short edge,
+768*1344 area cap, then per-axis 32px rounding. This is the intended E workflow because the target
+width/height come dynamically from the user's existing MP -> Scale(1.20) sizing path.
+
+For the current 896x928 target, that automatic rule gives a 768x800 analytic reference:
 
 - reference area: 614400 pixels / 2400 latent cells / 600 spatial DiT patch positions per frame;
 - target area: 831488 pixels / 3248 latent cells / 812 spatial DiT patch positions per frame;
@@ -84,7 +88,8 @@ VAE+DiT alignment gives a 768x800 analytic reference:
 - effective video shift at strength 1: ~13.95994269.
 
 The reference dimensions describe an uncertainty/resolution **regime only**. E does not execute a
-768x800 low-resolution pass.
+768x800 low-resolution pass. The normal learned Latent Upscale Refine node is also bypassed for E;
+the existing Scale(1.20) node remains only to produce the target dimensions automatically.
 
 H3 still derives audio from the resulting shared base coordinate:
 
