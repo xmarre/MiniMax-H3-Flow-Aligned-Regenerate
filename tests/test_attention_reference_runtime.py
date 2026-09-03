@@ -11,7 +11,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
-from h3_flow_regenerate.nodes import H3FlowAlignedRefineState
+from h3_flow_regenerate.nodes import H3FlowAlignedRefineState, H3FlowAlignedRegenerate
 from h3_flow_regenerate.reference import apply_reference_budget
 from h3_flow_regenerate.runtime import (
     FLOW_BINDING_KEY,
@@ -579,6 +579,43 @@ def test_raw_conditioning_signature_matches_cfg_guider_conversion():
         }
     )
     assert conditioning_signature_from_conditioning(raw) == _conditioning_signature(converted)
+
+
+def test_standalone_regenerate_can_bind_low_pass_source_conditioning(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    low_cross = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
+    low_keyframe = torch.arange(1 * 24 * 1 * 4 * 4, dtype=torch.float32).reshape(1, 24, 1, 4, 4)
+    source_conditioning = [
+        [
+            low_cross,
+            {
+                "minimax_keyframes": [{"latent": low_keyframe}],
+            },
+        ]
+    ]
+    patched, _metrics = H3FlowAlignedRegenerate().patch(
+        FakePatcher(),
+        H3FlowTrajectory(),
+        "direction",
+        0.35,
+        0.0,
+        0.0,
+        0.25,
+        source_conditioning,
+    )
+    binding = patched.model_options[FLOW_BINDING_KEY]
+    assert binding.guidance_conditioning_signature == conditioning_signature_from_conditioning(
+        source_conditioning
+    )
+    assert not binding.capture_enabled
+    assert not binding.capture_forecasts
 
 
 def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(monkeypatch):
