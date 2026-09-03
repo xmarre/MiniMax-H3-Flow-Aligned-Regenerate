@@ -20,6 +20,75 @@ H3_NATIVE_CANVAS_MULTIPLE = 32
 H3_NATIVE_MAX_PIXELS = 768 * 1344
 
 
+def h3_refine_scale_target_canvas(
+    base_width: int,
+    base_height: int,
+    scale: float,
+    *,
+    align: int = 32,
+    keep_proportion: bool = True,
+) -> tuple[int, int]:
+    """Mirror the LBH H3 refine node's scale-by-multiplier target geometry.
+
+    base_width/base_height are the pixel dimensions entering Continuum sampler 1.
+    The learned refine node normally sees their latent equivalent after sampler 1
+    and applies this calculation there. E uses the same sizing semantics before
+    sampler 1 so direct-target controls reach the exact canvas the downstream
+    1.20 refine would have produced.
+    """
+    if isinstance(base_width, bool) or isinstance(base_height, bool):
+        raise TypeError("base width/height must be integers")
+    base_width = int(base_width)
+    base_height = int(base_height)
+    if base_width <= 0 or base_height <= 0:
+        raise ValueError("base width/height must be positive")
+    if not isinstance(scale, (float, int)) or isinstance(scale, bool):
+        raise TypeError("scale must be numeric")
+    scale = float(scale)
+    if not math.isfinite(scale) or scale < 1.0:
+        raise ValueError("refine target scale must be finite and >= 1.0")
+    if isinstance(align, bool):
+        raise TypeError("align must be an integer")
+    align = int(align)
+    if align <= 0:
+        raise ValueError("align must be positive")
+
+    grid = math.lcm(align, H3_VAE_SPATIAL_DOWNSAMPLE)
+    width_target = max(float(grid), base_width * scale)
+    height_target = max(float(grid), base_height * scale)
+
+    if not keep_proportion:
+        return (
+            max(grid, int(round(width_target / grid)) * grid),
+            max(grid, int(round(height_target / grid)) * grid),
+        )
+
+    aspect = base_width / base_height
+    ideal_height = width_target / aspect
+    width_center = max(1, int(round(width_target / grid)))
+    height_center = max(1, int(round(ideal_height / grid)))
+
+    best: tuple[tuple[float, float, float, float], int, int] | None = None
+    for width_units in range(max(1, width_center - 2), width_center + 3):
+        for height_units in range(max(1, height_center - 2), height_center + 3):
+            width = width_units * grid
+            height = height_units * grid
+            ratio_error = abs(math.log((width / height) / aspect))
+            size_error = abs(width / width_target - 1.0) + abs(height / ideal_height - 1.0)
+            score = (
+                ratio_error * 4.0 + size_error,
+                ratio_error,
+                size_error,
+                abs(width - width_target) + abs(height - ideal_height),
+            )
+            if best is None or score < best[0]:
+                best = (score, width, height)
+
+    if best is None:  # pragma: no cover - loops above always produce candidates
+        raise RuntimeError("failed to resolve H3 refine target geometry")
+    return best[1], best[2]
+
+
 def h3_native_reference_canvas(width: int, height: int) -> tuple[int, int]:
     """Mirror ComfyUI MiniMax H3 adapt_canvas() for an arbitrary target aspect ratio."""
     if isinstance(width, bool) or isinstance(height, bool):
