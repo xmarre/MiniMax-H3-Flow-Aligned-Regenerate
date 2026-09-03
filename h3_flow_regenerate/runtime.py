@@ -56,6 +56,8 @@ class FlowBinding:
     capture_enabled: bool = False
     capture_forecasts: bool = False
     guidance_conditioning_signature: str | None = None
+    captured_run_id: str | None = None
+    guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
@@ -253,6 +255,8 @@ def flow_model_clone_callback(source_model: Any, cloned_model: Any) -> None:
         capture_enabled=binding.capture_enabled,
         capture_forecasts=binding.capture_forecasts,
         guidance_conditioning_signature=binding.guidance_conditioning_signature,
+        captured_run_id=binding.captured_run_id,
+        guidance_run_id=binding.guidance_run_id,
     )
 
 
@@ -271,6 +275,7 @@ def _begin_capture(
     video = torch.empty(latent_shapes[0], device="meta")
     geometry = geometry_from_video(video)
     session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+    binding.captured_run_id = None
     run_id = trajectory.begin(
         session_id=session_id,
         chunk_id=chunk_id,
@@ -306,6 +311,7 @@ def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None)
     binding.active_capture = None
     if error is None:
         run = binding.trajectory.commit(active.run_id)
+        binding.captured_run_id = run.run_id
         binding.metrics.event(
             "trajectory_commit",
             run_id=run.run_id,
@@ -314,6 +320,7 @@ def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None)
         )
         return run
     run = binding.trajectory.abort(active.run_id, f"{type(error).__name__}: {error}")
+    binding.captured_run_id = None
     binding.metrics.event("trajectory_abort", run_id=active.run_id, error=type(error).__name__)
     return run
 
@@ -459,13 +466,16 @@ def flow_outer_wrapper(
     if not is_progressive and binding.guidance is not None and binding.guidance.mode != "off":
         if binding.trajectory is None:
             raise RuntimeError("flow guidance requires an H3_FLOW_TRAJECTORY")
-        session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
-        expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-        run = binding.trajectory.select(
-            chunk_id=chunk_id,
-            session_id=session_id,
-            conditioning_signature=expected_signature,
-        )
+        if binding.guidance_run_id is not None:
+            run = binding.trajectory.select(run_id=binding.guidance_run_id)
+        else:
+            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            run = binding.trajectory.select(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                conditioning_signature=expected_signature,
+            )
         if run.geometry.latent_t != int(latent_shapes[0][2]):
             raise ValueError("trajectory and target video temporal geometry differ")
         binding.active_guidance_run = run
