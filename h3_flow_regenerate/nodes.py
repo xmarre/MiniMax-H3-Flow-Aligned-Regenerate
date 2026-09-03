@@ -110,10 +110,10 @@ class H3FlowAlignedRegenerate:
         acceleration_weight,
         consistency_weight,
         low_frequency_cutoff,
-        temporal_weight,
         source_conditioning=None,
         source_negative=None,
         metrics=None,
+        temporal_weight=0.20,
     ):
         metrics = metrics or H3FlowMetrics()
         if source_negative is not None and source_conditioning is None:
@@ -180,8 +180,8 @@ class H3FlowAlignedRefineState:
         acceleration_weight,
         consistency_weight,
         low_frequency_cutoff,
-        temporal_weight,
         metrics=None,
+        temporal_weight=0.20,
     ):
         if not isinstance(refine_state, dict):
             raise TypeError("H3 Continuum refine_state must be a dictionary")
@@ -271,8 +271,8 @@ class H3ProgressiveHandoff:
         acceleration_weight,
         consistency_weight,
         low_frequency_cutoff,
-        temporal_weight,
         metrics=None,
+        temporal_weight=0.20,
     ):
         if target_mode == "scale":
             progressive = ProgressiveHandoffConfig(
@@ -357,8 +357,8 @@ class H3ProgressiveTargetInputHandoff:
         acceleration_weight,
         consistency_weight,
         low_frequency_cutoff,
-        temporal_weight,
         metrics=None,
+        temporal_weight=0.20,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
