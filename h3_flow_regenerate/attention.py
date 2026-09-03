@@ -239,7 +239,8 @@ def make_layout_block_wrapper(
     return wrapper
 
 
-def mark_layout_wrapper(wrapper, *, metrics: H3FlowMetrics):
+def mark_layout_wrapper(wrapper, *, metrics: H3FlowMetrics, previous=None):
     wrapper._h3_flow_layout_wrapper = True
     wrapper._h3_flow_metrics = metrics
+    wrapper._h3_flow_previous = previous
     return wrapper
