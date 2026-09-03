@@ -343,6 +343,7 @@ def test_continuum_refine_state_patch_preserves_payload_and_disables_capture(mon
     assert not binding.capture_enabled
     assert binding.metrics is metrics
 
+
 def test_spectrum_forecasts_never_become_exact_trajectory_anchors():
     video = torch.full((1, 24, 1, 4, 4), 2.0)
     audio = torch.full((1, 32, 2, 5), 3.0)
@@ -416,6 +417,7 @@ def test_progressive_mask_resize_uses_single_channel_av_geometry():
     assert out_video.shape == (1, 1, 1, 8, 6)
     assert torch.equal(out_audio, audio_mask)
 
+
 def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
     class KSampler:
         def __init__(self, function):
@@ -444,9 +446,7 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
     sampler = SimpleNamespace(sampler_function=native, extra_options={})
     original_cond = {
         "cross_attn": torch.zeros(1, 2, 4),
-        "minimax_keyframes": [
-            {"latent": source_video.clone(), "latent_h": 4, "latent_w": 4}
-        ],
+        "minimax_keyframes": [{"latent": source_video.clone(), "latent_h": 4, "latent_w": 4}],
     }
     guider = SimpleNamespace(
         model_options={"transformer_options": {}},
@@ -467,9 +467,7 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
                     dict(guider.model_options["transformer_options"]),
                     call_sigmas.clone(),
                     "stage_mutated" in guider.conds["positive"][0],
-                    tuple(
-                        guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]
-                    ),
+                    tuple(guider.conds["positive"][0]["minimax_keyframes"][0]["latent"].shape[-2:]),
                 )
             )
             guider.conds["positive"][0]["stage_mutated"] = True
