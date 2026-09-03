@@ -223,16 +223,26 @@ class H3FlowTrajectory:
                 return invalid
             raise RuntimeError("cannot invalidate an unknown trajectory run")
 
-    def select(self, *, chunk_id: str | None = None, session_id: str | None = None) -> TrajectoryRun:
+    def select(
+        self,
+        *,
+        chunk_id: str | None = None,
+        session_id: str | None = None,
+        conditioning_signature: str | None = None,
+    ) -> TrajectoryRun:
         with self._lock:
             candidates = [
                 run
                 for run in self._runs
                 if (chunk_id is None or run.chunk_id == str(chunk_id))
                 and (session_id is None or run.session_id == str(session_id))
+                and (
+                    conditioning_signature is None
+                    or run.conditioning_signature == str(conditioning_signature)
+                )
             ]
             if not candidates:
-                raise RuntimeError("no trajectory matches the requested session/chunk")
+                raise RuntimeError("no trajectory matches the requested session/chunk/conditioning")
             run = candidates[-1]
             if not run.complete:
                 raise RuntimeError("latest matching trajectory is incomplete")
