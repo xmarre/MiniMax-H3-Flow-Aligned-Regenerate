@@ -1061,6 +1061,17 @@ def test_noise_reconstruction_aligns_wrapper_latent_to_sampler_state_domain():
     assert torch.allclose(reconstructed, state, atol=1e-10, rtol=1e-10)
 
 
+def test_noise_reconstruction_moves_wrapper_latent_to_sampler_state_device():
+    base_model = SimpleNamespace(model_sampling=SimpleNamespace(noise_scale=1.0))
+    # Meta stands in for a different sampler-state device without requiring CUDA
+    # in CI. The operation must first migrate the wrapper-retained CPU latent.
+    state = torch.empty((1, 1, 8), device="meta")
+    latent = torch.randn(1, 1, 8)
+    noise = _noise_argument(base_model, state, 0.5, latent)
+    assert noise.device.type == "meta"
+    assert noise.shape == state.shape
+
+
 def test_progressive_mask_resize_uses_prepared_full_channel_av_geometry():
     source_shapes = [(1, 24, 1, 4, 4), (1, 32, 2, 5)]
     target_shapes = [(1, 24, 1, 8, 6), (1, 32, 2, 5)]
