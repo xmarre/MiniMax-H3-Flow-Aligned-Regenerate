@@ -320,5 +320,80 @@
     "low_frequency_cutoff": 0.25,
     "remove_separate_learned_refine": true,
     "run_storage": "off"
+  },
+  "resolution_shift_smoke": {
+    "id": "E10-smoke",
+    "status": "pending_matched_pair",
+    "purpose": "Isolate resolution-aware shared AV sigma remapping on the same difficult-motion target-grid workflow after retiring temporal transport.",
+    "geometry": {
+      "source_reference_pixels_wh": [
+        736,
+        768
+      ],
+      "target_generation_pixels_wh": [
+        896,
+        928
+      ],
+      "source_reference_latent_wh": [
+        46,
+        48
+      ],
+      "target_generation_latent_wh": [
+        56,
+        58
+      ],
+      "target_to_source_area_ratio": 1.4710144927536233,
+      "derived_strength_1_factor": 1.2128538629008951
+    },
+    "common": {
+      "outer_steps": 10,
+      "sampler": "sa_solver_pece",
+      "generation_grid": "target only",
+      "progressive_handoff": false,
+      "trajectory_guidance": false,
+      "learned_upscale_refine": false,
+      "run_storage": "off",
+      "keep_identical": [
+        "seed",
+        "prompt",
+        "references",
+        "loras",
+        "DiffAid",
+        "Untwist",
+        "Spectrum",
+        "sampler",
+        "scheduler base schedule",
+        "Continuum chunking",
+        "audio behavior",
+        "decode"
+      ]
+    },
+    "runs": [
+      {
+        "id": "E0-direct-control",
+        "resolution_sigma_mode": "off",
+        "strength": 0,
+        "role": "matched direct-target control"
+      },
+      {
+        "id": "E1-resolution-aware",
+        "resolution_sigma_mode": "resolution_aware",
+        "strength": 1,
+        "source_width": 736,
+        "source_height": 768,
+        "target_width": 896,
+        "target_height": 928,
+        "role": "single analytic SD3-derived resolution remap candidate"
+      }
+    ],
+    "expected_structure": {
+      "sampler_logical_calls": 38,
+      "progressive_sampler_invocations": 0,
+      "progressive_history_boundaries": 0,
+      "handoff_exact_probe_nfe": 0,
+      "transformer_actual_nfe_and_spectrum_forecasts": "record, do not force equal; mapped sigmas can alter Spectrum decisions"
+    },
+    "media_gate": "Compare E1 against E0 for motion/disocclusion, clothing, grass/background, anatomy, detail, shot behavior, prompt/reference fidelity, and decoded audio. Reject if video improves only by harming audio or global dynamics.",
+    "no_sweep_rule": "Do not tune strength before the E0/E1 matched pair is decoded."
   }
 }
