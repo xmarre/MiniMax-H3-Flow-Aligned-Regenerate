@@ -51,7 +51,7 @@ def test_abort_preserves_diagnostics_but_never_becomes_guidance_state():
     assert not aborted.complete
     assert aborted.abort_reason == "cancelled"
     assert len(trajectory.runs) == 1
-    with pytest.raises(RuntimeError, match="no committed trajectory"):
+    with pytest.raises(RuntimeError, match="latest matching trajectory is incomplete"):
         trajectory.select()
 
     retry = begin(trajectory)
@@ -71,7 +71,23 @@ def test_committed_run_can_be_invalidated_after_downstream_failure():
     invalid = trajectory.invalidate(run_id, "high stage failed")
     assert not invalid.complete
     assert invalid.abort_reason == "high stage failed"
-    with pytest.raises(RuntimeError, match="no completed run"):
+    with pytest.raises(RuntimeError, match="latest trajectory run is incomplete"):
+        _ = trajectory.latest
+
+
+def test_newer_incomplete_run_blocks_stale_complete_fallback():
+    trajectory = H3FlowTrajectory()
+    old = begin(trajectory, "session", "chunk")
+    trajectory.append(old, sample(1))
+    trajectory.commit(old)
+
+    failed = begin(trajectory, "session", "chunk")
+    trajectory.append(failed, sample(2))
+    trajectory.abort(failed, "new attempt failed")
+
+    with pytest.raises(RuntimeError, match="latest matching trajectory is incomplete"):
+        trajectory.select(session_id="session", chunk_id="chunk")
+    with pytest.raises(RuntimeError, match="latest trajectory run is incomplete"):
         _ = trajectory.latest
 
 
