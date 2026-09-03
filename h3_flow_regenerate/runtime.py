@@ -377,9 +377,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
-    spectrum_active_step = (
-        _active_spectrum_step(spectrum_runtime) if spectrum_runtime is not None else None
-    )
+    spectrum_active_step = _active_spectrum_step(spectrum_runtime) if spectrum_runtime is not None else None
     spectrum_completed_after = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
