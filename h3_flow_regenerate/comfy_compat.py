@@ -69,6 +69,7 @@ def patch_flow_model(
     model: Any,
     *,
     trajectory: H3FlowTrajectory | None = None,
+    clear_trajectory: bool = False,
     guidance: GuidanceConfig | None = None,
     progressive: ProgressiveHandoffConfig | ProgressiveTargetInputConfig | None = None,
     clear_progressive: bool = False,
@@ -87,8 +88,14 @@ def patch_flow_model(
         prior = None
     patched = model.clone()
     _copy_model_options(patched)
+    if clear_trajectory and trajectory is not None:
+        raise ValueError("cannot set and clear trajectory in the same model patch")
     binding = FlowBinding(
-        trajectory=trajectory if trajectory is not None else (prior.trajectory if prior else None),
+        trajectory=(
+            None
+            if clear_trajectory
+            else (trajectory if trajectory is not None else (prior.trajectory if prior else None))
+        ),
         guidance=guidance if guidance is not None else (prior.guidance if prior else None),
         metrics=metrics or (prior.metrics if prior else H3FlowMetrics()),
         capture_enabled=(
