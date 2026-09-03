@@ -327,7 +327,9 @@ def _finish_capture(binding: FlowBinding, *, error: BaseException | None = None)
 
 
 def _active_spectrum_runtime(guider: Any) -> Any | None:
-    spectrum_binding = (getattr(guider, "model_options", None) or {}).get(SPECTRUM_BINDING_KEY)
+    spectrum_binding = (getattr(guider, "model_options", None) or {}).get(
+        SPECTRUM_BINDING_KEY
+    )
     runtime = getattr(spectrum_binding, "runtime", None)
     if runtime is None or getattr(runtime, "active_run_id", None) is None:
         return None
