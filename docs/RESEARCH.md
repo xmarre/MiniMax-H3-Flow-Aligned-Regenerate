@@ -17,6 +17,43 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 | [simple diffusion](https://arxiv.org/abs/2301.11093) | Resolution changes the appropriate signal-to-noise relationship. | Its argument is not reduced to an unexplained H3 sigma multiplier. |
 | [SD3 / Scaling Rectified Flow Transformers](https://arxiv.org/abs/2403.03206) | The constant-observation derivation yields `alpha=sqrt(m/n)` and a fractional-linear map. | The constant-image assumption is unrealistic, as the paper notes; H3 composition is only a probe. |
 
+## Resolution-shift experiment
+
+The E path is deliberately narrower than the progressive/regeneration literature above. It changes
+only the sampler SIGMAS while generating directly at the target grid.
+
+The reference resolution is now tied to the public H3 contract rather than to D10's private low grid.
+MiniMax documents H3-Base as a 768p generator and states that the shorter output side defaults to
+768 pixels. For the current 896x928 target, preserving aspect ratio at a 768px short side and snapping
+to H3's 32px VAE+DiT alignment yields a 768x800 analytic reference regime.
+
+SD3 Eq. 23 derives the relative flow-time shift
+
+[
+\alpha=\sqrt{m/n},\qquad
+t_m=\frac{\alpha t_n}{1+(\alpha-1)t_n},
+]
+
+under a constant-image uncertainty model. For 768x800 -> 896x928, the area ratio is ~1.35333333 and
+(alpha\approx1.16332856). simple diffusion independently argues that increasing spatial resolution
+requires a lower-SNR/more-noisy schedule at a comparable global-structure stage. Both results support
+the *direction* of the experiment, but neither proves that MiniMax H3 should use this exact mapping.
+
+H3 already uses video flow shift 12 and audio shift 3. The implementation therefore composes the SD3
+factor **relatively** with shift 12 rather than replacing H3's native schedule. At strength 1 the
+effective video shift is ~13.95994. Because H3 is a packed joint AV flow model, the same transformed
+base coordinate also changes audio sigma. A video-only interpretation would be false; decoded audio is
+part of the gate.
+
+The E0/E1 pair uses the same direct 896x928 H3 graph and standard VAE. E0 passes SIGMAS through the
+resolution node in `off` mode as an exact-parity control. E1 changes only the mode to
+`resolution_aware` at strength 1. No progressive handoff, trajectory guidance, temporal transport,
+or learned refine is active. This isolates the schedule hypothesis before any combination test.
+
+If E1 wins clearly, only then combine the shift with the accepted progressive+temporal path. If E1 is
+neutral or worse, the mapping remains experimental/off and no strength sweep is justified from this
+single pair.
+
 ## Occlusion-aware temporal experiment
 
 The difficult-motion D10 smoke isolated a failure that denoising-time acceleration did not clearly
