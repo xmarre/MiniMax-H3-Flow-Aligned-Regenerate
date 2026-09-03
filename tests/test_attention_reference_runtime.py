@@ -247,6 +247,31 @@ def test_patch_can_explicitly_clear_inherited_progressive_handoff(monkeypatch):
         patch_flow_model(first, progressive=progressive, clear_progressive=True)
 
 
+def test_patch_can_explicitly_clear_inherited_guidance_signature(monkeypatch):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+
+    first, first_binding = patch_flow_model(FakePatcher(), guidance_conditioning_signature="source")
+    assert first_binding.guidance_conditioning_signature == "source"
+
+    inherited, inherited_binding = patch_flow_model(first)
+    assert inherited_binding.guidance_conditioning_signature == "source"
+
+    _, cleared = patch_flow_model(inherited, clear_guidance_conditioning_signature=True)
+    assert cleared.guidance_conditioning_signature is None
+
+    with pytest.raises(ValueError, match="cannot set and clear guidance conditioning signature"):
+        patch_flow_model(
+            first,
+            guidance_conditioning_signature="other",
+            clear_guidance_conditioning_signature=True,
+        )
+
+
 def test_patch_can_explicitly_disable_inherited_forecast_capture(monkeypatch):
     fake_extension = ModuleType("comfy.patcher_extension")
     fake_extension.WrappersMP = SimpleNamespace(OUTER_SAMPLE="outer_sample", PREDICT_NOISE="predict_noise")
