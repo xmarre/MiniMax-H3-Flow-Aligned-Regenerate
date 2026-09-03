@@ -771,6 +771,77 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert handoff.fields["high_stage_model_calls"] == 1
 
 
+def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):
+    class KSampler:
+        def __init__(self, function):
+            self.sampler_function = function
+            self.extra_options = {}
+
+    fake_samplers = ModuleType("comfy.samplers")
+    fake_samplers.KSAMPLER = KSampler
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.samplers = fake_samplers
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake_samplers)
+
+    video = torch.randn(1, 24, 1, 4, 4)
+    audio = torch.randn(1, 32, 2, 5)
+    packed, shapes = pack_streams((video, audio))
+    sigmas = torch.tensor([1.0, 0.8, 0.4, 0.0])
+
+    def native():
+        pass
+
+    native.__name__ = "sample_euler"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        model_patcher=SimpleNamespace(model=MiniMaxH3()),
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+        conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+    calls = 0
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, noise, latent, call_sampler, call_sigmas, *args, latent_shapes):
+            nonlocal calls
+            calls += 1
+            if call_sampler.sampler_function.__name__ == "_h3_flow_exact_probe":
+                return packed
+            if calls == 1:
+                return packed / (1.0 - call_sigmas[-1])
+            raise RuntimeError("synthetic high failure")
+
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(
+        trajectory=trajectory,
+        guidance=GuidanceConfig(mode="off"),
+        capture_enabled=True,
+    )
+    with pytest.raises(RuntimeError, match="synthetic high failure"):
+        _run_progressive(
+            Executor(),
+            guider,
+            binding,
+            ProgressiveHandoffConfig(8, 6, handoff_coordinate=0.3),
+            packed,
+            torch.zeros_like(packed),
+            sampler,
+            sigmas,
+            None,
+            None,
+            True,
+            7,
+            list(shapes),
+        )
+    assert len(trajectory.runs) == 1
+    assert not trajectory.runs[0].complete
+    assert "progressive continuation failed" in trajectory.runs[0].abort_reason
+    assert any(event.kind == "trajectory_invalidate" for event in binding.metrics.events)
+
+
 @pytest.mark.parametrize(
     ("name", "calls", "phases"),
     [
