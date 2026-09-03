@@ -59,14 +59,14 @@ def h3_refine_scale_target_canvas(
 
     if not keep_proportion:
         return (
-            max(grid, int(round(width_target / grid)) * grid),
-            max(grid, int(round(height_target / grid)) * grid),
+            max(grid, round(width_target / grid) * grid),
+            max(grid, round(height_target / grid) * grid),
         )
 
     aspect = base_width / base_height
     ideal_height = width_target / aspect
-    width_center = max(1, int(round(width_target / grid)))
-    height_center = max(1, int(round(ideal_height / grid)))
+    width_center = max(1, round(width_target / grid))
+    height_center = max(1, round(ideal_height / grid))
 
     best: tuple[tuple[float, float, float, float], int, int] | None = None
     for width_units in range(max(1, width_center - 2), width_center + 3):
