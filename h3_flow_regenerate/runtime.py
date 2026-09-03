@@ -490,7 +490,12 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             acceleration_rms_ratio=binding.guidance_state.last_acceleration_rms_ratio,
             acceleration_applied=binding.guidance_state.last_acceleration_applied,
             same_coordinate_refinement=binding.guidance_state.last_same_coordinate_refinement,
+            acceleration_anchor_coordinate=binding.guidance_state.last_acceleration_anchor_coordinate,
             actual=actual,
+            solver_phase=spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY),
+            solver_outer_step=spectrum_active_step[2]
+            if spectrum_active_step is not None
+            else transformer.get(SPECTRUM_OUTER_STEP_KEY),
         )
     return result
 

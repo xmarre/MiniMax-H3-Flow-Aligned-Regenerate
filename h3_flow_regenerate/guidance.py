@@ -57,6 +57,7 @@ class GuidanceState:
     last_acceleration_rms_ratio: float | None = None
     last_acceleration_applied: bool = False
     last_same_coordinate_refinement: bool = False
+    last_acceleration_anchor_coordinate: float | None = None
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -75,6 +76,7 @@ class GuidanceState:
         self.last_acceleration_rms_ratio = None
         self.last_acceleration_applied = False
         self.last_same_coordinate_refinement = False
+        self.last_acceleration_anchor_coordinate = None
 
 
 _PHASE_PRIORITY = {
@@ -281,6 +283,7 @@ def apply_guidance(
     state.last_acceleration_rms_ratio = _rms_ratio(acceleration_correction, high_x0)
     state.last_acceleration_applied = acceleration_applied
     state.last_same_coordinate_refinement = same_coordinate_refinement
+    state.last_acceleration_anchor_coordinate = state.previous_coordinate if acceleration_applied else None
 
     if acceleration_active:
         assert high_state is not None
