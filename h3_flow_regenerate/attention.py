@@ -239,8 +239,17 @@ def make_layout_block_wrapper(
     return wrapper
 
 
-def mark_layout_wrapper(wrapper, *, metrics: H3FlowMetrics, previous=None):
+def mark_layout_wrapper(
+    wrapper,
+    *,
+    metrics: H3FlowMetrics,
+    previous=None,
+    scope: str = "layout",
+):
+    if scope not in {"layout", "attention"}:
+        raise ValueError(f"unsupported H3 flow layout-wrapper scope {scope!r}")
     wrapper._h3_flow_layout_wrapper = True
+    wrapper._h3_flow_layout_scope = scope
     wrapper._h3_flow_metrics = metrics
     wrapper._h3_flow_previous = previous
     return wrapper
