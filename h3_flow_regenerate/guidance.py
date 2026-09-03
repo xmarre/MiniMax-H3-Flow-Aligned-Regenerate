@@ -138,14 +138,18 @@ def _bounded(
     ref_rms = reference.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
     scale = torch.clamp(ref_rms * ratio / corr_rms.clamp_min(1e-8), max=1.0)
     bounded_rms = corr_rms * scale
-    summary = torch.stack(
-        (
-            bounded_rms.mean(),
-            ref_rms.mean(),
-            (bounded_rms / ref_rms).mean(),
-            scale.mean(),
+    summary = (
+        torch.stack(
+            (
+                bounded_rms.mean(),
+                ref_rms.mean(),
+                (bounded_rms / ref_rms).mean(),
+                scale.mean(),
+            )
         )
-    ).detach().to(device="cpu", dtype=torch.float64)
+        .detach()
+        .to(device="cpu", dtype=torch.float64)
+    )
     correction_rms, baseline_rms, correction_rms_ratio, clamp_scale = map(float, summary.tolist())
     stats = {
         "correction_rms": correction_rms,
