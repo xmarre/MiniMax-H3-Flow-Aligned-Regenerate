@@ -41,12 +41,16 @@ def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(
     from h3_flow_regenerate.metrics import H3FlowMetrics
     from h3_flow_regenerate.nodes import H3MetricsJSON
 
+    allocations = 0
+
     def get_save_image_path(filename_prefix, output_dir, image_width=0, image_height=0):
+        nonlocal allocations
         del image_width, image_height
+        allocations += 1
         subfolder = "bench"
         folder = tmp_path / subfolder
         folder.mkdir(parents=True, exist_ok=True)
-        return str(folder), "metrics", 1, subfolder, filename_prefix
+        return str(folder), "metrics", allocations, subfolder, filename_prefix
 
     monkeypatch.setitem(
         sys.modules,
@@ -70,6 +74,12 @@ def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(
     metrics.increment("transformer_actual_nfe", 7)
     metrics.event("guidance", correction_rms=0.125)
     assert '"guidance"' not in saved.read_text(encoding="utf-8")
+
+    repeated = H3MetricsJSON().render(metrics, "bench/other-prefix")
+    assert allocations == 1
+    assert metrics.autosave_path == saved
+    assert not (tmp_path / "bench" / "metrics_00002_.json").exists()
+    assert repeated["ui"]["text"] == ["Saving metrics JSON: bench/metrics_00001_.json"]
 
     metrics.event("sampler_wall", elapsed_ms=123.0, failed=False, progressive=False)
     final = saved.read_text(encoding="utf-8")
