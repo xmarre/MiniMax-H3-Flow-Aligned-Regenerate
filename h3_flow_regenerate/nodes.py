@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 from .attention import AttentionConfig
 from .comfy_compat import patch_flow_model
@@ -524,7 +525,7 @@ class H3MetricsJSON:
             output_dir,
         )
         file_name = f"{filename}_{counter:05}_.json"
-        metrics.write_json(f"{full_output_folder}/{file_name}")
+        metrics.write_json(Path(full_output_folder) / file_name)
         relative_path = f"{subfolder}/{file_name}" if subfolder else file_name
         return {
             "ui": {"text": [f"Saved metrics JSON: {relative_path}"]},
