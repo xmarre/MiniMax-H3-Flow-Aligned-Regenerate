@@ -1,33 +1,66 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Apply to each Continuum chunk's existing base-plus-refine graph",
+  "purpose": "Apply flow-aligned guidance to each current Continuum V3.4 base-plus-integrated-refine chunk",
+  "continuum": {
+    "node": "H3 Continuum Sampler V3.4",
+    "required_widget": {
+      "emit_refine_conditioning": true
+    }
+  },
   "shared_handle": {
     "node": "H3FlowTrajectory",
-    "widgets": {"storage": "system_ram", "max_runs": 8}
+    "widgets": {
+      "storage": "system_ram",
+      "max_runs": 8
+    }
   },
   "base_model_patch": {
     "node": "H3TrajectoryCapture",
-    "inputs": {"trajectory": "shared_handle"},
-    "widgets": {"capture_forecasts": false},
-    "placement": "after chunk-local MODEL patches and before base KSampler"
+    "inputs": {
+      "trajectory": "shared_handle"
+    },
+    "widgets": {
+      "capture_forecasts": false
+    },
+    "placement": "after DiffAid/Untwist/Spectrum MODEL patches and before the H3 Continuum Sampler V3.4 MODEL input"
   },
-  "high_model_patch": {
-    "node": "H3FlowAlignedRegenerate",
-    "inputs": {"trajectory": "shared_handle"},
+  "refine_state_patch": {
+    "node": "H3FlowAlignedRefineState",
+    "inputs": {
+      "trajectory": "shared_handle",
+      "refine_state": "matching Continuum chunk refine_state"
+    },
     "widgets": {
       "guidance_mode": "direction",
       "direction_weight": 0.35,
-      "acceleration_weight": 0.0,
-      "consistency_weight": 0.0,
+      "acceleration_weight": 0,
+      "consistency_weight": 0,
       "low_frequency_cutoff": 0.25
     },
-    "placement": "after learned-upscaler chunk MODEL output and before refine KSampler"
+    "placement": "between each Continuum refine_state output and MiniMax H3 Latent Upscaler + Refine (3D).refine_state"
+  },
+  "integrated_refine": {
+    "node": "MiniMax H3 Latent Upscaler + Refine (3D)",
+    "keep_existing_inputs": [
+      "video_latents",
+      "audio_latents",
+      "RandomNoise",
+      "SAMPLER",
+      "partial SIGMAS"
+    ],
+    "note": "The flow adapter patches refine_state.model; it does not replace the integrated learned upscale or its mask/audio handling."
   },
   "invariants": {
     "audio": "locked_by_existing_refine_graph",
-    "target_pixels": [1024, 768],
-    "target_latent_wh": [64, 48],
+    "target_pixels": [
+      1024,
+      768
+    ],
+    "target_latent_wh": [
+      64,
+      48
+    ],
     "forecast_anchors": false,
     "decoded_media_required": true
   }
