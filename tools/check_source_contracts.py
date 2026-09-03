@@ -49,6 +49,14 @@ def main() -> None:
         "mask=None, skip_reshape=True",
     )
     require(
+        args.comfy / "comfy_extras/nodes_minimax_h3.py",
+        "CANVAS_MULTIPLE = 32",
+        "BASE_SHORT_EDGE = 768",
+        "MAX_PIXELS = 768 * 1344",
+        "def adapt_canvas(width, height):",
+        '"""768-short-edge canvas with 768*1344 area cap, per-axis round to 32."""',
+    )
+    require(
         args.comfy / "comfy/model_base.py",
         "class MiniMaxH3(BaseModel):",
         "return self.model_sampling.audio_scale",
