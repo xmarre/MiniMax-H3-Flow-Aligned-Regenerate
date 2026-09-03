@@ -384,7 +384,7 @@
         "audio behavior",
         "decode"
       ],
-      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics output -> H3MetricsJSON"
+      "metrics_probe": "H3RuntimeMetricsProbe after Spectrum, before Continuum; metrics -> Resolution-Aware Sigmas and H3MetricsJSON"
     },
     "runs": [
       {
@@ -418,7 +418,8 @@
       "guidance_events": 0,
       "transformer_actual_nfe_and_spectrum_forecasts": "record rather than force parity; mapped sigma coordinates may legitimately change Spectrum decisions",
       "metrics_source": "H3RuntimeMetricsProbe",
-      "sa_solver_timing": "default native tau_func; remapped effective sigmas may move stochastic outer indices"
+      "sa_solver_timing": "default native tau_func; remapped effective sigmas may move stochastic outer indices",
+      "resolution_sigma_map_events": 1
     },
     "diagnostics_gate": {
       "e0": {
