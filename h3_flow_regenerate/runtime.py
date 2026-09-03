@@ -200,8 +200,7 @@ def _conditioning_signature_from_original(original: dict[str, Any]) -> str:
     return digest.hexdigest()[:32]
 
 
-def conditioning_signature_from_conditioning(conditioning: list[Any]) -> str:
-    """Match CFGGuider.convert_cond without its execution-only UUID."""
+def _convert_conditioning_for_signature(conditioning: list[Any]) -> list[dict[str, Any]]:
     converted = []
     for entry in conditioning:
         if not isinstance(entry, (list, tuple)) or len(entry) < 2 or not isinstance(entry[1], dict):
@@ -212,7 +211,18 @@ def conditioning_signature_from_conditioning(conditioning: list[Any]) -> str:
             metadata["cross_attn"] = entry[0]
         metadata["model_conds"] = model_conds
         converted.append(metadata)
-    return _conditioning_signature_from_original({"positive": converted})
+    return converted
+
+
+def conditioning_signature_from_conditioning(
+    positive: list[Any],
+    negative: list[Any] | None = None,
+) -> str:
+    """Match CFGGuider.convert_cond without its execution-only UUID."""
+    original = {"positive": _convert_conditioning_for_signature(positive)}
+    if negative is not None:
+        original["negative"] = _convert_conditioning_for_signature(negative)
+    return _conditioning_signature_from_original(original)
 
 
 def _conditioning_signature(guider: Any) -> str:
