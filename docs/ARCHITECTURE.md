@@ -95,10 +95,12 @@ velocity field. Downsample consistency forms the low-grid residual before liftin
 ### Continuum integrated-refine adapter
 
 Current Continuum V3.4 exposes a per-chunk `H3_CONTINUUM_REFINE_STATE` containing the fresh sampled
-MODEL, exact positive conditioning, and optional mask state. The learned H3 upscaler/refine consumes
-that state internally, so there is no external high-resolution MODEL wire to patch. The
-**Flow-Aligned Refine State** node shallow-copies the state, patches only its MODEL with read-only
-trajectory guidance, and preserves the conditioning/mask objects unchanged.
+MODEL and exact positive conditioning. Native continuation denoise masks are attached separately to
+the parallel video/audio LATENT outputs. The learned H3 upscaler/refine consumes the refine state
+internally, so there is no external high-resolution MODEL wire to patch. The **Flow-Aligned Refine
+State** node shallow-copies the state, patches only its MODEL with read-only trajectory guidance, and
+preserves the conditioning and any future/opaque state fields unchanged; it does not intercept the
+LATENT mask path.
 
 The learned refine path legitimately resizes target-grid `minimax_keyframes` before sampler 2.
 Conditioning identity therefore canonicalizes only those keyframes' spatial latent bytes and H/W
