@@ -24,10 +24,15 @@ class H3FlowMetrics:
         self._lock = threading.RLock()
         self._events: list[MetricEvent] = []
         self._counters: Counter[str] = Counter()
+        self._autosave_path: Path | None = None
 
     def event(self, kind: str, **fields: Any) -> None:
+        kind = str(kind)
         with self._lock:
-            self._events.append(MetricEvent(kind=str(kind), fields=dict(fields)))
+            self._events.append(MetricEvent(kind=kind, fields=dict(fields)))
+            autosave_path = self._autosave_path if kind == "sampler_wall" else None
+        if autosave_path is not None:
+            self.write_json(autosave_path)
 
     def increment(self, name: str, amount: int = 1) -> None:
         with self._lock:
@@ -52,6 +57,12 @@ class H3FlowMetrics:
 
     def to_json(self, *, indent: int = 2) -> str:
         return json.dumps(self.snapshot(), indent=indent, sort_keys=True, default=str)
+
+    def enable_autosave(self, path: str | Path) -> Path:
+        target = Path(path)
+        with self._lock:
+            self._autosave_path = target
+        return self.write_json(target)
 
     def write_json(self, path: str | Path) -> Path:
         target = Path(path)
