@@ -102,12 +102,12 @@ MODEL output from the learned upscaler. Enable Continuum's `emit_refine_conditio
 chunk's `refine_state` through **Flow-Aligned Refine State**, and connect that patched state to the
 integrated upscaler/refine node. Patch the MODEL entering Continuum with **Trajectory Capture**
 after the normal DiffAid/Untwist/Spectrum patches. The refine-state adapter preserves the exact
-chunk positive conditioning, the captured `noise_mask`, and any other refine-state fields while
-changing only its fresh per-chunk MODEL clone. Continuum V3.4 records the sampler-boundary mask in
-`refine_state` **and** carries native masks on the parallel video/audio LATENT outputs. The current
-integrated upscaler/refine resolves MODEL + positive from `refine_state`, while its actual refinement
-denoise mask is taken from the parallel LATENT path; those LATENT wires therefore remain connected
-directly and unmodified.
+chunk positive conditioning and any opaque refine-state fields while changing only its fresh per-chunk
+MODEL clone. Continuum V3.4 internally captures the sampler-boundary `noise_mask`, but its public
+`H3_CONTINUUM_REFINE_STATE` emits only API + MODEL + positive conditioning; the captured mask is
+instead restored onto the parallel video/audio LATENT outputs. The integrated upscaler/refine resolves
+MODEL + positive from `refine_state` and its actual refinement denoise mask from those LATENT inputs,
+so the LATENT wires remain connected directly and unmodified.
 
 Target-grid `minimax_keyframes` are expected to be spatially resized by the learned-refine node.
 The refine-state adapter therefore records the sampler-1 conditioning signature before that resize
