@@ -149,21 +149,21 @@ forecast so this interaction remains auditable.
 ### Video-time correspondence guidance
 
 The `direction+temporal` experiment is intentionally separate from denoising-time acceleration.
-For the time-matched exact low-grid clean estimate (R), adjacent video-latent frames are lightly
+For the time-matched exact low-grid clean estimate \(R\), adjacent video-latent frames are lightly
 spatially smoothed and matched inside a bounded local search window using channel-normalized cosine
-similarity. Both (i\rightarrow i-1) and (i-1\rightarrow i) maps are computed. Match strength combines
+similarity. Both \(i\rightarrow i-1\) and \(i-1\rightarrow i\) maps are computed. Match strength combines
 absolute similarity, the best-vs-second-best margin, and a reverse-match cycle-consistency gate.
 
-For a trusted mapping from target frame (i) to neighbor (j), let (W) warp along that low-grid
-correspondence and let (U) transfer a low-grid residual to the target grid. The high-grid temporal
+For a trusted mapping from target frame \(i\) to neighbor \(j\), let \(W\) warp along that low-grid
+correspondence and let \(U\) transfer a low-grid residual to the target grid. The high-grid temporal
 target is
 
-[
+\[
 P_i = W(\hat x^{HR}_{0,j}) + U\left(R_i - W(R_j)\right).
-]
+\]
 
 Thus the neighbor contributes high-resolution detail, while the low-resolution H3 trajectory supplies
-the actual same-time structural innovation. The correction (P_i-\hat x^{HR}_{0,i}) is weighted by
+the actual same-time structural innovation. The correction \(P_i-\hat x^{HR}_{0,i}\) is weighted by
 correspondence confidence. Failed/ambiguous/cycle-inconsistent matches contribute zero temporal
 correction instead of copying stale content into disoccluded regions. The existing same-time direction
 term remains active there.
