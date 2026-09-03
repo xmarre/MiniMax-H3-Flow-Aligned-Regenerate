@@ -94,10 +94,12 @@ LATENT outputs, not inside `refine_state`; those LATENT wires remain connected d
 integrated upscaler/refine node.
 
 Target-grid `minimax_keyframes` are expected to be spatially resized by the learned-refine node.
-The refine-state adapter therefore records the exact sampler-1 conditioning signature before that
-resize and binds sampler 2 to it explicitly. The trajectory fingerprint itself remains strict over
-keyframe latent content and geometry, Qwen/context tensors, and independent `minimax_refs`; expected
-geometry transfer is not implemented by weakening the global conditioning identity check.
+The refine-state adapter therefore records the sampler-1 conditioning signature before that resize
+and binds sampler 2 to it explicitly. There is no keyframe-specific geometry exemption in the
+trajectory identity check: keyframe latents/shape, Qwen/context tensors, and independent
+`minimax_refs` all pass through the same bounded deterministic content fingerprint. The fingerprint
+samples tensor positions instead of reading every tensor byte back from the accelerator, so it is a
+practical drift fence rather than a cryptographic proof of full tensor equality.
 
 ### Progressive handoff use
 
@@ -136,9 +138,11 @@ used as an alignment mechanism; this prevents the known odd-grid flashing-border
   progressive split creates independent solver lifetimes. Unclassified calls remain explicit.
 - **Spectrum:** no import dependency. Actual/forecast, solver-phase, and outer-step metadata are
   consumed when present. A new downstream outer-sample execution is used per geometry.
-- **Continuum:** session/chunk metadata is part of trajectory selection. A different chunk cannot
-  silently consume the prior chunk's trajectory. Multi-chunk progressive use must use the Target
-  Input node so Continuum's latent/session geometry remains on the final grid.
+- **Continuum:** trajectory selection uses the available chunk identity plus the bounded conditioning
+  signature (and a session namespace when one is present). Current Continuum V3.4 interop does not
+  expose a unique sequence/session ID, so conditioning identity prevents same-index runs from
+  independent branches being confused. Multi-chunk progressive use must use the Target Input node so
+  Continuum's latent/session geometry remains on the final grid.
 - **DiffAid / Untwisting RoPE:** patches stay in the downstream path. The `h3_refinement` exact-anchor
   contract is published during the high stage.
 - **Other attention overrides:** experimental sparse attention delegates to the existing provider.
