@@ -85,50 +85,59 @@ global acceleration-weight tuning from this smoke result. If that artifact class
 the next research target should be video-time correspondence/occlusion-aware guidance rather than
 additional denoising-time acceleration strength.
 
-### D10 video-time correspondence experiment — VAE-confounded, clean rerun pending
+### D10 video-time correspondence experiment — clean standard-VAE result
 
-Two matched `direction+temporal` runs were previously decoded against the accepted D10 direction-only
-control. Structurally they remained comparable: 38 logical / 28 actual / 10 Spectrum forecast calls,
-22 low + 2 exact probes + 14 high, 48x46 -> 58x56 geometry, handoff index 6 at coordinate
-~0.400000016 / sigma ~0.888888896, no sampler failures, and no RMS clamp activation.
+Two earlier `direction+temporal` media runs remain **invalid for temporal attribution** because the
+workflow had accidentally switched to `ComfyUI-H3VAE_TRT` with the `w4a16_awq` decoder. The user
+identified that decoder as the source of the repeated/patterned output. Their structural evidence is
+retained, including the v1 ambiguity bug and the v2 hard uniqueness/cycle fix, but their decoded-media
+verdicts are excluded.
 
-Those **media verdicts are not valid temporal evidence**. The workflow had accidentally switched to
-`ComfyUI-H3VAE_TRT` and compiled the `w4a16_awq` decoder. The user later identified that decoder as
-the source of the repeated/patterned output. The console/runtime evidence confirms that the affected
-run used `MiniMaxH3TRTVAE`. Therefore the patterned grass cannot be attributed to
-`direction+temporal` from those runs.
+The clean **D10-temporal-v2-rerun** used the standard MiniMax H3 video VAE and completed successfully.
+The console shows the native `VAELoader` / `MiniMaxH3VideoVAE` path rather than
+`MiniMaxH3TRTVAE`.
 
-The structural findings remain useful:
-
-- v1 exposed a real ambiguity bug: high cosine similarity but weak best-vs-second-best uniqueness
-  allowed repetitive regions to receive temporal transport;
-- v2 fixed that independently by making similarity/margin hard admission rules, requiring exact
-  reverse-cycle consistency, and caching by the resolved low-grid reference coordinate;
-- on the latest v2 run, strict valid support fell to ~0.2202% / ~0.2235%, mean confidence to
-  ~0.00118 / ~0.00120, and 12/14 guidance calls correctly reused the resolved/clamped ~0.4 anchor.
-
-Because the VAE changed at the same time as the temporal experiment, neither v1 nor v2 can answer the
-quality question. The public `direction+temporal` mode and conservative v2 implementation are restored.
-
-The next gate is exactly one clean **D10-temporal-v2-rerun** after the corrected VAE is installed:
+It preserved the accepted D10 structure exactly:
 
 - 10 SA-Solver-PECE outer steps;
 - Target Input `source_mode=scale`, `source_scale=0.83`;
-- fixed handoff request 0.35;
-- `guidance_mode=direction+temporal`;
-- direction 0.25, temporal 0.20, acceleration 0, consistency 0;
-- low-frequency cutoff 0.25;
-- same seed, prompt, references, LoRAs, DiffAid, Untwist, Spectrum, Continuum chunking, audio behavior,
-  and decode settings;
-- Continuum Run Storage off;
-- use the corrected VAE decoder, explicitly record the exact decoder/engine identifier, and do **not**
-  use `w4a16_awq`.
+- 48x46 private source -> 58x56 target;
+- fixed handoff request 0.35 -> index 6 / coordinate ~0.400000016 / sigma ~0.888888896;
+- `direction+temporal`, direction 0.25, temporal 0.20, acceleration 0, consistency 0;
+- 38 logical calls = 22 low + 2 exact probes + 14 high;
+- 28 actual H3 NFEs / 10 Spectrum forecasts;
+- high stage 10 actual / 4 forecast;
+- 6 sampler invocations, 4 history boundaries, 2 exact probes;
+- both high stages begin actual, both sampler walls complete with `failed=false`;
+- no guidance correction hits the RMS clamp.
 
-Do not tune temporal weight, search radius, margin, or cycle tolerance before this clean rerun.
-The media gate returns to the original question: fast-motion clothing and newly revealed
-grass/background must improve without freezing, stale copying, repetition, ghosting, or smearing.
+V2's conservative temporal gate remained extremely sparse, which is expected after the earlier
+ambiguity fix:
 
-Resolution-shift-only path E remains pending after this clean temporal rerun.
+- chunk 1 valid fraction ~0.0015985 (0.1598%), confidence mean ~0.0008162,
+  similarity ~0.8924, margin ~0.03559;
+- chunk 2 valid fraction ~0.0005420 (0.0542%), confidence mean ~0.0002955,
+  similarity ~0.9495, margin ~0.03056;
+- mean temporal RMS ratio across all 14 guidance calls ~0.0008996, maximum ~0.002206;
+- mean direction RMS ratio ~0.02426;
+- 12/14 temporal calls reuse the resolved ~0.4 cache and 12/14 report the expected post-handoff
+  reference clamp.
+
+The decoded result is **good** and no longer contains the VAE-induced pattern. The user's matched
+perceptual verdict is **maybe slightly better than the non-temporal D10 run**. That is the first clean
+positive evidence for the temporal hypothesis, but it is deliberately recorded as **weak/tentative**
+rather than a validated quality improvement: the difference is small and only one clean difficult-motion
+case has been judged.
+
+Decision:
+
+- retain conservative `direction+temporal` v2 as an experimental candidate;
+- keep temporal weight 0.20 as the current reference operating point;
+- do not claim a general quality improvement and do not start a parameter sweep from this single weak
+  positive;
+- proceed to the orthogonal **E: resolution-shift-only** gate next;
+- a later second-seed matched direction-only/temporal pair can be used if stronger promotion evidence
+  is needed.
 
 
 Row E does not generate a low-resolution first pass. Its `shift_reference_grid` is the active area
