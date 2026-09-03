@@ -194,6 +194,10 @@ and [benchmark instructions](docs/BENCHMARKS.md).
   documented standard-Gaussian CPU generator keyed by the graph seed; it cannot preserve the semantics
   of an arbitrary custom/non-Gaussian video-noise node at that private grid. The caller's audio noise
   and target-grid protected-region noise remain preserved.
+- Progressive handoff rejects sampler objects with an explicit `noise_sampler`. Standard native
+  SA/SEEDS/ER-SDE samplers create their seed-derived noise sampler inside each independent invocation;
+  reusing an opaque caller-supplied noise-sampler closure could carry mutable RNG/history across the
+  low/high reset boundary, so that contract fails closed.
 - Progressive handoff carries ComfyUI denoise-mask semantics across the grid transition by resizing
   ComfyUI's prepared packed video mask, preserving the audio mask, spatially transferring the sampler
   `latent_image`, and reconstructing the exact noise argument against that preserved latent state.
