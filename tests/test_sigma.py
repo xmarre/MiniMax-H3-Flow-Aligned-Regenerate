@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from h3_flow_regenerate.geometry import h3_native_reference_canvas
 from h3_flow_regenerate.sigma import (
     audio_sigma,
     flow_shift,
@@ -37,6 +38,54 @@ def test_resolution_node_reports_effective_shift_factor():
     assert off["extra_shift_factor"] == 1.0
     assert calibrated["extra_shift_factor"] == 2.5
     assert derived["extra_shift_factor"] == pytest.approx(resolution_shift_factor(864 * 640, 1024 * 768))
+
+
+def test_h3_native_reference_canvas_matches_pinned_comfy_contract():
+    assert h3_native_reference_canvas(896, 928) == (768, 800)
+    assert h3_native_reference_canvas(928, 896) == (800, 768)
+    # Extreme aspect ratios must engage the 768*1344 area cap before 32px snapping.
+    width, height = h3_native_reference_canvas(4096, 512)
+    assert width * height <= (768 * 1344) + (32 * max(width, height))
+    assert width % 32 == 0
+    assert height % 32 == 0
+
+
+def test_resolution_node_auto_reference_follows_dynamic_target_aspect():
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = flow_shift(torch.tensor([1.0, 0.5, 0.0]), 12.0)
+    _, diagnostics = H3ResolutionAwareSigmas().map(
+        sigmas,
+        "resolution_aware",
+        0,
+        0,
+        896,
+        928,
+        1.0,
+        1.0,
+    )
+    assert diagnostics["reference_mode"] == "h3_native_auto"
+    assert diagnostics["source_width"] == 768
+    assert diagnostics["source_height"] == 800
+    assert diagnostics["target_width"] == 896
+    assert diagnostics["target_height"] == 928
+
+
+def test_resolution_node_rejects_half_auto_reference():
+    from h3_flow_regenerate.nodes import H3ResolutionAwareSigmas
+
+    sigmas = torch.tensor([1.0, 0.5, 0.0])
+    with pytest.raises(ValueError, match="both be 0"):
+        H3ResolutionAwareSigmas().map(
+            sigmas,
+            "resolution_aware",
+            0,
+            800,
+            896,
+            928,
+            1.0,
+            1.0,
+        )
 
 
 def test_resolution_mapping_is_ordered_finite_and_exact_at_endpoints():
