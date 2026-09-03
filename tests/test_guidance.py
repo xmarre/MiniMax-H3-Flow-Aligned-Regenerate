@@ -285,10 +285,7 @@ def test_pece_corrector_reuses_previous_distinct_velocity_anchor():
     predictor_reference_velocity = (predictor_state - current_ref) / current_sigma
     schedule = current_coordinate / first_coordinate
     expected_predictor_velocity = predictor_high_velocity + schedule * config.acceleration_weight * (
-        predictor_reference_velocity
-        - previous_reference_velocity
-        - predictor_high_velocity
-        + previous_high_velocity
+        predictor_reference_velocity - previous_reference_velocity - predictor_high_velocity + previous_high_velocity
     )
     expected_predictor_x0 = predictor_state - current_sigma * expected_predictor_velocity
     predictor = apply_guidance(
@@ -309,10 +306,7 @@ def test_pece_corrector_reuses_previous_distinct_velocity_anchor():
     corrector_high_velocity = (corrector_state - corrector_x0) / current_sigma
     corrector_reference_velocity = (corrector_state - current_ref) / current_sigma
     expected_corrector_velocity = corrector_high_velocity + schedule * config.acceleration_weight * (
-        corrector_reference_velocity
-        - previous_reference_velocity
-        - corrector_high_velocity
-        + previous_high_velocity
+        corrector_reference_velocity - previous_reference_velocity - corrector_high_velocity + previous_high_velocity
     )
     expected_corrector_x0 = corrector_state - current_sigma * expected_corrector_velocity
     corrector = apply_guidance(
@@ -339,10 +333,7 @@ def test_pece_corrector_reuses_previous_distinct_velocity_anchor():
     corrected_reference_velocity = (corrector_state - current_ref) / current_sigma
     next_schedule = next_coordinate / first_coordinate
     expected_next_velocity = next_high_velocity + next_schedule * config.acceleration_weight * (
-        next_reference_velocity
-        - corrected_reference_velocity
-        - next_high_velocity
-        + corrected_current_velocity
+        next_reference_velocity - corrected_reference_velocity - next_high_velocity + corrected_current_velocity
     )
     expected_next_x0 = next_state - next_sigma * expected_next_velocity
     next_result = apply_guidance(
