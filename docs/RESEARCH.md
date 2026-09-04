@@ -29,11 +29,21 @@ the exact target H/W before the existing conditional re-noise equation. This is 
 than the companion integrated refine node: it adds one CNN call, no second H3 sampling pass, and never
 touches audio. Bicubic remains the default and the prior evidence baseline.
 
-The intended D14 test is strict: 46×46→56×56, 14 outer steps, source scale 0.83, fixed 0.35 handoff,
-direction 0.25, other guidance weights zero, cutoff 0.25, with transfer mode as the only variable. The
-upscaler training includes arbitrary 1–4× scales, making the approximately 1.217× geometry supported,
-but 2× was much more common. Synthetic contract validation cannot establish perceptual quality or
-wall-time value; those claims remain withheld pending matched decoded video/audio.
+Decoded media now validates the learned boundary beyond the originally planned D14 46×46→56×56
+control. Around a 0.995 MP target, an aggressive bicubic transition showed substantial body/spatial
+artifacts in the tested difficult prompt; changing only the exact-probe clean-video transfer to the
+versioned learned 3D provider fixed the majority of them. At that target, `source_scale=0.70` resolved
+to 800×608→1152×864 and was judged excellent, whereas `0.65` resolved to 736×576→1152×864 and began
+losing reference likeness / tonal stability.
+
+A final `source_scale=0.70` higher-resolution gate resolved 832×640→1184×896 (~1.061 MP). The generated
+action was different but the decoded result was again judged very good. The run preserved the expected
+38 logical / 28 actual / 10 forecast topology, two exact probes, six sampler invocations, four history
+boundaries, copied audio, and actual high-grid anchors. Learned BF16 CUDA inference cost about 0.60 s
+and 0.77 s for the two physical chunks and added no H3 NFE. These learned-transfer media runs used
+`direction+acceleration`, so they do not change the earlier conclusion that acceleration has not shown
+a clear matched advantage over direction-only. Around 1 MP, 0.70 is the current tested learned-transfer
+quality/compute sweet spot for this prompt; no cross-prompt optimum is claimed.
 
 The original difficult-motion D10 reference established the topology at a rectangular 736x768 private source -> 896x928 target. A later matched square quality sweep used 736x736 -> 896x896 and showed a consistent subjective improvement from 10 -> 12 -> 14 SA-Solver-PECE outer steps with fixed handoff 0.35 and direction weight 0.25.
 
@@ -140,6 +150,6 @@ CI checks executable contracts at:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- H3 latent upscaler/refine and learned-handoff provider `5256edceabf651bdd9094c224e1907b2f0edd941` (draft provider PR #12)
+- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (draft provider PR #12)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`. Updating a source pin requires re-running the source audit and compatibility tests.

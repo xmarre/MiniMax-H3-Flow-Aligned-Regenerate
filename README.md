@@ -88,17 +88,31 @@ Create one **Flow Trajectory** handle and connect it to Progressive Handoff (Tar
 
 Continuum remains configured on the final target grid. The wrapper creates a private low-grid video state for the early stage, performs an exact low-grid handoff probe, rebuilds target-grid conditioning, and starts a fresh sampler lifetime on the high grid. Audio is never spatially transformed. SA/PECE Adams history and Spectrum feature history are deliberately reset across the geometry boundary, and the first high-grid H3 call is forced actual.
 
-`handoff_transfer=bicubic` is the default and preserves the released behavior. To test
-`learned_3d`, install the companion latent-upscaler revision listed under Validated source revisions,
-create **MiniMax H3 Latent Upscaler Provider (3D) [Experimental]**, and connect its
-`H3_LATENT_UPSCALER` output to the Target Input node. The learned CNN replaces only the clean-video
-46×46→56×56 transfer after the exact probe. Conditional re-noising, deterministic target noise,
-sampler/Spectrum history boundaries, high-grid actual anchor, caller audio, masks, and all H3 model
-calls remain unchanged. One learned inference is added per physical chunk; no extra H3 NFE is added.
-The roughly 1.217× transition is supported by the upscaler's arbitrary-scale training component but
-is less represented than 2×. No quality or speed advantage is claimed before matched decoded-media
-validation. Select an installed 3D checkpoint from `ComfyUI/models/latent_upscale_models`; provider
-mode fails instead of silently falling back when its configured inference device is unavailable.
+`handoff_transfer=bicubic` remains the compatibility default. For the validated learned path,
+install the companion latent upscaler, create **MiniMax H3 Latent Upscaler Provider (3D) [Experimental]**,
+connect its `H3_LATENT_UPSCALER` output to the Target Input node, and select
+`handoff_transfer=learned_3d`. The learned CNN replaces only the exact-probe clean-video spatial
+transfer. Conditional re-noising, deterministic target noise, sampler/Spectrum history boundaries,
+the mandatory first high-grid actual call, caller audio, masks, and all H3 model-call semantics remain
+unchanged. One learned inference is added per physical chunk and no extra H3 NFE is added.
+
+Decoded-media validation now covers substantially more aggressive transitions than the original
+46×46→56×56 D14 plan. Around a 0.995 MP target, bicubic at roughly a 0.55 MP private source produced
+visible body/spatial handoff artifacts in the tested difficult prompt; replacing only that boundary with
+`learned_3d` fixed the majority of those artifacts. At the same target, `source_scale=0.70` resolved to
+800×608→1152×864 and was judged excellent, while `0.65` resolved to 736×576→1152×864 and began losing
+reference likeness / tonal stability. The final higher-resolution gate kept `source_scale=0.70` and
+resolved 832×640→1184×896 (~1.061 MP target); the generated action was different but the result was
+again judged very good. Its two BF16 CUDA learned calls took about 0.60 s and 0.77 s and added zero H3
+NFEs. These latest learned-transfer media runs used `direction+acceleration`; they are not evidence for
+promoting acceleration over direction-only.
+
+For roughly 1 MP targets, `0.70` is therefore the current tested quality/compute sweet spot for this
+prompt, not a universal optimum. `0.65` is below the current useful quality floor in this case, while
+higher source scales remain the safer choice when preserving source-grid fidelity matters more than
+compute. Keep bicubic available for compatibility and matched controls rather than silently changing
+existing workflows. Provider mode fails instead of silently falling back when its configured inference
+device is unavailable.
 
 Use a complete 1-to-0 H3 sigma schedule. Partial low-sigma refinement schedules are rejected because their absolute flow origin is ambiguous for a progressive split.
 
@@ -129,6 +143,8 @@ For a desired private stage around ~0.54 MP:
 | 1.20 | 0.67 |
 
 The actual source dimensions are snapped to valid H3 latent geometry, so these values are starting points rather than exact pixel guarantees. Check the `handoff_plan` metrics event for the resolved source/target latent dimensions. With fixed handoff, increasing MP alone does not require changing `handoff_coordinate`; keep the tested 0.35 initially and adjust `source_scale` separately to control the low-stage compute budget.
+
+The table is a geometry heuristic, not a quality guarantee. At approximately 1 MP, real decoded media showed that `source_scale=0.70` can work very well with `learned_3d`, while `0.65` crossed the tested prompt's fidelity/tonal floor. Because H3 snaps both axes, compare the resolved `handoff_plan` geometry rather than assuming two nearby decimal scales produce a smooth change.
 
 ## Two-pass flow-aligned use
 
@@ -215,7 +231,7 @@ Pinned executable/source contracts:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- H3 latent upscaler/refine and learned-handoff provider `5256edceabf651bdd9094c224e1907b2f0edd941` (draft provider PR #12)
+- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (draft provider PR #12)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`.
 
