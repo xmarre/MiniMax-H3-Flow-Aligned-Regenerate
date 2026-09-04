@@ -942,6 +942,7 @@ def _run_progressive(
         requested_coordinate=config.handoff_coordinate,
         selected_coordinate=selected_coordinate,
         selection=config.handoff_selection,
+        transfer_mode=config.transfer_mode,
         input_mode="target_grid" if target_input else "source_grid",
         source_shape=source_shapes[0],
         target_hw=(target_h, target_w),
@@ -1036,6 +1037,7 @@ def _run_progressive(
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
         transfer_started = time.perf_counter()
+        transfer_metrics: dict[str, Any] = {}
         target_raw, target_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -1045,7 +1047,29 @@ def _run_progressive(
             target_w=target_w,
             seed=int(seed or 0) + config.seed_offset,
             transfer_mode=config.transfer_mode,
+            learned_upscaler=getattr(config, "learned_upscaler", None),
+            transfer_metrics=transfer_metrics,
         )
+        if config.transfer_mode == "learned_3d":
+            binding.metrics.event(
+                "handoff_learned_upscale_wall",
+                elapsed_ms=transfer_metrics["learned_upscale_elapsed_ms"],
+                provider_api_version=transfer_metrics["provider_api_version"],
+                provider_kind=transfer_metrics["provider_kind"],
+                model_name=transfer_metrics["model_name"],
+                source_hw=transfer_metrics["source_hw"],
+                target_hw=transfer_metrics["target_hw"],
+                temporal_length=transfer_metrics["temporal_length"],
+                input_dtype=transfer_metrics["input_dtype"],
+                input_device=transfer_metrics["input_device"],
+                inference_precision=transfer_metrics["inference_precision"],
+                configured_device=transfer_metrics["configured_device"],
+                inference_device=transfer_metrics["inference_device"],
+                offload_after_upscale=transfer_metrics["offload_after_upscale"],
+                offloaded_after_upscale=transfer_metrics["offloaded_after_upscale"],
+                output_dtype=transfer_metrics["output_dtype"],
+                output_device=transfer_metrics["output_device"],
+            )
         if target_input and target_shapes != input_shapes:
             raise RuntimeError("target-input progressive handoff changed the caller-visible AV geometry")
         if target_input:
@@ -1123,6 +1147,7 @@ def _run_progressive(
             high_stage_first_call_actual=first_high_actual,
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
+            transfer_mode=config.transfer_mode,
             input_mode="target_grid" if target_input else "source_grid",
         )
         return result

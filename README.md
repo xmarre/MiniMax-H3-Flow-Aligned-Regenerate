@@ -64,7 +64,7 @@ Restart ComfyUI. PyTorch is supplied by ComfyUI. Sibling custom nodes are not im
 | MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for an explicit second pass | Direction is conservative default |
 | MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine state for integrated learned refinement | Direction is conservative default |
 | MiniMax H3 Progressive Handoff | Source-grid sampler input grows to target grid during one schedule | Experimental |
-| MiniMax H3 Progressive Handoff (Target Input) | Continuum-safe target-sized topology with a private low-grid early stage | Validated experimental path |
+| MiniMax H3 Progressive Handoff (Target Input) | Continuum-safe target-sized topology with a private low-grid early stage; optional learned 3D clean-state transfer | Bicubic validated; learned transfer experimental |
 | MiniMax H3 Refine Target Geometry | Mirrors downstream learned-refine target sizing for sigma experiments | Experimental |
 | MiniMax H3 Resolution-Aware Sigmas | Relative H3-native resolution/time remap | Off / experimental |
 | MiniMax H3 Reference Budget | Direct-reference row diagnostics/cap | Native |
@@ -87,6 +87,18 @@ DiffAid
 Create one **Flow Trajectory** handle and connect it to Progressive Handoff (Target Input). The progressive node captures the low-grid trajectory internally; a separate **Trajectory Capture** node is not required on this path.
 
 Continuum remains configured on the final target grid. The wrapper creates a private low-grid video state for the early stage, performs an exact low-grid handoff probe, rebuilds target-grid conditioning, and starts a fresh sampler lifetime on the high grid. Audio is never spatially transformed. SA/PECE Adams history and Spectrum feature history are deliberately reset across the geometry boundary, and the first high-grid H3 call is forced actual.
+
+`handoff_transfer=bicubic` is the default and preserves the released behavior. To test
+`learned_3d`, install the companion latent-upscaler revision listed under Validated source revisions,
+create **MiniMax H3 Latent Upscaler Provider (3D) [Experimental]**, and connect its
+`H3_LATENT_UPSCALER` output to the Target Input node. The learned CNN replaces only the clean-video
+46×46→56×56 transfer after the exact probe. Conditional re-noising, deterministic target noise,
+sampler/Spectrum history boundaries, high-grid actual anchor, caller audio, masks, and all H3 model
+calls remain unchanged. One learned inference is added per physical chunk; no extra H3 NFE is added.
+The roughly 1.217× transition is supported by the upscaler's arbitrary-scale training component but
+is less represented than 2×. No quality or speed advantage is claimed before matched decoded-media
+validation. Select an installed 3D checkpoint from `ComfyUI/models/latent_upscale_models`; provider
+mode fails instead of silently falling back when its configured inference device is unavailable.
 
 Use a complete 1-to-0 H3 sigma schedule. Partial low-sigma refinement schedules are rejected because their absolute flow origin is ambiguous for a progressive split.
 
@@ -203,7 +215,7 @@ Pinned executable/source contracts:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- integrated H3 latent upscaler/refine `2c707492084962f7ed665e8817a05a11b14dab27`
+- H3 latent upscaler/refine and learned-handoff provider `5256edceabf651bdd9094c224e1907b2f0edd941` (draft provider PR #12)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`.
 

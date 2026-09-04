@@ -23,6 +23,18 @@ The strongest practical result is the Continuum-safe **Progressive Handoff (Targ
 
 The reset is essential: SA-Solver/PECE Adams history and Spectrum hidden-feature history do not cross the spatial geometry boundary. Audio stays at target representation and is never spatially resized.
 
+The Target Input boundary now also permits an experimental learned 3D transfer supplied by the
+companion latent-upscaler package. It consumes the exact-probe clean 24-channel video latent and emits
+the exact target H/W before the existing conditional re-noise equation. This is deliberately narrower
+than the companion integrated refine node: it adds one CNN call, no second H3 sampling pass, and never
+touches audio. Bicubic remains the default and the prior evidence baseline.
+
+The intended D14 test is strict: 46×46→56×56, 14 outer steps, source scale 0.83, fixed 0.35 handoff,
+direction 0.25, other guidance weights zero, cutoff 0.25, with transfer mode as the only variable. The
+upscaler training includes arbitrary 1–4× scales, making the approximately 1.217× geometry supported,
+but 2× was much more common. Synthetic contract validation cannot establish perceptual quality or
+wall-time value; those claims remain withheld pending matched decoded video/audio.
+
 The original difficult-motion D10 reference established the topology at a rectangular 736x768 private source -> 896x928 target. A later matched square quality sweep used 736x736 -> 896x896 and showed a consistent subjective improvement from 10 -> 12 -> 14 SA-Solver-PECE outer steps with fixed handoff 0.35 and direction weight 0.25.
 
 At 14 outer steps, fixed 0.35 snapped to unshifted coordinate ~0.358 / schedule index 9. Across two chunks the run recorded 54 logical model calls, 36 actual H3 NFEs, and 18 Spectrum forecasts, effectively allocating 9 low-grid and 5 high-grid outer steps per chunk. The user judged it again slightly better than the 12-step result. This is the current tested quality operating point, while 10/12 remain valid faster points.
@@ -128,6 +140,6 @@ CI checks executable contracts at:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- integrated H3 latent upscaler/refine `2c707492084962f7ed665e8817a05a11b14dab27`
+- H3 latent upscaler/refine and learned-handoff provider `5256edceabf651bdd9094c224e1907b2f0edd941` (draft provider PR #12)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`. Updating a source pin requires re-running the source audit and compatibility tests.

@@ -24,6 +24,7 @@ Attach **MiniMax H3 Metrics JSON** to experimental paths. The autosaved JSON is 
 | D12-direction | Square matched run, fixed 0.35, direction 0.25 | Perceptually better than D10 |
 | D14-direction | Square matched run, fixed 0.35, direction 0.25 | Again slightly better; current tested quality point |
 | D14-temporal | Same D14 topology plus temporal 0.20 | No perceptual difference from D14 direction-only |
+| D14-transfer-A/B | Same D14 direction topology; bicubic vs learned 3D clean-state transfer only | Implementation/synthetic validation complete; decoded media pending |
 | E0/E1 | Learned-refine SIGMAS identity control vs resolution-aware remap | Structurally valid; no relevant E1 quality improvement |
 
 Earlier temporal media generated with the accidental TensorRT `w4a16_awq` VAE is excluded from media conclusions.
@@ -65,6 +66,19 @@ D14 fixed handoff selected schedule index 9 at unshifted coordinate ~0.35799987 
 - sampler failures: 0.
 
 This is effectively 9 low-grid + 5 high-grid outer steps per chunk. It is not equivalent to a separate 7+7 learned-refine workflow, but it is a useful quality/compute comparison because the majority of the trajectory runs on the cheaper low grid.
+
+### Pending strict D14 transfer A/B
+
+Use the quality reference above unchanged. Control A selects `handoff_transfer=bicubic`; treatment B
+connects the versioned 3D provider and selects `handoff_transfer=learned_3d`. The only intended change
+is the clean-video spatial transfer at the 46×46→56×56 boundary. Keep seed, inputs, 14 outer steps,
+source scale 0.83, fixed 0.35 handoff, direction 0.25, all other guidance weights zero, cutoff 0.25,
+sampler, scheduler, model patches, Continuum settings, masks, audio, and decode identical.
+
+Require the same logical/actual/forecast topology and exact-probe/high-anchor invariants in both runs.
+For learned mode also record provider API/kind, checkpoint, precision, configured/resolved device,
+offload policy, source/target HWT, dtype/device, per-chunk learned wall time, total handoff wall time,
+peak VRAM if available, decoded video/audio, and the metrics JSON. A structural pass is not a media win.
 
 The D12 predecessor used fixed 0.35 -> ~0.334/index 8 and recorded 46 logical / 32 actual / 14 forecast calls. The user judged D12 better than D10 and D14 again a bit better than D12. Stop the current step sweep at 14 unless a future scenario gives a specific reason to test higher budgets.
 
