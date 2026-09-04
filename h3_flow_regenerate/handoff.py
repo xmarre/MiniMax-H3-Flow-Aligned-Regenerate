@@ -1,13 +1,59 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
 from .geometry import normalize_target_geometry, pack_streams, unpack_streams, validate_av
-from .guidance import conditional_renoise_alignment
+from .guidance import conditional_renoise_alignment, conditional_renoise_target
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+
+H3_LATENT_UPSCALER_API_VERSION = 1
+H3_LATENT_UPSCALER_KIND = "minimax_h3_learned_latent_upscaler"
+
+
+def validate_learned_upscaler_provider(provider: Any) -> dict[str, Any]:
+    if provider is None:
+        raise ValueError("learned_3d handoff requires a connected H3_LATENT_UPSCALER provider")
+    api_version = getattr(provider, "api_version", None)
+    if api_version != H3_LATENT_UPSCALER_API_VERSION:
+        raise ValueError(
+            f"unsupported H3 latent-upscaler provider API {api_version!r}; expected {H3_LATENT_UPSCALER_API_VERSION}"
+        )
+    kind = getattr(provider, "kind", None)
+    if kind != H3_LATENT_UPSCALER_KIND:
+        raise ValueError(f"unsupported H3 latent-upscaler provider kind {kind!r}")
+    upscale = getattr(provider, "upscale_clean_video", None)
+    if not callable(upscale):
+        raise TypeError("H3 latent-upscaler provider is missing callable upscale_clean_video")
+    model_name = getattr(provider, "model_name", None)
+    device = getattr(provider, "device", None)
+    precision = getattr(provider, "precision", None)
+    offload = getattr(provider, "offload_after_upscale", None)
+    inference_device = getattr(provider, "inference_device", device)
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError("H3 latent-upscaler provider is missing a checkpoint identity")
+    if device not in {"cuda", "cpu"}:
+        raise ValueError("H3 latent-upscaler provider device must be cuda or cpu")
+    if precision not in {"fp32", "fp16", "bf16"}:
+        raise ValueError("H3 latent-upscaler provider precision must be fp32, fp16, or bf16")
+    if not isinstance(offload, bool):
+        raise TypeError("H3 latent-upscaler provider offload_after_upscale must be boolean")
+    if inference_device not in {"cuda", "cpu"}:
+        raise ValueError("H3 latent-upscaler provider inference_device must be cuda or cpu")
+    return {
+        "api_version": api_version,
+        "kind": kind,
+        "model_name": model_name,
+        "device": device,
+        "inference_device": inference_device,
+        "precision": precision,
+        "offload_after_upscale": offload,
+        "upscale": upscale,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +89,8 @@ class ProgressiveHandoffConfig:
             raise ValueError("automatic handoff bounds must lie inside (0, 1)")
         if self.matching_mode != "conditional_renoise":
             raise ValueError("only the derived conditional_renoise handoff is currently supported")
+        if self.transfer_mode != "bicubic":
+            raise ValueError("source-input progressive handoff currently supports bicubic transfer only")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
@@ -92,6 +140,7 @@ class ProgressiveTargetInputConfig:
     seed_offset: int = 0x4833464C4F57
     source_noise_offset: int = 0x48334C4F574C52
     min_high_steps: int = 2
+    learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -112,6 +161,10 @@ class ProgressiveTargetInputConfig:
             raise ValueError("automatic handoff bounds must lie inside (0, 1)")
         if self.matching_mode != "conditional_renoise":
             raise ValueError("only the derived conditional_renoise handoff is currently supported")
+        if self.transfer_mode not in {"bicubic", "learned_3d"}:
+            raise ValueError("target-input handoff transfer must be bicubic or learned_3d")
+        if self.transfer_mode == "learned_3d":
+            validate_learned_upscaler_provider(self.learned_upscaler)
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
@@ -186,6 +239,8 @@ def build_handoff_state(
     target_w: int,
     seed: int,
     transfer_mode: str = "bicubic",
+    learned_upscaler: Any | None = None,
+    transfer_metrics: dict[str, Any] | None = None,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -204,14 +259,72 @@ def build_handoff_state(
         device=source_video.device,
         dtype=source_video.dtype,
     )
-    target_video = conditional_renoise_alignment(
-        x0_video,
-        target_h=target_h,
-        target_w=target_w,
-        sigma=float(sigma),
-        noise=noise,
-        transfer_mode=transfer_mode,
-    )
+    if transfer_mode == "bicubic":
+        target_video = conditional_renoise_alignment(
+            x0_video,
+            target_h=target_h,
+            target_w=target_w,
+            sigma=float(sigma),
+            noise=noise,
+            transfer_mode="bicubic",
+        )
+        report = {"transfer_mode": "bicubic"}
+    elif transfer_mode == "learned_3d":
+        provider = validate_learned_upscaler_provider(learned_upscaler)
+        learned_started = time.perf_counter()
+        learned_x0 = provider["upscale"](
+            x0_video,
+            target_h=int(target_h),
+            target_w=int(target_w),
+        )
+        learned_elapsed_ms = (time.perf_counter() - learned_started) * 1000.0
+        if not isinstance(learned_x0, torch.Tensor):
+            raise TypeError("H3 latent-upscaler provider returned a non-tensor value")
+        expected_shape = (
+            int(x0_video.shape[0]),
+            int(x0_video.shape[1]),
+            int(x0_video.shape[2]),
+            int(target_h),
+            int(target_w),
+        )
+        if tuple(learned_x0.shape) != expected_shape:
+            raise RuntimeError(
+                f"H3 latent-upscaler provider returned shape {tuple(learned_x0.shape)}; expected {expected_shape}"
+            )
+        if not learned_x0.is_floating_point():
+            raise TypeError("H3 latent-upscaler provider returned a non-floating tensor")
+        if not bool(torch.isfinite(learned_x0).all().item()):
+            raise RuntimeError("H3 latent-upscaler provider returned NaN or Inf values")
+        target_video = conditional_renoise_target(
+            learned_x0,
+            sigma=float(sigma),
+            noise=noise,
+        )
+        report = {
+            "transfer_mode": "learned_3d",
+            "provider_api_version": provider["api_version"],
+            "provider_kind": provider["kind"],
+            "model_name": provider["model_name"],
+            "source_hw": tuple(int(value) for value in x0_video.shape[-2:]),
+            "target_hw": (int(target_h), int(target_w)),
+            "temporal_length": int(x0_video.shape[2]),
+            "input_dtype": str(x0_video.dtype),
+            "input_device": str(x0_video.device),
+            "inference_precision": provider["precision"],
+            "configured_device": provider["device"],
+            "inference_device": provider["inference_device"],
+            "learned_upscale_elapsed_ms": learned_elapsed_ms,
+            "offload_after_upscale": provider["offload_after_upscale"],
+            "offloaded_after_upscale": bool(
+                provider["offload_after_upscale"] and provider["inference_device"] == "cuda"
+            ),
+            "output_dtype": str(learned_x0.dtype),
+            "output_device": str(learned_x0.device),
+        }
+    else:
+        raise ValueError(f"unsupported progressive handoff transfer mode {transfer_mode!r}")
+    if transfer_metrics is not None:
+        transfer_metrics.update(report)
     # The packed sampler carries audio on the video sigma schedule. Its state is
     # preserved byte-for-byte across a purely spatial video transition.
     target_packed, target_shapes = pack_streams((target_video, source_audio.clone()))

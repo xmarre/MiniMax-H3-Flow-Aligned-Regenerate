@@ -60,7 +60,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
-          git -C .contracts/Upscaler checkout 2c707492084962f7ed665e8817a05a11b14dab27
+          git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
       - name: Validate native and sibling contracts
         run: >-
           python tools/check_source_contracts.py

@@ -169,7 +169,9 @@ class H3FlowAlignedRefineState:
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
                 "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
-            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+            "optional": {
+                "metrics": ("H3_FLOW_METRICS",),
+            },
         }
 
     RETURN_TYPES = ("H3_CONTINUUM_REFINE_STATE", "H3_FLOW_METRICS")
@@ -339,8 +341,21 @@ class H3ProgressiveTargetInputHandoff:
                 "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
                 "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "handoff_transfer": (
+                    ["bicubic", "learned_3d"],
+                    {
+                        "default": "bicubic",
+                        "tooltip": (
+                            "bicubic preserves the released handoff. learned_3d applies one connected "
+                            "H3 latent-upscaler provider to the exact-probe clean video state."
+                        ),
+                    },
+                ),
             },
-            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+            "optional": {
+                "metrics": ("H3_FLOW_METRICS",),
+                "learned_upscaler": ("H3_LATENT_UPSCALER",),
+            },
         }
 
     RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
@@ -365,12 +380,16 @@ class H3ProgressiveTargetInputHandoff:
         low_frequency_cutoff,
         metrics=None,
         temporal_weight=0.20,
+        handoff_transfer="bicubic",
+        learned_upscaler=None,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
                 source_scale=source_scale,
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
+                transfer_mode=handoff_transfer,
+                learned_upscaler=learned_upscaler,
             )
         else:
             source_h, source_w = pixel_to_safe_latent(source_height, source_width)
@@ -379,6 +398,8 @@ class H3ProgressiveTargetInputHandoff:
                 source_latent_w=source_w,
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
+                transfer_mode=handoff_transfer,
+                learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
             mode=guidance_mode,

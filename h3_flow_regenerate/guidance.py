@@ -694,6 +694,19 @@ def conditional_renoise_alignment(
     if not 0 <= sigma <= 1:
         raise ValueError("sigma must be in [0, 1]")
     ref = resize_video(reference_x0, target_h, target_w, mode=transfer_mode).to(noise)
+    return conditional_renoise_target(ref, sigma=sigma, noise=noise)
+
+
+def conditional_renoise_target(
+    target_x0: torch.Tensor,
+    *,
+    sigma: float,
+    noise: torch.Tensor,
+) -> torch.Tensor:
+    """Reconstruct x_t from an already target-sized clean state and target noise."""
+    if not 0 <= sigma <= 1:
+        raise ValueError("sigma must be in [0, 1]")
+    ref = target_x0.to(noise)
     if ref.shape != noise.shape:
         raise ValueError("initialization reference and noise shapes differ")
     return (1.0 - sigma) * ref + sigma * noise

@@ -1412,6 +1412,28 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     )
     calls = []
 
+    class LearnedProvider:
+        api_version = 1
+        kind = "minimax_h3_learned_latent_upscaler"
+        model_name = "fake.safetensors"
+        device = "cpu"
+        precision = "fp32"
+        offload_after_upscale = False
+
+        def __init__(self):
+            self.calls = []
+
+        def upscale_clean_video(self, video, *, target_h, target_w):
+            self.calls.append((video.clone(), target_h, target_w))
+            return torch.nn.functional.interpolate(
+                video.float(),
+                size=(video.shape[2], target_h, target_w),
+                mode="trilinear",
+                align_corners=False,
+            ).to(video)
+
+    learned_provider = LearnedProvider()
+
     class Executor:
         class_obj = guider
 
@@ -1462,7 +1484,13 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         Executor(),
         guider,
         binding,
-        ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4, handoff_coordinate=0.3),
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            handoff_coordinate=0.3,
+            transfer_mode="learned_3d",
+            learned_upscaler=learned_provider,
+        ),
         target_noise,
         target_latent,
         sampler,
@@ -1490,11 +1518,19 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert result.shape == target_latent.shape
     assert binding.trajectory.latest.geometry.latent_h == 4
     assert binding.trajectory.latest.geometry.latent_w == 4
+    assert len(learned_provider.calls) == 1
+    assert torch.equal(learned_provider.calls[0][0], source_video)
+    assert learned_provider.calls[0][1:] == (8, 6)
     handoff = [event for event in binding.metrics.events if event.kind == "handoff_complete"][-1]
+    learned = [event for event in binding.metrics.events if event.kind == "handoff_learned_upscale_wall"][-1]
     assert handoff.fields["high_stage_first_call_actual"] is True
     assert handoff.fields["high_stage_model_calls"] == 1
     assert handoff.fields["sampler_invocation_count"] == 3
     assert handoff.fields["history_boundary_count"] == 2
+    assert handoff.fields["transfer_mode"] == "learned_3d"
+    assert learned.fields["provider_api_version"] == 1
+    assert learned.fields["source_hw"] == (4, 4)
+    assert learned.fields["target_hw"] == (8, 6)
 
     calls.clear()
     callback_shapes.clear()
@@ -1502,7 +1538,12 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
         Executor(),
         guider,
         binding,
-        ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4, handoff_coordinate=0.3),
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            handoff_coordinate=0.3,
+            learned_upscaler=learned_provider,
+        ),
         target_noise,
         target_latent,
         sampler,
@@ -1518,6 +1559,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert second_handoff.fields["history_boundary_count"] == 2
     assert binding.metrics.counters["progressive_sampler_invocations"] == 6
     assert binding.metrics.counters["progressive_history_boundaries"] == 4
+    assert len(learned_provider.calls) == 1
 
 
 def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):
@@ -1589,6 +1631,97 @@ def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypat
     assert len(trajectory.runs) == 1
     assert not trajectory.runs[0].complete
     assert "progressive continuation failed" in trajectory.runs[0].abort_reason
+    assert any(event.kind == "trajectory_invalidate" for event in binding.metrics.events)
+
+
+def test_learned_provider_failure_invalidates_committed_low_trajectory(monkeypatch):
+    class KSampler:
+        def __init__(self, function, inpaint_options=None):
+            self.sampler_function = function
+            self.extra_options = {}
+            self.inpaint_options = dict(inpaint_options or {})
+
+    fake_samplers = ModuleType("comfy.samplers")
+    fake_samplers.KSAMPLER = KSampler
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.samplers = fake_samplers
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake_samplers)
+
+    target_video = torch.randn(1, 24, 1, 8, 6)
+    audio = torch.randn(1, 32, 2, 5)
+    target_packed, target_shapes = pack_streams((target_video, audio))
+    source_packed, _ = pack_streams((torch.randn(1, 24, 1, 4, 4), audio))
+    sigmas = torch.tensor([1.0, 0.8, 0.4, 0.0])
+
+    def native():
+        pass
+
+    native.__name__ = "sample_euler"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={})
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        model_patcher=SimpleNamespace(model=MiniMaxH3()),
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+        conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+    calls = 0
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, noise, latent, call_sampler, call_sigmas, *args, latent_shapes):
+            nonlocal calls
+            del noise, latent, args, latent_shapes
+            calls += 1
+            if call_sampler.sampler_function.__name__ == "_h3_flow_exact_probe":
+                return source_packed
+            return source_packed / (1.0 - call_sigmas[-1])
+
+    class FailingProvider:
+        api_version = 1
+        kind = "minimax_h3_learned_latent_upscaler"
+        model_name = "failing.safetensors"
+        device = "cpu"
+        precision = "fp32"
+        offload_after_upscale = False
+
+        def upscale_clean_video(self, video, *, target_h, target_w):
+            del video, target_h, target_w
+            raise RuntimeError("synthetic provider failure")
+
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(
+        trajectory=trajectory,
+        guidance=GuidanceConfig(mode="off"),
+        capture_enabled=True,
+    )
+    with pytest.raises(RuntimeError, match="synthetic provider failure"):
+        _run_progressive(
+            Executor(),
+            guider,
+            binding,
+            ProgressiveTargetInputConfig(
+                source_latent_h=4,
+                source_latent_w=4,
+                handoff_coordinate=0.3,
+                transfer_mode="learned_3d",
+                learned_upscaler=FailingProvider(),
+            ),
+            torch.randn_like(target_packed),
+            target_packed,
+            sampler,
+            sigmas,
+            None,
+            None,
+            True,
+            7,
+            list(target_shapes),
+        )
+    assert calls == 2
+    assert len(trajectory.runs) == 1
+    assert not trajectory.runs[0].complete
+    assert "synthetic provider failure" in trajectory.runs[0].abort_reason
     assert any(event.kind == "trajectory_invalidate" for event in binding.metrics.events)
 
 

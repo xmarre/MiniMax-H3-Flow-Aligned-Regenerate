@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "kind": "comfyui_workflow_overlay",
   "purpose": "Continuum-safe progressive H3 sampling: keep the workflow/session on the final grid while running the early H3 trajectory internally at a smaller video grid.",
   "placement": {
@@ -37,7 +37,8 @@
       "acceleration_weight": 0,
       "temporal_weight": 0,
       "consistency_weight": 0,
-      "low_frequency_cutoff": 0.25
+      "low_frequency_cutoff": 0.25,
+      "handoff_transfer": "bicubic"
     },
     "observed_handoff": {
       "index": 9,
@@ -59,6 +60,28 @@
       "progressive_sampler_invocations": 6,
       "progressive_history_boundaries": 4
     }
+  },
+  "learned_transfer_experiment": {
+    "status": "implementation_validated_media_pending",
+    "provider_node": "MinimaxH3LatentUpscaler3DProvider",
+    "wiring": "provider.learned_upscaler -> H3ProgressiveTargetInputHandoff.learned_upscaler",
+    "treatment_widget": {"handoff_transfer": "learned_3d"},
+    "control_widget": {"handoff_transfer": "bicubic"},
+    "strict_d14_pair": {
+      "outer_steps": 14,
+      "source_scale": 0.83,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction",
+      "direction_weight": 0.25,
+      "acceleration_weight": 0,
+      "temporal_weight": 0,
+      "consistency_weight": 0,
+      "low_frequency_cutoff": 0.25,
+      "latent_transition": "46x46 -> 56x56",
+      "only_intended_difference": "handoff_transfer"
+    },
+    "claims": "No quality or speed win is claimed before decoded video/audio review."
   },
   "faster_operating_points": [
     {
