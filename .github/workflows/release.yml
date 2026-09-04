@@ -1,0 +1,121 @@
+name: release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          version="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid project version: ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          archive="MiniMax-H3-Flow-Aligned-Regenerate-v${VERSION}.zip"
+          git archive \
+            --format=zip \
+            --prefix="MiniMax-H3-Flow-Aligned-Regenerate-v${VERSION}/" \
+            --output="dist/${archive}" \
+            HEAD
+          (cd dist && sha256sum "${archive}" > SHA256SUMS)
+
+      - name: Extract current release notes
+        shell: bash
+        run: |
+          awk '/^---$/ { exit } { print }' RELEASE_NOTES.md > CURRENT_RELEASE_NOTES.md
+          test -s CURRENT_RELEASE_NOTES.md
+
+      - name: Publish or refresh GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            current_main="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')"
+            if [[ "${RELEASE_SHA}" != "${current_main}" ]]; then
+              echo "Tested commit ${RELEASE_SHA} is no longer current main (${current_main}); refusing to refresh an existing release from a stale workflow run."
+              exit 0
+            fi
+
+            if ! git fetch --force --no-tags --depth=1 origin "refs/tags/${TAG}:refs/tags/${TAG}"; then
+              echo "Failed to fetch existing release tag ${TAG}; refusing to refresh release notes." >&2
+              exit 1
+            fi
+            if ! existing_target="$(git rev-parse "${TAG}^{commit}")"; then
+              echo "Failed to resolve ${TAG} to a commit; refusing to refresh release notes." >&2
+              exit 1
+            fi
+
+            if [[ "${existing_target}" != "${RELEASE_SHA}" ]]; then
+              changed_file_list="$(mktemp)"
+              if ! git diff --name-only "${existing_target}" "${RELEASE_SHA}" > "${changed_file_list}"; then
+                echo "Failed to compare existing release commit ${existing_target} with tested commit ${RELEASE_SHA}; refusing to refresh release notes." >&2
+                rm -f "${changed_file_list}"
+                exit 1
+              fi
+              mapfile -t changed_files < "${changed_file_list}"
+              rm -f "${changed_file_list}"
+
+              docs_only=true
+              for path in "${changed_files[@]}"; do
+                case "${path}" in
+                  README.md|RELEASE_NOTES.md|.github/workflows/release.yml) ;;
+                  *) docs_only=false ;;
+                esac
+              done
+
+              if [[ "${docs_only}" != "true" ]]; then
+                echo "Release ${TAG} already exists and the tested commit contains non-documentation changes; leaving the published release unchanged."
+                exit 0
+              fi
+            fi
+
+            gh release edit "${TAG}" \
+              --title "MiniMax H3 Flow-Aligned Regenerate ${TAG}" \
+              --notes-file CURRENT_RELEASE_NOTES.md
+            echo "Refreshed release notes for ${TAG}; existing tag target and assets were preserved."
+            exit 0
+          fi
+
+          gh release create "${TAG}" \
+            dist/MiniMax-H3-Flow-Aligned-Regenerate-v${VERSION}.zip \
+            dist/SHA256SUMS \
+            --target "${RELEASE_SHA}" \
+            --title "MiniMax H3 Flow-Aligned Regenerate ${TAG}" \
+            --notes-file CURRENT_RELEASE_NOTES.md
