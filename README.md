@@ -90,6 +90,34 @@ Continuum remains configured on the final target grid. The wrapper creates a pri
 
 Use a complete 1-to-0 H3 sigma schedule. Partial low-sigma refinement schedules are rejected because their absolute flow origin is ambiguous for a progressive split.
 
+### Choosing `source_scale` when target MP changes
+
+With `source_mode=scale`, `source_scale` is a **linear H/W scale**, not a megapixel fraction. Before H3-safe geometry snapping, the private low-stage area therefore follows approximately:
+
+```text
+source_MP ~= target_MP * source_scale^2
+```
+
+If you want to preserve the same relative low/high resolution ratio as target MP increases, leave `source_scale` unchanged. The low stage then grows proportionally with the final target and becomes more expensive as well.
+
+If instead you want to preserve roughly the tested private low-stage size (~736x736, ~0.54 MP) while increasing final MP, reduce `source_scale` approximately as:
+
+```text
+source_scale ~= sqrt(desired_source_MP / target_MP)
+```
+
+For a desired private stage around ~0.54 MP:
+
+| Target MP | Approx. `source_scale` |
+|---:|---:|
+| 0.84 | 0.80 |
+| 0.90 | 0.78 |
+| 1.00 | 0.74 |
+| 1.10 | 0.70 |
+| 1.20 | 0.67 |
+
+The actual source dimensions are snapped to valid H3 latent geometry, so these values are starting points rather than exact pixel guarantees. Check the `handoff_plan` metrics event for the resolved source/target latent dimensions. With fixed handoff, increasing MP alone does not require changing `handoff_coordinate`; keep the tested 0.35 initially and adjust `source_scale` separately to control the low-stage compute budget.
+
 ## Two-pass flow-aligned use
 
 1. Create one **Flow Trajectory** handle.
