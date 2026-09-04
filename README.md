@@ -19,15 +19,16 @@ The implementation, guards, instrumentation, workflow specifications, and synthe
 
 - **Integrated two-pass flow guidance:** C7=7+7, C6=7+6, C5=7+5, and exploratory C4=7+4 all completed acceptable difficult-motion smokes. This path remains useful when keeping the learned latent upscaler/refiner.
 - **Progressive Target Input:** the accepted D10 direction-only run validated the Continuum-safe split topology and restored quality to roughly baseline level after the earlier under-budgeted 7-step progressive attempt.
-- **Step-budget sweep:** on the later matched square difficult-motion setup (736x736 private source -> 896x896 target), direction-only improved perceptually from 10 -> 12 -> 14 SA-Solver-PECE outer steps. The 14-step run is the current tested quality operating point.
+- **Step-budget sweep:** on the later matched square difficult-motion setup (736x736 private source -> 896x896 target), direction-only improved perceptually from 10 -> 12 -> 14 SA-Solver-PECE outer steps. The 14-step run is the current tested direction-only quality operating point.
 - **14-step topology:** fixed handoff 0.35 snapped to unshifted coordinate ~0.358 / index 9, giving 54 logical calls, 36 actual H3 NFEs, and 18 Spectrum forecasts across two chunks. The split is effectively 9 low-grid + 5 high-grid outer steps per chunk.
+- **Learned handoff around 1 MP:** `source_scale=0.70` at 10 progressive outer steps was decoded-media positive through ~1.061 MP. In the final run, 832x640 -> 1184x896 completed in 621.63 s end-to-end with 38 logical / 28 actual H3 NFE / 10 Spectrum forecast calls. Against the historical proper 960x704 -> 1184x864 two-pass 7+6 upscale/refine workflow at ~777 s, this is an observed ~20% end-to-end wall-time reduction while producing ~3.7% more final pixels. This is a workflow-level reference, not a formal matched A/B.
 - **Auto handoff:** functional. On the matched 46x46 -> 56x56 latent setup, `auto_compute` selected 0.2875 and snapped to ~0.30/index 7, reallocating work toward the low grid. Media changed but showed no clear quality advantage over fixed 0.35.
 - **Downsample consistency:** functional at weight 0.25 and produced measurable latent corrections, but no meaningful decoded-media improvement. Do not prefer it over direction guidance from current evidence.
 - **HiFlow-style acceleration:** corrected PECE semantics are validated, but the decoded-media result is neutral/inconclusive for the fast-motion clothing/newly revealed background artifact class.
 - **Temporal correspondence:** the final matched 14-step standard-VAE `direction+temporal` run was perceptually indistinguishable from 14-step direction-only. The matcher was active but extremely sparse, so temporal remains experimental and is not promoted.
 - **Resolution-aware refine SIGMAS:** matched E0/E1 learned-refine runs completed. The mapping worked structurally, but E1 showed no relevant quality improvement over the exact-identity control. Keep this mode off/experimental.
 
-The current practical recommendation from the tested difficult-motion workflow is therefore:
+The conservative direction-only quality-sweep reference is therefore:
 
 ```text
 outer_steps = 14
@@ -43,7 +44,7 @@ consistency_weight = 0
 low_frequency_cutoff = 0.25
 ```
 
-This is a **tested operating point**, not a universal optimum. For lower latency, 10 or 12 outer steps remain valid operating points; 12 was already perceptually better than 10 in the matched quality sweep.
+This is a **tested operating point**, not a universal optimum. For lower latency, 10 or 12 outer steps remain valid operating points; 12 was already perceptually better than 10 in the matched direction-only quality sweep. The learned `learned_3d` path has a separate tested quality/compute point around 1 MP at 10 outer steps and `source_scale=0.70`, documented below; those latest learned runs used `direction+acceleration` and therefore do not replace the conservative direction-only guidance recommendation.
 
 ## Install
 
@@ -64,7 +65,7 @@ Restart ComfyUI. PyTorch is supplied by ComfyUI. Sibling custom nodes are not im
 | MiniMax H3 Flow-Aligned Regenerate | Time-matched low-frequency guidance for an explicit second pass | Direction is conservative default |
 | MiniMax H3 Flow-Aligned Refine State | Patches Continuum V3.4 per-chunk refine state for integrated learned refinement | Direction is conservative default |
 | MiniMax H3 Progressive Handoff | Source-grid sampler input grows to target grid during one schedule | Experimental |
-| MiniMax H3 Progressive Handoff (Target Input) | Continuum-safe target-sized topology with a private low-grid early stage; optional learned 3D clean-state transfer | Bicubic validated; learned transfer experimental |
+| MiniMax H3 Progressive Handoff (Target Input) | Continuum-safe target-sized topology with a private low-grid early stage; optional learned 3D clean-state transfer | Bicubic compatibility path; learned transfer decoded-media validated / experimental |
 | MiniMax H3 Refine Target Geometry | Mirrors downstream learned-refine target sizing for sigma experiments | Experimental |
 | MiniMax H3 Resolution-Aware Sigmas | Relative H3-native resolution/time remap | Off / experimental |
 | MiniMax H3 Reference Budget | Direct-reference row diagnostics/cap | Native |
@@ -106,6 +107,32 @@ resolved 832×640→1184×896 (~1.061 MP target); the generated action was diffe
 again judged very good. Its two BF16 CUDA learned calls took about 0.60 s and 0.77 s and added zero H3
 NFEs. These latest learned-transfer media runs used `direction+acceleration`; they are not evidence for
 promoting acceleration over direction-only.
+
+### Observed performance versus proper two-pass upscale + refine
+
+The useful legacy comparison is the established **7 first-pass + 6 learned-refine outer-step** workflow,
+not the old 3-step high-ratio refine experiments. At nominal 0.7 MP, that proper two-pass path resolved
+approximately 960×704 (0.676 MP) -> 1184×864 (1.023 MP) and took about 777 s end-to-end in the observed
+run. The historical full-quality setup was 7+7; no equally clean ~1 MP raw timing has been recovered for
+that exact 7+7 case, so no larger speedup is claimed from it.
+
+| Path | Base/private grid | Final grid | Sampling structure | Observed full workflow |
+|---|---:|---:|---|---:|
+| Proper two-pass upscale + refine | 960×704 (0.676 MP) | 1184×864 (1.023 MP) | 7 base + 6 learned-refine outer steps | ~777 s (~12:57) |
+| Progressive + `learned_3d` | 832×640 (0.532 MP) | 1184×896 (1.061 MP) | 10 progressive outer steps; 38 logical / 28 actual / 10 forecast | 621.63 s (10:21.6) |
+
+Relative to that proper 6-step-refine baseline, the progressive learned-handoff run used ~21.2% fewer
+private/source pixels, produced ~3.7% more final pixels, and saved about 155 s end-to-end: roughly a
+**20% wall-time reduction / 1.25× observed workflow speedup**. The learned CNN itself was not the source
+of the saving: its two calls totaled only ~1.37 s of inference (~1.43 s including transfer bookkeeping)
+and added zero H3 NFEs. The saving comes from performing more of the trajectory on the cheaper private
+grid and avoiding a complete second low-sigma H3 refine pass.
+
+This timing comparison is a practical observed-workflow reference rather than a controlled same-seed
+microbenchmark. The old and new runs differ slightly in final geometry and were recorded at different
+points in development, so use the ~20% figure as measured evidence for this workflow, not a universal
+speed claim or a quality-superiority percentage. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the
+full accounting and caveats.
 
 For roughly 1 MP targets, `0.70` is therefore the current tested quality/compute sweet spot for this
 prompt, not a universal optimum. `0.65` is below the current useful quality floor in this case, while
@@ -210,7 +237,7 @@ Runtime events distinguish:
 - sampler/stage wall time;
 - resolution sigma maps and fallbacks.
 
-Use [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [workflows/benchmark-matrix.json](workflows/benchmark-matrix.json) for the evidence ledger and the broader optional formal matrix. Decoded video and audio remain the pass/fail criterion.
+Use [docs/BENCHMARKS.md](docs/BENCHMARKS.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md), and [workflows/benchmark-matrix.json](workflows/benchmark-matrix.json) for the evidence ledger, observed timing accounting, and the broader optional formal matrix. Decoded video and audio remain the pass/fail criterion.
 
 ## Compatibility
 
@@ -231,7 +258,7 @@ Pinned executable/source contracts:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (draft provider PR #12)
+- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (merged provider revision; released by companion v0.2.0)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`.
 
@@ -246,12 +273,13 @@ python -m compileall -q .
 python -m build
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RESEARCH.md](docs/RESEARCH.md), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RESEARCH.md](docs/RESEARCH.md), [docs/BENCHMARKS.md](docs/BENCHMARKS.md), and [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Limitations
 
 - The current quality recommendation comes from a limited difficult-motion workflow and is not a broad cross-prompt benchmark claim.
 - The 14-step quality sweep used the later matched square 736x736 -> 896x896 progressive setup; the earlier rectangular D10 reference remains a separate validated topology case.
+- The ~20% observed end-to-end timing reduction is against the proper historical 7+6 two-pass workflow at similar final resolution; it is not a formal same-seed benchmark and must not be generalized to every prompt, target MP, model residency state, or reference budget.
 - The progressive exact handoff probe costs one visible H3 NFE per chunk.
 - Target Input derives private low-grid **video** noise from a documented standard-Gaussian CPU generator keyed by graph seed; arbitrary custom/non-Gaussian private-grid video-noise semantics cannot be preserved.
 - Progressive handoff rejects sampler objects with an explicit external `noise_sampler` closure because mutable RNG/history cannot safely cross the geometry reset.
