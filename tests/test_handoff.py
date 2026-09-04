@@ -12,6 +12,30 @@ from h3_flow_regenerate.handoff import (
 from h3_flow_regenerate.sigma import flow_shift
 
 
+class FakeLearnedProvider:
+    api_version = 1
+    kind = "minimax_h3_learned_latent_upscaler"
+    model_name = "fake.safetensors"
+    device = "cpu"
+    precision = "fp32"
+    offload_after_upscale = False
+
+    def __init__(self, output=None):
+        self.output = output
+        self.calls = []
+
+    def upscale_clean_video(self, video, *, target_h, target_w):
+        self.calls.append((video.clone(), target_h, target_w))
+        if self.output is not None:
+            return self.output
+        return torch.full(
+            (*video.shape[:-2], target_h, target_w),
+            5.0,
+            dtype=video.dtype,
+            device=video.device,
+        )
+
+
 def packed(h=4, w=4):
     video = torch.randn(1, 24, 2, h, w)
     audio = torch.randn(1, 32, 2, 7)
@@ -52,6 +76,107 @@ def test_handoff_geometry_audio_and_determinism():
     assert target_video.shape == (1, 24, 2, 8, 6)
     assert torch.equal(target_audio, audio)
     assert torch.equal(first, second)
+
+
+def test_bicubic_default_never_invokes_connected_learned_provider():
+    state, x0, shapes, _, _ = packed()
+    provider = FakeLearnedProvider()
+    build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=123,
+        transfer_mode="bicubic",
+        learned_upscaler=provider,
+    )
+    assert provider.calls == []
+
+
+def test_learned_handoff_uses_exact_probe_video_once_and_preserves_audio():
+    source_video = torch.full((1, 24, 2, 4, 4), -3.0)
+    exact_x0_video = torch.full_like(source_video, 2.0)
+    audio = torch.randn(1, 32, 2, 7)
+    state, shapes = pack_streams((source_video, audio))
+    x0, _ = pack_streams((exact_x0_video, torch.full_like(audio, 99.0)))
+    provider = FakeLearnedProvider()
+    report = {}
+
+    target, target_shapes = build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=123,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        transfer_metrics=report,
+    )
+
+    target_video, target_audio = unpack_streams(target, target_shapes)
+    expected_noise = deterministic_video_noise(
+        target_video.shape,
+        seed=123,
+        device=target_video.device,
+        dtype=target_video.dtype,
+    )
+    assert len(provider.calls) == 1
+    assert torch.equal(provider.calls[0][0], exact_x0_video)
+    assert provider.calls[0][1:] == (8, 6)
+    assert torch.allclose(target_video, 0.6 * torch.full_like(target_video, 5.0) + 0.4 * expected_noise)
+    assert torch.equal(target_audio, audio)
+    assert report["transfer_mode"] == "learned_3d"
+    assert report["provider_api_version"] == 1
+    assert report["source_hw"] == (4, 4)
+    assert report["target_hw"] == (8, 6)
+    assert report["temporal_length"] == 2
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        torch.zeros(1, 23, 2, 8, 6),
+        torch.zeros(1, 24, 3, 8, 6),
+        torch.zeros(1, 24, 2, 7, 6),
+    ],
+)
+def test_learned_handoff_rejects_wrong_provider_geometry(output):
+    state, x0, shapes, _, _ = packed()
+    with pytest.raises(RuntimeError, match="returned shape"):
+        build_handoff_state(
+            source_packed_state=state,
+            source_x0_packed=x0,
+            source_shapes=shapes,
+            sigma=0.4,
+            target_h=8,
+            target_w=6,
+            seed=123,
+            transfer_mode="learned_3d",
+            learned_upscaler=FakeLearnedProvider(output),
+        )
+
+
+def test_learned_target_input_config_requires_supported_provider_contract():
+    with pytest.raises(ValueError, match="requires a connected"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            transfer_mode="learned_3d",
+        )
+
+    incompatible = FakeLearnedProvider()
+    incompatible.api_version = 2
+    with pytest.raises(ValueError, match="provider API"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            transfer_mode="learned_3d",
+            learned_upscaler=incompatible,
+        )
 
 
 def test_cpu_rng_contract_is_retry_stable_and_seed_sensitive():

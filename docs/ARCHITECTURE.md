@@ -374,6 +374,21 @@ standard-Gaussian low-grid video tensor from the graph seed while preserving the
 The handoff high-frequency video noise uses a separate domain offset. Both generators are isolated
 from the sampler RNG.
 
+Target-input transfer is a pluggable clean-state boundary with `bicubic` as the compatibility default.
+The optional versioned `H3_LATENT_UPSCALER` provider receives only the unpacked, post-`process_latent_in`
+24-channel exact-probe video estimate and the already-resolved target latent H/W. For current pinned H3,
+`process_latent_in` leaves video numerically unchanged and applies the packed internal scaling only to
+audio, so this is the same clean-video latent domain used by the standalone learned 3D upscaler. Audio
+never enters the provider. The provider must preserve B/C/T, return the exact target H/W, a floating
+finite tensor, and API/kind metadata; violations fail before the high sampler starts.
+
+After either transfer, the same deterministic target-grid Gaussian tensor and conditional rectified-flow
+equation construct the handoff state. Thus learned mode changes one spatial clean-state transform, adds
+one CNN inference per physical chunk, and does not alter the exact probe, sigma, H3 NFE count, masks,
+conditioning rebuild, first-high actual anchor, or sampler/Spectrum lifetime boundaries. Metrics record
+the mode, provider/checkpoint, source/target HWT, input/output dtype/device, configured and resolved
+inference device, precision, elapsed time, and offload policy.
+
 `auto_compute` is a deterministic, bounded handoff heuristic that moves the base coordinate later
 as the target/source area ratio grows. It uses no model calls and is reported in metrics. It is a
 compute-allocation probe, not a learned quality criterion; fixed `0.35` remains the reproducible

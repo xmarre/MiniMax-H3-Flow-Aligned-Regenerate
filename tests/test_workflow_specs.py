@@ -30,3 +30,17 @@ def test_resolution_shift_matrix_preserves_base_and_refine():
     assert matrix["topology"]["forbidden_placement"] == "H3ResolutionAwareSigmas must not feed Continuum.sigmas"
     assert matrix["runs"][0]["id"] == "E0-refine-control"
     assert matrix["runs"][1]["id"] == "E1-refine-resolution-aware"
+
+
+def test_progressive_overlay_defaults_to_bicubic_and_defines_strict_learned_ab():
+    overlay = _load("workflows/progressive-handoff.overlay.json")
+    widgets = overlay["recommended_quality_operating_point"]["widgets"]
+    experiment = overlay["learned_transfer_experiment"]
+
+    assert overlay["schema_version"] == 4
+    assert widgets["handoff_transfer"] == "bicubic"
+    assert experiment["provider_node"] == "MinimaxH3LatentUpscaler3DProvider"
+    assert experiment["control_widget"] == {"handoff_transfer": "bicubic"}
+    assert experiment["treatment_widget"] == {"handoff_transfer": "learned_3d"}
+    assert experiment["strict_d14_pair"]["only_intended_difference"] == "handoff_transfer"
+    assert experiment["strict_d14_pair"]["latent_transition"] == "46x46 -> 56x56"

@@ -24,6 +24,7 @@ Attach **MiniMax H3 Metrics JSON** to experimental paths. The autosaved JSON is 
 | D12-direction | Square matched run, fixed 0.35, direction 0.25 | Perceptually better than D10 |
 | D14-direction | Square matched run, fixed 0.35, direction 0.25 | Again slightly better; current tested quality point |
 | D14-temporal | Same D14 topology plus temporal 0.20 | No perceptual difference from D14 direction-only |
+| Learned-transfer media | Progressive Target Input around 1.0–1.06 MP; aggressive source scales; learned 3D clean-state transfer | Decoded-media positive; 0.70 strongest tested quality/compute point, 0.65 begins fidelity loss |
 | E0/E1 | Learned-refine SIGMAS identity control vs resolution-aware remap | Structurally valid; no relevant E1 quality improvement |
 
 Earlier temporal media generated with the accidental TensorRT `w4a16_awq` VAE is excluded from media conclusions.
@@ -65,6 +66,38 @@ D14 fixed handoff selected schedule index 9 at unshifted coordinate ~0.35799987 
 - sampler failures: 0.
 
 This is effectively 9 low-grid + 5 high-grid outer steps per chunk. It is not equivalent to a separate 7+7 learned-refine workflow, but it is a useful quality/compute comparison because the majority of the trajectory runs on the cheaper low grid.
+
+### Learned 3D transfer decoded-media validation
+
+The original strict 46×46→56×56 D14 A/B plan was superseded by a more informative aggressive-handoff
+sweep around 1 MP. The learned-transfer conclusion comes from decoded media; synthetic contract tests
+remain supporting structural evidence only.
+
+The useful progression was:
+
+- around `1152×864` (~0.995 MP) target, a bicubic handoff from roughly a ~0.55 MP private source showed
+  substantial body/spatial artifacts in the difficult-motion prompt;
+- replacing only the exact-probe clean-state resize with `learned_3d` fixed the majority of those
+  artifacts while preserving the same sampler boundary semantics;
+- `source_scale=0.70` resolved to `800×608 → 1152×864` and was judged excellent;
+- `source_scale=0.65` resolved to `736×576 → 1152×864` and began losing reference-picture likeness and
+  tonal stability, so it is not promoted;
+- the final higher-resolution gate used `source_scale=0.70` at `832×640 → 1184×896` (~1.061 MP target).
+  The video was different in action/content but was again judged very good.
+
+The final ~1.061 MP run used 10 SA-Solver-PECE outer steps, fixed handoff 0.35 snapping to schedule index
+6 / unshifted coordinate ~0.400000016 / sigma ~0.888888896, and `direction+acceleration` guidance. Across
+two physical chunks it recorded 38 logical H3 calls / 28 actual transformer NFEs / 10 Spectrum
+forecasts: low 22/16/6, exact probes 2/2/0, high 14/10/4. It also recorded 6 progressive sampler
+invocations, 4 history boundaries, copied audio, rebuilt high-grid conditioning, and an actual first
+high-grid H3 call for both chunks. The BF16 CUDA learned provider took about 602 ms and 771 ms; total
+learned-transfer wall time was about 628 ms and 802 ms. No sampler failure occurred and the CNN added no
+H3 NFE.
+
+This does not establish universal learned-transfer superiority or a universal source-scale optimum.
+For this prompt around 1 MP, `0.70` is the current tested quality/compute sweet spot; `0.65` is below the
+observed quality floor. The latest learned runs had acceleration enabled, so they must not be cited as
+new direction-only or acceleration-promotion evidence.
 
 The D12 predecessor used fixed 0.35 -> ~0.334/index 8 and recorded 46 logical / 32 actual / 14 forecast calls. The user judged D12 better than D10 and D14 again a bit better than D12. Stop the current step sweep at 14 unless a future scenario gives a specific reason to test higher budgets.
 
