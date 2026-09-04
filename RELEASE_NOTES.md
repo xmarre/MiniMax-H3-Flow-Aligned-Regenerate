@@ -1,20 +1,45 @@
-# Unreleased
+# MiniMax H3 Flow-Aligned Regenerate v0.3.0
+
+v0.3.0 preserves exact Continuum Native Masked prefixes in Progressive Target Input and adds opt-in OpenVDN-topology attention diagnostics/reference tooling. The Continuum fix is default-path correctness behavior; the VDN modes remain experimental diagnostics and correctness oracles, not production acceleration.
 
 ## Exact Continuum prefix safety
 
-- Progressive Target Input now bypasses the private low-grid handoff when the prepared video denoise mask contains exact-zero values.
-- The fallback forwards the original target-grid noise, latent, mask, schedule, sampler, callback, and mutable shape metadata through one sampler lifetime, preserving ComfyUI's exact mask contract and stateful sampler behavior.
-- Audio-only protection and fractional video blends retain the existing progressive path.
-- Metrics distinguish the fallback from both ordinary and split-progressive sampling.
+- Progressive Target Input now detects exact-zero values in the prepared **video** denoise mask and treats that prefix as authoritative target-grid state.
+- When exact video protection is present, the private low-resolution stage is bypassed for that invocation: no target latent resize, private low-grid noise, learned transfer, low/probe/high split, or same-invocation Flow guidance is applied.
+- The original target-grid noise, latent, denoise mask, sampler, schedule, callback, and mutable shape metadata are forwarded through one ordinary sampler lifetime.
+- Audio-only protection and fractional video masks retain the existing progressive path.
+- Metrics emit `progressive_target_fallback` and record the reason, target-grid forwarding, sampler invocation count, history-boundary count, and whether progressive guidance was applied.
 
-## Attention Lab
+This fixes the prior semantic mismatch where generated rows could attend to a spatially downsampled approximation of a Continuum prefix that was supposed to remain exact, even if protected values were restored later at the target-grid boundary.
 
-- Output-neutral diagnostics now measure native dense-attention mass retained by the public OpenVDN temporal topology, plus outside mass, boundary-frame mass, exact analytic pair density, and an optional authoritative Continuum seam.
-- Adds `vdn_reference_dense`, an all-head query-chunked dense-mask correctness oracle using complete 5-frame chunks, radius 1, global non-video tokens, and first/last row-and-column anchors.
-- The seam anchor requires `protected_video_prefix_latent_slots`; frame-count metadata is never guessed into latent indices.
-- No sparse-kernel or speed claim is made. OpenVDN's trained hybrid branch, compiled kernel, and separately licensed weights are not included.
+## Decoded H3 runtime validation
 
-Decoded H3 media validation remains required before release or recommendation.
+The release gate used matched two-chunk Continuum Native Masked runs with ordinary `sa_solver_pece`, the normal H3 workflow stack, and a known-good VAE path.
+
+- Progressive off: `440.32 s` complete workflow; each chunk used 11 logical calls = 8 actual transformer calls + 3 Spectrum forecasts; no full-frame jitter/flashing.
+- Progressive on: chunk 1 used 7 low-grid logical calls, one exact handoff probe, and 3 target-grid high-stage actual calls; chunk 2 detected the protected prefix and used the exact target-grid fallback.
+- Progressive-on complete workflow: `398.64 s`, about **9.5% lower** than the matched control even though only chunk 1 was progressively accelerated.
+- For chunk 1's principal sampling path, native Spectrum wall time was `176.991 s` versus approximately `135.960 s` for progressive low + exact probe + high, about **23.2% lower** in that run.
+- Progressive metrics recorded `progressive_target_fallbacks=1`, `handoff_exact_probe_nfe=1`, `progressive_history_boundaries=2`, `progressive_sampler_invocations=4`, 18 actual transformer evaluations, and 4 Spectrum forecasts.
+- The decoded progressive result had no new jitter/flashing and no new Continuum seam regression was reported. The exact-prefix fallback retained the material seam/cut improvement observed in the tested seed/reference setup.
+
+These timings are workflow-, resolution-, prompt-, and hardware-specific measurements, not universal speed claims.
+
+The earlier full-frame flashing/jitter report was misattributed to Flow. It reproduced with the external **MiniMax H3 RefDelta Stability Sampler** and disappeared when replaced with ordinary SA-PECE in both progressive-off and progressive-on controls. RefDelta jitter is therefore a separate issue and is not presented as a v0.3.0 Flow regression.
+
+## Attention Lab / VDN reference tooling
+
+- `diagnostic` remains output-neutral and now reports native dense-attention retention/outside mass, modality mass, boundary mass, exact analytic allowed-pair density, and optional Continuum seam diagnostics.
+- Adds `vdn_reference_dense`, an independently implemented all-head, query-chunked dense-mask correctness oracle using complete 5-latent-frame chunks, radius-1 previous/current/next temporal neighborhoods, globally visible non-video tokens, and symmetric first/last row-and-column anchors.
+- Optional Continuum seam anchoring fails closed unless authoritative `h3_continuum.protected_video_prefix_latent_slots` metadata exists. Pixel/frame counts are never guessed into latent slots.
+- The reference path does **not** implement OpenVDN's trained long-range linear branch, compiled FlexAttention/BlockMask kernel, cache design, or separately licensed VDN-H3 weights, and it makes no OpenVDN speed/quality claim.
+
+## Validation and compatibility
+
+- PR gate: Ruff check and format check passed; `pytest` reported **150 passed**; `compileall`, sdist/wheel build, built-wheel import, pinned sibling/source contracts, and GitHub CI passed.
+- Existing Progressive Target Input workflows without exact-zero video protection retain the prior low/probe/high path.
+- Existing audio handling, fractional masks, target geometry, learned handoff provider behavior, Spectrum accounting, and trajectory metrics remain compatible outside the protected-prefix fallback.
+- v0.3.0 is a minor release because it adds a new user-selectable Attention Lab reference mode in addition to the Continuum correctness fix.
 
 ---
 
