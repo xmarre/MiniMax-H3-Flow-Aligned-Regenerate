@@ -82,12 +82,17 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
           git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
       - name: Validate native and sibling contracts
-        run: >-
-          python tools/check_source_contracts.py
-          --comfy .contracts/ComfyUI
-          --spectrum .contracts/Spectrum
-          --continuum .contracts/Continuum
-          --diffaid .contracts/DiffAid
-          --refdelta .contracts/RefDelta
-          --untwist .contracts/Untwist
-          --upscaler .contracts/Upscaler
+        run: |
+          python tools/check_source_contracts.py \
+            --comfy .contracts/ComfyUI \
+            --spectrum .contracts/Spectrum \
+            --continuum .contracts/Continuum \
+            --diffaid .contracts/DiffAid \
+            --refdelta .contracts/RefDelta \
+            --untwist .contracts/Untwist \
+            --upscaler .contracts/Upscaler
+          python tools/check_target_sparse_contracts.py \
+            --comfy .contracts/ComfyUI \
+            --spectrum .contracts/Spectrum \
+            --continuum .contracts/Continuum \
+            --diffaid .contracts/DiffAid

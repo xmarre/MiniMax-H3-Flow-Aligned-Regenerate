@@ -24,6 +24,7 @@ from .handoff import (
 )
 from .metrics import H3FlowMetrics
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 
 LOG = logging.getLogger(__name__)
 
@@ -840,6 +841,25 @@ def _flow_stage_contract(guider: Any, stage: str):
 
 
 @contextlib.contextmanager
+def _target_sparse_stage_contract(guider: Any, contract: dict[str, Any]):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable transformer options")
+    previous = transformer.get(TARGET_SPARSE_CONTRACT_KEY)
+    transformer[TARGET_SPARSE_CONTRACT_KEY] = contract
+    try:
+        yield
+    finally:
+        if previous is None:
+            transformer.pop(TARGET_SPARSE_CONTRACT_KEY, None)
+        else:
+            transformer[TARGET_SPARSE_CONTRACT_KEY] = previous
+
+
+@contextlib.contextmanager
 def _high_stage_contract(guider: Any):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
@@ -872,6 +892,214 @@ def _high_stage_contract(guider: Any):
             transformer["h3_refinement"] = previous
 
 
+def _run_target_sparse_exact_prefix(
+    executor,
+    guider,
+    binding: FlowBinding,
+    config: ProgressiveTargetInputConfig,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask,
+    callback,
+    disable_pbar,
+    seed,
+    latent_shapes,
+):
+    """Progressively reduce H3 transformer tokens without resizing exact context.
+
+    This path is intentionally different from the normal low-grid handoff. The
+    sampler state, latent image, denoise mask, conditioning layout and RoPE all
+    remain on the caller's target grid. During the early sampler lifetime only,
+    H3 block wrappers keep every non-video row, every exact-protected target-video
+    row and a regular coarse lattice of generated video rows. The last block
+    lifts the coarse hidden field to the full target grid. A fresh full-transformer
+    sampler lifetime begins at the configured handoff coordinate.
+    """
+
+    if denoise_mask is None:
+        raise ValueError("target-sparse exact-prefix mode requires a prepared H3 denoise mask")
+    _validate_progressive_sampler_state(sampler)
+    if sigmas.ndim != 1 or sigmas.numel() < 4:
+        raise ValueError("progressive handoff requires a full H3 sigma schedule")
+    if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
+        float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
+    ):
+        raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
+
+    target_shapes = list(latent_shapes)
+    target_h, target_w = map(int, target_shapes[0][-2:])
+    if target_h % 2 or target_w % 2:
+        raise ValueError("target-sparse input H3 geometry is not patch-safe")
+    source_h, source_w = config.resolve_source(target_h, target_w)
+
+    model_options = getattr(guider, "model_options", None)
+    if not isinstance(model_options, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable model options")
+    transformer = model_options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable transformer options")
+    current_conds = getattr(guider, "conds", None)
+    if not isinstance(current_conds, dict):
+        raise RuntimeError("target-sparse progressive handoff requires ComfyUI guider conditioning state")
+    conditioning_template = {
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
+        for key, entries in current_conds.items()
+    }
+    video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
+    selected_coordinate = config.resolve_coordinate(source_h, source_w, target_h, target_w)
+    index = select_handoff_index(
+        sigmas,
+        selected_coordinate,
+        min_high_steps=config.min_high_steps,
+        video_shift=video_shift,
+    )
+    sigma = float(sigmas[index].item())
+    low_sigmas = sigmas[: index + 1]
+    high_sigmas = sigmas[index:]
+    plan = build_target_sparse_plan(
+        denoise_mask,
+        target_shapes,
+        source_h=source_h,
+        source_w=source_w,
+    )
+    sparse_contract = target_sparse_contract(plan)
+
+    binding.metrics.increment("progressive_target_sparse_runs")
+    binding.metrics.event(
+        "handoff_plan",
+        index=index,
+        sigma=sigma,
+        coordinate=float(normalized_coordinate(sigma, video_shift=video_shift)),
+        requested_coordinate=config.handoff_coordinate,
+        selected_coordinate=selected_coordinate,
+        selection=config.handoff_selection,
+        transfer_mode="target_sparse_lifter",
+        input_mode="target_grid_sparse",
+        source_shape=(*target_shapes[0][:-2], source_h, source_w),
+        target_hw=(target_h, target_w),
+        protected_video_rows=plan.protected_video_row_count,
+        anchor_video_rows=plan.anchor_video_row_count,
+        selected_video_rows=plan.selected_video_row_count,
+        target_video_rows=plan.target_video_rows,
+        video_row_fraction=plan.video_row_fraction,
+        exact_target_latent_resized=False,
+        exact_target_mask_resized=False,
+    )
+
+    sampler_invocation_count = 0
+    history_boundary_count = 0
+    _begin_capture(binding, guider, sampler, low_sigmas, target_shapes)
+    try:
+        _reset_guider_conds(guider, template=conditioning_template)
+        low_started = time.perf_counter()
+        try:
+            sampler_invocation_count += 1
+            binding.metrics.increment("progressive_sampler_invocations")
+            with _flow_stage_contract(guider, "low"), _target_sparse_stage_contract(guider, sparse_contract):
+                low_result = executor(
+                    noise,
+                    latent_image,
+                    sampler,
+                    low_sigmas,
+                    denoise_mask,
+                    callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=target_shapes,
+                )
+        finally:
+            binding.metrics.event(
+                "low_stage_wall",
+                elapsed_ms=(time.perf_counter() - low_started) * 1000.0,
+                target_sparse=True,
+            )
+        base_model = guider.model_patcher.model
+        target_raw = _raw_sampler_state(base_model, low_result, target_shapes, sigma)
+    except BaseException as exc:
+        _finish_capture(binding, error=exc)
+        raise
+
+    committed_low_run = _finish_capture(binding)
+    try:
+        target_latent_internal = _process_latent_in(base_model, latent_image, target_shapes)
+        target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
+        target_noise = _merge_preserved_noise(target_noise, noise, denoise_mask)
+
+        if binding.guidance is not None and binding.guidance.mode != "off":
+            if committed_low_run is None:
+                raise RuntimeError("target-sparse Flow guidance requires low-stage trajectory capture")
+            if committed_low_run.geometry.latent_t != int(target_shapes[0][2]):
+                raise ValueError("target-sparse low trajectory and target video temporal geometry differ")
+            binding.active_guidance_run = committed_low_run
+
+        def high_callback(step, x0, x, _total):
+            if callback is not None:
+                return callback(index + step, x0, x, len(sigmas) - 1)
+            return None
+
+        _reset_guider_conds(guider, template=conditioning_template)
+        high_started = time.perf_counter()
+        high_event_start = len(binding.metrics.events)
+        sampler_invocation_count += 1
+        history_boundary_count += 1
+        binding.metrics.increment("progressive_sampler_invocations")
+        binding.metrics.increment("progressive_history_boundaries")
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+            result = executor(
+                target_noise,
+                latent_image,
+                sampler,
+                high_sigmas,
+                denoise_mask,
+                high_callback,
+                disable_pbar,
+                seed,
+                latent_shapes=target_shapes,
+            )
+        binding.metrics.event(
+            "high_stage_wall",
+            elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
+            target_sparse=False,
+        )
+        high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
+        if not high_model_calls:
+            raise RuntimeError("target-sparse progressive high stage produced no H3 model evaluations")
+        first_high_actual = bool(high_model_calls[0].fields.get("actual"))
+        if not first_high_actual:
+            raise RuntimeError("target-sparse progressive high stage did not begin with an exact H3 model evaluation")
+        binding.metrics.event(
+            "handoff_complete",
+            sigma=sigma,
+            target_shape=target_shapes[0],
+            audio_state_copied=False,
+            separate_sampler_invocations=True,
+            sampler_invocation_count=sampler_invocation_count,
+            history_boundary_count=history_boundary_count,
+            exact_probe_performed=False,
+            high_stage_exact_prefix_requested=1,
+            high_stage_first_call_actual=first_high_actual,
+            high_stage_model_calls=len(high_model_calls),
+            conditioning_rebuilt_for_high_grid=False,
+            transfer_mode="target_sparse_lifter",
+            input_mode="target_grid_sparse",
+            exact_target_inputs_forwarded=True,
+            exact_protected_rows_retained=True,
+            source_latent_resize_performed=False,
+            learned_transfer_performed=False,
+        )
+        return result
+    except BaseException as exc:
+        if committed_low_run is not None and binding.trajectory is not None:
+            invalid = binding.trajectory.invalidate(
+                committed_low_run.run_id,
+                f"target-sparse progressive continuation failed: {type(exc).__name__}: {exc}",
+            )
+            binding.metrics.event("trajectory_invalidate", run_id=invalid.run_id, error=type(exc).__name__)
+        raise
+
+
 def _run_progressive(
     executor,
     guider,
@@ -891,6 +1119,22 @@ def _run_progressive(
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
     input_shapes = list(latent_shapes)
     if isinstance(config, ProgressiveTargetInputConfig) and _has_exact_video_protection(denoise_mask, input_shapes):
+        if config.exact_prefix_mode == "target_sparse_lifter":
+            return _run_target_sparse_exact_prefix(
+                executor,
+                guider,
+                binding,
+                config,
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes,
+            )
         # Native masked continuation promises exact video-prefix preservation.
         # A private low-grid lifetime would resize those clean prefix latents and
         # expose the changed values to every generated row through H3's dense
