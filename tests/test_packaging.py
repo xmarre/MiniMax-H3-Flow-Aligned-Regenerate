@@ -10,6 +10,22 @@ def test_package_import_without_comfyui():
     assert h3_flow_regenerate.H3FlowTrajectory.api_version == 1
 
 
+def test_project_declares_apache_license_and_tracks_license_file():
+    root = Path(__file__).parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    license_text = (root / "LICENSE").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    assert 'license = "Apache-2.0"' in pyproject
+    assert 'license-files = ["LICENSE"]' in pyproject
+    assert 'License = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/main/LICENSE"' in pyproject
+    assert license_text.startswith("Apache License\n                           Version 2.0, January 2004")
+    assert "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION" in license_text
+    assert "END OF TERMS AND CONDITIONS" in license_text
+    assert "[Apache License 2.0](LICENSE)" in readme
+    assert "Copyright 2026 xmarre." in readme
+
+
 def test_custom_node_root_registration_smoke():
     root = Path(__file__).parents[1] / "__init__.py"
     spec = importlib.util.spec_from_file_location(
