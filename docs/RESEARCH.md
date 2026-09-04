@@ -1,21 +1,29 @@
 # Research transfer notes
 
-This design uses public work as evidence and inspiration while keeping H3 assumptions explicit. Decoded-media results determine which transferred ideas are retained as practical recommendations.
+This design uses public work as evidence and inspiration while keeping H3 assumptions explicit. Decoded-media results determine which transferred ideas are retained as practical recommendations. Full author, paper, code-repository, inspected-snapshot, license, and node-by-node attribution is maintained in [../CREDITS.md](../CREDITS.md).
 
 | Source | Useful transfer | Boundary for H3 |
 |---|---|---|
 | [HiFlow](https://arxiv.org/abs/2504.06232) | Low-resolution flow trajectories contain time-varying structure; direction and acceleration alignment motivate the guidance experiments. | Published experiments are image models. H3 is packed AV. Direction is a low-frequency predicted-clean correction; acceleration reconstructs H3 velocity from `x0 = x - sigma * v`. Correct transfer does not imply a media win. |
 | [FrescoDiffusion](https://arxiv.org/abs/2603.17555) | High-resolution video can benefit from a global low-resolution prior and spatially selective trust. | Its tiled fusion and activity masks are not copied. H3 uses captured clean-state trajectories and a conservative correspondence gate. |
 | [TokenFlow](https://arxiv.org/abs/2307.10373) | Diffusion-space features can expose useful inter-frame correspondences. | This project does not replace H3 attention tokens; it tests local correspondence directly on captured H3 video latents. |
-| [FRESCO](https://arxiv.org/abs/2403.12962) | Temporal propagation needs explicit occlusion/validity evidence and forward/backward consistency. | No external optical-flow network is added; mutual local latent matching is used as a bounded visibility gate. |
+| [FRESCO](https://arxiv.org/abs/2403.12962) | Explicit spatial/temporal correspondence motivates stronger validity constraints than unconstrained feature copying. | No external optical-flow network is added; mutual local latent matching is used as a bounded visibility gate. |
+| [MoVideo](https://arxiv.org/abs/2311.11325) | Warped latent guidance plus an explicit occlusion signal reinforces that correspondence should be trusted selectively. | The H3 temporal mode uses no trained flow/depth generator and no MoVideo conditioning pipeline. |
+| [Upscale-A-Video](https://arxiv.org/abs/2312.06640) | Flow-guided recurrent latent propagation is evidence that latent-space correspondence can support temporal stability. | The current mode is local adjacent-frame matching rather than a recurrent propagation network. |
+| [LatentWarp](https://arxiv.org/abs/2311.00353) | Warping latent features along motion correspondence motivates latent-level temporal constraints. | H3 correspondence is inferred locally from captured clean-state latents rather than external optical flow. |
 | [RALU](https://arxiv.org/abs/2507.08422) | Naively resizing noisy state causes distribution/timestep mismatch; spatial transitions need explicit noise semantics. | H3 uses a conditional rectified-flow state, exact transition probe, and fresh sampler lifetime instead of copying RALU's noise construction. |
 | [CineScale](https://arxiv.org/abs/2508.15774) | Self-cascade video regeneration and high-resolution degradation are relevant hypotheses. | Wan-specific positional changes are not transferred to H3 MM-RoPE. |
 | [FreeSwim](https://arxiv.org/abs/2511.14712) | Separate global and local-detail paths motivate selective spatial locality. | H3 is one multimodal stream; non-video and temporal paths remain global. |
-| [HRDiT](https://arxiv.org/abs/2608.07003) | Per-head/layer scope diagnostics are worth investigating. | No sparse-head policy is recommended without H3 measurements. |
-| [Just-in-Time](https://arxiv.org/abs/2603.10744) | Fine spatial compute can be deferred while global structure forms. | JiT micro-flow token activation is not treated as a license for arbitrary latent resizing. |
+| [HRDiT](https://arxiv.org/abs/2608.07003) | Positional-capacity analysis and per-head/layer scope diagnostics are worth investigating. | No sparse-head policy is recommended without H3 measurements. |
+| [ResDiT](https://arxiv.org/abs/2512.01426) | Separating global-layout positional behavior from local-detail receptive-field behavior supports the Attention Lab's local/global diagnostic framing. | No ResDiT PE scaling, Gaussian patch splicing, or spectral fusion is implemented. |
+| [Just-in-Time](https://arxiv.org/abs/2603.10744) | Fine spatial compute can be deferred while global structure forms. | JiT SAG-ODE/DMF token activation is not treated as a license for arbitrary latent resizing. |
 | [Self-Cascade Diffusion](https://arxiv.org/abs/2402.10491) | Semantic pivots and staged resolution adaptation support coarse-to-fine design. | Trained/model-specific cascade modules are outside this plugin. |
 | [simple diffusion](https://arxiv.org/abs/2301.11093) | Resolution changes the appropriate signal-to-noise relationship. | This does not by itself justify an H3 sigma multiplier. |
 | [SD3 / Scaling Rectified Flow Transformers](https://arxiv.org/abs/2403.03206) | The constant-observation derivation gives `alpha=sqrt(m/n)` and a fractional-linear time map. | The constant-image assumption is only a probe; H3 already has native shifts and packed AV coupling. |
+| [Spectrum](https://arxiv.org/abs/2603.01623) | Feature forecasting makes actual-vs-forecast provenance and history lifetime relevant to H3 trajectory capture and geometry changes. | Spectrum forecasting is implemented by the sibling Spectrum repository, not this package. |
+| [SA-Solver](https://arxiv.org/abs/2309.05019) | Predictor/corrector and multistep-history semantics constrain capture, PECE acceleration history, and progressive reset behavior. | H3 sampler integration is supplied by the sibling RefDelta/solver work; this package preserves rather than reimplements the solver. |
+| [RACER](https://arxiv.org/abs/2608.01740) | Forecast disagreement/trust/refresh is useful secondary context for acceleration robustness. | No RACER controller or disagreement-based refresh policy is implemented here. |
+| [PAB](https://arxiv.org/abs/2408.12588), DiffCR / VideoDiffCR | Attention/token efficiency is useful secondary context when investigating H3 reference growth and attention cost. | These works do **not** establish a fixed H3 reference-token budget; no published pruning/broadcast policy is copied by Reference Budget. |
 
 ## Progressive spatial handoff: empirical result
 
@@ -139,6 +147,7 @@ Decoded E1 showed no relevant quality improvement over E0. A boundary hiccup app
 - [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) documents the public H3 model family and a progressive 2K product path; H3-Regenerate-2K internals are not public.
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) supplies the executable H3 packing, shift, sampler, layout, and wrapper contracts.
 - [Spectrum](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3), [RefDelta](https://github.com/xmarre/ComfyUI-MiniMax-H3-RefDelta-Solver), [Continuum](https://github.com/xmarre/ComfyUI-H3-Continuum), [the latent upscaler](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler), [DiffAid](https://github.com/xmarre/ComfyUI-DiffAid-Patches), and [Untwisting RoPE](https://github.com/xmarre/ComfyUI-Untwisting-RoPE) informed integration contracts.
+- Official research-code repositories and the exact supplied research snapshots inspected during design are listed in [../CREDITS.md](../CREDITS.md).
 
 ## Validated source revisions
 
@@ -150,6 +159,6 @@ CI checks executable contracts at:
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`
-- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (draft provider PR #12)
+- H3 latent upscaler/refine and learned-handoff provider `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` (merged provider revision; released by companion v0.2.0)
 
 MiniMax-H3 main was additionally inspected at `d21241f0a4b3acbb34c97dae47fa417b7065e438`. Updating a source pin requires re-running the source audit and compatibility tests.
