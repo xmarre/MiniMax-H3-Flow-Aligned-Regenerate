@@ -5,6 +5,12 @@ Research-grade ComfyUI nodes for H3-native coarse-to-fine generation: transactio
 > [!IMPORTANT]
 > This project is an independent, training-free approximation informed by public research. It does **not** reproduce MiniMax's closed H3-Regenerate-2K model or its unreleased sparse-attention topology. Decoded media, not latent telemetry alone, is the quality gate.
 
+## Research lineage and credits
+
+This repository builds on published ideas rather than presenting flow-aligned guidance, mixed-resolution sampling, temporal correspondence, or high-resolution attention research as original inventions. **HiFlow** is the primary credit for trajectory/direction/acceleration alignment; **FrescoDiffusion** for a low-resolution video trajectory as a high-resolution prior; **RALU**, **Self-Cascade**, **CineScale**, and **Just-in-Time** for coarse-to-fine / spatial-transition reasoning; **simple diffusion** and **Scaling Rectified Flow Transformers** for resolution-dependent schedule research; and **FreeSwim**, **HRDiT**, and **ResDiT** for high-resolution DiT attention/receptive-field analysis. Temporal correspondence experiments additionally draw on **TokenFlow**, **FRESCO**, **MoVideo**, **Upscale-A-Video**, and **LatentWarp**.
+
+See **[CREDITS.md](CREDITS.md)** for node-by-node attribution, paper authors, official paper/project/code links, inspected research-code commit snapshots, licensing notes, and the exact boundary between published methods and this H3-specific implementation. [docs/RESEARCH.md](docs/RESEARCH.md) records the corresponding transfer assumptions and experimental outcomes.
+
 ## Why this exists
 
 Native H3 generation at the final high-resolution grid can be weaker than a lower-resolution generation followed by learned latent upscale/refinement, but the latter repeats part of the denoising trajectory. This repository tests whether H3 can reuse low-resolution trajectory information or change spatial resolution during one schedule without paying for a full second pass.
@@ -57,6 +63,8 @@ git clone https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate.git
 Restart ComfyUI. PyTorch is supplied by ComfyUI. Sibling custom nodes are not imported by this package, although the benchmark workflow uses the surrounding H3 ecosystem described below.
 
 ## Nodes
+
+Research attribution for every research-facing public node is mapped explicitly in [CREDITS.md](CREDITS.md); the node names below are implementation names, not claims of algorithmic originality.
 
 | Node | Purpose | Posture |
 |---|---|---|
@@ -273,7 +281,7 @@ python -m compileall -q .
 python -m build
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RESEARCH.md](docs/RESEARCH.md), [docs/BENCHMARKS.md](docs/BENCHMARKS.md), and [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+See [CREDITS.md](CREDITS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RESEARCH.md](docs/RESEARCH.md), [docs/BENCHMARKS.md](docs/BENCHMARKS.md), and [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Limitations
 
