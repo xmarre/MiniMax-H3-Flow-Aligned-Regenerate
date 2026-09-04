@@ -677,13 +677,22 @@ class H3AttentionExperiment:
         return {
             "required": {
                 "model": ("MODEL",),
-                "mode": (["native", "diagnostic", "experimental_sparse"], {"default": "native"}),
+                "mode": (
+                    ["native", "diagnostic", "vdn_reference_dense", "experimental_sparse"],
+                    {"default": "native"},
+                ),
                 "layers": ("STRING", {"default": "8,16,24,32,40"}),
                 "sparse_window": ("INT", {"default": 4, "min": 1, "max": 32}),
                 "global_heads": ("INT", {"default": 8, "min": 0, "max": 56}),
                 "max_sequence": ("INT", {"default": 8192, "min": 256, "max": 65536}),
             },
-            "optional": {"metrics": ("H3_FLOW_METRICS",)},
+            "optional": {
+                "metrics": ("H3_FLOW_METRICS",),
+                "vdn_chunk_size": ("INT", {"default": 5, "min": 1, "max": 32}),
+                "vdn_chunk_radius": ("INT", {"default": 1, "min": 0, "max": 8}),
+                "vdn_anchor_mode": (["both", "columns", "rows", "none"], {"default": "both"}),
+                "continuum_seam_anchor": ("BOOLEAN", {"default": True}),
+            },
         }
 
     RETURN_TYPES = ("MODEL", "H3_FLOW_METRICS")
@@ -691,7 +700,20 @@ class H3AttentionExperiment:
     FUNCTION = "patch"
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
 
-    def patch(self, model, mode, layers, sparse_window, global_heads, max_sequence, metrics=None):
+    def patch(
+        self,
+        model,
+        mode,
+        layers,
+        sparse_window,
+        global_heads,
+        max_sequence,
+        metrics=None,
+        vdn_chunk_size=5,
+        vdn_chunk_radius=1,
+        vdn_anchor_mode="both",
+        continuum_seam_anchor=True,
+    ):
         try:
             selected = tuple(sorted({int(value.strip()) for value in layers.split(",") if value.strip()}))
         except ValueError as exc:
@@ -704,6 +726,10 @@ class H3AttentionExperiment:
             sparse_window=sparse_window,
             global_heads=global_heads,
             max_sequence=max_sequence,
+            vdn_chunk_size=vdn_chunk_size,
+            vdn_chunk_radius=vdn_chunk_radius,
+            vdn_anchor_mode=vdn_anchor_mode,
+            continuum_seam_anchor=continuum_seam_anchor,
         )
         metrics = metrics or H3FlowMetrics()
         if mode == "native":

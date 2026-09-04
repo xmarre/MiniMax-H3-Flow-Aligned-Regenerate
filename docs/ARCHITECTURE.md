@@ -429,7 +429,10 @@ fresh-lifetime boundaries instead of reporting an unverified solver-reset boolea
   committed run is immediately invalidated and becomes ineligible for future trajectory selection.
   Guidance state clears in `finally`.
 - **Denoise masks:** current ComfyUI prepares each user mask to full latent-channel AV geometry before
-  OUTER_SAMPLE wrappers run. Progressive mode resizes only the prepared video portion, preserves the
+  OUTER_SAMPLE wrappers run. An exact-zero target-input video mask bypasses progressive splitting and
+  forwards the untouched target-grid sampler inputs once, because restoring the returned prefix cannot
+  undo the different context that generated rows would have seen during a resized low-grid pass. For
+  masks without exact-zero video values, progressive mode resizes only the prepared video portion, preserves the
   audio portion, spatially transfers the external latent image, converts it through H3's normal latent-in
   transform, and solves `noise = (x_sigma - (1-sigma) * latent_image) / (sigma * noise_scale)` so
   the next sampler invocation starts from the exact carried state. In target-input mode, mask-protected
@@ -449,11 +452,19 @@ latent would make the packed reference contract inconsistent.
 
 ## Attention lab
 
-Diagnostics sample selected heads/queries and report entropy and modality mass without retaining full
-matrices. Experimental sparse layers keep text/reference/audio global. Video queries retain non-video
-keys and all temporal positions inside a spatial patch window; configured heads remain fully global.
-Query-local restrictions are passed to ComfyUI attention backends as numeric QxK additive masks,
-because Core's boolean-mask path is a batch/key mask and cannot represent per-query sparsity.
-Unsupported mask backends fall back to native attention. Query chunking avoids a sequence-square mask.
-RoPE is untouched and block replacements are chained. If another optimized attention override exists,
-the experiment records a fallback and delegates to it.
+Diagnostics sample video queries on selected heads and report entropy, modality mass, OpenVDN-topology
+retained/outside mass, first/last anchor mass, optional Continuum seam mass, and exact analytic pair
+density without changing backend output. The VDN dense reference keeps every pair involving
+text/reference/audio global and restricts video/video pairs to complete 5-frame chunks in the previous,
+current, and next chunk. First/last boundary anchors are symmetric row-and-column anchors. A Continuum
+seam becomes a matching symmetric anchor only when `h3_continuum.protected_video_prefix_latent_slots`
+provides an authoritative latent index; frame-count metadata is never heuristically converted.
+
+The VDN reference and earlier spatial-local experiment both pass numeric QxK additive masks to ordinary
+ComfyUI attention backends in query chunks. They avoid retaining a sequence-square mask, but still use
+dense keys and repeated dense backend calls. They are correctness/topology experiments, not sparse
+execution or speed claims. Unsupported mask backends fall back to native attention. RoPE is untouched
+and block replacements are chained. If another optimized attention override exists, the experiment
+records a fallback and delegates to it. OpenVDN's compiled FlexAttention/BlockMask path was audited but
+is not transplanted: its static inference specialization and mask-cache lifecycle need bounded,
+real-H3 validation inside long-lived dynamic ComfyUI processes first.

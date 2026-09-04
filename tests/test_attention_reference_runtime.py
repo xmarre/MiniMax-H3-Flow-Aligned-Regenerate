@@ -4,7 +4,16 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
-from h3_flow_regenerate.attention import AttentionConfig, layout_summary, make_attention_override, video_local_mask
+from h3_flow_regenerate.attention import (
+    AttentionConfig,
+    _continuum_seam_frame,
+    layout_summary,
+    make_attention_override,
+    vdn_attention_density,
+    vdn_chunk_bounds,
+    vdn_reference_mask,
+    video_local_mask,
+)
 from h3_flow_regenerate.comfy_compat import patch_flow_model, reconfigure_binding
 from h3_flow_regenerate.contracts import H3FlowTrajectory
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
@@ -26,6 +35,7 @@ from h3_flow_regenerate.runtime import (
     _begin_capture,
     _conditioning_signature,
     _finish_capture,
+    _has_exact_video_protection,
     _high_stage_contract,
     _make_probe_sampler,
     _merge_preserved_noise,
@@ -49,6 +59,15 @@ def layout():
     )
 
 
+def temporal_layout():
+    # Three global rows followed by 12 one-token video frames.
+    return SimpleNamespace(
+        segments=[(0, 2, "text"), (2, 3, "audio"), (3, 15, "video")],
+        signature=(2, 12, 2, 2, 1),
+        seq_len=15,
+    )
+
+
 def test_sparse_mask_keeps_nonvideo_global_and_video_spatiotemporal_local():
     mask = video_local_mask(layout(), torch.tensor([0, 8]), radius=1, device=torch.device("cpu"))
     assert mask[0].all()
@@ -58,6 +77,116 @@ def test_sparse_mask_keeps_nonvideo_global_and_video_spatiotemporal_local():
     assert mask[1, 14]
     # Far spatial corner is hidden.
     assert not mask[1, 13]
+
+
+def test_vdn_chunk_topology_uses_complete_neighbour_chunks_and_short_tail():
+    assert vdn_chunk_bounds(12, chunk_size=5, radius=1) == (
+        *((0, 9),) * 5,
+        *((0, 11),) * 5,
+        *((5, 11),) * 2,
+    )
+    test_layout = temporal_layout()
+    # global, first-frame boundary row, frame 4, and final short-chunk frame
+    queries = torch.tensor([0, 3, 7, 13])
+    mask = vdn_reference_mask(
+        test_layout,
+        queries,
+        chunk_size=5,
+        radius=1,
+        anchor_mode="both",
+        device=torch.device("cpu"),
+    )
+    assert mask[0].all()
+    assert mask[1].all()
+    assert mask[2, 3:13].all()  # frames 0..9
+    assert not mask[2, 13]  # frame 10 is outside the window
+    assert mask[2, 14]  # last-frame anchor column
+    assert mask[3, 3]  # first-frame anchor column
+    assert not mask[3, 4:8].any()  # frames 1..4 are outside the final chunk's window
+    assert mask[3, 8:15].all()  # frames 5..11
+
+
+def test_vdn_row_column_and_continuum_seam_anchor_semantics():
+    test_layout = temporal_layout()
+    query = torch.tensor([7])  # frame 4: first chunk, but not a boundary frame
+    columns = vdn_reference_mask(
+        test_layout,
+        query,
+        chunk_size=5,
+        radius=0,
+        anchor_mode="columns",
+        device=torch.device("cpu"),
+    )
+    assert columns[0, 3] and columns[0, 14]
+    assert not columns[0, 13]
+
+    first_row = vdn_reference_mask(
+        test_layout,
+        torch.tensor([3]),
+        chunk_size=5,
+        radius=0,
+        anchor_mode="rows",
+        device=torch.device("cpu"),
+    )
+    assert first_row.all()
+
+    seam = vdn_reference_mask(
+        test_layout,
+        torch.tensor([7, 13]),
+        chunk_size=5,
+        radius=0,
+        anchor_mode="none",
+        seam_frame=4,
+        device=torch.device("cpu"),
+    )
+    assert seam[0].all()  # seam query row is global over video keys
+    assert seam[1, 7]  # every video query sees the seam key column
+    assert not seam[1, 6]
+
+
+def test_vdn_density_matches_materialized_reference_mask_exactly():
+    test_layout = temporal_layout()
+    full = vdn_reference_mask(
+        test_layout,
+        torch.arange(test_layout.seq_len),
+        chunk_size=5,
+        radius=1,
+        anchor_mode="both",
+        seam_frame=4,
+        device=torch.device("cpu"),
+    )
+    density = vdn_attention_density(
+        test_layout,
+        chunk_size=5,
+        radius=1,
+        anchor_mode="both",
+        seam_frame=4,
+    )
+    assert density["allowed_pairs"] == int(full.sum().item())
+    assert density["total_pairs"] == full.numel()
+    assert density["density"] == pytest.approx(float(full.float().mean().item()))
+
+
+def test_continuum_seam_requires_authoritative_latent_slot_metadata():
+    frame, status = _continuum_seam_frame(
+        {"h3_continuum": {"active": True, "context_frames": 5}},
+        12,
+    )
+    assert frame is None
+    assert status == "exact_prefix_slots_unavailable"
+
+    frame, status = _continuum_seam_frame(
+        {
+            "h3_continuum": {
+                "active": True,
+                "context_frames": 5,
+                "protected_video_prefix_latent_slots": 2,
+            }
+        },
+        12,
+    )
+    assert frame == 1
+    assert status == "exact_contract"
 
 
 def test_layout_summary_counts_packed_modalities():
@@ -166,11 +295,89 @@ def test_attention_diagnostic_preserves_existing_override():
         q,
         2,
         skip_reshape=True,
-        transformer_options={"h3_flow_attention_context": {"layout": layout(), "layer": 0}},
+        transformer_options={
+            "h3_flow_attention_context": {"layout": layout(), "layer": 0},
+            "h3_continuum": {
+                "active": True,
+                "protected_video_prefix_latent_slots": 1,
+            },
+        },
     )
     assert result.shape == (1, 20, 8)
     assert calls == [(None, True)]
-    assert metrics.events[-1].kind == "attention_diagnostic"
+    event = metrics.events[-1]
+    assert event.kind == "attention_diagnostic"
+    assert event.fields["query_scope"] == "video"
+    assert event.fields["output_neutral"] is True
+    assert event.fields["vdn_chunk_size"] == 5
+    assert event.fields["vdn_chunk_radius"] == 1
+    assert event.fields["vdn_anchor_mode"] == "both"
+    assert event.fields["continuum_seam_frame"] == 0
+    assert event.fields["continuum_seam_status"] == "exact_contract"
+    assert event.fields["continuum_seam_mass"] is not None
+    assert event.fields["vdn_retained_mass_mean"] == pytest.approx(1.0)
+    assert event.fields["vdn_outside_mass_mean"] == pytest.approx(0.0)
+
+
+def test_vdn_reference_dense_uses_all_head_query_chunk_masks_without_claiming_acceleration():
+    test_layout = temporal_layout()
+    q = torch.randn(1, 2, 15, 4)
+    observed = []
+
+    def backend(q, _k, _v, heads, mask=None, skip_reshape=False, **_kwargs):
+        assert heads == 2
+        assert skip_reshape
+        if mask is not None:
+            observed.append(mask.detach().clone())
+        return torch.zeros(q.shape[0], q.shape[2], heads * q.shape[-1], dtype=q.dtype)
+
+    metrics = H3FlowMetrics()
+    override = make_attention_override(
+        AttentionConfig(
+            mode="vdn_reference_dense",
+            layers=(0,),
+            query_chunk=6,
+            max_sequence=32,
+            vdn_chunk_size=5,
+            vdn_chunk_radius=1,
+            vdn_anchor_mode="both",
+        ),
+        metrics,
+    )
+    result = override(
+        backend,
+        q,
+        q,
+        q,
+        2,
+        skip_reshape=True,
+        transformer_options={
+            "h3_flow_attention_context": {"layout": test_layout, "layer": 0},
+            "h3_continuum": {
+                "active": True,
+                "protected_video_prefix_latent_slots": 5,
+            },
+        },
+    )
+    assert result.shape == (1, 15, 8)
+    assert [mask.shape for mask in observed] == [(6, 15), (6, 15), (3, 15)]
+    expected = vdn_reference_mask(
+        test_layout,
+        torch.arange(15),
+        chunk_size=5,
+        radius=1,
+        anchor_mode="both",
+        seam_frame=4,
+        device=torch.device("cpu"),
+    )
+    actual = torch.cat([mask.eq(0) for mask in observed], dim=0)
+    assert torch.equal(actual, expected)
+    event = metrics.events[-1]
+    assert event.kind == "attention_vdn_reference"
+    assert event.fields["implementation"] == "dense_additive_mask"
+    assert event.fields["acceleration_claim"] is False
+    assert event.fields["seam_frame"] == 4
+    assert event.fields["allowed_pairs"] == int(expected.sum().item())
 
 
 def test_sparse_backend_error_falls_back_to_full_attention():
@@ -1150,6 +1357,24 @@ def test_progressive_mask_resize_uses_prepared_full_channel_av_geometry():
     assert torch.equal(out_audio, audio_mask)
 
 
+def test_exact_video_protection_detection_ignores_audio_and_fractional_video_masks():
+    shapes = [(1, 24, 2, 4, 4), (1, 32, 2, 5)]
+    video_mask = torch.ones(shapes[0])
+    audio_mask = torch.ones(shapes[1])
+
+    audio_mask[..., 0] = 0
+    audio_only, _ = pack_streams((video_mask, audio_mask))
+    assert not _has_exact_video_protection(audio_only, shapes)
+
+    video_mask[..., 0, :, :] = 0.25
+    fractional_video, _ = pack_streams((video_mask, audio_mask))
+    assert not _has_exact_video_protection(fractional_video, shapes)
+
+    video_mask[..., 0, :, :] = 0
+    exact_video, _ = pack_streams((video_mask, audio_mask))
+    assert _has_exact_video_protection(exact_video, shapes)
+
+
 def test_preserved_noise_merge_keeps_native_noise_only_under_mask():
     generated = torch.full((1, 1, 8), 7.0)
     native = torch.arange(8, dtype=torch.float32).reshape(1, 1, 8)
@@ -1365,7 +1590,7 @@ def test_progressive_rejects_explicit_stateful_noise_sampler():
         _validate_progressive_sampler_state(sampler)
 
 
-def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
+def test_target_input_progressive_keeps_target_geometry_for_fractional_video_masks(monkeypatch):
     class KSampler:
         def __init__(self, function, inpaint_options=None):
             self.sampler_function = function
@@ -1384,7 +1609,7 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     target_latent, target_shapes = pack_streams((target_video, target_audio))
     target_noise = torch.randn_like(target_latent)
     video_mask = torch.ones(1, 24, 1, 8, 6)
-    video_mask[:, :, :, :2] = 0
+    video_mask[:, :, :, :2] = 0.25
     audio_mask = torch.ones(1, 32, 2, 5)
     packed_mask, _ = pack_streams((video_mask, audio_mask))
     source_video = torch.randn(1, 24, 1, 4, 4)
@@ -1560,6 +1785,124 @@ def test_target_input_progressive_keeps_continuum_target_geometry(monkeypatch):
     assert binding.metrics.counters["progressive_sampler_invocations"] == 6
     assert binding.metrics.counters["progressive_history_boundaries"] == 4
     assert len(learned_provider.calls) == 1
+
+
+def test_target_input_exact_video_protection_forwards_one_untouched_target_sampler_call():
+    target_video = torch.randn(1, 24, 2, 8, 6)
+    target_audio = torch.randn(1, 32, 2, 5)
+    target_latent, target_shapes = pack_streams((target_video, target_audio))
+    target_noise = torch.randn_like(target_latent)
+    video_mask = torch.ones_like(target_video)
+    video_mask[:, :, :1] = 0
+    audio_mask = torch.ones_like(target_audio)
+    packed_mask, _ = pack_streams((video_mask, audio_mask))
+    sigmas = torch.tensor([1.0, 0.9, 0.7, 0.4, 0.0])
+
+    def native():
+        pass
+
+    native.__name__ = "sample_stateful"
+    sampler = SimpleNamespace(sampler_function=native, extra_options={"noise_sampler": object()})
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        original_conds={"positive": [{"cross_attn": torch.zeros(1, 2, 4)}]},
+    )
+    callback = object()
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            noise,
+            latent,
+            call_sampler,
+            call_sigmas,
+            mask,
+            call_callback,
+            disable_pbar,
+            seed,
+            *,
+            latent_shapes,
+        ):
+            calls.append(
+                (
+                    noise,
+                    latent,
+                    call_sampler,
+                    call_sigmas,
+                    mask,
+                    call_callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes,
+                )
+            )
+            return latent
+
+    class UnusedProvider:
+        api_version = 1
+        kind = "minimax_h3_learned_latent_upscaler"
+        model_name = "unused.safetensors"
+        device = "cpu"
+        precision = "fp32"
+        offload_after_upscale = False
+
+        def upscale_clean_video(self, *_args, **_kwargs):
+            raise AssertionError("exact-prefix fallback must not invoke the transfer provider")
+
+    trajectory = H3FlowTrajectory()
+    binding = FlowBinding(
+        trajectory=trajectory,
+        guidance=GuidanceConfig(mode="direction"),
+        capture_enabled=True,
+    )
+    mutable_shapes = list(target_shapes)
+    result = _run_progressive(
+        Executor(),
+        guider,
+        binding,
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            handoff_coordinate=0.3,
+            transfer_mode="learned_3d",
+            learned_upscaler=UnusedProvider(),
+        ),
+        target_noise,
+        target_latent,
+        sampler,
+        sigmas,
+        packed_mask,
+        callback,
+        True,
+        7,
+        mutable_shapes,
+    )
+
+    assert result is target_latent
+    assert len(calls) == 1
+    call = calls[0]
+    assert call[0] is target_noise
+    assert call[1] is target_latent
+    assert call[2] is sampler
+    assert call[3] is sigmas
+    assert call[4] is packed_mask
+    assert call[5] is callback
+    assert call[6:] == (True, 7, mutable_shapes)
+    assert mutable_shapes == target_shapes
+    event = [event for event in binding.metrics.events if event.kind == "progressive_target_fallback"][-1]
+    assert event.fields["reason"] == "exact_video_protection"
+    assert event.fields["sampler_invocation_count"] == 1
+    assert event.fields["history_boundary_count"] == 0
+    assert event.fields["exact_target_inputs_forwarded"] is True
+    assert event.fields["progressive_guidance_applied"] is False
+    assert binding.metrics.counters["progressive_target_fallbacks"] == 1
+    assert binding.metrics.counters["progressive_sampler_invocations"] == 1
+    assert trajectory.latest.complete
+    assert trajectory.latest.geometry.latent_h == 8
+    assert trajectory.latest.geometry.latent_w == 6
 
 
 def test_progressive_high_failure_invalidates_committed_low_trajectory(monkeypatch):

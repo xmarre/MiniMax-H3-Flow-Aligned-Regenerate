@@ -1,3 +1,23 @@
+# Unreleased
+
+## Exact Continuum prefix safety
+
+- Progressive Target Input now bypasses the private low-grid handoff when the prepared video denoise mask contains exact-zero values.
+- The fallback forwards the original target-grid noise, latent, mask, schedule, sampler, callback, and mutable shape metadata through one sampler lifetime, preserving ComfyUI's exact mask contract and stateful sampler behavior.
+- Audio-only protection and fractional video blends retain the existing progressive path.
+- Metrics distinguish the fallback from both ordinary and split-progressive sampling.
+
+## Attention Lab
+
+- Output-neutral diagnostics now measure native dense-attention mass retained by the public OpenVDN temporal topology, plus outside mass, boundary-frame mass, exact analytic pair density, and an optional authoritative Continuum seam.
+- Adds `vdn_reference_dense`, an all-head query-chunked dense-mask correctness oracle using complete 5-frame chunks, radius 1, global non-video tokens, and first/last row-and-column anchors.
+- The seam anchor requires `protected_video_prefix_latent_slots`; frame-count metadata is never guessed into latent indices.
+- No sparse-kernel or speed claim is made. OpenVDN's trained hybrid branch, compiled kernel, and separately licensed weights are not included.
+
+Decoded H3 media validation remains required before release or recommendation.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.2.1
 
 v0.2.1 adds CI-gated Comfy Registry publication. Runtime and sampling behavior are unchanged from v0.2.0.
