@@ -240,7 +240,7 @@ These are executable/source contracts rather than merely conceptual citations.
 
 Those projects are not vendored by this Flow package. The actual runtime dependency boundary is the companion `H3_LATENT_UPSCALER` provider API; upstream model/code licenses remain their own.
 
-The exact executable revisions pinned by CI are listed in `README.md` and `docs/RESEARCH.md`.
+The exact executable revisions pinned by CI are listed in `docs/DEVELOPMENT.md` and `docs/RESEARCH.md`.
 
 ## Research implementation revisions audited
 
