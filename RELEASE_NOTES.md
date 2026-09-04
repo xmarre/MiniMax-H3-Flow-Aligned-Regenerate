@@ -1,3 +1,25 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.2.1
+
+v0.2.1 adds CI-gated Comfy Registry publication. Runtime and sampling behavior are unchanged from v0.2.0.
+
+## Distribution
+
+- Adds a dedicated **Publish to Comfy registry** workflow using the pinned `Comfy-Org/publish-node-action` v1 revision already used by the companion MiniMax H3 latent-upscaler release path.
+- Registry publication runs only after a successful `CI` push run on `main` and only when the tested commit changes the package version relative to its first parent.
+- Manual `workflow_dispatch` remains available for explicit operator-controlled publication/retry.
+- The workflow checks out the exact CI-tested commit, uses read-only repository permissions and non-persistent checkout credentials, and consumes `REGISTRY_ACCESS_TOKEN` only in the publish step.
+- Publication is serialized per tested commit so overlapping workflow-run/manual attempts are not cancelled mid-publish.
+
+## Versioning
+
+The package version is bumped to `0.2.1` rather than republishing `0.2.0` from a different source commit. This keeps the GitHub release/tag and Comfy Registry package version aligned to the same source revision.
+
+## Compatibility
+
+No Python runtime, sampler, handoff, guidance, Continuum, Spectrum, metrics, or learned-upscaler integration code changes are included in v0.2.1.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.2.0
 
 v0.2.0 adds an optional learned 3D transfer at the Progressive Target Input handoff boundary, backed by the versioned API-v1 provider from `Comfyui_Minimax_h3_latent_Upscaler`.
