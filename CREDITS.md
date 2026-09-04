@@ -14,7 +14,7 @@ These references are attribution, not relicensing. The research repositories lis
 | **MiniMax H3 Flow-Aligned Regenerate** / **Flow-Aligned Refine State** | **HiFlow**; **FrescoDiffusion** | Time-matched low-resolution trajectory guidance; low-frequency direction alignment; experimental adjacent-velocity acceleration; use of a low-resolution video trajectory as a global prior | HiFlow is an image method and FrescoDiffusion uses tiled prior-regularized fusion. This project adapts the ideas to H3 predicted-clean AV sampling rather than copying either pipeline. |
 | `direction+temporal` guidance | **TokenFlow**, **FRESCO**, **MoVideo**, **Upscale-A-Video**, **LatentWarp** | Inter-frame correspondence, latent/feature propagation, confidence/visibility gating, and the need to avoid transporting content through ambiguous or occluded regions | No external optical-flow model is loaded. H3 clean-state latents are locally matched with strict similarity, uniqueness, and reverse-cycle gates. |
 | **MiniMax H3 Progressive Handoff** | **RALU**, **Self-Cascade Diffusion**, **CineScale**, **Just-in-Time** | Coarse-to-fine sampling, explicit spatial transition semantics, re-noising after scale change, and deferring expensive high-resolution computation | The H3 handoff uses an exact probe plus a rectified-flow conditional state and fresh sampler/Spectrum lifetimes. It is not RALU NT-Matching, JiT DMF, or MiniMax H3-Regenerate-2K. |
-| **Progressive Handoff (Target Input)** `learned_3d` | Companion **Comfyui_Minimax_h3_latent_Upscaler** and its LBH-derived learned 3D upscaler | A single learned clean-video spatial transform at the exact handoff boundary | The provider receives only Bx24xTxHxW clean video. Audio, target noise, sigma law, masks, and H3 NFEs are unchanged. |
+| **Progressive Handoff (Target Input)** `learned_3d` | Companion **Comfyui_Minimax_h3_latent_Upscaler**; inherited **LBH-123-AI**, **ComfyUi_NNLatentUpscale**, and **LTX spatial-upscaler** lineage | A single learned clean-video spatial transform at the exact handoff boundary | Flow only consumes the companion provider API. The learned model/architecture lineage and checkpoints remain owned and credited by their upstream projects; audio, target noise, sigma law, masks, and H3 NFEs are unchanged. |
 | **MiniMax H3 Refine Target Geometry** | Companion **Comfyui_Minimax_h3_latent_Upscaler** | Mirrors the companion node's scale-by-multiplier geometry contract for schedule metadata | No latent upscale or sampling occurs in this helper. |
 | **MiniMax H3 Resolution-Aware Sigmas** | **simple diffusion**; **Scaling Rectified Flow Transformers for High-Resolution Image Synthesis** | Resolution/SNR motivation and the fractional-linear resolution-dependent flow-time map | The SD3 constant-observation derivation is only used as an experimental relative correction composed with H3's native shift; it is not claimed to be an optimal H3 schedule. |
 | **MiniMax H3 Attention Lab** | **FreeSwim**, **HRDiT**, **ResDiT**; MiniMax-H3's public sparse-attention statement | Investigating native-scale spatial receptive fields, mixed local/global attention scopes, positional/receptive-field mismatch, and heterogeneous head/layer behavior | H3 uses one packed multimodal stream. The experiment keeps non-video paths global and does not claim to reconstruct MiniMax's unreleased sparse topology or any paper's exact attention rule. |
@@ -68,7 +68,7 @@ Its trainable upsampler modules and exact pivot-replacement method are not trans
 
 ### CineScale — Free Lunch in High-Resolution Cinematic Visual Generation
 
-Haonan Qiu et al.
+Haonan Qiu, Ning Yu, Ziqi Huang, Paul Debevec, Ziwei Liu.
 
 - Paper: https://arxiv.org/abs/2508.15774
 - Project: https://eyeline-labs.github.io/CineScale/
@@ -97,7 +97,7 @@ Emiel Hoogeboom, Jonathan Heek, Tim Salimans.
 
 ### Scaling Rectified Flow Transformers for High-Resolution Image Synthesis
 
-Patrick Esser et al.
+Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller, Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, Dustin Podell, Tim Dockhorn, Zion English, Kyle Lacey, Alex Goodwin, Yannik Marek, Robin Rombach.
 
 - Paper: https://arxiv.org/abs/2403.03206
 - Direct influence here: the fractional-linear timestep shift and the `sqrt(target observations / reference observations)` constant-observation derivation used by the experimental resolution-aware SIGMAS node.
@@ -225,9 +225,20 @@ These are executable/source contracts rather than merely conceptual citations.
 - **ComfyUI-Spectrum-MiniMax-H3** — https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3 — Spectrum provenance and exact/forecast integration used by the validated workflows.
 - **ComfyUI-MiniMax-H3-RefDelta-Solver** — https://github.com/xmarre/ComfyUI-MiniMax-H3-RefDelta-Solver — H3 SA-Solver/PECE schedule and call-topology integration studied during implementation.
 - **ComfyUI-H3-Continuum** — https://github.com/xmarre/ComfyUI-H3-Continuum — per-chunk H3 model/refine-state, continuation, mask, geometry, and session contracts.
-- **Comfyui_Minimax_h3_latent_Upscaler** — https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler — learned LBH-style 3D H3 latent upscaler/refiner and the versioned clean-video provider consumed by `learned_3d` handoff.
+- **Comfyui_Minimax_h3_latent_Upscaler** — https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler — learned H3 3D upscaler/refiner and the versioned clean-video provider consumed by `learned_3d` handoff. The learned model's inherited upstream lineage is recorded immediately below.
 - **ComfyUI-DiffAid-Patches** — https://github.com/xmarre/ComfyUI-DiffAid-Patches — external patch compatibility and refinement-anchor interaction used by the benchmark workflow.
 - **ComfyUI-Untwisting-RoPE** — https://github.com/xmarre/ComfyUI-Untwisting-RoPE — external H3 RoPE patch compatibility used by the benchmark workflow.
+
+### Learned handoff: inherited model and architecture lineage
+
+`MiniMax-H3-Flow-Aligned-Regenerate` does not load the learned-upscaler checkpoint itself. The `learned_3d` handoff consumes the versioned provider from the companion upscaler repository, so the provider's own upstream/model lineage is an indirect but material credit for this node:
+
+- **LBH-123-AI / Comfyui_Minimax_h3_latent_Upscaler** — https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler — original MiniMax H3 learned-upscaler implementation lineage. The pretrained checkpoints used by the companion package are published at https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler.
+- **Ttl / ComfyUi_NNLatentUpscale** — https://github.com/Ttl/ComfyUi_NNLatentUpscale — neural latent-upscaling approach credited by the companion package as a foundational influence.
+- **Lightricks / LTX-2** — https://github.com/Lightricks/LTX-2 — the companion package credits the LTX 2.3 Spatial Upscaler (`ltx-2.3-spatial-upscaler-x2-1.1.safetensors`) as an architectural influence.
+- **Tr1dae / ComfyUI-MiniMaxH3_LatentUpscaler** — https://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler — studied by the companion package while implementing native H3 refinement integration. It is research/integration provenance, not a Flow runtime dependency.
+
+Those projects are not vendored by this Flow package. The actual runtime dependency boundary is the companion `H3_LATENT_UPSCALER` provider API; upstream model/code licenses remain their own.
 
 The exact executable revisions pinned by CI are listed in `README.md` and `docs/RESEARCH.md`.
 
