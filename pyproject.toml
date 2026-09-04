@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "comfyui-minimax-h3-flow-aligned-regenerate"
-version = "0.1.0"
+version = "0.2.0"
 description = "H3-native flow-aligned and progressive-resolution regeneration for ComfyUI"
 readme = "README.md"
 requires-python = ">=3.10"
