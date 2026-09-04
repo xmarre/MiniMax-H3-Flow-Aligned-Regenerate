@@ -21,11 +21,11 @@ jobs:
           python-version: '3.12'
       - name: Apply reconciliation
         run: |
-          python .tmp_patch_pr11.py
+          python .tmp_patch_pr11_v2.py
           git diff --check
           git diff --stat
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/ci.yml README.md docs/RESEARCH.md docs/BENCHMARKS.md
+          git add .github/workflows/ci.yml README.md docs/RESEARCH.md docs/BENCHMARKS.md docs/ARCHITECTURE.md
           git commit -m 'docs: reconcile learned handoff media evidence'
           git push origin HEAD:mirror/pr11-final-media-20260904
