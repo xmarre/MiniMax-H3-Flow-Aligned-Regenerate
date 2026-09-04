@@ -28,6 +28,26 @@ jobs:
       - run: pytest
       - run: python -m compileall -q .
       - run: python -m build
+      - name: Validate distribution license metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          from zipfile import ZipFile
+
+          wheel = next(Path("dist").glob("*.whl"))
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+              metadata_path = next(name for name in names if name.endswith(".dist-info/METADATA"))
+              metadata = archive.read(metadata_path).decode("utf-8")
+              assert "License-Expression: Apache-2.0" in metadata
+              assert "License-File: LICENSE" in metadata
+              assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names)
+
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          with tarfile.open(sdist, "r:gz") as archive:
+              assert any(member.name.endswith("/LICENSE") for member in archive.getmembers())
+          PY
       - name: Validate built wheel in an isolated environment
         run: |
           WHEEL="$(pwd)/$(ls dist/*.whl | head -n 1)"

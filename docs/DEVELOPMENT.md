@@ -14,7 +14,24 @@ The current package metadata is defined in `pyproject.toml`:
 project = comfyui-minimax-h3-flow-aligned-regenerate
 python >= 3.10
 build backend = hatchling
+license = Apache-2.0
 ```
+
+## Licensing and provenance
+
+Project-authored source code and documentation are distributed under the Apache License 2.0. `LICENSE` is the canonical license text, while `pyproject.toml` declares the SPDX expression and `license-files` metadata so built distributions carry the same licensing information.
+
+Research papers, upstream repositories, and sibling integrations cited in `CREDITS.md` are attribution and provenance references, not bundled code and not relicensed by this project. Their original copyrights and license terms continue to apply to their own works.
+
+When incorporating third-party source rather than independently reimplementing an idea or interoperating through an API:
+
+1. verify that the source license is compatible with the intended distribution;
+2. preserve required copyright, license, attribution, and NOTICE material;
+3. record the incorporated component, exact source revision, affected local paths, and licensing obligations in `CREDITS.md`;
+4. update distribution metadata or notices when the third-party license requires it;
+5. do not describe copied or translated source as an independent implementation.
+
+A top-level `NOTICE` file is intentionally not created merely for research citations. Add one only when this project itself needs project-level attribution notices or when incorporated third-party material creates a NOTICE/attribution obligation that should travel with distributions.
 
 ## Local development
 
@@ -160,6 +177,7 @@ Keep information in the document that matches its purpose:
 | `docs/BENCHMARKS.md` | Media-validation ledger, test matrix, exact experiment topology |
 | `docs/PERFORMANCE.md` | Performance measurements and claim boundaries |
 | `CREDITS.md` | Research/implementation attribution and provenance |
+| `LICENSE` | Canonical Apache License 2.0 terms for project-authored work |
 | `RELEASE_NOTES.md` | Release history and user-visible release changes |
 | `docs/DEVELOPMENT.md` | Development setup, CI, tests, source pins, maintenance rules |
 

@@ -180,6 +180,15 @@ More detailed wiring rules and failure conditions are in [docs/USAGE.md](docs/US
 - **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** — measured workflow-level timing evidence and limits.
 - **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — development setup, CI/test scope, source pins, and maintenance rules.
 - **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — release history.
+- **[LICENSE](LICENSE)** — Apache License 2.0 terms for this project.
+
+## License
+
+MiniMax H3 Flow-Aligned Regenerate is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 xmarre.
+
+Research references and implementation provenance are documented in [CREDITS.md](CREDITS.md). Those references are attribution, not relicensing: third-party projects retain their own copyrights and licenses, and referenced research repositories are not bundled into this project unless explicitly stated otherwise.
 
 ## Scope and limitations
 

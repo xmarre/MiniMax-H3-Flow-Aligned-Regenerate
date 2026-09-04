@@ -9,11 +9,14 @@ description = "H3-native flow-aligned and progressive-resolution regeneration fo
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "xmarre" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = ["comfyui", "minimax-h3", "rectified-flow", "video", "audio"]
 dependencies = []
 
 [project.urls]
 Repository = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate"
+License = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/main/LICENSE"
 
 [tool.comfy]
 PublisherId = "xmarre"
