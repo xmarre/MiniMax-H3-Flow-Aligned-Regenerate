@@ -242,15 +242,15 @@ Those projects are not vendored by this Flow package. The actual runtime depende
 
 The exact executable revisions pinned by CI are listed in `README.md` and `docs/RESEARCH.md`.
 
-## Research source snapshots actually inspected
+## Research implementation revisions audited
 
-Several source archives supplied for this project retained Git history. The following commits identify the exact research-code snapshots inspected during the design/audit. This is useful because research repositories can change after a paper release.
+The supplied source ZIPs do **not** contain Git metadata, so no commit SHA is inferred from the archives themselves. During this credit/source audit, each supplied snapshot was reviewed alongside its corresponding upstream branch; the branch heads recorded below are the upstream revisions audited at that time. License state refers only to the top-level files observed in the supplied source snapshot.
 
-| Research implementation | Inspected commit | Top-level license observed in that snapshot |
+| Research implementation | Upstream revision audited | Top-level license observed in supplied snapshot |
 |---|---|---|
 | HiFlow | `f397a1fbde770108b500ec3809fdd7b13fc61a75` | Apache-2.0 |
 | RALU | `3979f8cab54332ec2d16f8646b68fa134d258990` | No top-level license file observed |
-| Self-Cascade | `b847d4f35d36ec046d7d3886548d09dd800efb99` | No top-level project license file observed; a vendored `clean_fid` component has its own MIT notice |
+| Self-Cascade (`stable-diffusion-xl`) | `b847d4f35d36ec046d7d3886548d09dd800efb99` | No top-level project license file observed; a vendored `clean_fid` component has its own MIT notice |
 | FreeSwim | `9f35a72f6382696fe2fd02ff02183a249c3090f3` | No top-level license file observed |
 | HRDiT | `f3be935da797c7dc98ecff07cf4a5f01e1ddb51d` | MIT |
 
