@@ -17,7 +17,7 @@ These references are attribution, not relicensing. The research repositories lis
 | **Progressive Handoff (Target Input)** `learned_3d` | Companion **Comfyui_Minimax_h3_latent_Upscaler**; inherited **LBH-123-AI**, **ComfyUi_NNLatentUpscale**, and **LTX spatial-upscaler** lineage | A single learned clean-video spatial transform at the exact handoff boundary | Flow only consumes the companion provider API. The learned model/architecture lineage and checkpoints remain owned and credited by their upstream projects; audio, target noise, sigma law, masks, and H3 NFEs are unchanged. |
 | **MiniMax H3 Refine Target Geometry** | Companion **Comfyui_Minimax_h3_latent_Upscaler** | Mirrors the companion node's scale-by-multiplier geometry contract for schedule metadata | No latent upscale or sampling occurs in this helper. |
 | **MiniMax H3 Resolution-Aware Sigmas** | **simple diffusion**; **Scaling Rectified Flow Transformers for High-Resolution Image Synthesis** | Resolution/SNR motivation and the fractional-linear resolution-dependent flow-time map | The SD3 constant-observation derivation is only used as an experimental relative correction composed with H3's native shift; it is not claimed to be an optimal H3 schedule. |
-| **MiniMax H3 Attention Lab** | **FreeSwim**, **HRDiT**, **ResDiT**; MiniMax-H3's public sparse-attention statement | Investigating native-scale spatial receptive fields, mixed local/global attention scopes, positional/receptive-field mismatch, and heterogeneous head/layer behavior | H3 uses one packed multimodal stream. The experiment keeps non-video paths global and does not claim to reconstruct MiniMax's unreleased sparse topology or any paper's exact attention rule. |
+| **MiniMax H3 Attention Lab** | **OpenVDN**, **FreeSwim**, **HRDiT**, **ResDiT**; MiniMax-H3's public sparse-attention statement | Output-neutral retention diagnostics; OpenVDN-inspired 5-frame chunk-local temporal reference topology with previous/current/next chunks and boundary anchors; native-scale spatial/local-global research | H3 uses one packed multimodal stream. The VDN topology path is an independently written dense-mask correctness oracle, not OpenVDN's trained hybrid model, FlexAttention kernel, weights, or a production acceleration claim. |
 | **MiniMax H3 Reference Budget** | MiniMax-H3 / ComfyUI packed-reference contract; secondary context from **PAB**, **DiffCR/VideoDiffCR** and token-reduction literature | Measurement of direct-reference row growth and a bounded experimental direct-reference cap | PAB and VideoDiffCR are **not** evidence that H3 should use a fixed reference budget. No published token-pruning policy is copied, and already encoded Qwen3-VL context is not modified. |
 | **Runtime Metrics Probe** / **Metrics JSON** | ComfyUI, Spectrum, SA-Solver and the sibling integration APIs | Auditable logical-call, actual/forecast, phase, geometry, timing, and reset provenance | These are instrumentation nodes, not implementations of the cited research algorithms. |
 
@@ -105,6 +105,15 @@ Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller, H
 The node composes this as a relative factor with H3's native video shift instead of replacing H3's model sampling.
 
 ## High-resolution attention research
+
+### OpenVDN — Video DeltaNet
+
+- Project: https://openvdn.github.io/
+- Code: https://github.com/OpenVDN/OpenVDN
+- Inspected code revision: `b8cb28fbfca0266d1c7742a9f25ab8b58191de97`
+- Direct influence here: complete 5-frame chunk alignment, radius-1 previous/current/next temporal windows, globally visible non-video tokens, and first/last row-and-column boundary-anchor semantics.
+
+Flow independently implements that public topology as an analytic diagnostic and dense additive-mask reference. It does not copy OpenVDN's hybrid linear branch, compiled FlexAttention/BlockMask implementation, cache policy, training code, or checkpoints. OpenVDN's repository code is Apache-2.0, while its separately distributed VDN-H3 weights are derivatives of MiniMax H3 and are governed by the MiniMax H3 Community License Agreement, including territorial restrictions. This project does not download or distribute those weights.
 
 ### FreeSwim — Revisiting Sliding-Window Attention Mechanisms for Training-Free Ultra-High-Resolution Video Generation
 

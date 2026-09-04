@@ -717,6 +717,28 @@ def _resize_packed_mask(
     return packed
 
 
+def _has_exact_video_protection(
+    mask: torch.Tensor | None,
+    shapes: list[tuple[int, ...]],
+) -> bool:
+    """Return whether a prepared packed H3 mask exactly protects video values.
+
+    ComfyUI's inpaint contract uses mask value zero for exact preservation and
+    supports fractional values as intentional blends.  Progressive target-input
+    sampling may therefore resize fractional masks, but it must not resize any
+    video value whose downstream sampler contract is exact.
+    """
+    if mask is None:
+        return False
+    if len(shapes) != 2:
+        raise ValueError("H3 exact-protection detection requires video and audio shapes")
+    expected = (shapes[0][0], 1, sum(math.prod(shape[1:]) for shape in shapes))
+    if tuple(mask.shape) != expected:
+        raise ValueError("prepared H3 denoise mask does not match packed AV geometry")
+    video_mask, _audio_mask = unpack_streams(mask, shapes)
+    return bool(torch.any(video_mask == 0).item())
+
+
 def _merge_preserved_noise(
     generated_noise: torch.Tensor,
     preserved_noise: torch.Tensor,
@@ -867,6 +889,45 @@ def _run_progressive(
 ):
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    input_shapes = list(latent_shapes)
+    if isinstance(config, ProgressiveTargetInputConfig) and _has_exact_video_protection(denoise_mask, input_shapes):
+        # Native masked continuation promises exact video-prefix preservation.
+        # A private low-grid lifetime would resize those clean prefix latents and
+        # expose the changed values to every generated row through H3's dense
+        # attention.  A later mask/noise merge can restore the returned prefix,
+        # but it cannot undo that altered low-stage context.  Preserve the exact
+        # contract by executing the untouched target-grid sampler once.
+        binding.metrics.increment("progressive_target_fallbacks")
+        binding.metrics.increment("progressive_sampler_invocations")
+        binding.metrics.event(
+            "progressive_target_fallback",
+            reason="exact_video_protection",
+            input_mode="target_grid",
+            target_shape=input_shapes[0],
+            sampler_invocation_count=1,
+            history_boundary_count=0,
+            exact_target_inputs_forwarded=True,
+            progressive_guidance_applied=False,
+        )
+        _begin_capture(binding, guider, sampler, sigmas, input_shapes)
+        error: BaseException | None = None
+        try:
+            return executor(
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
+            )
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_capture(binding, error=error)
     _validate_progressive_sampler_state(sampler)
     if sigmas.ndim != 1 or sigmas.numel() < 4:
         raise ValueError("progressive handoff requires a full H3 sigma schedule")
@@ -874,7 +935,6 @@ def _run_progressive(
         float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
     ):
         raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
-    input_shapes = list(latent_shapes)
     if input_shapes[0][-2] % 2 or input_shapes[0][-1] % 2:
         raise ValueError("input H3 geometry is not patch-safe")
     model_options = getattr(guider, "model_options", None)

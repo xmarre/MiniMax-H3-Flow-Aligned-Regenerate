@@ -49,7 +49,7 @@ private/source grid  ------------>  target grid
 
 The handoff is not a blind resize of noisy state. The wrapper performs an exact low-grid probe, transfers the predicted-clean video state, reconstructs the target-grid conditional state, resets sampler/forecast histories that cannot safely cross the geometry change, and continues sampling at the final resolution.
 
-For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid.
+For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid. If Continuum's native mask exactly protects any video prefix (`mask == 0`), Flow automatically preserves that stronger contract by skipping the private resize/handoff and running the original target-grid sampler once.
 
 ### 3. Optional learned handoff
 
@@ -125,7 +125,7 @@ The same trajectory handle must be used by capture and guidance.
 | **MiniMax H3 Refine Target Geometry [Experimental]** | Mirrors the companion learned-refiner's target sizing so schedule experiments can use the same geometry metadata. It does not upscale latents. |
 | **MiniMax H3 Resolution-Aware Sigmas [Experimental]** | Tests a resolution-dependent remap of the downstream learned-refine sigma schedule. Default/recommended mode remains `off`. |
 | **MiniMax H3 Reference Budget [Experimental]** | Reports direct-reference row growth and provides a guarded experimental direct-reference cap. |
-| **MiniMax H3 Attention Lab [Experimental]** | H3 packed-layout diagnostics plus a guarded sparse/local attention experiment. It is not MiniMax's proprietary sparse-attention implementation. |
+| **MiniMax H3 Attention Lab [Experimental]** | Output-neutral H3/VDN retention diagnostics, a dense-mask VDN topology oracle, and the earlier guarded spatial-local experiment. No path is presented as production sparse acceleration. |
 
 ### Diagnostics
 

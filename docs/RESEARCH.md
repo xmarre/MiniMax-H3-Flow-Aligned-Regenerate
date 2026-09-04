@@ -14,6 +14,7 @@ This design uses public work as evidence and inspiration while keeping H3 assump
 | [RALU](https://arxiv.org/abs/2507.08422) | Naively resizing noisy state causes distribution/timestep mismatch; spatial transitions need explicit noise semantics. | H3 uses a conditional rectified-flow state, exact transition probe, and fresh sampler lifetime instead of copying RALU's noise construction. |
 | [CineScale](https://arxiv.org/abs/2508.15774) | Self-cascade video regeneration and high-resolution degradation are relevant hypotheses. | Wan-specific positional changes are not transferred to H3 MM-RoPE. |
 | [FreeSwim](https://arxiv.org/abs/2511.14712) | Separate global and local-detail paths motivate selective spatial locality. | H3 is one multimodal stream; non-video and temporal paths remain global. |
+| [OpenVDN](https://openvdn.github.io/) | Complete 5-frame temporal chunks, previous/current/next chunk reach, global non-video tokens, and symmetric boundary anchors define a concrete H3 attention topology to measure. | Flow implements an independent output-neutral diagnostic and dense-mask oracle only. It does not include the trained linear branch, FlexAttention kernel, or separately licensed VDN-H3 weights. |
 | [HRDiT](https://arxiv.org/abs/2608.07003) | Positional-capacity analysis and per-head/layer scope diagnostics are worth investigating. | No sparse-head policy is recommended without H3 measurements. |
 | [ResDiT](https://arxiv.org/abs/2512.01426) | Separating global-layout positional behavior from local-detail receptive-field behavior supports the Attention Lab's local/global diagnostic framing. | No ResDiT PE scaling, Gaussian patch splicing, or spectral fusion is implemented. |
 | [Just-in-Time](https://arxiv.org/abs/2603.10744) | Fine spatial compute can be deferred while global structure forms. | JiT SAG-ODE/DMF token activation is not treated as a license for arbitrary latent resizing. |
@@ -156,6 +157,7 @@ CI checks executable contracts at:
 - ComfyUI `1af040bf022569d7a890241c8dd79b296cda483f`
 - Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3`
 - Continuum `bf25353d8bec44afea22c89717c4301ce13c2036`
+- OpenVDN code `b8cb28fbfca0266d1c7742a9f25ab8b58191de97` (Apache-2.0 code inspected; weights not downloaded or used)
 - DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb`
 - RefDelta `034e4c4c14c56bf76813cee4765e7164b0c7e0db`
 - Untwisting RoPE `299d4c56a3f057a97b3140d2136189bcd1e7d6bb`

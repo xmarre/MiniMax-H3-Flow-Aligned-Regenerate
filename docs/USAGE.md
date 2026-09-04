@@ -49,6 +49,8 @@ Do **not** add a separate Trajectory Capture node on this path. The progressive 
 
 Continuum remains configured for the final target width/height. The wrapper creates a private smaller video state for the early stage, performs the handoff, rebuilds target-grid conditioning, and continues at the final grid.
 
+If the prepared video denoise mask contains any exact-zero values, the exact native-masked contract takes precedence over progressive resizing. Flow forwards the original target noise, latent, mask, schedule, sampler, callback, and shape metadata through one ordinary target-grid sampler lifetime. No private noise, spatial transfer, exact probe, history boundary, or progressive guidance is used. A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not trigger it, and fractional video masks remain intentional blends rather than exact protection.
+
 ### What happens at the handoff
 
 At the selected handoff point the wrapper:
@@ -379,10 +381,13 @@ The node cannot retroactively change Qwen3-VL tokens that have already been enco
 Modes:
 
 - `native` — no attention change;
-- `diagnostic` — inspect the selected H3 blocks/layout path;
-- `experimental_sparse` — guarded research experiment with selected layers, local window size, global heads, and sequence cap.
+- `diagnostic` — output-neutral measurement of native dense attention: entropy, modality mass, VDN-retained/outside mass, first/last boundary mass, exact mask density, and Continuum seam mass when authoritative seam metadata exists;
+- `vdn_reference_dense` — query-chunked dense additive-mask correctness oracle for OpenVDN's chunk-local temporal topology; this changes attention output but is explicitly not a sparse-compute or acceleration path;
+- `experimental_sparse` — the earlier guarded spatial-local/all-time dense-mask experiment with selected layers, local window size, global heads, and sequence cap.
 
-This is not an implementation of MiniMax's unreleased H3 sparse-attention topology and should not be treated as a production acceleration path.
+The VDN reference defaults are 5-frame chunks, radius 1 (previous/current/next complete chunks), globally visible non-video tokens, and `both` first/last anchors: every video query sees both boundary frames and both boundary-frame query rows see all video frames. When `continuum_seam_anchor` is enabled, the same symmetric anchor is added at the last protected latent frame only if Continuum supplies `protected_video_prefix_latent_slots`. Flow deliberately does not infer a latent seam from `context_frames`.
+
+The reference path still feeds ordinary attention backends dense Q×K masks in query chunks and can be slower than native attention. It is not OpenVDN's FlexAttention kernel, does not include OpenVDN's trained linear branch or weights, is not an implementation of MiniMax's unreleased H3 sparse-attention topology, and should not be treated as a production acceleration path.
 
 ## Evidence documents
 
