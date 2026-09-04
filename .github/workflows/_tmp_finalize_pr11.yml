@@ -42,7 +42,6 @@ jobs:
                   pin_files.append(name)
           assert pin_files, 'old provider pin not found'
 
-          # README: replace the pre-media learned-transfer paragraph with the validated operating evidence.
           p = Path('README.md')
           text = p.read_text()
           start = text.index('`handoff_transfer=bicubic` is the default and preserves the released behavior.')
@@ -83,7 +82,6 @@ device is unavailable.
           text = text.replace(marker, addition, 1)
           p.write_text(text)
 
-          # BENCHMARKS: record the superseding learned-transfer media sweep.
           p = Path('docs/BENCHMARKS.md')
           text = p.read_text()
           old_row = '| D14-transfer-A/B | Same D14 direction topology; bicubic vs learned 3D clean-state transfer only | Implementation/synthetic validation complete; decoded media pending |'
@@ -128,7 +126,6 @@ new direction-only or acceleration-promotion evidence.
           text = text[:start] + section + text[end:]
           p.write_text(text)
 
-          # RESEARCH: replace the pre-media planned experiment with the empirical learned-transfer result.
           p = Path('docs/RESEARCH.md')
           text = p.read_text()
           start = text.index('The intended D14 test is strict:')
@@ -152,7 +149,6 @@ quality/compute sweet spot for this prompt; no cross-prompt optimum is claimed.
           text = text[:start] + research + text[end:]
           p.write_text(text)
 
-          # Guard against accidentally leaving the old release-gate language or old dependency pin.
           joined = '\n'.join(Path(name).read_text(errors='ignore') for name in tracked if Path(name).is_file())
           assert OLD_PIN not in joined
           assert 'Pending strict D14 transfer A/B' not in joined
