@@ -43,6 +43,8 @@ jobs:
       - name: Format and lint staged tree
         run: |
           python -m ruff format .
+          python -m ruff check --fix .
+          python -m ruff format .
           python -m ruff format --check .
           python -m ruff check .
       - name: Run focused bridge and mixed-grid tests
