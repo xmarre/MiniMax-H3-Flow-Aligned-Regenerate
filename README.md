@@ -1,229 +1,206 @@
 # MiniMax H3 Flow-Aligned Regenerate
 
-Training-free ComfyUI nodes for reusing low-resolution MiniMax H3 generation structure while moving toward a higher-resolution result.
+Training-free ComfyUI nodes for reusing lower-resolution MiniMax H3 structure while producing a higher-resolution result, with dedicated Continuum paths for exact-prefix continuation.
 
-The project has two main goals:
+The project has two main approaches:
 
-- **guide a high-resolution/refine pass with the actual low-resolution H3 denoising trajectory**, instead of treating the low-resolution result as only a final latent;
-- **move from a smaller video grid to the final grid inside one sampling schedule**, so more H3 work can happen at the cheaper resolution before the expensive high-resolution stage begins.
+1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
+2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-Native H3 generation directly on the final high-resolution grid can be more expensive and, depending on the workflow, less robust than generating smaller and refining after a learned latent upscale. The ordinary upscale/refine approach solves that by starting a second H3 sampling pass. These nodes explore two alternatives: make that second pass reuse the first pass's trajectory, or avoid a complete second pass by carrying one trajectory across a controlled spatial-resolution handoff.
+For Continuum exact-prefix continuation, the recommended accelerated path is now **Progressive Mixed-Grid Continuum**: it keeps the authoritative target-grid prefix for H3 conditioning, generates the continuation suffix on a real lower-resolution grid, performs the learned 3D latent upscale, then starts a fresh full-grid refinement stage.
 
-> [!IMPORTANT]
-> This is an independent research implementation informed by public work. It does **not** reproduce MiniMax's closed H3-Regenerate-2K implementation or its unreleased sparse-attention topology.
+> This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
-Full node-by-node research and implementation attribution is in [CREDITS.md](CREDITS.md).
-
-## What the nodes do
-
-### 1. Flow-aligned second-pass guidance
-
-The low-resolution H3 pass is captured as a time-indexed trajectory. A later high-resolution or learned-refine pass can then be guided toward the matching low-resolution predicted-clean state at the same flow coordinate.
-
-```text
-low-resolution H3
-      |
-      +-> Trajectory Capture -> H3_FLOW_TRAJECTORY
-                                  |
-learned upscale / refine input ---+
-                                  |
-                         Flow-Aligned Regenerate
-                                  |
-                         high-resolution H3
-```
-
-This keeps the existing two-pass workflow, but lets the second H3 pass reuse information from the full first-pass trajectory rather than only the upscaled endpoint.
-
-For H3 Continuum refinement, **Flow-Aligned Refine State** applies the same guidance directly to each Continuum `refine_state`.
-
-### 2. Progressive resolution handoff
-
-The progressive nodes keep early denoising on a smaller video grid and switch to the target grid later in the same schedule.
-
-```text
-early schedule                     late schedule
-
-private/source grid  ------------>  target grid
-        H3            handoff           H3
-```
-
-The handoff is not a blind resize of noisy state. The wrapper performs an exact low-grid probe, transfers the predicted-clean video state, reconstructs the target-grid conditional state, resets sampler/forecast histories that cannot safely cross the geometry change, and continues sampling at the final resolution.
-
-For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid. If Continuum's Native Masked path exactly protects any video prefix (`mask == 0`), the ordinary Target Input node preserves that stronger contract by skipping the private resize/handoff and running the original target-grid sampler once. This means the conservative node does **not** progressively accelerate exact-prefix continuation chunks; normally only chunk 1 receives the low-grid handoff.
-
-For exact-prefix chunk boundaries, place **MiniMax H3 Continuum Decode Context**
-immediately before Video VAE Decode, after all latent processing. It supplies
-real future context to H3's overlapping decoder at the join. Keep the original
-assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).
-
-The two dedicated exact-prefix Continuum nodes, **Progressive Target-Sparse Continuum** and **Progressive Mixed-Grid Continuum**, expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target-Sparse derives it from the first actual full-grid H3 predicted-clean boundary before native mask restoration. The generic **Progressive Handoff (Target Input)** node does not expose or apply this Continuum-specific seam correction.
-
-### 3. Experimental exact-prefix Continuum acceleration
-
-**MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** samples a real
-low-resolution continuation suffix while H3 attends to the original target-grid
-protected prefix. It then performs an exact probe, learned 3D suffix transfer,
-and fresh full-grid refinement. Requires `learned_3d`, an upscaler provider, and
-VDN external-sequence API 2 when VDN is enabled. See
-[mixed-grid setup and validation](docs/MIXED_GRID_CONTINUUM.md). GPU/media
-acceptance is pending.
-
-**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** investigates continuation-chunk acceleration without resizing the protected Native Masked prefix.
-
-On an exact-prefix chunk:
-
-```text
-full target-grid sampler latent + mask
-               |
-               +-- exact protected video rows: keep every row
-               +-- generated video rows: keep a coarse target-grid anchor lattice
-               +-- text / refs / audio: keep all rows
-               |
-         reduced early H3 hidden stream
-               |
-       lift hidden video field to full target grid
-       + overwrite every retained row exactly
-               |
-       fresh full-grid H3 sampler lifetime
-```
-
-The sampler latent, original mask, protected prefix, and retained RoPE coordinates stay on the target grid. Only the **early transformer hidden-token stream** is reduced. The full hidden sequence is restored before H3's native final layer and before Spectrum's final-block observation. Because the early dense-attention computation is approximated, this is not semantic parity with ordinary H3 and remains opt-in until real decoded-media and timing gates pass.
-
-For exact-prefix chunks, `source_scale` or explicit source dimensions control the coarse **anchor density**; they do not describe a private sampler latent geometry. The learned handoff provider is not called on these exact-prefix chunks. Chunk 1, which has no protected continuation prefix, still uses the normal Target Input low/probe/high path and can still use `learned_3d` if configured.
-
-### 4. Optional learned handoff
-
-**Progressive Handoff (Target Input)** supports:
-
-- `bicubic` — built-in compatibility path;
-- `learned_3d` — one learned clean-video spatial transfer using the companion [MiniMax H3 Latent Upscaler](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler).
-
-The learned provider replaces only the clean-video spatial transfer at the handoff. It does not add a second H3 sampling pass, does not spatially transform audio, and adds no H3 transformer NFE by itself.
+See [CREDITS.md](CREDITS.md) for research and implementation attribution.
 
 ## Install
 
-From `ComfyUI/custom_nodes`:
-
 ```bash
+cd ComfyUI/custom_nodes
 git clone https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate.git
 ```
 
 Restart ComfyUI.
 
-The core package has no runtime dependency on the sibling H3 custom nodes. The optional `learned_3d` transfer requires the companion latent-upscaler package above.
+The core package has no mandatory sibling-node dependency. The learned transfer paths require the companion [MiniMax H3 Latent Upscaler](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler).
 
 ## Recommended Continuum path
 
-For the conservative validated path, keep this model-patch order when the surrounding H3 patches are present:
+### Progressive Mixed-Grid Continuum
+
+Use **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** for exact-prefix continuation when you want progressive speedup without giving up the learned latent upscale.
+
+The execution contract is:
+
+```text
+authoritative target-grid prefix
+            +
+real low-grid generated suffix
+            |
+       mixed H3 sequence
+            |
+       exact handoff probe
+            |
+      learned 3D upscale
+            |
+  restore exact target prefix
+            |
+ fresh target-grid refinement
+```
+
+The protected prefix is never spatially resized for transformer conditioning. The low-grid suffix is real low-resolution H3 sampling, not a sparse subset of target-grid hidden rows.
+
+When VDN is enabled, this path uses VDN external-sequence API 2 (`mixed_grid_low_suffix`) during the mixed low stage and returns to normal VDN execution for the fresh target-grid stage.
+
+### Suffix DC bridge
+
+**Mixed-Grid Continuum** exposes `suffix_dc_bridge`, enabled by default.
+
+At the exact-prefix handoff, the learned 3D upscaler produces a complete target-grid clean sequence before its learned prefix is discarded. The bridge measures the per-channel DC difference between that learned prefix boundary and the authoritative exact prefix, then applies the corresponding constant offset to **only the first generated suffix latent token**.
+
+It does not:
+
+- edit the authoritative prefix;
+- alter later suffix tokens at bridge application;
+- perform a video-space crossfade;
+- add an H3 transformer evaluation.
+
+The bridge fixed the brief Continuum boundary flash in matched real-media testing, including multi-boundary continuation. In the validated run, the uncorrected exact-boundary DC RMS was about `0.207763`; the corrected boundary was about `0.093093`, matching the learned-upscaler native boundary at about `0.093093`, while `final_prefix_exact=true` remained intact.
+
+### Continuum Decode Context
+
+**MiniMax H3 Continuum Decode Context** can be placed immediately before the normal Video VAE Decode. It supplies real future latent context to the native H3 temporal decoder at exact chunk joins while leaving accepted sampling latents, continuation state, masks, audio and the assembly plan unchanged.
+
+This solves a separate decoder-window boundary problem. It is not the mechanism that fixed the mixed-grid DC flash above.
+
+See [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md).
+
+## Target-Sparse Continuum status
+
+**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** remains available as a research/control path, but it is **not recommended for production quality**.
+
+It keeps the sampler latent on the target grid and sparsifies only the early H3 hidden-token stream over generated video rows. Because it does **not** perform the learned latent upscale used by the Mixed-Grid path, real decoded-media testing showed cascading quality errors: skin imperfections, odd clothing changes and spurious background additions could appear and propagate through later continuation.
+
+That negative result is the reason the release recommendation is Mixed-Grid rather than Target-Sparse. Target-Sparse remains useful for architectural experiments and controlled comparisons, not as the preferred Continuum acceleration path.
+
+## Generic Progressive Handoff (Target Input)
+
+**MiniMax H3 Progressive Handoff (Target Input)** is the generic target-input progressive node. It is not a Continuum-specific exact-prefix node.
+
+- Unprotected calls can run early H3 work privately at lower resolution before handing off to the target grid.
+- Exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime.
+- It supports `bicubic` and optional `learned_3d` clean-video transfer on the normal handoff path.
+- It does **not** expose or apply the Continuum `suffix_dc_bridge`.
+
+## Flow-aligned two-pass guidance
+
+The two-pass path keeps the established low-resolution generation -> learned upscale/refine workflow but reuses the full low-resolution denoising trajectory instead of only the endpoint.
+
+```text
+low-resolution H3
+      |
+Trajectory Capture
+      |
+H3_FLOW_TRAJECTORY ------------------+
+                                      |
+learned upscale / refine input -------+
+                                      |
+                         Flow-Aligned Regenerate
+                                      |
+                             high-resolution H3
+```
+
+Use:
+
+1. **MiniMax H3 Flow Trajectory**
+2. **MiniMax H3 Trajectory Capture** on the first pass
+3. your learned latent upscale/refine initialization
+4. **MiniMax H3 Flow-Aligned Regenerate** on the second pass
+
+For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
+
+`direction` remains the conservative guidance recommendation. `direction+acceleration`, `direction+temporal`, `downsample_consistency`, resolution-aware sigma remapping and the Attention Lab remain research controls.
+
+## Nodes
+
+### Main nodes
+
+| Node | Purpose |
+|---|---|
+| **MiniMax H3 Flow Trajectory** | Shared trajectory handle for capture, guidance and progressive execution. |
+| **MiniMax H3 Trajectory Capture** | Records first-pass H3 predicted-clean trajectory states. |
+| **MiniMax H3 Flow-Aligned Regenerate** | Guides a later H3 pass from the matching captured trajectory state. |
+| **MiniMax H3 Flow-Aligned Refine State** | Continuum `refine_state` version of flow-aligned guidance. |
+| **MiniMax H3 Progressive Handoff** | Generic source-sized progressive resolution handoff. |
+| **MiniMax H3 Progressive Handoff (Target Input)** | Generic target-input progressive handoff; exact protected prefixes fall back to the target grid. |
+| **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** | Recommended accelerated exact-prefix Continuum path: real low-grid suffix, target-grid prefix conditioning, learned 3D transfer, DC bridge and fresh target-grid refine. |
+| **MiniMax H3 Continuum Decode Context** | Supplies right context to the native temporal VAE at exact Continuum joins. |
+
+### Research/control nodes
+
+| Node | Purpose |
+|---|---|
+| **MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** | Target-grid hidden-row sparsification experiment. Real media showed cascading quality artifacts; not recommended for final output. |
+| **MiniMax H3 Refine Target Geometry [Experimental]** | Mirrors learned-refiner target sizing metadata. |
+| **MiniMax H3 Resolution-Aware Sigmas [Experimental]** | Resolution-dependent refine-sigma experiments; default remains off. |
+| **MiniMax H3 Reference Budget [Experimental]** | Reference-row diagnostics and guarded direct-reference cap. |
+| **MiniMax H3 Attention Lab [Experimental]** | Attention/retention diagnostics and topology oracles. |
+
+### Diagnostics
+
+| Node | Purpose |
+|---|---|
+| **MiniMax H3 Runtime Metrics Probe** | Passive sampler/model-call instrumentation. |
+| **MiniMax H3 Metrics JSON** | Writes structured H3/Spectrum/sampler/geometry metrics. |
+
+## Patch order and interoperability
+
+For the tested Continuum stack, keep model patches in this order when present:
 
 ```text
 DiffAid
   -> Untwisting RoPE
   -> Spectrum
-  -> Progressive Handoff (Target Input)
+  -> Progressive node
   -> Continuum
 ```
 
-DiffAid, Untwisting RoPE, and Spectrum are optional external integrations, not requirements of this package. Omit any that are not part of your workflow; when Spectrum is used, keep the progressive node downstream of it.
+DiffAid, Untwisting RoPE, Spectrum and VDN are optional integrations.
 
-Create one **MiniMax H3 Flow Trajectory** and connect it to **Progressive Handoff (Target Input)**. A separate **Trajectory Capture** node is not required on this path because the progressive wrapper captures its private trajectory internally.
+Important contracts:
 
-Continuum remains on the target geometry. Only chunk 1 or other unprotected Target Input calls use a private lower-resolution sampler grid. Exact Native Masked continuation chunks stay on the target geometry; the conservative node uses a full-grid fallback, while the separate experimental target-sparse node reduces only early H3 hidden tokens.
+- **Spectrum:** actual/forecast provenance and sampler-history boundaries are preserved. Fresh target-grid stages start with an actual H3 evaluation where required.
+- **VDN-H3:** Mixed-Grid uses API 2 only during the external mixed sequence and resumes ordinary VDN behavior at full target resolution.
+- **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; separate sampler lifetimes are used where geometry/history boundaries require them.
+- **Audio:** progressive spatial transfer affects video only. Audio is never spatially resized.
+- **Learned upscaler:** Mixed-Grid requires `learned_3d`; the generic Target Input node can use either `bicubic` or `learned_3d`.
 
-Detailed parameter guidance, tested starting points, `source_scale` behavior, handoff selection, learned-provider setup, and sampler requirements are in [docs/USAGE.md](docs/USAGE.md).
+## Practical status
 
-## Two-pass path
+The paths with the strongest real-media support are:
 
-Use the explicit two-pass nodes when you want to keep an existing low-resolution generation + learned upscale/refine workflow:
+- two-pass flow-aligned guidance with the learned upscale/refine workflow;
+- generic Progressive Handoff for unprotected calls;
+- **Mixed-Grid Continuum with learned 3D transfer and the suffix DC bridge** for exact-prefix continuation.
 
-1. Create one **Flow Trajectory**.
-2. Patch the first-pass model with **Trajectory Capture**.
-3. Run the low-resolution generation.
-4. Perform the existing learned latent upscale / refine initialization.
-5. Patch the second-pass model with **Flow-Aligned Regenerate**.
-6. For Continuum-integrated refinement, patch the emitted `refine_state` with **Flow-Aligned Refine State** instead.
+The Mixed-Grid path has been exercised on a real RTX Pro 6000 workflow with VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact handoff probing and multiple Continuum boundaries. The previously observed boundary flashing is fixed by the suffix DC bridge in that tested workflow.
 
-The same trajectory handle must be used by capture and guidance.
+Target-Sparse is deliberately not promoted because its no-latent-upscale design produced cascading decoded-media defects in testing.
 
-## Nodes
-
-### Core generation nodes
-
-| Node | What it is for |
-|---|---|
-| **MiniMax H3 Flow Trajectory** | Shared mutable trajectory handle used by capture, guidance, and progressive sampling. Storage can live in system RAM or VRAM. |
-| **MiniMax H3 Trajectory Capture** | Patches an H3 model so first-pass predicted-clean trajectory states and provenance are recorded. |
-| **MiniMax H3 Flow-Aligned Regenerate** | Guides a later H3 pass from the matching captured low-resolution trajectory. |
-| **MiniMax H3 Flow-Aligned Refine State** | Continuum version of Flow-Aligned Regenerate; patches each `H3_CONTINUUM_REFINE_STATE`. |
-| **MiniMax H3 Progressive Handoff** | Starts from a source-sized workflow input and grows the video grid to a target resolution during sampling. |
-| **MiniMax H3 Progressive Handoff (Target Input)** | Generic target-sized variant. Unprotected calls run the early H3 stage privately on a smaller grid; exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime. Supports optional `learned_3d` transfer on the normal handoff path. It does not own Continuum-specific seam correction. |
-
-### Experimental research nodes
-
-| Node | What it is for |
-|---|---|
-| **MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** | Exact-prefix Continuum experiment: keeps the full target-grid sampler state and every protected video row while reducing only early H3 hidden-token computation over generated video rows. Structural/CI validation exists; decoded-media quality and speed are not yet established. |
-| **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** | Real low-grid continuation suffix with original target-grid prefix conditioning, exact probe, learned suffix upscale, and fresh target refinement. Requires the learned upscaler and VDN API 2 when VDN is enabled. GPU/media acceptance is pending. |
-| **MiniMax H3 Refine Target Geometry [Experimental]** | Mirrors the companion learned-refiner's target sizing so schedule experiments can use the same geometry metadata. It does not upscale latents. |
-| **MiniMax H3 Resolution-Aware Sigmas [Experimental]** | Tests a resolution-dependent remap of the downstream learned-refine sigma schedule. Default/recommended mode remains `off`. |
-| **MiniMax H3 Reference Budget [Experimental]** | Reports direct-reference row growth and provides a guarded experimental direct-reference cap. |
-| **MiniMax H3 Attention Lab [Experimental]** | Output-neutral H3/VDN retention diagnostics, a dense-mask VDN topology oracle, and the earlier guarded spatial-local experiment. No path is presented as production sparse acceleration. |
-
-### Diagnostics
-
-| Node | What it is for |
-|---|---|
-| **MiniMax H3 Runtime Metrics Probe** | Passive sampler/model-call instrumentation without enabling trajectory guidance or progressive handoff. |
-| **MiniMax H3 Metrics JSON** | Saves structured H3/Spectrum/sampler/geometry metrics to a JSON artifact. |
-
-## Guidance modes
-
-| Mode | Purpose | Current posture |
-|---|---|---|
-| `direction` | Low-frequency alignment toward the matched captured predicted-clean state | **Preferred/default guidance path** |
-| `direction+acceleration` | Adds adjacent denoising-time velocity-change alignment inspired by HiFlow | Experimental; structurally valid, no consistent media advantage established |
-| `direction+temporal` | Adds conservative adjacent-frame latent correspondence | Experimental; functioning, currently neutral in matched decoded-media testing |
-| `downsample_consistency` | Compares the target clean estimate against the captured low-grid state after downsampling | Experimental; measurable but not currently preferred |
-| `off` | Disable trajectory correction while retaining the surrounding wrapper/metrics path | Control/debug use |
-
-Exact settings and evidence are intentionally kept out of the main README. See [docs/USAGE.md](docs/USAGE.md) for practical configuration and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the decoded-media evidence ledger.
-
-## Current practical status
-
-The core paths are usable and have been exercised with real decoded H3 media:
-
-- **two-pass flow-aligned guidance** is functional with the learned upscale/refine workflow;
-- **Progressive Handoff (Target Input)** is functional for chunk 1/unprotected calls and uses a semantically safe target-grid fallback for Native Masked exact-prefix continuation chunks;
-- **direction-only guidance** remains the conservative recommendation;
-- **learned `learned_3d` handoff** has shown a clear benefit over bicubic for aggressive transitions in the tested ~1 MP workflow;
-- **target-sparse exact-prefix Continuum acceleration is not yet promoted**: the implementation is structurally tested, but real multi-chunk decoded-media and timing validation remain required;
-- the resolution-aware sigma, temporal, acceleration, reference-budget, and attention experiments remain research features rather than promoted defaults.
-
-The current observed performance comparison for the learned progressive path is documented separately in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). It is workflow-specific and not a universal speed or quality claim.
-
-## Compatibility
-
-The implementation is designed around native MiniMax H3 joint audio/video sampling rather than treating video as an isolated tensor path.
-
-- **Continuum:** use **Progressive Handoff (Target Input)** for the conservative path. Exact Native Masked continuation chunks use target-grid fallback. **Progressive Mixed-Grid Continuum [Experimental]** adds real low-grid suffix generation and learned transfer; **Progressive Target-Sparse Continuum [Experimental]** retains the previous sparse-row experiment as a control. Both require explicit runtime validation. **Flow-Aligned Refine State** is available for explicit two-pass Continuum refinement.
-- **Spectrum:** actual/forecast provenance is preserved. Feature-history state is reset across a progressive boundary, and the first full target-grid call is forced actual. The target-sparse wrapper restores the full target hidden stream before Spectrum's final-block observation.
-- **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; progressive stages use separate sampler lifetimes where required by geometry or target-sparse history boundaries.
-- **DiffAid / Untwisting RoPE:** keep these upstream of the progressive wrapper when used. The target-sparse path retains all non-video rows and reduces H3 target-video modulation metadata consistently; runtime media validation of the complete external-patch stack is still required.
-- **Learned H3 latent upscaler:** optional provider for `learned_3d`; not bundled with this repository. It is not invoked for an exact-prefix target-sparse continuation stage.
-
-More detailed wiring rules and failure conditions are in [docs/USAGE.md](docs/USAGE.md).
+Quality and speed still depend on prompt, references, geometry, sampler, Spectrum policy, model residency and hardware. Use decoded media rather than structural metrics alone for new workflow variants.
 
 ## Documentation
 
-- **[docs/USAGE.md](docs/USAGE.md)** — practical wiring, settings, handoff behavior, guidance modes, learned transfer, metrics, and compatibility rules.
-- **[CREDITS.md](CREDITS.md)** — node-by-node research and implementation attribution.
-- **[docs/RESEARCH.md](docs/RESEARCH.md)** — research-transfer rationale and empirical conclusions.
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — internal H3 contracts and implementation architecture.
-- **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** — decoded-media validation ledger and benchmark protocol.
-- **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** — measured workflow-level timing evidence and limits.
-- **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — development setup, CI/test scope, source pins, and maintenance rules.
-- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — release history.
-- **[LICENSE](LICENSE)** — Apache License 2.0 terms for this project.
+- [docs/USAGE.md](docs/USAGE.md) — wiring and parameter details
+- [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract and diagnostics
+- [docs/TARGET_SPARSE_CONTINUUM.md](docs/TARGET_SPARSE_CONTINUUM.md) — Target-Sparse research path
+- [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md) — decoder right-context helper
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — decoded-media validation ledger
+- [docs/PERFORMANCE.md](docs/PERFORMANCE.md) — workflow-specific timing evidence
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal contracts
+- [docs/RESEARCH.md](docs/RESEARCH.md) — research-transfer rationale
+- [CREDITS.md](CREDITS.md) — attribution and provenance
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) — release history
 
 ## License
 
@@ -231,14 +208,4 @@ MiniMax H3 Flow-Aligned Regenerate is licensed under the [Apache License 2.0](LI
 
 Copyright 2026 xmarre.
 
-Research references and implementation provenance are documented in [CREDITS.md](CREDITS.md). Those references are attribution, not relicensing: third-party projects retain their own copyrights and licenses, and referenced research repositories are not bundled into this project unless explicitly stated otherwise.
-
-## Scope and limitations
-
-- This is research-grade tooling, not an official MiniMax implementation.
-- Normal progressive handoff changes only the **video** spatial grid; audio is never spatially resized. Target-sparse exact-prefix mode does not resize the sampler video grid at all.
-- Progressive sampling requires a complete H3 sigma schedule whose absolute flow origin is known.
-- Arbitrary external sampler RNG/history closures cannot be safely carried across a progressive split and may be rejected.
-- Mutable capture/guidance/progressive state currently fails closed for unsupported parallel multi-GPU model-call ordering.
-- The target-sparse path approximates early full-dense H3 transformer computation. Passing structural tests does not establish decoded-media quality or a net speedup.
-- Quality and speed depend on prompt, references, geometry, sampler, Spectrum policy, model residency, and hardware. Use decoded media rather than metrics alone as the final quality test.
+Referenced papers and third-party repositories retain their own copyrights and licenses.

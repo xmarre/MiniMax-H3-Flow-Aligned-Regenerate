@@ -1,141 +1,116 @@
-# Mixed-grid Continuum continuation (experimental)
+# Mixed-Grid Continuum continuation
 
-Use **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** with
-`handoff_transfer=learned_3d` and the companion `H3_LATENT_UPSCALER` provider.
-Keep Continuum configured for the final target geometry. Chunk 1 uses the
-existing low-grid/probe/learned-transfer/high-grid path. Exact-prefix chunks
-use the mixed-grid path described below. This remains a draft implementation
-pending matched GPU and decoded-media acceptance.
+**MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** is the recommended accelerated exact-prefix Continuum path in v0.3.0.
 
-Use [Continuum Decode Context](CONTINUUM_DECODE_CONTEXT.md) before the final
-video decoder to correct missing right context at exact-prefix decode joins.
-This shared decoder issue also affects the other progressive paths. It is
-separate from a learned-transfer latent discontinuity.
+It requires `handoff_transfer=learned_3d` and the companion `H3_LATENT_UPSCALER` provider. Continuum stays configured for the final target geometry.
 
-## Call contract
+## Why Mixed-Grid exists
 
-The low sampler owns `[1,24,T,source_h,source_w]`. Its whole-frame prefix mask
-is zero. An immutable per-chunk snapshot independently owns the original
-model-domain target-grid prefix and the corresponding original target-grid
-sampler noise. The low carrier copy is never used as H3 transformer
-conditioning.
+The conservative Target Input node cannot safely resize an exact protected prefix, so exact-prefix continuation falls back to one target-grid sampler lifetime. The earlier Target-Sparse experiment avoids resizing the prefix but also avoids the learned latent upscale; real decoded-media testing showed cascading quality defects on that path.
 
-1. A diffusion wrapper supplies a native-compatible carrier layout, preserving
-   target-grid keyframes and the target-output audio width bounds. References
-   keep their native geometry. The target-video segment uses a low grid.
-2. Immediately before block 0, reconstruct the protected target-grid input with
-   the same Native Masked H3 visual-conditioning augmentation used by ComfyUI:
-   `VISUAL_COND_TIMESTEP * P_hi + (1 - VISUAL_COND_TIMESTEP) * N_hi`, currently
-   `0.999 * P_hi + 0.001 * N_hi`. Patchify/project that target-grid prefix
-   independently and replace the carrier prefix. The authoritative clean prefix
-   itself is never spatially resized for H3 conditioning. Keep genuine
-   source-grid suffix patch embeddings. All transformer blocks receive the mixed
-   layout, mixed RoPE, and expanded native per-row modulation indices.
-3. Prefix positions are the native target grid. Suffix positions are the native
-   source grid, sliced from the full global temporal timeline. This preserves
-   the native five-slot temporal-span period across any prefix length. Protected
-   prefix rows retain native pinned timestep/AdaLN labels while suffix rows use
-   the active sampler timestep.
-4. After the final block, discard its target-prefix outputs and insert zero
-   low-carrier hidden rows. Keep suffix and non-video hidden rows exactly.
-   Spectrum observes this regular carrier layout. Native final projection and
-   unpatchification therefore receive a valid low-grid sequence. The diffusion
-   wrapper discards carrier-prefix velocity, including on forecast calls.
-5. The exact handoff probe uses this same mixed model in a separate sampler
-   lifetime. The learned upscaler receives clean suffix latents and a temporary
-   low-grid copy of all original prefix frames. Its 3D attention and GroupNorm
-   provide no demonstrated finite-context truncation rule.
-6. Discard upscaled prefix output. Restore the original target-grid prefix in
-   the transferred state, reconstruct high-stage noise with the existing H3
-   law, preserve the original inpaint noise/mask, and start a fresh high-stage
-   sampler. Verify its first call is actual and its returned prefix is exact.
+Mixed-Grid instead keeps the exact target-grid prefix authoritative while generating the new suffix on a genuine smaller sampler grid, then uses the learned 3D latent transfer before target-grid refinement.
 
-There is no interpolation of generated hidden rows between transformer blocks.
-The ordinary conservative Target Input node and the previous target-sparse
-experimental node remain available as control arms.
+## Execution contract
 
-## VDN contract
+1. Snapshot the original model-domain target-grid prefix and corresponding target-grid sampler noise.
+2. Run the private early sampler on a normal low-grid carrier.
+3. Immediately before H3 transformer block 0, independently patchify/project the original target-grid protected prefix using native H3 masked-conditioning semantics and replace only the carrier prefix rows.
+4. Keep genuine source-grid suffix patch embeddings. Prefix positions use the native target grid; suffix positions use the native source grid while preserving temporal slot continuity.
+5. Run all transformer blocks on the mixed sequence with matching per-row modulation metadata.
+6. Before native output projection, discard target-prefix transformer outputs and restore the normal low-carrier layout so native projection/unpatchification remains valid.
+7. Run the exact handoff probe through the same mixed topology in a separate sampler lifetime.
+8. Feed the complete clean low-grid sequence plus resized prefix context to the learned 3D upscaler.
+9. Discard the upscaler's prefix output, restore the authoritative target-grid prefix, rebuild the high-stage conditional state/noise, and start a fresh full-grid sampler lifetime.
+10. Require the first high-stage call to be an actual H3 evaluation and verify the returned protected prefix remains exact.
 
-VDN-H3 must advertise external-sequence capability **2**. API 1 remains supported
-for the existing target-sparse path. Mixed calls use the existing key
-`vdn_h3_external_sequence_v1` with `api=2`, `mode=dense_gate_no_linear`, and
-`topology=mixed_grid_low_suffix`.
+The authoritative target-grid prefix is never spatially resized for H3 transformer conditioning.
 
-| Field | Meaning |
-|---|---|
-| `native_sequence_rows` | Published regular low-carrier sequence length |
-| `sequence_rows` | Actual mixed sequence length |
-| `video_start` | Unchanged non-video row count |
-| `temporal`, `prefix_t` | Full and protected temporal lengths |
-| `source_rows_per_frame` | Native source patch rows per frame |
-| `prefix_rows_per_frame` | Native target patch rows per prefix frame |
+## Suffix DC bridge
 
-VDN validates both layout identities and the complete row-count equation,
-requires matching explicit RoPE, then uses learned gated dense attention with
-geometry-dependent windows/linear complement disabled. The high stage has no
-external contract and resumes ordinary VDN. Missing or stale contracts fail
-closed. Flow checks VDN capability when applying the node and again before
-sampling the assembled workflow.
+`suffix_dc_bridge` defaults **on** for Mixed-Grid.
 
-## Source audit
+The learned 3D transfer produces a complete target-grid clean sequence before its learned prefix is discarded. Let that learned output be `[U_prefix | U_suffix]` and the authoritative protected prefix be `P_exact`.
 
-Audited native ComfyUI `250b2e9551a7bc7a8ebb5beb07e0fecd2983e04a` against the
-existing pinned `1af040bf022569d7a890241c8dd79b296cda483f`. The relevant change
-adds the allocation-compiler wrapper and prefetch scope arguments; packing,
-modulation, and final projection contracts remain equivalent. The existing
-pin remains the regression oracle; GPU compiler behavior still needs testing.
-The source-contract lane also pins MiniMaxH3 `scale_latent_inpaint` semantics so
-changes to the protected-prefix `VISUAL_COND_TIMESTEP` noise augmentation fail
-CI instead of silently changing mixed-grid conditioning.
+Flow computes the per-batch/per-channel spatial-mean offset:
 
-Spectrum `beb32dd210ef9e95520453107f158241d4f2ecf3` observes the last block
-outside pre-existing replacements, which permits Flow to restore carrier
-geometry before observation. Its state-input capture also uses carrier
-geometry. DiffAid `ba9d9efbcf7e64c755e068cb76547d8cc85481eb` derives language
-ranges from modulation segments; those segments are expanded coherently.
-Untwist `299d4c56a3f057a97b3140d2136189bcd1e7d6bb` targets reference ranges,
-which remain before the changed video segment. Continuum
-`bf25353d8bec44afea22c89717c4301ce13c2036` supplies whole-frame zero prefixes.
-The upscaler's provider/network files are unchanged between existing pin
-`bdc670e5926bcefbe4022e17fe8b171fbfcf15de` and current
-`0744761a2021ec459206ad5f5e1d0e1ff310342a`.
+```text
+delta = mean(P_exact[-1]) - mean(U_prefix[-1])
+```
 
-## Continuum suffix DC bridge
+and adds `delta` to **only** `U_suffix[0]`.
 
-`suffix_dc_bridge` defaults to **on** only on the two dedicated exact-prefix Continuum nodes: **Progressive Target-Sparse Continuum** and **Progressive Mixed-Grid Continuum**. The generic **Progressive Handoff (Target Input)** node does not expose or apply this Continuum-specific seam correction. The bridge contract is deliberately narrow: a canonical whole-frame exact prefix, one generated suffix boundary, a per-channel spatial-mean correction, and exactly one corrected suffix latent token. The authoritative prefix and every later suffix token remain unchanged. No video-space crossfade or extra H3 NFE is introduced.
+This preserves the learned upscaler's native boundary relation while keeping the exact prefix authoritative.
 
-Mixed-Grid has the strongest calibration source because its learned 3D transfer produces a complete target-grid clean sequence before the authoritative prefix is restored. Flow measures the per-channel spatial mean difference between the last discarded learned prefix token `U_prefix[-1]` and `P_exact[-1]`, then adds that difference only to `U_suffix[0]`. The corrected exact boundary therefore carries the learned upscaler's native `U_suffix[0] - U_prefix[-1]` DC relation while preserving `P_exact` bit-exactly.
+The bridge:
 
-The learned-transfer constructor already performs conditional re-noising. Flow recovers the clean learned estimate with the same deterministic noise, computes the clean-space delta, and maps only that suffix delta through `x_sigma = (1-sigma) * x0 + sigma * noise`. The deterministic noise is unchanged.
+- corrects exactly one generated suffix latent token;
+- uses fixed weight `1.0`;
+- never edits the authoritative prefix;
+- leaves later suffix tokens unchanged at bridge application;
+- performs no video-space crossfade;
+- adds no H3 transformer NFE.
 
-Target-Sparse exposes the same Continuum-only control without inventing a learned-prefix surrogate. Its fresh full-grid high stage already evaluates H3 on the target grid, so it calibrates from the first **actual** H3 predicted-clean boundary before native mask restoration. Forecasts are deliberately not used for calibration, and Target-Sparse guarantees an actual first high-stage call.
+For the conditional flow state, the clean-space delta is mapped through the same affine construction:
 
-`mixed_grid_transfer` retains A/B/C diagnostics for native learned-upscaler, uncorrected exact restoration, and corrected exact restoration. `mixed_grid_complete` retains D after full target-grid refinement. The matched Mixed-Grid media gate removed the boundary flash with the one-token weight-1.0 correction, which justifies the default for Mixed-Grid. Target-Sparse remains a separate placement and still requires its own matched decoded-media check; no inference is made for generic Target Input.
+```text
+x_sigma = (1 - sigma) * x0 + sigma * noise
+```
 
-## Validation and remaining acceptance
+The deterministic noise is unchanged.
 
-CPU tests exercise native packing/positions, the real native `_forward` with
-small test components, independence from poisoned low-prefix carrier values,
-dependence on both the authoritative target prefix and its native target-grid
-sampler-noise augmentation, exact suffix projection rows, modulation expansion,
-carrier observation, low/probe/high contract lifetimes, exception cleanup, and
-replacement of poisoned probe-prefix context before learned transfer. These
-establish structural behavior only.
+## Real-media result
 
-Run matched conservative/mixed two-chunk A/B renders, then at least four
-chunks, holding prompt, seed, references, geometries, checkpoints, VAE,
-sampler/scheduler, VDN, Spectrum, DiffAid, and Untwist settings fixed. Require
-exact prefixes, no seam/flash/motion/identity/audio regression, independent
-mixed stages for every continuation, and no stale histories or layouts.
-Inspect `mixed_grid_plan`, `mixed_grid_transformer`, `mixed_grid_transfer`, and
-`mixed_grid_complete` alongside existing low/probe/upscale/transfer/high wall
-events. At T=62, prefix=12, target=48x64, source=34x44, require 27,916 rows.
+The matched production test on RTX Pro 6000 removed the brief exact-prefix boundary flash. Multi-boundary continuation was also clean.
 
-The reported low-stage preview lattice remains unclassified. Save and explicitly
-VAE-decode a low-stage latent, compare with the live preview, then use matched
-VDN on/off runs if the decoded latent is patterned. Compare chunk 1 with the
-mixed continuation suffix. Any contamination of final media blocks acceptance.
-The live preview alone cannot establish decoded latent quality.
+The validated metrics were approximately:
 
-No GPU timing, quality, peak-memory, four-chunk, or allocation-compiler result
-is claimed for this implementation. Keep both PRs draft; do not merge/release.
+- uncorrected exact-boundary DC RMS: `0.207763`;
+- corrected exact-boundary DC RMS: `0.093093`;
+- native learned-upscaler boundary DC RMS: `0.093093`;
+- corrected suffix tokens: `1`;
+- weight: `1.0`;
+- `final_prefix_exact=true`.
+
+This is the basis for making the bridge default on for Mixed-Grid in v0.3.0.
+
+## VDN-H3 contract
+
+With VDN enabled, Mixed-Grid requires external-sequence capability API 2 using:
+
+```text
+key      = vdn_h3_external_sequence_v1
+api      = 2
+mode     = dense_gate_no_linear
+topology = mixed_grid_low_suffix
+```
+
+VDN validates both target-prefix and source-suffix row identities, full sequence length, temporal partition and explicit RoPE.
+
+During the mixed sequence, VDN retains the learned dense softmax gate and disables only geometry-dependent local-window/linear-complement processing. The fresh target-grid high stage receives no external contract and resumes ordinary VDN behavior.
+
+The coordinated release is `xmarre/ComfyUI-VDN-H3` v1.5.0.
+
+## Continuum Decode Context
+
+**MiniMax H3 Continuum Decode Context** addresses a separate native temporal-VAE issue: independently decoding chunks can miss real right context that a continuous decode would have seen.
+
+Place it immediately before the normal Video VAE Decode when using the native H3 temporal decoder. It changes only the decode-only tensor; accepted sampling latents, continuation state, masks, audio and the assembly plan remain unchanged.
+
+The suffix DC bridge, not Decode Context, is what fixed the mixed-grid latent tone flash in the validated workflow.
+
+## Diagnostics
+
+Mixed-Grid records four seam states:
+
+- **A** — native learned-upscaler boundary `[U_prefix | U_suffix]`;
+- **B** — authoritative prefix restored without the bridge `[P_exact | U_suffix]`;
+- **C** — authoritative prefix plus corrected first suffix token;
+- **D** — final boundary after target-grid refinement.
+
+Diagnostics include raw RMS, spatial low-pass RMS, per-channel spatial-mean/DC RMS, bridge magnitude/count/weight and final/B/final/C ratios.
+
+## Current status
+
+The mixed-grid path is still labeled Experimental because it is an independent research topology, but its previously open production acceptance gate is closed for the tested stack: real GPU/media validation, multiple Continuum boundaries, VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact probe, fresh target-grid refinement and the suffix DC bridge have all been exercised together successfully.
+
+Quality/speed remain workflow dependent; the documented result is evidence for this implementation and tested stack, not a universal model guarantee.

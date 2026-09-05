@@ -82,7 +82,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
           git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
-          git -C .contracts/VDN checkout cd0083291f62203fcb40d578ae58b4caaa1c5ec7
+          git -C .contracts/VDN checkout 80a7ec59664c8e0bff519f139d12b679b6ace4ea
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \

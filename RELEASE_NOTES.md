@@ -1,104 +1,101 @@
-# Unreleased
+# MiniMax H3 Flow-Aligned Regenerate v0.3.0
 
-## Exact Continuum prefix safety
+v0.3.0 makes the real low-grid **Mixed-Grid Continuum** path the recommended exact-prefix progressive workflow, adds the one-token suffix DC seam bridge that fixed the observed Continuum boundary flash, adds native temporal decode context, and ships the VDN API-2 interoperability needed by the mixed sequence.
 
-- Progressive Target Input now bypasses the private low-grid handoff when the prepared video denoise mask contains exact-zero values.
-- The fallback forwards the original target-grid noise, latent, mask, schedule, sampler, callback, and mutable shape metadata through one sampler lifetime, preserving ComfyUI's exact mask contract and stateful sampler behavior.
-- Audio-only protection and fractional video blends retain the existing progressive path.
-- Metrics distinguish the fallback from both ordinary and split-progressive sampling.
+## Mixed-Grid Continuum
 
-## Attention Lab
+- Adds **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]**.
+- Keeps the authoritative target-grid protected prefix for H3 transformer conditioning while sampling a genuine lower-resolution generated suffix.
+- Runs the exact handoff probe under the same mixed topology.
+- Requires the versioned `learned_3d` provider from `Comfyui_Minimax_h3_latent_Upscaler` for suffix transfer.
+- Restores the authoritative target-grid prefix before a fresh full-grid refinement stage.
+- Requires an actual first target-grid H3 evaluation after the handoff.
+- Preserves audio, mask/noise semantics, sampler boundaries and exact final-prefix protection.
 
-- Output-neutral diagnostics now measure native dense-attention mass retained by the public OpenVDN temporal topology, plus outside mass, boundary-frame mass, exact analytic pair density, and an optional authoritative Continuum seam.
-- Adds `vdn_reference_dense`, an all-head query-chunked dense-mask correctness oracle using complete 5-frame chunks, radius 1, global non-video tokens, and first/last row-and-column anchors.
-- The seam anchor requires `protected_video_prefix_latent_slots`; frame-count metadata is never guessed into latent indices.
-- No sparse-kernel or speed claim is made. OpenVDN's trained hybrid branch, compiled kernel, and separately licensed weights are not included.
+## Continuum suffix DC bridge
 
-Decoded H3 media validation remains required before release or recommendation.
+`Progressive Mixed-Grid Continuum` exposes `suffix_dc_bridge`, enabled by default.
+
+The bridge is intentionally narrow:
+
+- computes a per-batch/per-channel spatial-mean offset from the learned-upscaler prefix boundary to the authoritative exact prefix;
+- applies that offset to exactly the **first generated suffix latent token**;
+- uses fixed weight `1.0`;
+- never edits the protected prefix;
+- leaves every later suffix token unchanged at bridge application;
+- performs no video-space crossfade;
+- adds no H3 transformer NFE.
+
+Matched real-media testing on the production RTX Pro 6000 Continuum workflow removed the brief boundary flash, including multi-boundary continuation. The validated run reported approximately:
+
+- uncorrected exact-boundary DC RMS: `0.207763`;
+- corrected exact-boundary DC RMS: `0.093093`;
+- learned-upscaler native boundary DC RMS: `0.093093`;
+- corrected tokens: `1`;
+- bridge weight: `1.0`;
+- `final_prefix_exact=true`.
+
+The correction fixed the artifact rather than merely moving it to another boundary.
+
+The dedicated **Target-Sparse Continuum** research node also exposes the same one-token control at its full-grid high-stage boundary, but Target-Sparse is not the recommended quality path; see below. The generic **Progressive Handoff (Target Input)** node is not Continuum-specific and does **not** expose or apply this bridge.
+
+## Target-Sparse quality result
+
+Target-Sparse remains in the package as an architectural/control experiment but is not promoted for production output.
+
+Real decoded-media testing showed that its target-grid hidden-row sparsification can produce cascading quality errors because it does not perform the learned latent upscale used by Mixed-Grid. Observed failures included skin imperfections, odd clothing changes and spurious background additions that propagated through later continuation.
+
+This negative media result closes the previous Target-Sparse acceptance question: the preferred Continuum acceleration path is Mixed-Grid, where the low-resolution suffix is followed by learned 3D latent transfer and full-grid refinement.
+
+## Continuum Decode Context
+
+Adds **MiniMax H3 Continuum Decode Context** for native H3 temporal VAE boundaries.
+
+- validates exact physical Continuum joins;
+- supplies real right-context latent tokens to the preceding chunk's decode-only tensor;
+- leaves accepted sampling latents, continuation state, mask, plan and audio unchanged;
+- relies on unchanged Continuum assembly trimming to discard the decode-only tail.
+
+This addresses the native temporal-decoder window boundary and is independent from the latent DC bridge above.
+
+## VDN-H3 interoperability
+
+- Adds external-sequence API 2 / `mixed_grid_low_suffix` integration for `ComfyUI-VDN-H3`.
+- During the mixed sequence VDN retains the learned dense softmax gate while disabling only geometry-dependent local-window/linear-complement processing that cannot be interpreted on mixed spatial lattices.
+- The fresh target-grid stage receives no external mixed-sequence contract and resumes ordinary VDN behavior.
+- API 1 target-sparse compatibility remains available.
+
+The coordinated VDN release is `xmarre/ComfyUI-VDN-H3` v1.5.0.
+
+## Validation
+
+The release is gated by:
+
+- Python 3.10, 3.11, 3.12 and 3.13 CI;
+- Ruff + format checks;
+- full unit/synthetic suite;
+- source-contract/native-oracle lane against pinned ComfyUI, Continuum, Spectrum, DiffAid, RefDelta, Untwisting RoPE, the learned upscaler and the coordinated VDN release;
+- package build, Apache-2.0 metadata validation and isolated wheel import;
+- real multi-boundary Mixed-Grid Continuum media validation on RTX Pro 6000.
+
+## Distribution
+
+The package version is bumped to `0.3.0`. After the exact `main` commit passes CI, the existing release workflow creates the GitHub source ZIP + `SHA256SUMS`, and the registry workflow publishes the same tested version to the Comfy Registry.
 
 ---
 
 # MiniMax H3 Flow-Aligned Regenerate v0.2.1
 
-v0.2.1 adds CI-gated Comfy Registry publication. Runtime and sampling behavior are unchanged from v0.2.0.
-
-## Distribution
-
-- Adds a dedicated **Publish to Comfy registry** workflow using the pinned `Comfy-Org/publish-node-action` v1 revision already used by the companion MiniMax H3 latent-upscaler release path.
-- Registry publication runs only after a successful `CI` push run on `main` and only when the tested commit changes the package version relative to its first parent.
-- Manual `workflow_dispatch` remains available for explicit operator-controlled publication/retry.
-- The workflow checks out the exact CI-tested commit, uses read-only repository permissions and non-persistent checkout credentials, and consumes `REGISTRY_ACCESS_TOKEN` only in the publish step.
-- Publication is serialized per tested commit so overlapping workflow-run/manual attempts are not cancelled mid-publish.
-
-## Versioning
-
-The package version is bumped to `0.2.1` rather than republishing `0.2.0` from a different source commit. This keeps the GitHub release/tag and Comfy Registry package version aligned to the same source revision.
-
-## Compatibility
-
-No Python runtime, sampler, handoff, guidance, Continuum, Spectrum, metrics, or learned-upscaler integration code changes are included in v0.2.1.
+v0.2.1 added CI-gated Comfy Registry publication. Runtime and sampling behavior were unchanged from v0.2.0.
 
 ---
 
 # MiniMax H3 Flow-Aligned Regenerate v0.2.0
 
-v0.2.0 adds an optional learned 3D transfer at the Progressive Target Input handoff boundary, backed by the versioned API-v1 provider from `Comfyui_Minimax_h3_latent_Upscaler`.
-
-## Learned progressive handoff
-
-- Adds `handoff_transfer=learned_3d` to **MiniMax H3 Progressive Handoff (Target Input)**.
-- Keeps `handoff_transfer=bicubic` as the compatibility default for existing workflows.
-- Consumes the API-v1 `H3_LATENT_UPSCALER` clean-video provider rather than importing sibling-node internals.
-- Replaces only the exact-probe clean-video spatial transfer. Deterministic target noise, conditional re-noising, caller audio, masks, target conditioning, sampler/Spectrum history boundaries, and the mandatory first high-grid actual H3 call remain unchanged.
-- Learned CNN work is tracked separately and does not increase H3 model-call/NFE counters.
-
-The coordinated provider is released in `Comfyui_Minimax_h3_latent_Upscaler` v0.2.0. The exact provider revision validated by this release is `bdc670e5926bcefbe4022e17fe8b171fbfcf15de`.
-
-## Decoded-media validation
-
-The learned-transfer path was validated on aggressive progressive transitions around 1 MP rather than only on synthetic shape/contract tests.
-
-- Around a `1152×864` (~0.995 MP) target, an aggressive bicubic handoff from roughly a ~0.55 MP private source showed substantial body/spatial handoff artifacts in the tested difficult prompt.
-- Replacing only that boundary with `learned_3d` fixed the majority of the observed artifacts.
-- `source_scale=0.70` resolved to `800×608 → 1152×864` and was judged excellent.
-- `source_scale=0.65` resolved to `736×576 → 1152×864` and began losing reference likeness / tonal stability, so it is not promoted.
-- The final higher-resolution gate used `source_scale=0.70` at `832×640 → 1184×896` (~1.061 MP). The generated action differed, but decoded quality was again judged very good.
-- That final run preserved `38 logical / 28 actual H3 NFE / 10 Spectrum forecast` calls across two physical chunks, with 2 exact probes, 6 progressive sampler invocations, 4 history boundaries, copied audio, rebuilt high-grid conditioning, and an actual first high-grid H3 call in both chunks.
-- BF16 CUDA learned inference took about 0.60 s and 0.77 s for the two chunks and added zero H3 NFEs.
-
-For this prompt around 1 MP, `source_scale=0.70` is the current tested quality/compute point and `0.65` is below the observed fidelity floor. These values are not claimed as universal optima.
-
-## Guidance interpretation
-
-The latest learned-transfer media sweep used `direction+acceleration`. It does not establish an acceleration advantage over direction-only. The earlier matched evidence still supports `direction` as the conservative preferred guidance mode; acceleration, temporal correspondence, downsample consistency, auto handoff, and resolution-aware refine sigmas remain experimental controls unless future matched media shows a clear benefit.
-
-## Compatibility and validation
-
-- Existing bicubic Progressive Target Input workflows retain their prior behavior.
-- Full 1-to-0 H3 sigma schedules remain required for progressive handoff.
-- CI validates Python 3.10–3.13, Ruff and formatting, 142 unit/synthetic tests, `compileall`, package build, isolated wheel import, and pinned native/sibling source contracts.
-- The source-contract gate pins the merged learned-provider revision and checks its API/kind constants, helper, provider classes, callable surface, and ComfyUI type.
+v0.2.0 added the optional `learned_3d` handoff provider for Progressive Target Input. Around ~1 MP, the learned transfer clearly outperformed aggressive bicubic handoff in difficult decoded-media testing; `source_scale=0.70` was the strongest tested quality/compute point in that sweep.
 
 ---
 
 # MiniMax H3 Flow-Aligned Regenerate v0.1.0
 
-Initial public release of MiniMax H3 Flow-Aligned Regenerate.
-
-## Highlights
-
-- H3-native low-resolution trajectory capture and time-aligned high-resolution guidance.
-- Progressive Target Input handoff for Continuum: early H3 sampling can run on a private lower-resolution grid before switching to the final grid without a separate learned-refine replay.
-- Integrated Continuum refine-state guidance for the existing MiniMax H3 Latent Upscaler + Refine path.
-- Experimental resolution-aware refine sigmas, temporal correspondence, acceleration, downsample consistency, reference-budget diagnostics, and attention diagnostics.
-- Runtime metrics distinguish logical sampler calls, actual H3 NFEs, Spectrum forecasts, handoff probes, guidance events, and resolution-map events.
-
-## Tested operating point
-
-The strongest matched difficult-motion result tested during v0.1.0 development used 14 SA-Solver-PECE outer steps, a 736×736 private source to 896×896 target, `source_scale=0.83`, fixed handoff 0.35, direction guidance 0.25, and 54 logical / 36 actual H3 NFE / 18 Spectrum forecast calls across two chunks.
-
-D12 was judged better than D10, and D14 slightly better again. These are tested quality/speed tradeoffs, not universal optima.
-
-## Scope
-
-This project is an independent, training-free research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K model or unreleased sparse-attention topology. Decoded media remains the quality gate.
+Initial public release: H3 trajectory capture, flow-aligned second-pass guidance, progressive target-input handoff, Continuum refine-state guidance, runtime metrics and the initial experimental research controls.
