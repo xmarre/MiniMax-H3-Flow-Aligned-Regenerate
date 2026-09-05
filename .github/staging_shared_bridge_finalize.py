@@ -46,8 +46,8 @@ Path("tests/test_continuum_suffix_bridge.py").write_text(
 # README: keep the main page concise, but make the shared control discoverable.
 replace_once(
     "README.md",
-    '''Keep audio unchanged. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).\n\n### 3. Experimental exact-prefix Continuum acceleration\n''',
-    '''Keep audio unchanged. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).\n\nAll three Continuum progressive nodes expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target Input fallback and Target-Sparse derive it from the first actual H3 predicted-clean boundary before native mask restoration. Disable it only for matched seam A/B testing.\n\n### 3. Experimental exact-prefix Continuum acceleration\n''',
+    '''assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).\n\n### 3. Experimental exact-prefix Continuum acceleration\n''',
+    '''assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).\n\nAll three Continuum progressive nodes expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target Input fallback and Target-Sparse derive it from the first actual H3 predicted-clean boundary before native mask restoration. Disable it only for matched seam A/B testing.\n\n### 3. Experimental exact-prefix Continuum acceleration\n''',
 )
 
 # Usage guide: explain the common mechanism and the two calibration sources.
