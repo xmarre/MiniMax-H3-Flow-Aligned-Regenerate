@@ -81,6 +81,8 @@ jobs:
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
           git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
+          git -C .contracts/VDN checkout 46a68f296f0dbe4ff2ff0661e9851953922eb968
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -95,4 +97,5 @@ jobs:
             --comfy .contracts/ComfyUI \
             --spectrum .contracts/Spectrum \
             --continuum .contracts/Continuum \
-            --diffaid .contracts/DiffAid
+            --diffaid .contracts/DiffAid \
+            --vdn .contracts/VDN
