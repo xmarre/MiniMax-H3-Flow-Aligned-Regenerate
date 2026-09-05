@@ -1,0 +1,44 @@
+name: staging remove Target Input DC bridge
+
+on:
+  push:
+    branches: [staging/remove-target-input-dc-bridge-20260905]
+    paths:
+      - .github/fix_target_input_dc_bridge.py
+      - .github/workflows/staging_remove_target_input_dc_bridge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: staging/remove-target-input-dc-bridge-20260905
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply scoped correction
+        run: python .github/fix_target_input_dc_bridge.py
+      - name: Validate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]' build
+          ruff format h3_flow_regenerate tests
+          ruff check --fix h3_flow_regenerate tests
+          ruff format --check h3_flow_regenerate tests
+          ruff check h3_flow_regenerate tests
+          pytest -q
+          python -m compileall -q h3_flow_regenerate tests
+          git diff --check
+      - name: Commit corrected production tree
+        run: |
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add README.md docs/USAGE.md h3_flow_regenerate/nodes.py h3_flow_regenerate/handoff.py h3_flow_regenerate/target_sparse_node.py h3_flow_regenerate/runtime.py tests/test_target_sparse_node.py tests/test_handoff.py
+          git commit -m "Keep Continuum seam bridge off generic Target Input"
+          git push origin HEAD:staging/remove-target-input-dc-bridge-20260905
