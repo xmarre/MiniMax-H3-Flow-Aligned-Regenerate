@@ -100,6 +100,39 @@ The upscaler's provider/network files are unchanged between existing pin
 `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` and current
 `0744761a2021ec459206ad5f5e1d0e1ff310342a`.
 
+## Experimental suffix DC bridge
+
+The Mixed-Grid node exposes `suffix_dc_bridge`, default **off**. This is a narrow
+research control for the remaining brief boundary tone flash. It never edits the
+authoritative prefix and never applies a video-space crossfade.
+
+When enabled, Flow measures the per-channel spatial mean of the last discarded
+learned prefix token `U_prefix[-1]` and the authoritative `P_exact[-1]`, then adds
+that difference only to the first generated learned suffix latent token. The fixed
+initial weight is `1.0`; later suffix tokens are unchanged. In the per-channel DC
+domain this makes the corrected exact boundary carry the learned upscaler's native
+`U_suffix[0] - U_prefix[-1]` offset. A broader decay is intentionally not enabled:
+the pinned H3 VAE decodes overlapping seven-token temporal windows with dense
+attention, while the learned upscaler uses repeated temporal convolutions over the
+full sequence, so the roughly two-frame visible defect does not establish a
+two-latent-token support.
+
+The learned-transfer constructor already performs conditional re-noising before the
+mixed-grid runtime restores the exact prefix. Flow therefore recovers the exact
+clean learned estimate with the same deterministic noise, computes the clean bridge,
+and maps only its suffix delta back through
+`x_sigma = (1-sigma) * x0 + sigma * noise`. Adding `(1-sigma) * delta` to the
+already-constructed state is algebraically identical to applying the bridge
+immediately before conditional re-noising; the deterministic noise is untouched.
+
+`mixed_grid_transfer` reports A/B/C seam measurements: learned-upscaler native,
+uncorrected exact-prefix restoration, and corrected exact-prefix restoration. It
+also reports bridge enablement, corrected-token count, weight, and aggregate
+per-channel offset magnitudes. `mixed_grid_complete` retains the final D seam and
+reports final/C ratios in addition to the existing final/B ratios. These diagnostics
+do not establish visual success. Use matched OFF/ON renders with Decode Context
+enabled in both runs.
+
 ## Validation and remaining acceptance
 
 CPU tests exercise native packing/positions, the real native `_forward` with

@@ -84,13 +84,17 @@ def apply_suffix_dc_bridge(
     if not bool(torch.isfinite(corrected).all().item()):
         raise RuntimeError("suffix DC bridge produced NaN or Inf values")
 
-    summary = torch.stack(
-        (
-            delta.square().mean().sqrt(),
-            delta.abs().mean(),
-            delta.abs().max(),
+    summary = (
+        torch.stack(
+            (
+                delta.square().mean().sqrt(),
+                delta.abs().mean(),
+                delta.abs().max(),
+            )
         )
-    ).detach().to(device="cpu", dtype=torch.float64)
+        .detach()
+        .to(device="cpu", dtype=torch.float64)
+    )
     delta_rms, delta_abs_mean, delta_abs_max = map(float, summary.tolist())
     return corrected, {
         "suffix_dc_bridge_version": 1,
@@ -141,7 +145,9 @@ def map_clean_bridge_to_conditional_state(
         raise ValueError("conditional bridge mapping corrected-token range is invalid")
     if not torch.equal(clean_before[:, :, :prefix_t], clean_after[:, :, :prefix_t]):
         raise RuntimeError("suffix DC bridge attempted to alter the authoritative prefix")
-    if not torch.equal(clean_before[:, :, prefix_t + corrected_tokens :], clean_after[:, :, prefix_t + corrected_tokens :]):
+    if not torch.equal(
+        clean_before[:, :, prefix_t + corrected_tokens :], clean_after[:, :, prefix_t + corrected_tokens :]
+    ):
         raise RuntimeError("suffix DC bridge attempted to alter later suffix tokens")
 
     result = state.clone()

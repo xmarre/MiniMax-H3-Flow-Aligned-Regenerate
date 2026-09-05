@@ -47,6 +47,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         temporal_weight=0.20,
         handoff_transfer="bicubic",
         learned_upscaler=None,
+        suffix_dc_bridge=False,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -55,6 +56,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
+                suffix_dc_bridge=bool(suffix_dc_bridge),
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -66,6 +68,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
+                suffix_dc_bridge=bool(suffix_dc_bridge),
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -96,7 +99,8 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     DESCRIPTION = (
         "Experimental real low-resolution continuation suffix with original target-grid protected prefix. "
         "Requires learned_3d handoff and an H3 latent-upscaler provider. Mixed transformer rows use "
-        "VDN external-sequence API v2; decoded-media acceptance is pending."
+        "VDN external-sequence API v2. An optional default-off one-token suffix DC bridge is available "
+        "for matched seam research; decoded-media acceptance is pending."
     )
 
     @classmethod
@@ -108,6 +112,17 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         for group in ("required", "optional"):
             if "handoff_transfer" in inputs.get(group, {}):
                 inputs[group]["handoff_transfer"] = (["learned_3d"], {"default": "learned_3d"})
+        inputs["required"]["suffix_dc_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Experimental one-token suffix-only per-channel DC bridge. Uses the discarded learned "
+                    "prefix as calibration while keeping the authoritative Continuum prefix bit-exact. "
+                    "Leave off except for matched seam A/B tests."
+                ),
+            },
+        )
         return inputs
 
 

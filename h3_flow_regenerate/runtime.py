@@ -31,6 +31,11 @@ from .seam_diagnostics import (
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
+from .tone_bridge import (
+    apply_suffix_dc_bridge,
+    disabled_suffix_dc_bridge_metrics,
+    map_clean_bridge_to_conditional_state,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -1448,16 +1453,40 @@ def _run_progressive(
                 diagnostic_noise,
                 sigma=sigma,
             )
+            exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
+            bridge_enabled = bool(getattr(config, "suffix_dc_bridge", False))
+            if bridge_enabled:
+                corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
+                    learned_clean,
+                    exact_prefix,
+                    weights=(1.0,),
+                )
+                target_video = map_clean_bridge_to_conditional_state(
+                    target_video,
+                    learned_clean,
+                    corrected_clean,
+                    sigma=sigma,
+                    prefix_t=mixed_plan.prefix_t,
+                    corrected_tokens=int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
+                )
+            else:
+                corrected_clean = learned_clean
+                bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t)
             splice_diagnostics = measure_exact_prefix_splice(
                 learned_clean,
-                mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype),
+                exact_prefix,
+                corrected_clean_video=corrected_clean,
             )
             splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
             splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
+            splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
+                "affine_equivalent_pre_renoise" if bridge_enabled else "disabled"
+            )
             binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
-            del diagnostic_noise, learned_clean
+            del diagnostic_noise, learned_clean, corrected_clean
 
-            target_video = target_video.clone()
+            if not bridge_enabled:
+                target_video = target_video.clone()
             target_video[:, :, : mixed_plan.prefix_t] = mixed_plan.prefix.to(target_video)
             target_raw = pack_streams((target_video, target_audio))[0]
             binding.metrics.event(
@@ -1467,6 +1496,7 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
+                **bridge_metrics,
                 **splice_diagnostics,
             )
         if config.transfer_mode == "learned_3d":
@@ -1578,6 +1608,12 @@ def _run_progressive(
                 / max(float(splice_diagnostics["exact_restored_seam_lowpass_rms"]), 1e-12),
                 final_over_transfer_exact_seam_spatial_mean_ratio=final_boundary["seam_spatial_mean_rms"]
                 / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
+                final_over_transfer_corrected_seam_rms_ratio=final_boundary["seam_rms"]
+                / max(float(splice_diagnostics["corrected_exact_seam_rms"]), 1e-12),
+                final_over_transfer_corrected_seam_lowpass_ratio=final_boundary["seam_lowpass_rms"]
+                / max(float(splice_diagnostics["corrected_exact_seam_lowpass_rms"]), 1e-12),
+                final_over_transfer_corrected_seam_spatial_mean_ratio=final_boundary["seam_spatial_mean_rms"]
+                / max(float(splice_diagnostics["corrected_exact_seam_spatial_mean_rms"]), 1e-12),
             )
         binding.metrics.event(
             "handoff_complete",

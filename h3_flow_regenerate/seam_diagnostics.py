@@ -95,6 +95,7 @@ def measure_exact_prefix_splice(
     upscaled_clean_video: torch.Tensor,
     exact_prefix: torch.Tensor,
     *,
+    corrected_clean_video: torch.Tensor | None = None,
     requested_lowpass_kernel: int = _DEFAULT_LOWPASS_KERNEL,
 ) -> dict[str, float | int]:
     """Measure the learned-upscaler seam before and after exact-prefix restoration.
@@ -110,6 +111,13 @@ def measure_exact_prefix_splice(
         raise ValueError("exact-prefix splice batch/channel geometry differs")
     if upscaled_clean_video.shape[-2:] != exact_prefix.shape[-2:]:
         raise ValueError("exact-prefix splice spatial geometry differs")
+    if corrected_clean_video is not None:
+        if corrected_clean_video.ndim != 5 or corrected_clean_video.shape != upscaled_clean_video.shape:
+            raise ValueError("corrected exact-prefix splice tensor geometry differs")
+        if not corrected_clean_video.is_floating_point():
+            raise TypeError("corrected exact-prefix splice tensor must be floating-point")
+        if not bool(torch.isfinite(corrected_clean_video).all().item()):
+            raise RuntimeError("corrected exact-prefix splice tensor contains NaN or Inf values")
     prefix_t = int(exact_prefix.shape[2])
     temporal = int(upscaled_clean_video.shape[2])
     if prefix_t < 1 or prefix_t >= temporal:
@@ -148,6 +156,10 @@ def measure_exact_prefix_splice(
 
         native = _delta_metrics(suffix_first, learned_last, lowpass_kernel=lowpass_kernel)
         restored = _delta_metrics(suffix_first, exact_last, lowpass_kernel=lowpass_kernel)
+        corrected_first = (
+            suffix_first if corrected_clean_video is None else corrected_clean_video[:, :, prefix_t : prefix_t + 1]
+        )
+        corrected = _delta_metrics(corrected_first, exact_last, lowpass_kernel=lowpass_kernel)
         fields.update(
             upscaler_native_seam_rms=native["rms"],
             exact_restored_seam_rms=restored["rms"],
@@ -158,6 +170,21 @@ def measure_exact_prefix_splice(
             upscaler_native_seam_spatial_mean_rms=native["spatial_mean_rms"],
             exact_restored_seam_spatial_mean_rms=restored["spatial_mean_rms"],
             seam_spatial_mean_amplification=_safe_ratio(restored["spatial_mean_rms"], native["spatial_mean_rms"]),
+            corrected_exact_seam_rms=corrected["rms"],
+            corrected_exact_seam_lowpass_rms=corrected["lowpass_rms"],
+            corrected_exact_seam_spatial_mean_rms=corrected["spatial_mean_rms"],
+            corrected_over_native_seam_rms_ratio=_safe_ratio(corrected["rms"], native["rms"]),
+            corrected_over_native_seam_lowpass_ratio=_safe_ratio(corrected["lowpass_rms"], native["lowpass_rms"]),
+            corrected_over_native_seam_spatial_mean_ratio=_safe_ratio(
+                corrected["spatial_mean_rms"], native["spatial_mean_rms"]
+            ),
+            corrected_over_uncorrected_exact_seam_rms_ratio=_safe_ratio(corrected["rms"], restored["rms"]),
+            corrected_over_uncorrected_exact_seam_lowpass_ratio=_safe_ratio(
+                corrected["lowpass_rms"], restored["lowpass_rms"]
+            ),
+            corrected_over_uncorrected_exact_seam_spatial_mean_ratio=_safe_ratio(
+                corrected["spatial_mean_rms"], restored["spatial_mean_rms"]
+            ),
         )
     return fields
 
