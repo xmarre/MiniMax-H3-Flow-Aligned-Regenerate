@@ -47,6 +47,7 @@ CLONE_CALLBACK_KEY = "h3_flow_regenerate.clone.v1"
 PROBE_MARKER = "_h3_flow_exact_probe"
 PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
 FLOW_STAGE_KEY = "h3_flow_stage"
+EXACT_PREFIX_BRIDGE_KEY = "h3_flow_exact_prefix_bridge_v1"
 SPECTRUM_BINDING_KEY = "spectrum_h3_binding"
 SPECTRUM_ACTUAL_KEY = "spectrum_h3_actual"
 SPECTRUM_PHASE_KEY = "spectrum_h3_solver_phase"
@@ -465,6 +466,32 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
                 ),
             )
         active.call_index += 1
+
+    exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)
+    if isinstance(exact_bridge, dict) and not bool(exact_bridge.get("applied")) and actual:
+        exact_prefix = exact_bridge.get("exact_prefix")
+        base_model = getattr(guider, "inner_model", None)
+        bridge_shapes = getattr(base_model, "latent_shapes", None)
+        if not isinstance(bridge_shapes, list) or len(bridge_shapes) != 2:
+            raise RuntimeError("exact-prefix suffix bridge could not resolve H3 AV latent shapes")
+        video_x0, audio_x0 = unpack_streams(result, bridge_shapes)
+        bridged_video, bridge_metrics = apply_suffix_dc_bridge(
+            video_x0,
+            exact_prefix,
+            weights=(1.0,),
+        )
+        result, _ = pack_streams((bridged_video, audio_x0))
+        exact_bridge["applied"] = True
+        binding.metrics.event(
+            "exact_prefix_suffix_dc_bridge",
+            source=str(exact_bridge.get("source", "unknown")),
+            stage=stage,
+            sigma=sigma,
+            coordinate=coordinate,
+            actual=True,
+            suffix_dc_bridge_state_mapping="first_actual_model_x0",
+            **bridge_metrics,
+        )
 
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
@@ -885,6 +912,58 @@ def _mixed_grid_stage_contract(guider, plan, metrics):
         transformer.pop(MIXED_GRID_KEY, None)
 
 
+def _contiguous_exact_video_prefix(base_model, latent_image, denoise_mask, shapes):
+    """Return a canonical whole-frame Continuum prefix in model-domain latents.
+
+    Arbitrary masks keep their existing behavior; the bridge is only defined for
+    a contiguous all-zero video prefix followed by an all-one generated suffix.
+    """
+    if denoise_mask is None:
+        return None
+    if len(shapes) != 2:
+        raise ValueError("exact-prefix suffix bridge requires native video/audio shapes")
+    expected = (shapes[0][0], 1, sum(math.prod(shape[1:]) for shape in shapes))
+    if tuple(denoise_mask.shape) != expected:
+        raise ValueError("prepared H3 denoise mask does not match packed AV geometry")
+    video_mask, _audio_mask = unpack_streams(denoise_mask, shapes)
+    if not bool(torch.isfinite(video_mask).all().item()):
+        raise ValueError("exact-prefix suffix bridge requires a finite video mask")
+    temporal = int(shapes[0][2])
+    frames = video_mask.permute(2, 0, 1, 3, 4).reshape(temporal, -1)
+    protected = (frames == 0).all(1)
+    generated = (frames == 1).all(1)
+    prefix_t = int(protected.sum().item())
+    if not 0 < prefix_t < temporal:
+        return None
+    if not bool(protected[:prefix_t].all().item() and generated[prefix_t:].all().item()):
+        return None
+    internal = _process_latent_in(base_model, latent_image, shapes)
+    video, _audio = unpack_streams(internal, shapes)
+    return video[:, :, :prefix_t].detach().clone()
+
+
+@contextlib.contextmanager
+def _exact_prefix_suffix_bridge_contract(guider, exact_prefix, *, source):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("exact-prefix suffix bridge requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("exact-prefix suffix bridge requires mutable transformer options")
+    if EXACT_PREFIX_BRIDGE_KEY in transformer:
+        raise RuntimeError("nested exact-prefix suffix bridge contract is unsupported")
+    contract = {
+        "exact_prefix": exact_prefix,
+        "source": str(source),
+        "applied": False,
+    }
+    transformer[EXACT_PREFIX_BRIDGE_KEY] = contract
+    try:
+        yield contract
+    finally:
+        transformer.pop(EXACT_PREFIX_BRIDGE_KEY, None)
+
+
 @contextlib.contextmanager
 def _high_stage_contract(guider: Any):
     options = getattr(guider, "model_options", None)
@@ -1065,6 +1144,30 @@ def _run_target_sparse_exact_prefix(
                 return callback(index + step, x0, x, len(sigmas) - 1)
             return None
 
+        bridge_prefix = None
+        if config.suffix_dc_bridge:
+            bridge_prefix = _contiguous_exact_video_prefix(
+                base_model,
+                latent_image,
+                denoise_mask,
+                target_shapes,
+            )
+            if bridge_prefix is None:
+                binding.metrics.event(
+                    "exact_prefix_suffix_dc_bridge_skipped",
+                    source="target_sparse_high",
+                    reason="noncanonical_exact_mask",
+                )
+        bridge_context = (
+            _exact_prefix_suffix_bridge_contract(
+                guider,
+                bridge_prefix,
+                source="target_sparse_high",
+            )
+            if bridge_prefix is not None
+            else contextlib.nullcontext(None)
+        )
+
         _reset_guider_conds(guider, template=conditioning_template)
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
@@ -1072,7 +1175,7 @@ def _run_target_sparse_exact_prefix(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), bridge_context:
             result = executor(
                 target_noise,
                 latent_image,
@@ -1196,20 +1299,44 @@ def _run_progressive(
             exact_target_inputs_forwarded=True,
             progressive_guidance_applied=False,
         )
+        bridge_prefix = None
+        if config.suffix_dc_bridge:
+            bridge_prefix = _contiguous_exact_video_prefix(
+                guider.model_patcher.model,
+                latent_image,
+                denoise_mask,
+                input_shapes,
+            )
+            if bridge_prefix is None:
+                binding.metrics.event(
+                    "exact_prefix_suffix_dc_bridge_skipped",
+                    source="target_input_fallback",
+                    reason="noncanonical_exact_mask",
+                )
+        bridge_context = (
+            _exact_prefix_suffix_bridge_contract(
+                guider,
+                bridge_prefix,
+                source="target_input_fallback",
+            )
+            if bridge_prefix is not None
+            else contextlib.nullcontext(None)
+        )
         _begin_capture(binding, guider, sampler, sigmas, input_shapes)
         error: BaseException | None = None
         try:
-            return executor(
-                noise,
-                latent_image,
-                sampler,
-                sigmas,
-                denoise_mask,
-                callback,
-                disable_pbar,
-                seed,
-                latent_shapes=latent_shapes,
-            )
+            with bridge_context:
+                return executor(
+                    noise,
+                    latent_image,
+                    sampler,
+                    sigmas,
+                    denoise_mask,
+                    callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=latent_shapes,
+                )
         except BaseException as exc:
             error = exc
             raise

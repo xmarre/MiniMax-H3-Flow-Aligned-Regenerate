@@ -25,7 +25,8 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         "target-grid anchor lattice for generated rows, then restores the full hidden grid before "
         "H3's native final layer. source_scale/source_width/source_height control anchor density on "
         "exact-prefix chunks, not sampler latent geometry. The ordinary Target Input node remains "
-        "the conservative full-target fallback until decoded-media validation is complete."
+        "the conservative full-target fallback. The shared one-token suffix DC bridge is "
+        "enabled by default on canonical Continuum exact-prefix boundaries."
     )
 
     def patch(
@@ -47,7 +48,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         temporal_weight=0.20,
         handoff_transfer="bicubic",
         learned_upscaler=None,
-        suffix_dc_bridge=False,
+        suffix_dc_bridge=True,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(

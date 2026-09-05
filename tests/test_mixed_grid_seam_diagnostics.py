@@ -143,8 +143,8 @@ def test_mixed_runtime_emits_transfer_and_final_seam_diagnostics(monkeypatch):
         "prefix_restore_rms_tail_2",
     }
     assert required_transfer <= transfer.fields.keys()
-    assert transfer.fields["suffix_dc_bridge_enabled"] is False
-    assert transfer.fields["suffix_dc_bridge_corrected_tokens"] == 0
+    assert transfer.fields["suffix_dc_bridge_enabled"] is True
+    assert transfer.fields["suffix_dc_bridge_corrected_tokens"] == 1
     numeric_transfer = required_transfer - {"splice_diagnostic_version", "suffix_dc_bridge_enabled"}
     assert all(math.isfinite(float(transfer.fields[key])) for key in numeric_transfer)
 
