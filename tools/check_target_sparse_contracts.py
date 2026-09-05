@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--spectrum", type=Path, required=True)
     parser.add_argument("--continuum", type=Path, required=True)
     parser.add_argument("--diffaid", type=Path, required=True)
+    parser.add_argument("--vdn", type=Path, required=True)
     args = parser.parse_args()
 
     require(
@@ -52,6 +53,16 @@ def main() -> None:
         "def _minimax_h3_language_ranges(",
         'args.get("mod_segments", None)',
         'new_args["img"] = new_img',
+    )
+    require(
+        args.vdn / "vdn_h3/hybrid.py",
+        'VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"',
+        'VDN_EXTERNAL_SEQUENCE_MODE = "dense_gate_no_linear"',
+        "def _external_reduced_sequence_active(",
+        'contract.get("full_sequence_rows", -1)',
+        'contract.get("reduced_sequence_rows", -1)',
+        "window_active = not layout.full_cover and not external_reduced",
+        'vdn_forward._vdn_external_sequence_api = VDN_EXTERNAL_SEQUENCE_API_VERSION',
     )
 
 
