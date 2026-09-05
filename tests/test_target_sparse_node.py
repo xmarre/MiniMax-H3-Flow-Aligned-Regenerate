@@ -71,12 +71,12 @@ def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semant
     assert progressive.source_latent_w is not None
 
 
-def test_suffix_dc_bridge_is_exposed_only_on_mixed_grid_and_defaults_off():
+def test_suffix_dc_bridge_is_exposed_only_on_mixed_grid_and_defaults_on():
     sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in sparse_inputs["required"]
     bridge = mixed_inputs["required"]["suffix_dc_bridge"]
     assert bridge[0] == "BOOLEAN"
-    assert bridge[1]["default"] is False
+    assert bridge[1]["default"] is True
     assert mixed_inputs["required"]["handoff_transfer"][0] == ["learned_3d"]
     assert sparse_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
