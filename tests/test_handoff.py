@@ -160,34 +160,29 @@ def test_learned_handoff_rejects_wrong_provider_geometry(output):
         )
 
 
-def test_suffix_dc_bridge_config_is_mixed_only_and_boolean():
+def test_suffix_dc_bridge_config_is_shared_across_continuum_modes_and_boolean():
     provider = FakeLearnedProvider()
-    with pytest.raises(ValueError, match="only supported by mixed-grid"):
-        ProgressiveTargetInputConfig(
+    for exact_prefix_mode in ("fallback", "target_sparse_lifter"):
+        config = ProgressiveTargetInputConfig(
             source_latent_h=4,
             source_latent_w=4,
-            transfer_mode="learned_3d",
-            learned_upscaler=provider,
-            suffix_dc_bridge=True,
+            exact_prefix_mode=exact_prefix_mode,
         )
-    with pytest.raises(TypeError, match="must be boolean"):
-        ProgressiveTargetInputConfig(
-            source_latent_h=4,
-            source_latent_w=4,
-            transfer_mode="learned_3d",
-            learned_upscaler=provider,
-            exact_prefix_mode="mixed_grid_low_suffix",
-            suffix_dc_bridge=1,
-        )
-    config = ProgressiveTargetInputConfig(
+        assert config.suffix_dc_bridge is True
+    mixed = ProgressiveTargetInputConfig(
         source_latent_h=4,
         source_latent_w=4,
         transfer_mode="learned_3d",
         learned_upscaler=provider,
         exact_prefix_mode="mixed_grid_low_suffix",
-        suffix_dc_bridge=True,
     )
-    assert config.suffix_dc_bridge is True
+    assert mixed.suffix_dc_bridge is True
+    with pytest.raises(TypeError, match="must be boolean"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            suffix_dc_bridge=1,
+        )
 
 
 def test_learned_target_input_config_requires_supported_provider_contract():

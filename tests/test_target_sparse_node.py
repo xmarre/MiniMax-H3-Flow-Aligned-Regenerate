@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
+from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
 from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff, H3ProgressiveTargetSparseHandoff
 
 
@@ -71,12 +72,13 @@ def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semant
     assert progressive.source_latent_w is not None
 
 
-def test_suffix_dc_bridge_is_exposed_only_on_mixed_grid_and_defaults_off():
+def test_suffix_dc_bridge_is_exposed_on_all_continuum_progressive_nodes_and_defaults_on():
+    target_inputs = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
     sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
-    assert "suffix_dc_bridge" not in sparse_inputs["required"]
-    bridge = mixed_inputs["required"]["suffix_dc_bridge"]
-    assert bridge[0] == "BOOLEAN"
-    assert bridge[1]["default"] is False
+    for inputs in (target_inputs, sparse_inputs, mixed_inputs):
+        bridge = inputs["required"]["suffix_dc_bridge"]
+        assert bridge[0] == "BOOLEAN"
+        assert bridge[1]["default"] is True
     assert mixed_inputs["required"]["handoff_transfer"][0] == ["learned_3d"]
     assert sparse_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]

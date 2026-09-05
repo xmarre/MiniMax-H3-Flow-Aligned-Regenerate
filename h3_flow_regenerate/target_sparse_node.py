@@ -25,7 +25,8 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         "target-grid anchor lattice for generated rows, then restores the full hidden grid before "
         "H3's native final layer. source_scale/source_width/source_height control anchor density on "
         "exact-prefix chunks, not sampler latent geometry. The ordinary Target Input node remains "
-        "the conservative full-target fallback until decoded-media validation is complete."
+        "the conservative full-target fallback. The shared one-token suffix DC bridge is "
+        "enabled by default on canonical Continuum exact-prefix boundaries."
     )
 
     def patch(
@@ -47,7 +48,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         temporal_weight=0.20,
         handoff_transfer="bicubic",
         learned_upscaler=None,
-        suffix_dc_bridge=False,
+        suffix_dc_bridge=True,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -97,10 +98,11 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
 class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     EXACT_PREFIX_MODE = "mixed_grid_low_suffix"
     DESCRIPTION = (
-        "Experimental real low-resolution continuation suffix with original target-grid protected prefix. "
-        "Requires learned_3d handoff and an H3 latent-upscaler provider. Mixed transformer rows use "
-        "VDN external-sequence API v2. An optional default-off one-token suffix DC bridge is available "
-        "for matched seam research; decoded-media acceptance is pending."
+        "Real low-resolution Continuum suffix generation with original target-grid protected-prefix "
+        "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
+        "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
+        "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
+        "flash while preserving the authoritative prefix bit-exactly."
     )
 
     @classmethod
@@ -115,11 +117,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         inputs["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
-                "default": False,
+                "default": True,
                 "tooltip": (
-                    "Experimental one-token suffix-only per-channel DC bridge. Uses the discarded learned "
-                    "prefix as calibration while keeping the authoritative Continuum prefix bit-exact. "
-                    "Leave off except for matched seam A/B tests."
+                    "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
+                    "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
+                    "default after matched multi-boundary decoded-media validation removed the handoff flash."
                 ),
             },
         )
@@ -133,5 +135,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3ProgressiveTargetSparseHandoff": "MiniMax H3 Progressive Target-Sparse Continuum [Experimental]",
-    "H3ProgressiveMixedGridHandoff": "MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]",
+    "H3ProgressiveMixedGridHandoff": "MiniMax H3 Progressive Mixed-Grid Continuum",
 }
