@@ -36,13 +36,11 @@ jobs:
           pytest -q
           python -m compileall -q h3_flow_regenerate tests
           git diff --check
-      - name: Commit validated staging tree and remove temporary staging files
+      - name: Commit and push validated production code
         shell: bash
         run: |
           git config user.name xmarre
           git config user.email 54859656+xmarre@users.noreply.github.com
           git add h3_flow_regenerate tests
           git commit -m "Generalize validated Continuum suffix DC bridge"
-          git rm .github/workflows/staging_generalize_suffix_bridge.yml .github/staging_generalize_suffix_bridge.py .github/staging_generalize_followup.py
-          git commit -m "Remove staging validation helpers"
           git push origin HEAD:staging/release-v0.3.0-20260905
