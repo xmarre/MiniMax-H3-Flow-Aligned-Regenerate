@@ -6,15 +6,15 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
+from test_handoff import FakeLearnedProvider
 
-from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.geometry import pack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
 from h3_flow_regenerate.seam_diagnostics import (
     measure_exact_prefix_splice,
     recover_conditional_clean_for_diagnostics,
 )
-from test_handoff import FakeLearnedProvider
 
 
 def _packed_inputs(t=7, prefix=2, h=8, w=12):
@@ -133,7 +133,11 @@ def test_mixed_runtime_emits_transfer_and_final_seam_diagnostics(monkeypatch):
         "prefix_restore_rms_tail_2",
     }
     assert required_transfer <= transfer.fields.keys()
-    assert all(math.isfinite(float(transfer.fields[key])) for key in required_transfer if key != "splice_diagnostic_version")
+    assert all(
+        math.isfinite(float(transfer.fields[key]))
+        for key in required_transfer
+        if key != "splice_diagnostic_version"
+    )
 
     complete = next(event for event in binding.metrics.events if event.kind == "mixed_grid_complete")
     required_final = {
