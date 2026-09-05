@@ -51,6 +51,19 @@ Continuum remains configured for the final target width/height. The wrapper crea
 
 If the prepared video denoise mask contains any exact-zero values, the exact native-masked contract takes precedence over progressive resizing. Flow forwards the original target noise, latent, mask, schedule, sampler, callback, and shape metadata through one ordinary target-grid sampler lifetime. No private noise, spatial transfer, exact probe, history boundary, or progressive guidance is used. A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not trigger it, and fractional video masks remain intentional blends rather than exact protection.
 
+### Exact-prefix suffix DC bridge
+
+Only the dedicated **Progressive Target-Sparse Continuum** and **Progressive Mixed-Grid Continuum** nodes expose `suffix_dc_bridge`. It defaults to **on** and is only defined for a canonical whole-frame exact prefix followed by a whole-frame generated suffix. The generic **Progressive Handoff (Target Input)** node does not expose or apply this Continuum-specific seam correction. Partial/fractional/noncontiguous masks are skipped rather than guessed.
+
+The correction is intentionally one latent token wide. Flow computes a per-batch/per-channel spatial-mean offset and applies it only to the first generated suffix token. The authoritative prefix and every later suffix token remain unchanged at bridge application. There is no video-space crossfade and no additional H3 transformer evaluation.
+
+The calibration source depends on the Continuum topology:
+
+- **Mixed-Grid:** use the discarded learned-upscaler prefix to preserve the learned transfer's native DC boundary relation when the exact target-grid prefix is restored.
+- **Target-Sparse high stage:** use the first **actual** full-grid H3 predicted-clean output at the exact boundary before native inpaint masking restores the protected prefix. Spectrum forecasts are not used as calibration; the bridge waits for the first actual model output. Target-Sparse already requires its first high-stage call to be actual.
+
+The Mixed-Grid placement passed the matched decoded-media seam test that motivated enabling the control by default. The Target-Sparse placement is structurally covered by CI but still needs its own matched decoded-media validation.
+
 ### What happens at the handoff
 
 At the selected handoff point the wrapper:

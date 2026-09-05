@@ -46,7 +46,9 @@ def layout_summary(layout: Any) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for start, stop, kind in segments:
         counts[kind] = counts.get(kind, 0) + (stop - start)
-    signature = tuple(int(v) for v in layout.signature)
+    signature = tuple(layout.signature)
+    if not signature or signature[0] != "h3_flow_mixed_grid_v1":
+        signature = tuple(int(v) for v in signature)
     return {
         "signature": signature,
         "segments": segments,

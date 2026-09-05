@@ -160,6 +160,40 @@ def test_learned_handoff_rejects_wrong_provider_geometry(output):
         )
 
 
+def test_suffix_dc_bridge_config_is_restricted_to_continuum_specific_modes_and_boolean():
+    provider = FakeLearnedProvider()
+    fallback = ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4)
+    assert fallback.suffix_dc_bridge is False
+    with pytest.raises(ValueError, match="Continuum-specific"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            suffix_dc_bridge=True,
+        )
+    sparse = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+        exact_prefix_mode="target_sparse_lifter",
+        suffix_dc_bridge=True,
+    )
+    assert sparse.suffix_dc_bridge is True
+    mixed = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        suffix_dc_bridge=True,
+    )
+    assert mixed.suffix_dc_bridge is True
+    with pytest.raises(TypeError, match="must be boolean"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            suffix_dc_bridge=1,
+        )
+
+
 def test_learned_target_input_config_requires_supported_provider_contract():
     with pytest.raises(ValueError, match="requires a connected"):
         ProgressiveTargetInputConfig(
