@@ -5,8 +5,7 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn.functional as F
-
+from torch.nn import functional as F
 
 _EPS = 1e-12
 _DEFAULT_LOWPASS_KERNEL = 5
@@ -88,7 +87,8 @@ def recover_conditional_clean_for_diagnostics(
     sigma = float(sigma)
     if not math.isfinite(sigma) or not 0.0 <= sigma < 1.0:
         raise ValueError("conditional-clean recovery requires finite sigma in [0, 1)")
-    return (state.float() - sigma * noise.float()) / (1.0 - sigma)
+    with torch.no_grad():
+        return (state.float() - sigma * noise.float()) / (1.0 - sigma)
 
 
 def measure_exact_prefix_splice(
