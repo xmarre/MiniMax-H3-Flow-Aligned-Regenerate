@@ -23,7 +23,14 @@ from .handoff import (
     select_handoff_index,
 )
 from .metrics import H3FlowMetrics
+from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
+from .seam_diagnostics import (
+    measure_exact_prefix_splice,
+    measure_video_boundary,
+    recover_conditional_clean_for_diagnostics,
+)
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 
 LOG = logging.getLogger(__name__)
 
@@ -840,6 +847,40 @@ def _flow_stage_contract(guider: Any, stage: str):
 
 
 @contextlib.contextmanager
+def _target_sparse_stage_contract(guider: Any, contract: dict[str, Any]):
+    options = getattr(guider, "model_options", None)
+    if not isinstance(options, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable model options")
+    transformer = options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable transformer options")
+    previous = transformer.get(TARGET_SPARSE_CONTRACT_KEY)
+    transformer[TARGET_SPARSE_CONTRACT_KEY] = contract
+    try:
+        yield
+    finally:
+        if previous is None:
+            transformer.pop(TARGET_SPARSE_CONTRACT_KEY, None)
+        else:
+            transformer[TARGET_SPARSE_CONTRACT_KEY] = previous
+
+
+@contextlib.contextmanager
+def _mixed_grid_stage_contract(guider, plan, metrics):
+    if plan is None:
+        yield
+        return
+    transformer = guider.model_options.setdefault("transformer_options", {})
+    if MIXED_GRID_KEY in transformer:
+        raise RuntimeError("nested mixed-grid stage is unsupported")
+    transformer[MIXED_GRID_KEY] = {"plan": plan, "metrics": metrics}
+    try:
+        yield
+    finally:
+        transformer.pop(MIXED_GRID_KEY, None)
+
+
+@contextlib.contextmanager
 def _high_stage_contract(guider: Any):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
@@ -872,6 +913,214 @@ def _high_stage_contract(guider: Any):
             transformer["h3_refinement"] = previous
 
 
+def _run_target_sparse_exact_prefix(
+    executor,
+    guider,
+    binding: FlowBinding,
+    config: ProgressiveTargetInputConfig,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask,
+    callback,
+    disable_pbar,
+    seed,
+    latent_shapes,
+):
+    """Progressively reduce H3 transformer tokens without resizing exact context.
+
+    This path is intentionally different from the normal low-grid handoff. The
+    sampler state, latent image, denoise mask, conditioning layout and RoPE all
+    remain on the caller's target grid. During the early sampler lifetime only,
+    H3 block wrappers keep every non-video row, every exact-protected target-video
+    row and a regular coarse lattice of generated video rows. The last block
+    lifts the coarse hidden field to the full target grid. A fresh full-transformer
+    sampler lifetime begins at the configured handoff coordinate.
+    """
+
+    if denoise_mask is None:
+        raise ValueError("target-sparse exact-prefix mode requires a prepared H3 denoise mask")
+    _validate_progressive_sampler_state(sampler)
+    if sigmas.ndim != 1 or sigmas.numel() < 4:
+        raise ValueError("progressive handoff requires a full H3 sigma schedule")
+    if not math.isclose(float(sigmas[0]), 1.0, rel_tol=0.0, abs_tol=1e-6) or not math.isclose(
+        float(sigmas[-1]), 0.0, rel_tol=0.0, abs_tol=1e-8
+    ):
+        raise ValueError("progressive handoff requires a full 1-to-0 H3 sigma schedule")
+
+    target_shapes = list(latent_shapes)
+    target_h, target_w = map(int, target_shapes[0][-2:])
+    if target_h % 2 or target_w % 2:
+        raise ValueError("target-sparse input H3 geometry is not patch-safe")
+    source_h, source_w = config.resolve_source(target_h, target_w)
+
+    model_options = getattr(guider, "model_options", None)
+    if not isinstance(model_options, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable model options")
+    transformer = model_options.setdefault("transformer_options", {})
+    if not isinstance(transformer, dict):
+        raise RuntimeError("target-sparse progressive handoff requires mutable transformer options")
+    current_conds = getattr(guider, "conds", None)
+    if not isinstance(current_conds, dict):
+        raise RuntimeError("target-sparse progressive handoff requires ComfyUI guider conditioning state")
+    conditioning_template = {
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
+        for key, entries in current_conds.items()
+    }
+    video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
+    selected_coordinate = config.resolve_coordinate(source_h, source_w, target_h, target_w)
+    index = select_handoff_index(
+        sigmas,
+        selected_coordinate,
+        min_high_steps=config.min_high_steps,
+        video_shift=video_shift,
+    )
+    sigma = float(sigmas[index].item())
+    low_sigmas = sigmas[: index + 1]
+    high_sigmas = sigmas[index:]
+    plan = build_target_sparse_plan(
+        denoise_mask,
+        target_shapes,
+        source_h=source_h,
+        source_w=source_w,
+    )
+    sparse_contract = target_sparse_contract(plan)
+
+    binding.metrics.increment("progressive_target_sparse_runs")
+    binding.metrics.event(
+        "handoff_plan",
+        index=index,
+        sigma=sigma,
+        coordinate=float(normalized_coordinate(sigma, video_shift=video_shift)),
+        requested_coordinate=config.handoff_coordinate,
+        selected_coordinate=selected_coordinate,
+        selection=config.handoff_selection,
+        transfer_mode="target_sparse_lifter",
+        input_mode="target_grid_sparse",
+        source_shape=(*target_shapes[0][:-2], source_h, source_w),
+        target_hw=(target_h, target_w),
+        protected_video_rows=plan.protected_video_row_count,
+        anchor_video_rows=plan.anchor_video_row_count,
+        selected_video_rows=plan.selected_video_row_count,
+        target_video_rows=plan.target_video_rows,
+        video_row_fraction=plan.video_row_fraction,
+        exact_target_latent_resized=False,
+        exact_target_mask_resized=False,
+    )
+
+    sampler_invocation_count = 0
+    history_boundary_count = 0
+    _begin_capture(binding, guider, sampler, low_sigmas, target_shapes)
+    try:
+        _reset_guider_conds(guider, template=conditioning_template)
+        low_started = time.perf_counter()
+        try:
+            sampler_invocation_count += 1
+            binding.metrics.increment("progressive_sampler_invocations")
+            with _flow_stage_contract(guider, "low"), _target_sparse_stage_contract(guider, sparse_contract):
+                low_result = executor(
+                    noise,
+                    latent_image,
+                    sampler,
+                    low_sigmas,
+                    denoise_mask,
+                    callback,
+                    disable_pbar,
+                    seed,
+                    latent_shapes=target_shapes,
+                )
+        finally:
+            binding.metrics.event(
+                "low_stage_wall",
+                elapsed_ms=(time.perf_counter() - low_started) * 1000.0,
+                target_sparse=True,
+            )
+        base_model = guider.model_patcher.model
+        target_raw = _raw_sampler_state(base_model, low_result, target_shapes, sigma)
+    except BaseException as exc:
+        _finish_capture(binding, error=exc)
+        raise
+
+    committed_low_run = _finish_capture(binding)
+    try:
+        target_latent_internal = _process_latent_in(base_model, latent_image, target_shapes)
+        target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
+        target_noise = _merge_preserved_noise(target_noise, noise, denoise_mask)
+
+        if binding.guidance is not None and binding.guidance.mode != "off":
+            if committed_low_run is None:
+                raise RuntimeError("target-sparse Flow guidance requires low-stage trajectory capture")
+            if committed_low_run.geometry.latent_t != int(target_shapes[0][2]):
+                raise ValueError("target-sparse low trajectory and target video temporal geometry differ")
+            binding.active_guidance_run = committed_low_run
+
+        def high_callback(step, x0, x, _total):
+            if callback is not None:
+                return callback(index + step, x0, x, len(sigmas) - 1)
+            return None
+
+        _reset_guider_conds(guider, template=conditioning_template)
+        high_started = time.perf_counter()
+        high_event_start = len(binding.metrics.events)
+        sampler_invocation_count += 1
+        history_boundary_count += 1
+        binding.metrics.increment("progressive_sampler_invocations")
+        binding.metrics.increment("progressive_history_boundaries")
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+            result = executor(
+                target_noise,
+                latent_image,
+                sampler,
+                high_sigmas,
+                denoise_mask,
+                high_callback,
+                disable_pbar,
+                seed,
+                latent_shapes=target_shapes,
+            )
+        binding.metrics.event(
+            "high_stage_wall",
+            elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
+            target_sparse=False,
+        )
+        high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
+        if not high_model_calls:
+            raise RuntimeError("target-sparse progressive high stage produced no H3 model evaluations")
+        first_high_actual = bool(high_model_calls[0].fields.get("actual"))
+        if not first_high_actual:
+            raise RuntimeError("target-sparse progressive high stage did not begin with an exact H3 model evaluation")
+        binding.metrics.event(
+            "handoff_complete",
+            sigma=sigma,
+            target_shape=target_shapes[0],
+            audio_state_copied=False,
+            separate_sampler_invocations=True,
+            sampler_invocation_count=sampler_invocation_count,
+            history_boundary_count=history_boundary_count,
+            exact_probe_performed=False,
+            high_stage_exact_prefix_requested=1,
+            high_stage_first_call_actual=first_high_actual,
+            high_stage_model_calls=len(high_model_calls),
+            conditioning_rebuilt_for_high_grid=False,
+            transfer_mode="target_sparse_lifter",
+            input_mode="target_grid_sparse",
+            exact_target_inputs_forwarded=True,
+            exact_protected_rows_retained=True,
+            source_latent_resize_performed=False,
+            learned_transfer_performed=False,
+        )
+        return result
+    except BaseException as exc:
+        if committed_low_run is not None and binding.trajectory is not None:
+            invalid = binding.trajectory.invalidate(
+                committed_low_run.run_id,
+                f"target-sparse progressive continuation failed: {type(exc).__name__}: {exc}",
+            )
+            binding.metrics.event("trajectory_invalidate", run_id=invalid.run_id, error=type(exc).__name__)
+        raise
+
+
 def _run_progressive(
     executor,
     guider,
@@ -887,10 +1136,43 @@ def _run_progressive(
     seed,
     latent_shapes,
 ):
+    chunk_started = time.perf_counter()
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
+    if isinstance(config, ProgressiveTargetInputConfig) and config.exact_prefix_mode == "mixed_grid_low_suffix":
+        # Recheck the assembled workflow, including VDN applied after Flow.
+        from .comfy_compat import _validate_vdn_target_sparse_compat
+
+        patcher = guider.model_patcher
+        _validate_vdn_target_sparse_compat(patcher, len(patcher.model.diffusion_model.blocks), minimum_api=2)
     input_shapes = list(latent_shapes)
-    if isinstance(config, ProgressiveTargetInputConfig) and _has_exact_video_protection(denoise_mask, input_shapes):
+    mixed = (
+        isinstance(config, ProgressiveTargetInputConfig)
+        and config.exact_prefix_mode == "mixed_grid_low_suffix"
+        and _has_exact_video_protection(denoise_mask, input_shapes)
+    )
+    mixed_plan = None
+    if (
+        not mixed
+        and isinstance(config, ProgressiveTargetInputConfig)
+        and _has_exact_video_protection(denoise_mask, input_shapes)
+    ):
+        if config.exact_prefix_mode == "target_sparse_lifter":
+            return _run_target_sparse_exact_prefix(
+                executor,
+                guider,
+                binding,
+                config,
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes,
+            )
         # Native masked continuation promises exact video-prefix preservation.
         # A private low-grid lifetime would resize those clean prefix latents and
         # expose the changed values to every generated row through H3's dense
@@ -957,6 +1239,34 @@ def _run_progressive(
         target_shapes = input_shapes
         target_h, target_w = target_shapes[0][-2:]
         source_h, source_w = config.resolve_source(target_h, target_w)
+        if mixed:
+            mixed_plan = build_mixed_grid_plan(
+                denoise_mask,
+                input_shapes,
+                _process_latent_in(guider.model_patcher.model, latent_image, input_shapes),
+                noise,
+                source_h=source_h,
+                source_w=source_w,
+            )
+            binding.metrics.event(
+                "mixed_grid_plan",
+                input_mode="mixed_grid_low_suffix",
+                transfer_mode="learned_3d_suffix",
+                prefix_temporal_length=mixed_plan.prefix_t,
+                suffix_temporal_length=mixed_plan.temporal - mixed_plan.prefix_t,
+                prefix_target_hw=mixed_plan.target_hw,
+                suffix_source_hw=(source_h, source_w),
+                target_hw=mixed_plan.target_hw,
+                full_target_video_rows=mixed_plan.temporal * mixed_plan.target_rows,
+                mixed_video_rows=mixed_plan.mixed_rows,
+                prefix_video_rows=mixed_plan.prefix_rows,
+                suffix_video_rows=(mixed_plan.temporal - mixed_plan.prefix_t) * mixed_plan.source_rows,
+                prefix_exact_latent_resized=False,
+                prefix_target_grid_rope=True,
+                suffix_source_grid_rope=True,
+                continuous_temporal_rope=True,
+                low_suffix_real_latent=True,
+            )
         source_shapes = list(target_shapes)
         source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
         target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
@@ -1003,7 +1313,7 @@ def _run_progressive(
         selected_coordinate=selected_coordinate,
         selection=config.handoff_selection,
         transfer_mode=config.transfer_mode,
-        input_mode="target_grid" if target_input else "source_grid",
+        input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
         source_shape=source_shapes[0],
         target_hw=(target_h, target_w),
     )
@@ -1027,13 +1337,13 @@ def _run_progressive(
         _reset_guider_conds(
             guider,
             template=conditioning_template,
-            target_video_hw=(source_h, source_w) if target_input else None,
+            target_video_hw=(source_h, source_w) if target_input and not mixed else None,
         )
         low_started = time.perf_counter()
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"):
+            with _flow_stage_contract(guider, "low"), _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -1061,7 +1371,7 @@ def _run_progressive(
             _reset_guider_conds(
                 guider,
                 template=conditioning_template,
-                target_video_hw=(source_h, source_w) if target_input else None,
+                target_video_hw=(source_h, source_w) if target_input and not mixed else None,
             )
             # The probe is a one-call sampler lifetime, but model-level patches such
             # as DiffAid must still see the full H3 sigma reference. The explicit
@@ -1071,7 +1381,11 @@ def _run_progressive(
             history_boundary_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
             binding.metrics.increment("progressive_history_boundaries")
-            with _flow_stage_contract(guider, "probe"), _high_stage_contract(guider):
+            with (
+                _flow_stage_contract(guider, "probe"),
+                _high_stage_contract(guider),
+                _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics),
+            ):
                 source_x0 = executor(
                     probe_noise,
                     low_latent_image,
@@ -1096,8 +1410,18 @@ def _run_progressive(
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        if mixed_plan is not None:
+            # Use all prefix frames as transient upscaler context. Its 3D attention
+            # has no proven finite temporal receptive field permitting truncation.
+            clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+            clean_video = clean_video.clone()
+            clean_video[:, :, : mixed_plan.prefix_t] = resize_spatial_5d(
+                mixed_plan.prefix.to(clean_video), source_h, source_w, mode="bicubic"
+            )
+            source_x0 = pack_streams((clean_video, clean_audio))[0]
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
+        splice_diagnostics: dict[str, Any] = {}
         target_raw, target_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -1110,6 +1434,41 @@ def _run_progressive(
             learned_upscaler=getattr(config, "learned_upscaler", None),
             transfer_metrics=transfer_metrics,
         )
+        if mixed_plan is not None:
+            target_video, target_audio = unpack_streams(target_raw, target_shapes)
+            diagnostic_started = time.perf_counter()
+            diagnostic_noise = deterministic_video_noise(
+                tuple(target_video.shape),
+                seed=int(seed or 0) + config.seed_offset,
+                device=target_video.device,
+                dtype=target_video.dtype,
+            )
+            learned_clean = recover_conditional_clean_for_diagnostics(
+                target_video,
+                diagnostic_noise,
+                sigma=sigma,
+            )
+            splice_diagnostics = measure_exact_prefix_splice(
+                learned_clean,
+                mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype),
+            )
+            splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
+            splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
+            binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
+            del diagnostic_noise, learned_clean
+
+            target_video = target_video.clone()
+            target_video[:, :, : mixed_plan.prefix_t] = mixed_plan.prefix.to(target_video)
+            target_raw = pack_streams((target_video, target_audio))[0]
+            binding.metrics.event(
+                "mixed_grid_transfer",
+                learned_transfer_performed=True,
+                upscaler_prefix_context_used=True,
+                upscaler_prefix_output_discarded=True,
+                final_original_prefix_restored=True,
+                transfer_mode="learned_3d_suffix",
+                **splice_diagnostics,
+            )
         if config.transfer_mode == "learned_3d":
             binding.metrics.event(
                 "handoff_learned_upscale_wall",
@@ -1194,6 +1553,32 @@ def _run_progressive(
         first_high_actual = bool(high_model_calls[0].fields.get("actual"))
         if not first_high_actual:
             raise RuntimeError("progressive high stage did not begin with the required exact H3 model evaluation")
+        if mixed_plan is not None:
+            final_video, _ = unpack_streams(result, target_shapes)
+            original_video, _ = unpack_streams(latent_image, target_shapes)
+            if not torch.equal(
+                final_video[:, :, : mixed_plan.prefix_t], original_video[:, :, : mixed_plan.prefix_t].to(final_video)
+            ):
+                raise RuntimeError("mixed-grid high stage violated exact original-prefix preservation")
+            final_boundary = measure_video_boundary(final_video, mixed_plan.prefix_t)
+            if not splice_diagnostics:
+                raise RuntimeError("mixed-grid splice diagnostics were not recorded before high-stage sampling")
+            binding.metrics.event(
+                "mixed_grid_complete",
+                final_prefix_exact=True,
+                high_stage_first_call_actual=first_high_actual,
+                total_chunk_sampler_elapsed_ms=(time.perf_counter() - chunk_started) * 1000.0,
+                final_seam_lowpass_kernel=final_boundary["lowpass_kernel"],
+                final_seam_rms=final_boundary["seam_rms"],
+                final_seam_lowpass_rms=final_boundary["seam_lowpass_rms"],
+                final_seam_spatial_mean_rms=final_boundary["seam_spatial_mean_rms"],
+                final_over_transfer_exact_seam_rms_ratio=final_boundary["seam_rms"]
+                / max(float(splice_diagnostics["exact_restored_seam_rms"]), 1e-12),
+                final_over_transfer_exact_seam_lowpass_ratio=final_boundary["seam_lowpass_rms"]
+                / max(float(splice_diagnostics["exact_restored_seam_lowpass_rms"]), 1e-12),
+                final_over_transfer_exact_seam_spatial_mean_ratio=final_boundary["seam_spatial_mean_rms"]
+                / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
+            )
         binding.metrics.event(
             "handoff_complete",
             sigma=sigma,
@@ -1208,7 +1593,7 @@ def _run_progressive(
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
             transfer_mode=config.transfer_mode,
-            input_mode="target_grid" if target_input else "source_grid",
+            input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
         )
         return result
 

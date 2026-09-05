@@ -81,13 +81,28 @@ jobs:
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
           git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
+          git -C .contracts/VDN checkout cd0083291f62203fcb40d578ae58b4caaa1c5ec7
       - name: Validate native and sibling contracts
-        run: >-
-          python tools/check_source_contracts.py
-          --comfy .contracts/ComfyUI
-          --spectrum .contracts/Spectrum
-          --continuum .contracts/Continuum
-          --diffaid .contracts/DiffAid
-          --refdelta .contracts/RefDelta
-          --untwist .contracts/Untwist
-          --upscaler .contracts/Upscaler
+        run: |
+          python tools/check_source_contracts.py \
+            --comfy .contracts/ComfyUI \
+            --spectrum .contracts/Spectrum \
+            --continuum .contracts/Continuum \
+            --diffaid .contracts/DiffAid \
+            --refdelta .contracts/RefDelta \
+            --untwist .contracts/Untwist \
+            --upscaler .contracts/Upscaler
+          python tools/check_target_sparse_contracts.py \
+            --comfy .contracts/ComfyUI \
+            --spectrum .contracts/Spectrum \
+            --continuum .contracts/Continuum \
+            --diffaid .contracts/DiffAid \
+            --vdn .contracts/VDN
+      - name: Execute mixed-grid native source oracles
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
+          python -m pytest tests/test_mixed_grid.py -q
