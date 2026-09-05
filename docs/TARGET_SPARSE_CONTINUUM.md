@@ -22,7 +22,9 @@ What is established structurally:
 - Spectrum's final-block observation receives the restored full target hidden stream;
 - the early and late sampler/Spectrum histories are separate lifetimes;
 - the first late/full-grid H3 call is required to be actual;
-- a late-stage failure invalidates the committed early trajectory instead of leaving stale guidance state reusable.
+- a late-stage failure invalidates the committed early trajectory instead of leaving stale guidance state reusable;
+- when a compatible VDN-H3 object patch is present, target-sparse publishes an explicit reduced-sequence contract instead of letting VDN interpret the irregular sparse rows as its normal full frame grid;
+- incompatible/older VDN-H3 object patches fail at node-patch time rather than crashing after expensive sampling work has begun.
 
 What is **not** established yet:
 
@@ -32,6 +34,7 @@ What is **not** established yet:
 - net wall-time speedup after sparse-selection/lifting overhead;
 - an optimal anchor density;
 - quality when combined with all optional external patches;
+- net speed/quality of the VDN-H3 reduced-sequence compatibility mode;
 - behavior on long 4/8+ chunk Continuum sequences.
 
 Passing CI is only structural evidence. Do not promote this mode based on CI alone.
@@ -153,6 +156,42 @@ Untwisting RoPE reference rows are before the target-video tail and remain prese
 
 These composition rules are source-contract checked against pinned sibling revisions, but the complete stack still needs a real decoded-media run.
 
+## VDN-H3 composition
+
+VDN-H3 normally publishes one regular packed-video geometry before the DiT blocks run: one `video_start:video_end` span with `num_frames * tokens_per_frame` rows. Its local softmax windows, retained activation scratch, spatial short-convolution, and bidirectional linear complement all rely on that uniform frame-major geometry.
+
+Target-sparse deliberately violates that representation **inside the early transformer only**. Exact-protected Continuum frames can retain all target-grid spatial rows while generated regions retain only the coarse anchor lattice. That irregular row set cannot safely be relabeled as a smaller ordinary VDN frame grid.
+
+A real runtime failure exposed this distinction: VDN published the full target video span, while target-sparse passed fewer selected video rows into the first block. The retained VDN scratch expected the full video-row count and failed while copying the reduced Q/K/V rows. Merely shrinking that scratch would not fix the algorithm, because the VDN window and linear branches would still interpret the irregular rows using the wrong frame geometry.
+
+The interoperability contract therefore has deliberately narrow semantics:
+
+```text
+target-sparse early block
+  -> reduced packed rows + exact target-grid RoPE subset
+  -> VDN external-sequence contract v1
+  -> dense softmax over the retained rows
+  -> preserve the learned VDN softmax gate
+  -> disable VDN's geometry-dependent local-window / linear-complement branch
+  -> target-sparse hidden lifter
+  -> full target packed rows restored
+
+late full-grid stage
+  -> ordinary VDN-H3 path again
+```
+
+The contract mode is `dense_gate_no_linear`. It is intentionally explicit and fail-closed:
+
+- Flow publishes exact `full_sequence_rows` and `reduced_sequence_rows` for every reduced block call;
+- VDN verifies those counts and the reduced RoPE length before running;
+- VDN advertises the supported external-sequence API on its object-patched attention forward;
+- Flow refuses to enable target-sparse with an older VDN object patch that does not advertise that capability;
+- an unrelated object patch is not treated as VDN.
+
+This compatibility mode is structurally safer than pretending the irregular rows form a normal VDN grid, but it is **not** a claim that VDN and target-sparse speedups multiply. Dense attention over the retained stream has quadratic cost, while normal VDN uses local windows plus its trained linear complement. Depending on anchor density and sequence size, the compatibility mode can be faster, neutral, or slower. Only matched GPU timing can answer that.
+
+It is also not semantically identical to normal VDN: the trained linear far-field branch is absent during the reduced early stage. The mode follows VDN's own full-cover topology—dense softmax, learned softmax gate, no linear complement—but applies it to Flow's retained-row stream. Decoded-media validation is therefore mandatory.
+
 ## Flow Attention Lab interaction
 
 The Attention Lab's H3 layout diagnostics use the authoritative full packed layout. During target-sparse early transformer calls the hidden sequence is shorter than that full layout. Existing guarded attention paths therefore must not pretend the reduced sequence is the full native layout.
@@ -176,6 +215,8 @@ A successful exact-prefix target-sparse chunk should show:
 - a `target_sparse_lift` event before full-grid output;
 - the first late/full-grid model call marked actual.
 
+With VDN-H3 enabled, also require the runtime to report its external reduced-sequence compatibility path for the sparse early stage, and verify that normal VDN resumes on the late/full-grid stage.
+
 If `selected_video_rows == full_video_rows`, the sparse stage provides no video-row reduction and should not be counted as an acceleration result.
 
 ## Required runtime acceptance gate
@@ -198,6 +239,13 @@ Verify:
 - no new cut/seam, protected-prefix corruption, motion jump, audio shift, or reference-identity regression;
 - per-chunk and whole-workflow wall times are recorded separately.
 
+If VDN-H3 is part of the tested workflow, additionally require:
+
+- the sparse early stage enters VDN `dense_gate_no_linear` rather than the normal full-grid VDN geometry path;
+- no full-vs-reduced row-count mismatch occurs;
+- the late/full-grid stage returns to normal VDN;
+- continuation-chunk timing is compared against the same VDN-enabled conservative control. A target-sparse result without the same VDN baseline does not establish incremental speedup.
+
 ### Gate B: long sequence
 
 If Gate A passes, run at least 4 chunks. Chunks 2, 3, and 4 must all execute target-sparse early stages rather than falling back. Compare seam quality and per-chunk timing against the conservative control.
@@ -214,4 +262,5 @@ Do not make this the default until all of these are true:
 - matched 4+ chunk decoded-media gate passes;
 - target-sparse is actually used on every continuation chunk;
 - measured continuation-chunk wall time improves enough to exceed sparse/lifter overhead;
-- no material seam, motion, anatomy, audio, or reference-fidelity regression is observed.
+- no material seam, motion, anatomy, audio, or reference-fidelity regression is observed;
+- when VDN-H3 is enabled, its reduced-sequence compatibility mode passes the same decoded-media and wall-time gates instead of being inferred correct from shape tests alone.
