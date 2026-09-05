@@ -198,6 +198,16 @@ The Attention Lab's H3 layout diagnostics use the authoritative full packed layo
 
 Target-sparse does not claim to combine its row reduction with the Attention Lab's experimental sparse/VDN output-changing attention modes. Treat those as separate experiments unless a specific reduced-layout attention contract is implemented and validated.
 
+## Shared suffix DC bridge
+
+Target-Sparse exposes the same `suffix_dc_bridge` control as the other Continuum progressive nodes and defaults it to **on**. It does not alter the sparse early transformer stage. The correction is installed only on the fresh full-grid high-stage sampler lifetime, after the hidden-space lifter boundary.
+
+For a canonical whole-frame exact prefix, Flow snapshots the authoritative model-domain prefix and waits for the first **actual** high-stage H3 predicted-clean output. It compares the per-channel spatial mean of that output's last predicted prefix token with the authoritative last prefix token and applies the resulting constant offset only to the first generated suffix token. Native masking subsequently restores the protected prefix as usual. Later suffix tokens are untouched.
+
+This composes with the existing target-sparse invariant that the first high-stage call must be actual. If the bridge is requested on a canonical boundary but no actual high-stage H3 evaluation consumes it, runtime fails rather than silently claiming success. Noncanonical masks emit a skip metric and keep the existing sampling behavior.
+
+The bridge itself adds no H3 NFE. It is a seam correction, not an acceleration mechanism, and does not change the requirement to validate target-sparse decoded-media quality and timing independently.
+
 ## Metrics to verify
 
 A successful exact-prefix target-sparse chunk should show:

@@ -1175,7 +1175,7 @@ def _run_target_sparse_exact_prefix(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), bridge_context:
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), bridge_context as bridge_contract:
             result = executor(
                 target_noise,
                 latent_image,
@@ -1186,6 +1186,10 @@ def _run_target_sparse_exact_prefix(
                 disable_pbar,
                 seed,
                 latent_shapes=target_shapes,
+            )
+        if isinstance(bridge_contract, dict) and not bool(bridge_contract.get("applied")):
+            raise RuntimeError(
+                "target-sparse exact-prefix suffix bridge did not observe the required actual high-stage H3 evaluation"
             )
         binding.metrics.event(
             "high_stage_wall",
@@ -1325,8 +1329,8 @@ def _run_progressive(
         _begin_capture(binding, guider, sampler, sigmas, input_shapes)
         error: BaseException | None = None
         try:
-            with bridge_context:
-                return executor(
+            with bridge_context as bridge_contract:
+                result = executor(
                     noise,
                     latent_image,
                     sampler,
@@ -1337,6 +1341,13 @@ def _run_progressive(
                     seed,
                     latent_shapes=latent_shapes,
                 )
+            if isinstance(bridge_contract, dict) and not bool(bridge_contract.get("applied")):
+                binding.metrics.event(
+                    "exact_prefix_suffix_dc_bridge_skipped",
+                    source="target_input_fallback",
+                    reason="no_actual_model_output",
+                )
+            return result
         except BaseException as exc:
             error = exc
             raise

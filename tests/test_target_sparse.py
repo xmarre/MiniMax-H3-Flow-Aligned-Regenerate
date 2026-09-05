@@ -265,6 +265,7 @@ def test_target_sparse_runtime_splits_two_target_grid_lifetimes_without_resizing
             source_latent_w=4,
             handoff_coordinate=0.3,
             exact_prefix_mode="target_sparse_lifter",
+            suffix_dc_bridge=False,
         ),
         target_noise,
         target_latent,

@@ -56,6 +56,8 @@ immediately before Video VAE Decode, after all latent processing. It supplies
 real future context to H3's overlapping decoder at the join. Keep the original
 assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).
 
+All three Continuum progressive nodes expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target Input fallback and Target-Sparse derive it from the first actual H3 predicted-clean boundary before native mask restoration. Disable it only for matched seam A/B testing.
+
 ### 3. Experimental exact-prefix Continuum acceleration
 
 **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** samples a real
