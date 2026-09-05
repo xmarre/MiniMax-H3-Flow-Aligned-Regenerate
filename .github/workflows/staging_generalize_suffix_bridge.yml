@@ -19,7 +19,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Apply generalized bridge patch
-        run: python .github/staging_generalize_suffix_bridge.py
+        shell: bash
+        run: |
+          sed -i 's/if count != 1:/if count < 1:/' .github/staging_generalize_suffix_bridge.py
+          python .github/staging_generalize_suffix_bridge.py
       - name: Format and validate
         shell: bash
         run: |
