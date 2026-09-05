@@ -1452,9 +1452,7 @@ def _run_progressive(
                 learned_clean,
                 mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype),
             )
-            splice_diagnostics["splice_diagnostic_elapsed_ms"] = (
-                time.perf_counter() - diagnostic_started
-            ) * 1000.0
+            splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
             splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
             binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
             del diagnostic_noise, learned_clean
