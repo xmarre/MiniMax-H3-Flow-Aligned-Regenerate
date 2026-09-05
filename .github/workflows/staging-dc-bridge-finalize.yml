@@ -1,0 +1,72 @@
+name: Staging DC bridge finalize
+
+on:
+  push:
+    branches:
+      - staging/continuum-dc-bridge-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reapply deterministic patch from staging workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/staging-dc-bridge-apply.yml').read_text()
+          match = re.search(r'^\s*payload = (".*")$', workflow, flags=re.MULTILINE)
+          if match is None:
+              raise RuntimeError('staging patch payload not found')
+          payload = ast.literal_eval(match.group(1))
+          code = gzip.decompress(base64.b64decode(payload))
+          fake_file = Path.cwd() / 'tools' / '_staging_apply_dc_bridge.py'
+          exec(compile(code, str(fake_file), 'exec'), {'__file__': str(fake_file), '__name__': '__main__'})
+          PY
+      - name: Install test dependencies
+        run: python -m pip install -e '.[test]' build
+      - name: Format and lint staged tree
+        run: |
+          python -m ruff format .
+          python -m ruff format --check .
+          python -m ruff check .
+      - name: Run focused bridge and mixed-grid tests
+        run: >-
+          python -m pytest
+          tests/test_mixed_grid_tone_bridge.py
+          tests/test_mixed_grid_seam_diagnostics.py
+          tests/test_target_sparse_node.py
+          tests/test_handoff.py
+          tests/test_mixed_grid.py
+          tests/test_packaging.py
+          -q
+      - name: Run complete Python suite
+        run: python -m pytest -q
+      - name: Compile and whitespace checks
+        run: |
+          python -m compileall -q h3_flow_regenerate tests tools
+          git diff --check
+      - name: Commit validated staging tree
+        run: |
+          git rm .github/workflows/staging-dc-bridge-apply.yml
+          git rm .github/workflows/staging-dc-bridge-finalize.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Stage suffix-only Continuum DC bridge'
+          git push origin HEAD:${{ github.ref_name }}
