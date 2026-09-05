@@ -113,15 +113,11 @@ def test_target_sparse_accepts_vdn_with_reduced_sequence_capability():
 
 
 def test_target_sparse_fails_before_sampling_on_old_vdn_attention_patch():
-    model = SimpleNamespace(
-        object_patches={"diffusion_model.blocks.0.attn.forward": _vdn_owner()}
-    )
+    model = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": _vdn_owner()})
     with pytest.raises(RuntimeError, match="VDN-H3 attention without the required"):
         _validate_vdn_target_sparse_compat(model, 1)
 
 
 def test_target_sparse_ignores_unrelated_attention_object_patch():
-    model = SimpleNamespace(
-        object_patches={"diffusion_model.blocks.0.attn.forward": lambda *args, **kwargs: None}
-    )
+    model = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": lambda *args, **kwargs: None})
     _validate_vdn_target_sparse_compat(model, 1)
