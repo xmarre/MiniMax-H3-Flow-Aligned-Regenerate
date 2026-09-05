@@ -100,17 +100,17 @@ The upscaler's provider/network files are unchanged between existing pin
 `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` and current
 `0744761a2021ec459206ad5f5e1d0e1ff310342a`.
 
-## Shared suffix DC bridge
+## Continuum suffix DC bridge
 
-`suffix_dc_bridge` defaults to **on** on all Continuum progressive nodes. The common contract is deliberately narrow: a canonical whole-frame exact prefix, one generated suffix boundary, a per-channel spatial-mean correction, and exactly one corrected suffix latent token. The authoritative prefix and every later suffix token remain unchanged. No video-space crossfade or extra H3 NFE is introduced.
+`suffix_dc_bridge` defaults to **on** only on the two dedicated exact-prefix Continuum nodes: **Progressive Target-Sparse Continuum** and **Progressive Mixed-Grid Continuum**. The generic **Progressive Handoff (Target Input)** node does not expose or apply this Continuum-specific seam correction. The bridge contract is deliberately narrow: a canonical whole-frame exact prefix, one generated suffix boundary, a per-channel spatial-mean correction, and exactly one corrected suffix latent token. The authoritative prefix and every later suffix token remain unchanged. No video-space crossfade or extra H3 NFE is introduced.
 
 Mixed-Grid has the strongest calibration source because its learned 3D transfer produces a complete target-grid clean sequence before the authoritative prefix is restored. Flow measures the per-channel spatial mean difference between the last discarded learned prefix token `U_prefix[-1]` and `P_exact[-1]`, then adds that difference only to `U_suffix[0]`. The corrected exact boundary therefore carries the learned upscaler's native `U_suffix[0] - U_prefix[-1]` DC relation while preserving `P_exact` bit-exactly.
 
 The learned-transfer constructor already performs conditional re-noising. Flow recovers the clean learned estimate with the same deterministic noise, computes the clean-space delta, and maps only that suffix delta through `x_sigma = (1-sigma) * x0 + sigma * noise`. The deterministic noise is unchanged.
 
-The other two Continuum progressive paths expose the same control without inventing a learned-prefix surrogate. Their exact-prefix sampler already evaluates H3 on the target grid, so they calibrate from the first **actual** H3 predicted-clean boundary before native mask restoration. Forecasts are deliberately not used for calibration. Target-Sparse guarantees an actual first high-stage call; the conservative Target Input fallback records a skip if no actual model output occurs.
+Target-Sparse exposes the same Continuum-only control without inventing a learned-prefix surrogate. Its fresh full-grid high stage already evaluates H3 on the target grid, so it calibrates from the first **actual** H3 predicted-clean boundary before native mask restoration. Forecasts are deliberately not used for calibration, and Target-Sparse guarantees an actual first high-stage call.
 
-`mixed_grid_transfer` retains A/B/C diagnostics for native learned-upscaler, uncorrected exact restoration, and corrected exact restoration. `mixed_grid_complete` retains D after full target-grid refinement. The matched mixed-grid media gate removed the boundary flash with the one-token weight-1.0 correction; that result justifies the default for the shared control, but the generalized Target Input and Target-Sparse placements still require their own matched decoded-media checks.
+`mixed_grid_transfer` retains A/B/C diagnostics for native learned-upscaler, uncorrected exact restoration, and corrected exact restoration. `mixed_grid_complete` retains D after full target-grid refinement. The matched Mixed-Grid media gate removed the boundary flash with the one-token weight-1.0 correction, which justifies the default for Mixed-Grid. Target-Sparse remains a separate placement and still requires its own matched decoded-media check; no inference is made for generic Target Input.
 
 ## Validation and remaining acceptance
 
