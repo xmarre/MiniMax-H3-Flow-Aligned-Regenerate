@@ -26,6 +26,17 @@ def test_project_declares_apache_license_and_tracks_license_file():
     assert "Copyright 2026 xmarre." in readme
 
 
+def test_comfy_registry_archive_excludes_development_only_paths():
+    root = Path(__file__).parents[1]
+    comfyignore = (root / ".comfyignore").read_text(encoding="utf-8").splitlines()
+
+    assert comfyignore == [
+        "# Development-only files must not be shipped in Comfy Registry archives.",
+        ".github/",
+        "tests/",
+    ]
+
+
 def test_custom_node_root_registration_smoke():
     root = Path(__file__).parents[1] / "__init__.py"
     spec = importlib.util.spec_from_file_location(
