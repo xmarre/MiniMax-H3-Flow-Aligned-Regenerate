@@ -14,6 +14,7 @@ These references are attribution, not relicensing. The research repositories lis
 | **MiniMax H3 Flow-Aligned Regenerate** / **Flow-Aligned Refine State** | **HiFlow**; **FrescoDiffusion** | Time-matched low-resolution trajectory guidance; low-frequency direction alignment; experimental adjacent-velocity acceleration; use of a low-resolution video trajectory as a global prior | HiFlow is an image method and FrescoDiffusion uses tiled prior-regularized fusion. This project adapts the ideas to H3 predicted-clean AV sampling rather than copying either pipeline. |
 | `direction+temporal` guidance | **TokenFlow**, **FRESCO**, **MoVideo**, **Upscale-A-Video**, **LatentWarp** | Inter-frame correspondence, latent/feature propagation, confidence/visibility gating, and the need to avoid transporting content through ambiguous or occluded regions | No external optical-flow model is loaded. H3 clean-state latents are locally matched with strict similarity, uniqueness, and reverse-cycle gates. |
 | **MiniMax H3 Progressive Handoff** | **RALU**, **Self-Cascade Diffusion**, **CineScale**, **Just-in-Time** | Coarse-to-fine sampling, explicit spatial transition semantics, re-noising after scale change, and deferring expensive high-resolution computation | The H3 handoff uses an exact probe plus a rectified-flow conditional state and fresh sampler/Spectrum lifetimes. It is not RALU NT-Matching, JiT DMF, or MiniMax H3-Regenerate-2K. |
+| **MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** | **Just-in-Time**; **RALU**; MiniMax-H3 / ComfyUI native mask and packed-layout contracts | Deferring dense target-grid work with target-grid anchor tokens and a hidden-space lifter while retaining every exact protected video row and every non-video row | Independently written H3 adaptation. It does not implement JiT SAG-ODE/DMF/deterministic micro-flow, RALU NT-Matching, OpenVDN's trained hybrid path, or MiniMax's private sparse attention. Structural validity does not establish decoded-media quality or speedup. |
 | **Progressive Handoff (Target Input)** `learned_3d` | Companion **Comfyui_Minimax_h3_latent_Upscaler**; inherited **LBH-123-AI**, **ComfyUi_NNLatentUpscale**, and **LTX spatial-upscaler** lineage | A single learned clean-video spatial transform at the exact handoff boundary | Flow only consumes the companion provider API. The learned model/architecture lineage and checkpoints remain owned and credited by their upstream projects; audio, target noise, sigma law, masks, and H3 NFEs are unchanged. |
 | **MiniMax H3 Refine Target Geometry** | Companion **Comfyui_Minimax_h3_latent_Upscaler** | Mirrors the companion node's scale-by-multiplier geometry contract for schedule metadata | No latent upscale or sampling occurs in this helper. |
 | **MiniMax H3 Resolution-Aware Sigmas** | **simple diffusion**; **Scaling Rectified Flow Transformers for High-Resolution Image Synthesis** | Resolution/SNR motivation and the fractional-linear resolution-dependent flow-time map | The SD3 constant-observation derivation is only used as an experimental relative correction composed with H3's native shift; it is not claimed to be an optimal H3 schedule. |
@@ -22,6 +23,15 @@ These references are attribution, not relicensing. The research repositories lis
 | **Runtime Metrics Probe** / **Metrics JSON** | ComfyUI, Spectrum, SA-Solver and the sibling integration APIs | Auditable logical-call, actual/forecast, phase, geometry, timing, and reset provenance | These are instrumentation nodes, not implementations of the cited research algorithms. |
 
 ## Primary flow-guidance and high-resolution research
+
+The **Progressive Mixed-Grid Continuum** path independently combines ComfyUI's
+native H3 patch projection, packed positions, per-row timestep modulation, and
+output projection with Continuum's original protected prefix and the companion
+learned upscaler. It reuses the existing progressive handoff mathematics.
+Mixed-grid packing is this repository's H3-specific implementation; it does
+not claim a new implementation of RALU, HRDiT, or another paper's algorithm.
+VDN's explicit mixed-sequence mode retains its learned dense softmax gate while
+omitting the geometry-dependent branch during that stage.
 
 ### HiFlow — Training-free High-Resolution Image Generation with Flow-Aligned Guidance
 
@@ -53,7 +63,7 @@ Wongi Jeong, Kyungryeol Lee, Hoigi Seo, Se Young Chun.
 - Code: https://github.com/ignoww/RALU
 - Direct influence here: the warning that a noisy latent cannot simply be resized mid-trajectory; resolution transitions must account for changed noise/timestep statistics.
 
-The progressive H3 handoff does not copy RALU's mixed-resolution mask or NT-Matching formula. It uses H3's own rectified-flow conditional state and a fresh solver lifetime.
+The progressive H3 handoff does not copy RALU's mixed-resolution mask or NT-Matching formula. It uses H3's own rectified-flow conditional state and a fresh solver lifetime. The experimental target-sparse path likewise does not implement NT-Matching; its retained target-grid row set and hidden-space lifter are separate from RALU's mixed-resolution transition method.
 
 ### Make a Cheap Scaling: A Self-Cascade Diffusion Model for Higher-Resolution Adaptation
 
@@ -83,9 +93,9 @@ Wenhao Sun, Ji Li, Zhaoqiang Liu.
 
 - Paper: https://arxiv.org/abs/2603.10744
 - Code: https://github.com/Wenhao-Sun77/Just-in-Time
-- Direct influence here: the compute-allocation principle that early global-structure stages should not necessarily pay the full final-resolution spatial cost.
+- Direct influence here: the compute-allocation principle that early global-structure stages should not necessarily pay the full final-resolution spatial cost; for the experimental target-sparse Continuum path, the more specific public anchor-token/lifter idea also motivates retaining a target-grid anchor lattice and restoring a full hidden field before the native output layer.
 
-JiT's SAG-ODE, anchor-token lifter, and deterministic micro-flow are not implemented by the H3 progressive handoff.
+The normal H3 progressive handoff does not implement JiT's SAG-ODE, DMF, anchor-token lifter, or deterministic micro-flow. The experimental target-sparse Continuum path independently implements only the high-level anchor/lifter compute-allocation idea: it selects native target-grid H3 rows and applies a bilinear hidden-space lifter while retaining every exact protected row. It does not reproduce JiT's SAG-ODE, deterministic micro-flow, source code, or model-specific mechanics.
 
 ### simple diffusion: End-to-end diffusion for high resolution images
 
@@ -266,6 +276,14 @@ The supplied source ZIPs do **not** contain Git metadata, so no commit SHA is in
 Absence of a top-level license in an inspected research snapshot must **not** be interpreted as permission to reuse its code. The citations above document research provenance; they do not grant rights beyond the upstream authors' actual licenses.
 
 ## Attribution policy for future changes
+
+**Continuum Decode Context** is derived from the native temporal-window contract
+in ComfyUI `1af040bf022569d7a890241c8dd79b296cda483f`
+(`comfy/ldm/minimax/vae.py`) and Continuum
+`bf25353d8bec44afea22c89717c4301ce13c2036` (`temporal.py`, `v3/assembly.py`,
+`hardening.py`). The node independently supplies real right context to the
+existing VAE; it does not vendor the decoder or introduce a new blending law.
+Tests execute temporal methods from the external pinned ComfyUI checkout.
 
 When a new paper or repository materially influences an algorithm, heuristic, node, or default in this project:
 

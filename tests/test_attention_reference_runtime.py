@@ -1869,6 +1869,7 @@ def test_target_input_exact_video_protection_forwards_one_untouched_target_sampl
             handoff_coordinate=0.3,
             transfer_mode="learned_3d",
             learned_upscaler=UnusedProvider(),
+            suffix_dc_bridge=False,
         ),
         target_noise,
         target_latent,

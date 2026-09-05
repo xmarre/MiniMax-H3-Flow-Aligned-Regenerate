@@ -49,9 +49,49 @@ private/source grid  ------------>  target grid
 
 The handoff is not a blind resize of noisy state. The wrapper performs an exact low-grid probe, transfers the predicted-clean video state, reconstructs the target-grid conditional state, resets sampler/forecast histories that cannot safely cross the geometry change, and continues sampling at the final resolution.
 
-For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid. If Continuum's native mask exactly protects any video prefix (`mask == 0`), Flow automatically preserves that stronger contract by skipping the private resize/handoff and running the original target-grid sampler once.
+For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid. If Continuum's Native Masked path exactly protects any video prefix (`mask == 0`), the ordinary Target Input node preserves that stronger contract by skipping the private resize/handoff and running the original target-grid sampler once. This means the conservative node does **not** progressively accelerate exact-prefix continuation chunks; normally only chunk 1 receives the low-grid handoff.
 
-### 3. Optional learned handoff
+For exact-prefix chunk boundaries, place **MiniMax H3 Continuum Decode Context**
+immediately before Video VAE Decode, after all latent processing. It supplies
+real future context to H3's overlapping decoder at the join. Keep the original
+assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).
+
+All three Continuum progressive nodes expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target Input fallback and Target-Sparse derive it from the first actual H3 predicted-clean boundary before native mask restoration. Disable it only for matched seam A/B testing.
+
+### 3. Experimental exact-prefix Continuum acceleration
+
+**MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** samples a real
+low-resolution continuation suffix while H3 attends to the original target-grid
+protected prefix. It then performs an exact probe, learned 3D suffix transfer,
+and fresh full-grid refinement. Requires `learned_3d`, an upscaler provider, and
+VDN external-sequence API 2 when VDN is enabled. See
+[mixed-grid setup and validation](docs/MIXED_GRID_CONTINUUM.md). GPU/media
+acceptance is pending.
+
+**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** investigates continuation-chunk acceleration without resizing the protected Native Masked prefix.
+
+On an exact-prefix chunk:
+
+```text
+full target-grid sampler latent + mask
+               |
+               +-- exact protected video rows: keep every row
+               +-- generated video rows: keep a coarse target-grid anchor lattice
+               +-- text / refs / audio: keep all rows
+               |
+         reduced early H3 hidden stream
+               |
+       lift hidden video field to full target grid
+       + overwrite every retained row exactly
+               |
+       fresh full-grid H3 sampler lifetime
+```
+
+The sampler latent, original mask, protected prefix, and retained RoPE coordinates stay on the target grid. Only the **early transformer hidden-token stream** is reduced. The full hidden sequence is restored before H3's native final layer and before Spectrum's final-block observation. Because the early dense-attention computation is approximated, this is not semantic parity with ordinary H3 and remains opt-in until real decoded-media and timing gates pass.
+
+For exact-prefix chunks, `source_scale` or explicit source dimensions control the coarse **anchor density**; they do not describe a private sampler latent geometry. The learned handoff provider is not called on these exact-prefix chunks. Chunk 1, which has no protected continuation prefix, still uses the normal Target Input low/probe/high path and can still use `learned_3d` if configured.
+
+### 4. Optional learned handoff
 
 **Progressive Handoff (Target Input)** supports:
 
@@ -74,7 +114,7 @@ The core package has no runtime dependency on the sibling H3 custom nodes. The o
 
 ## Recommended Continuum path
 
-When the surrounding H3 patches used by the validated workflow are present, keep this model-patch order:
+For the conservative validated path, keep this model-patch order when the surrounding H3 patches are present:
 
 ```text
 DiffAid
@@ -84,11 +124,11 @@ DiffAid
   -> Continuum
 ```
 
-DiffAid, Untwisting RoPE, and Spectrum are optional external integrations, not requirements of this package. Omit any that are not part of your workflow; when Spectrum is used, keep Progressive Handoff downstream of it.
+DiffAid, Untwisting RoPE, and Spectrum are optional external integrations, not requirements of this package. Omit any that are not part of your workflow; when Spectrum is used, keep the progressive node downstream of it.
 
-Create one **MiniMax H3 Flow Trajectory** and connect it to **Progressive Handoff (Target Input)**. A separate **Trajectory Capture** node is not required on this path because the progressive wrapper captures its private low-grid trajectory internally.
+Create one **MiniMax H3 Flow Trajectory** and connect it to **Progressive Handoff (Target Input)**. A separate **Trajectory Capture** node is not required on this path because the progressive wrapper captures its private trajectory internally.
 
-Continuum remains on the target geometry. Only the video grid changes internally; audio remains in the native joint H3 path.
+Continuum remains on the target geometry. Only chunk 1 or other unprotected Target Input calls use a private lower-resolution sampler grid. Exact Native Masked continuation chunks stay on the target geometry; the conservative node uses a full-grid fallback, while the separate experimental target-sparse node reduces only early H3 hidden tokens.
 
 Detailed parameter guidance, tested starting points, `source_scale` behavior, handoff selection, learned-provider setup, and sampler requirements are in [docs/USAGE.md](docs/USAGE.md).
 
@@ -116,12 +156,14 @@ The same trajectory handle must be used by capture and guidance.
 | **MiniMax H3 Flow-Aligned Regenerate** | Guides a later H3 pass from the matching captured low-resolution trajectory. |
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum version of Flow-Aligned Regenerate; patches each `H3_CONTINUUM_REFINE_STATE`. |
 | **MiniMax H3 Progressive Handoff** | Starts from a source-sized workflow input and grows the video grid to a target resolution during sampling. |
-| **MiniMax H3 Progressive Handoff (Target Input)** | Target-sized/Continuum-safe variant: the public workflow stays at final geometry while the early H3 stage runs privately on a smaller grid. Supports optional `learned_3d` transfer. |
+| **MiniMax H3 Progressive Handoff (Target Input)** | Target-sized/Continuum-safe variant. Unprotected calls run the early H3 stage privately on a smaller grid; exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime. Supports optional `learned_3d` transfer on the normal handoff path. |
 
 ### Experimental research nodes
 
 | Node | What it is for |
 |---|---|
+| **MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** | Exact-prefix Continuum experiment: keeps the full target-grid sampler state and every protected video row while reducing only early H3 hidden-token computation over generated video rows. Structural/CI validation exists; decoded-media quality and speed are not yet established. |
+| **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** | Real low-grid continuation suffix with original target-grid prefix conditioning, exact probe, learned suffix upscale, and fresh target refinement. Requires the learned upscaler and VDN API 2 when VDN is enabled. GPU/media acceptance is pending. |
 | **MiniMax H3 Refine Target Geometry [Experimental]** | Mirrors the companion learned-refiner's target sizing so schedule experiments can use the same geometry metadata. It does not upscale latents. |
 | **MiniMax H3 Resolution-Aware Sigmas [Experimental]** | Tests a resolution-dependent remap of the downstream learned-refine sigma schedule. Default/recommended mode remains `off`. |
 | **MiniMax H3 Reference Budget [Experimental]** | Reports direct-reference row growth and provides a guarded experimental direct-reference cap. |
@@ -151,9 +193,10 @@ Exact settings and evidence are intentionally kept out of the main README. See [
 The core paths are usable and have been exercised with real decoded H3 media:
 
 - **two-pass flow-aligned guidance** is functional with the learned upscale/refine workflow;
-- **Progressive Handoff (Target Input)** is the main single-schedule coarse-to-fine path for Continuum;
+- **Progressive Handoff (Target Input)** is functional for chunk 1/unprotected calls and uses a semantically safe target-grid fallback for Native Masked exact-prefix continuation chunks;
 - **direction-only guidance** remains the conservative recommendation;
 - **learned `learned_3d` handoff** has shown a clear benefit over bicubic for aggressive transitions in the tested ~1 MP workflow;
+- **target-sparse exact-prefix Continuum acceleration is not yet promoted**: the implementation is structurally tested, but real multi-chunk decoded-media and timing validation remain required;
 - the resolution-aware sigma, temporal, acceleration, reference-budget, and attention experiments remain research features rather than promoted defaults.
 
 The current observed performance comparison for the learned progressive path is documented separately in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). It is workflow-specific and not a universal speed or quality claim.
@@ -162,11 +205,11 @@ The current observed performance comparison for the learned progressive path is 
 
 The implementation is designed around native MiniMax H3 joint audio/video sampling rather than treating video as an isolated tensor path.
 
-- **Continuum:** use **Progressive Handoff (Target Input)** for multi-chunk progressive generation. **Flow-Aligned Refine State** is available for explicit two-pass Continuum refinement.
-- **Spectrum:** actual/forecast provenance is preserved. Feature-history state is reset across a progressive geometry boundary, and the first target-grid call is forced actual.
-- **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; progressive stages use separate sampler lifetimes where required by the geometry change.
-- **DiffAid / Untwisting RoPE:** keep these upstream of the progressive wrapper when used.
-- **Learned H3 latent upscaler:** optional provider for `learned_3d`; not bundled with this repository.
+- **Continuum:** use **Progressive Handoff (Target Input)** for the conservative path. Exact Native Masked continuation chunks use target-grid fallback. **Progressive Mixed-Grid Continuum [Experimental]** adds real low-grid suffix generation and learned transfer; **Progressive Target-Sparse Continuum [Experimental]** retains the previous sparse-row experiment as a control. Both require explicit runtime validation. **Flow-Aligned Refine State** is available for explicit two-pass Continuum refinement.
+- **Spectrum:** actual/forecast provenance is preserved. Feature-history state is reset across a progressive boundary, and the first full target-grid call is forced actual. The target-sparse wrapper restores the full target hidden stream before Spectrum's final-block observation.
+- **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; progressive stages use separate sampler lifetimes where required by geometry or target-sparse history boundaries.
+- **DiffAid / Untwisting RoPE:** keep these upstream of the progressive wrapper when used. The target-sparse path retains all non-video rows and reduces H3 target-video modulation metadata consistently; runtime media validation of the complete external-patch stack is still required.
+- **Learned H3 latent upscaler:** optional provider for `learned_3d`; not bundled with this repository. It is not invoked for an exact-prefix target-sparse continuation stage.
 
 More detailed wiring rules and failure conditions are in [docs/USAGE.md](docs/USAGE.md).
 
@@ -193,8 +236,9 @@ Research references and implementation provenance are documented in [CREDITS.md]
 ## Scope and limitations
 
 - This is research-grade tooling, not an official MiniMax implementation.
-- Progressive handoff changes only the **video** spatial grid; audio is never spatially resized.
+- Normal progressive handoff changes only the **video** spatial grid; audio is never spatially resized. Target-sparse exact-prefix mode does not resize the sampler video grid at all.
 - Progressive sampling requires a complete H3 sigma schedule whose absolute flow origin is known.
-- Arbitrary external sampler RNG/history closures cannot be safely carried across a geometry reset and may be rejected.
+- Arbitrary external sampler RNG/history closures cannot be safely carried across a progressive split and may be rejected.
 - Mutable capture/guidance/progressive state currently fails closed for unsupported parallel multi-GPU model-call ordering.
+- The target-sparse path approximates early full-dense H3 transformer computation. Passing structural tests does not establish decoded-media quality or a net speedup.
 - Quality and speed depend on prompt, references, geometry, sampler, Spectrum policy, model residency, and hardware. Use decoded media rather than metrics alone as the final quality test.
