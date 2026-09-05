@@ -126,6 +126,13 @@ class ProgressiveTargetInputConfig:
     contract must remain on the final output grid. The wrapper derives a low-grid
     sampler invocation internally and returns to the original target grid at the
     handoff, so downstream spatial contracts never observe a geometry change.
+
+    Exact Native Masked video protection defaults to the conservative target-grid
+    fallback. ``target_sparse_lifter`` is an experimental continuation path that
+    keeps the sampler state and protected rows on the exact target grid while
+    reducing only the early H3 transformer token stream. ``mixed_grid_low_suffix``
+    samples a real low-grid suffix while independently supplying the original
+    target-grid prefix to H3, then performs learned suffix transfer.
     """
 
     source_latent_h: int | None = None
@@ -140,6 +147,7 @@ class ProgressiveTargetInputConfig:
     seed_offset: int = 0x4833464C4F57
     source_noise_offset: int = 0x48334C4F574C52
     min_high_steps: int = 2
+    exact_prefix_mode: str = "fallback"
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -165,6 +173,10 @@ class ProgressiveTargetInputConfig:
             raise ValueError("target-input handoff transfer must be bicubic or learned_3d")
         if self.transfer_mode == "learned_3d":
             validate_learned_upscaler_provider(self.learned_upscaler)
+        if self.exact_prefix_mode not in {"fallback", "target_sparse_lifter", "mixed_grid_low_suffix"}:
+            raise ValueError("unsupported exact_prefix_mode")
+        if self.exact_prefix_mode == "mixed_grid_low_suffix" and self.transfer_mode != "learned_3d":
+            raise ValueError("mixed-grid continuation requires learned_3d transfer")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
