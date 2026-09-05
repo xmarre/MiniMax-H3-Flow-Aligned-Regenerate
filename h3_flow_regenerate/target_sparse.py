@@ -11,6 +11,9 @@ from .metrics import H3FlowMetrics
 
 TARGET_SPARSE_CONTRACT_KEY = "h3_flow_target_sparse_v1"
 TARGET_SPARSE_API_VERSION = 1
+VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
+VDN_EXTERNAL_SEQUENCE_API_VERSION = 1
+VDN_EXTERNAL_SEQUENCE_MODE = "dense_gate_no_linear"
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +328,17 @@ def make_target_sparse_block_wrapper(
                 f"{int(img.shape[0])} is neither full {video_stop} nor reduced {reduced_len}"
             )
 
+        new_transformer = dict(transformer)
+        existing_vdn_contract = new_transformer.get(VDN_EXTERNAL_SEQUENCE_KEY)
+        if existing_vdn_contract is not None:
+            raise RuntimeError("target-sparse H3 path found an existing VDN external-sequence contract")
+        new_transformer[VDN_EXTERNAL_SEQUENCE_KEY] = {
+            "api": VDN_EXTERNAL_SEQUENCE_API_VERSION,
+            "mode": VDN_EXTERNAL_SEQUENCE_MODE,
+            "full_sequence_rows": video_stop,
+            "reduced_sequence_rows": reduced_len,
+        }
+
         new_args = dict(args)
         new_args["img"] = reduced_img
         new_args["rope_freqs"] = rope.index_select(1, selected_global.to(device=rope.device))
@@ -334,6 +348,7 @@ def make_target_sparse_block_wrapper(
             video_stop=video_stop,
             selected_video=selected_video,
         )
+        new_args["transformer_options"] = new_transformer
         output = call_next(new_args, extra)
         if not isinstance(output, dict) or "img" not in output or not torch.is_tensor(output["img"]):
             raise RuntimeError("target-sparse wrapped H3 block must return {'img': tensor}")
@@ -358,6 +373,7 @@ def make_target_sparse_block_wrapper(
                 target_t=plan.target_t,
                 exact_protected_rows_retained=True,
                 target_grid_rope_retained=True,
+                vdn_external_sequence_mode=VDN_EXTERNAL_SEQUENCE_MODE,
             )
 
         if layer != num_layers - 1:
