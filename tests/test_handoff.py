@@ -160,6 +160,36 @@ def test_learned_handoff_rejects_wrong_provider_geometry(output):
         )
 
 
+def test_suffix_dc_bridge_config_is_mixed_only_and_boolean():
+    provider = FakeLearnedProvider()
+    with pytest.raises(ValueError, match="only supported by mixed-grid"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            transfer_mode="learned_3d",
+            learned_upscaler=provider,
+            suffix_dc_bridge=True,
+        )
+    with pytest.raises(TypeError, match="must be boolean"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            transfer_mode="learned_3d",
+            learned_upscaler=provider,
+            exact_prefix_mode="mixed_grid_low_suffix",
+            suffix_dc_bridge=1,
+        )
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        suffix_dc_bridge=True,
+    )
+    assert config.suffix_dc_bridge is True
+
+
 def test_learned_target_input_config_requires_supported_provider_contract():
     with pytest.raises(ValueError, match="requires a connected"):
         ProgressiveTargetInputConfig(
