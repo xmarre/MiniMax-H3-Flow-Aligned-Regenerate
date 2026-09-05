@@ -37,14 +37,16 @@ def test_custom_node_root_registration_smoke():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "H3ProgressiveTargetSparseHandoff" in module.NODE_CLASS_MAPPINGS
     assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
 
 
 def test_progressive_nodes_expose_all_selectable_guidance_controls():
     from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
-    for node in (H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff):
+    for node in (H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff, H3ProgressiveTargetSparseHandoff):
         required = node.INPUT_TYPES()["required"]
         assert {
             "guidance_mode",
@@ -60,12 +62,23 @@ def test_progressive_nodes_expose_all_selectable_guidance_controls():
 
 def test_target_input_progressive_exposes_optional_learned_handoff_without_changing_default():
     from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
-    target_schema = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
-    assert target_schema["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
-    assert target_schema["required"]["handoff_transfer"][1]["default"] == "bicubic"
-    assert target_schema["optional"]["learned_upscaler"] == ("H3_LATENT_UPSCALER",)
+    for node in (H3ProgressiveTargetInputHandoff, H3ProgressiveTargetSparseHandoff):
+        target_schema = node.INPUT_TYPES()
+        assert target_schema["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
+        assert target_schema["required"]["handoff_transfer"][1]["default"] == "bicubic"
+        assert target_schema["optional"]["learned_upscaler"] == ("H3_LATENT_UPSCALER",)
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
+
+
+def test_target_sparse_node_is_explicitly_experimental_and_keeps_target_input_schema():
+    from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
+
+    assert H3ProgressiveTargetSparseHandoff.INPUT_TYPES() == H3ProgressiveTargetInputHandoff.INPUT_TYPES()
+    assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
+    assert "Exact Native Masked video prefixes stay on the target grid" in H3ProgressiveTargetSparseHandoff.DESCRIPTION
 
 
 def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(monkeypatch, tmp_path):

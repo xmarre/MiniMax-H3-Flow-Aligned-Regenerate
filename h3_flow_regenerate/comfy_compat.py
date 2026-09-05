@@ -20,6 +20,7 @@ from .runtime import (
     flow_outer_wrapper,
     flow_predict_wrapper,
 )
+from .target_sparse import VDN_EXTERNAL_SEQUENCE_API_VERSION, make_target_sparse_block_wrapper
 
 
 def validate_h3_model(model: Any) -> Any:
@@ -151,6 +152,11 @@ def patch_flow_model(
     _install_layout_metrics(patched, binding.metrics)
     if attention is not None and attention.mode != "native":
         _install_attention(patched, attention, binding.metrics)
+    if (
+        isinstance(progressive, ProgressiveTargetInputConfig)
+        and progressive.exact_prefix_mode == "target_sparse_lifter"
+    ):
+        _install_target_sparse(patched, binding.metrics)
     return patched, binding
 
 
@@ -191,6 +197,60 @@ def _install_attention(model: Any, config: AttentionConfig, metrics: H3FlowMetri
         )
         model.set_model_patch_replace(
             wrapper,
+            "dit",
+            "double_block",
+            layer,
+        )
+
+
+def _contains_target_sparse_wrapper(wrapper: Any) -> bool:
+    """Walk Flow-owned wrapper links without depending on third-party internals."""
+    seen: set[int] = set()
+    current = wrapper
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "_h3_flow_target_sparse_wrapper", False):
+            return True
+        if getattr(current, "_h3_flow_layout_wrapper", False):
+            current = getattr(current, "_h3_flow_previous", None)
+            continue
+        current = None
+    return False
+
+
+def _validate_vdn_target_sparse_compat(model: Any, num_layers: int) -> None:
+    object_patches = getattr(model, "object_patches", None)
+    if not isinstance(object_patches, dict):
+        return
+    for layer in range(num_layers):
+        key = f"diffusion_model.blocks.{layer}.attn.forward"
+        owner = object_patches.get(key)
+        if owner is None or not getattr(owner, "_vdn_forward", False):
+            continue
+        api = int(getattr(owner, "_vdn_external_sequence_api", 0))
+        if api < VDN_EXTERNAL_SEQUENCE_API_VERSION:
+            raise RuntimeError(
+                "target-sparse Continuum detected VDN-H3 attention without the required "
+                f"external reduced-sequence API v{VDN_EXTERNAL_SEQUENCE_API_VERSION}; "
+                "update ComfyUI-VDN-H3 or disable VDN for this experimental path"
+            )
+
+
+def _install_target_sparse(model: Any, metrics: H3FlowMetrics) -> None:
+    diffusion = validate_h3_model(model)
+    blocks = getattr(diffusion, "blocks", None)
+    if blocks is None:
+        raise TypeError("native MiniMax H3 diffusion model does not expose transformer blocks")
+    num_layers = len(blocks)
+    _validate_vdn_target_sparse_compat(model, num_layers)
+    transformer = model.model_options["transformer_options"]
+    existing = ((transformer.get("patches_replace") or {}).get("dit") or {}).copy()
+    for layer in range(num_layers):
+        previous = existing.get(("double_block", layer))
+        if _contains_target_sparse_wrapper(previous):
+            continue
+        model.set_model_patch_replace(
+            make_target_sparse_block_wrapper(layer, num_layers, metrics, previous=previous),
             "dit",
             "double_block",
             layer,
