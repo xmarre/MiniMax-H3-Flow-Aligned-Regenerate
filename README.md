@@ -56,7 +56,7 @@ immediately before Video VAE Decode, after all latent processing. It supplies
 real future context to H3's overlapping decoder at the join. Keep the original
 assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).
 
-All three Continuum progressive nodes expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target Input fallback and Target-Sparse derive it from the first actual H3 predicted-clean boundary before native mask restoration. Disable it only for matched seam A/B testing.
+The two dedicated exact-prefix Continuum nodes, **Progressive Target-Sparse Continuum** and **Progressive Mixed-Grid Continuum**, expose `suffix_dc_bridge`, enabled by default on canonical whole-frame exact-prefix boundaries. The bridge changes only the first generated suffix latent token with a per-channel DC offset; it never edits the authoritative prefix or later suffix tokens. Mixed-Grid derives the offset from its discarded learned-upscaler prefix, while Target-Sparse derives it from the first actual full-grid H3 predicted-clean boundary before native mask restoration. The generic **Progressive Handoff (Target Input)** node does not expose or apply this Continuum-specific seam correction.
 
 ### 3. Experimental exact-prefix Continuum acceleration
 
@@ -156,7 +156,7 @@ The same trajectory handle must be used by capture and guidance.
 | **MiniMax H3 Flow-Aligned Regenerate** | Guides a later H3 pass from the matching captured low-resolution trajectory. |
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum version of Flow-Aligned Regenerate; patches each `H3_CONTINUUM_REFINE_STATE`. |
 | **MiniMax H3 Progressive Handoff** | Starts from a source-sized workflow input and grows the video grid to a target resolution during sampling. |
-| **MiniMax H3 Progressive Handoff (Target Input)** | Target-sized/Continuum-safe variant. Unprotected calls run the early H3 stage privately on a smaller grid; exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime. Supports optional `learned_3d` transfer on the normal handoff path. |
+| **MiniMax H3 Progressive Handoff (Target Input)** | Generic target-sized variant. Unprotected calls run the early H3 stage privately on a smaller grid; exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime. Supports optional `learned_3d` transfer on the normal handoff path. It does not own Continuum-specific seam correction. |
 
 ### Experimental research nodes
 

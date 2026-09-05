@@ -89,6 +89,7 @@ def test_mixed_runtime_emits_transfer_and_final_seam_diagnostics(monkeypatch):
         exact_prefix_mode="mixed_grid_low_suffix",
         transfer_mode="learned_3d",
         learned_upscaler=provider,
+        suffix_dc_bridge=True,
     )
 
     def execute(noise, latent, sampler, sigmas, call_mask, *args, latent_shapes):

@@ -1303,51 +1303,20 @@ def _run_progressive(
             exact_target_inputs_forwarded=True,
             progressive_guidance_applied=False,
         )
-        bridge_prefix = None
-        if config.suffix_dc_bridge:
-            bridge_prefix = _contiguous_exact_video_prefix(
-                guider.model_patcher.model,
-                latent_image,
-                denoise_mask,
-                input_shapes,
-            )
-            if bridge_prefix is None:
-                binding.metrics.event(
-                    "exact_prefix_suffix_dc_bridge_skipped",
-                    source="target_input_fallback",
-                    reason="noncanonical_exact_mask",
-                )
-        bridge_context = (
-            _exact_prefix_suffix_bridge_contract(
-                guider,
-                bridge_prefix,
-                source="target_input_fallback",
-            )
-            if bridge_prefix is not None
-            else contextlib.nullcontext(None)
-        )
         _begin_capture(binding, guider, sampler, sigmas, input_shapes)
         error: BaseException | None = None
         try:
-            with bridge_context as bridge_contract:
-                result = executor(
-                    noise,
-                    latent_image,
-                    sampler,
-                    sigmas,
-                    denoise_mask,
-                    callback,
-                    disable_pbar,
-                    seed,
-                    latent_shapes=latent_shapes,
-                )
-            if isinstance(bridge_contract, dict) and not bool(bridge_contract.get("applied")):
-                binding.metrics.event(
-                    "exact_prefix_suffix_dc_bridge_skipped",
-                    source="target_input_fallback",
-                    reason="no_actual_model_output",
-                )
-            return result
+            return executor(
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
+            )
         except BaseException as exc:
             error = exc
             raise

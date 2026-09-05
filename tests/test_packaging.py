@@ -84,11 +84,19 @@ def test_target_input_progressive_exposes_optional_learned_handoff_without_chang
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
 
 
-def test_target_sparse_node_is_explicitly_experimental_and_keeps_target_input_schema():
+def test_target_sparse_node_is_explicitly_experimental_and_only_adds_continuum_bridge_schema():
     from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
     from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
-    assert H3ProgressiveTargetSparseHandoff.INPUT_TYPES() == H3ProgressiveTargetInputHandoff.INPUT_TYPES()
+    target_schema = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
+    sparse_schema = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    assert "suffix_dc_bridge" not in target_schema["required"]
+    sparse_required = sparse_schema["required"].copy()
+    bridge = sparse_required.pop("suffix_dc_bridge")
+    assert bridge[0] == "BOOLEAN"
+    assert bridge[1]["default"] is True
+    assert sparse_required == target_schema["required"]
+    assert sparse_schema["optional"] == target_schema["optional"]
     assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
     assert "Exact Native Masked video prefixes stay on the target grid" in H3ProgressiveTargetSparseHandoff.DESCRIPTION
 

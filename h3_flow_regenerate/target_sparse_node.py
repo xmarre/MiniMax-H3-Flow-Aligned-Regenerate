@@ -24,10 +24,27 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         "target grid; early H3 transformer work retains every protected video row plus a coarse "
         "target-grid anchor lattice for generated rows, then restores the full hidden grid before "
         "H3's native final layer. source_scale/source_width/source_height control anchor density on "
-        "exact-prefix chunks, not sampler latent geometry. The ordinary Target Input node remains "
-        "the conservative full-target fallback. The shared one-token suffix DC bridge is "
-        "enabled by default on canonical Continuum exact-prefix boundaries."
+        "exact-prefix chunks, not sampler latent geometry. The one-token suffix DC bridge is "
+        "Continuum-specific and enabled by default on canonical exact-prefix boundaries."
     )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import copy
+
+        inputs = copy.deepcopy(super().INPUT_TYPES())
+        inputs["required"]["suffix_dc_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": True,
+                "tooltip": (
+                    "Continuum-only one-token per-channel DC seam correction. It calibrates from the first "
+                    "actual full-grid H3 predicted-clean boundary, preserves the authoritative prefix, and "
+                    "changes only the first generated suffix latent token."
+                ),
+            },
+        )
+        return inputs
 
     def patch(
         self,

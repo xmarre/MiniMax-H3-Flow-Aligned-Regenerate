@@ -351,18 +351,6 @@ class H3ProgressiveTargetInputHandoff:
                         ),
                     },
                 ),
-                "suffix_dc_bridge": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": (
-                            "One-token per-channel DC correction at canonical Continuum exact-prefix "
-                            "boundaries. It preserves the exact prefix and changes only the first "
-                            "generated suffix latent token. Enabled by default after the boundary "
-                            "flash was removed in decoded-media validation."
-                        ),
-                    },
-                ),
             },
             "optional": {
                 "metrics": ("H3_FLOW_METRICS",),
@@ -394,7 +382,6 @@ class H3ProgressiveTargetInputHandoff:
         temporal_weight=0.20,
         handoff_transfer="bicubic",
         learned_upscaler=None,
-        suffix_dc_bridge=True,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -402,7 +389,6 @@ class H3ProgressiveTargetInputHandoff:
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
-                suffix_dc_bridge=bool(suffix_dc_bridge),
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -413,7 +399,6 @@ class H3ProgressiveTargetInputHandoff:
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
-                suffix_dc_bridge=bool(suffix_dc_bridge),
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(

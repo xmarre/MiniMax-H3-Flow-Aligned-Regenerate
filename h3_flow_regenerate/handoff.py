@@ -148,7 +148,7 @@ class ProgressiveTargetInputConfig:
     source_noise_offset: int = 0x48334C4F574C52
     min_high_steps: int = 2
     exact_prefix_mode: str = "fallback"
-    suffix_dc_bridge: bool = True
+    suffix_dc_bridge: bool = False
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -180,6 +180,8 @@ class ProgressiveTargetInputConfig:
             raise ValueError("mixed-grid continuation requires learned_3d transfer")
         if not isinstance(self.suffix_dc_bridge, bool):
             raise TypeError("suffix_dc_bridge must be boolean")
+        if self.suffix_dc_bridge and self.exact_prefix_mode not in {"target_sparse_lifter", "mixed_grid_low_suffix"}:
+            raise ValueError("suffix_dc_bridge is only supported by Continuum-specific exact-prefix modes")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
