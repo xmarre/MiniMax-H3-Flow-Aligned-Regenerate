@@ -134,9 +134,7 @@ def test_mixed_runtime_emits_transfer_and_final_seam_diagnostics(monkeypatch):
     }
     assert required_transfer <= transfer.fields.keys()
     assert all(
-        math.isfinite(float(transfer.fields[key]))
-        for key in required_transfer
-        if key != "splice_diagnostic_version"
+        math.isfinite(float(transfer.fields[key])) for key in required_transfer if key != "splice_diagnostic_version"
     )
 
     complete = next(event for event in binding.metrics.events if event.kind == "mixed_grid_complete")
