@@ -184,6 +184,9 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
         digest.update(_tensor_signature(value))
         return
     if isinstance(value, dict):
+        # ComfyUI's convert_cond creates a fresh UUID on each conversion. It is
+        # execution identity, not conditioning identity, so it must be excluded
+        # from both the keyed payload *and the structural field count*.
         keys = [key for key in value if str(key) != "uuid"]
         digest.update(f"dict:{len(keys)}:".encode())
         for key in sorted(keys, key=lambda item: str(item)):
@@ -621,6 +624,7 @@ def _exact_probe_function(model, x, sigmas, extra_args=None, callback=None, disa
     denoised = model(x, sigmas[0] * s_in, **extra_args)
     if callback is not None:
         callback({"x": x, "i": 0, "sigma": sigmas[0], "sigma_hat": sigmas[0], "denoised": denoised})
+    # Comfy's flow KSAMPLER applies inverse_noise_scaling at the terminal sigma.
     return denoised * (1.0 - sigmas[0])
 
 
@@ -674,6 +678,12 @@ def _noise_argument(
     if latent_image is not None:
         if latent_image.shape != state.shape:
             raise ValueError("H3 latent_image and sampler state shapes differ")
+        # OUTER_SAMPLE wrappers run before CFGGuider.outer_sample moves the caller's
+        # latent_image/noise onto the model load device. A split sampler result has
+        # already passed through that boundary, so its raw state can be on CUDA while
+        # the original/private latent_image retained here is still on CPU. Reconstruct
+        # the sampler noise in the state domain, matching ComfyUI's inner-sampler
+        # device/dtype contract rather than assuming wrapper inputs were preloaded.
         latent_image = latent_image.to(device=state.device, dtype=state.dtype)
         numerator = state - (1.0 - float(sigma)) * latent_image
     return numerator / (float(sigma) * noise_scale)
@@ -695,6 +705,12 @@ def _resize_packed_mask(
     source_shapes: list[tuple[int, ...]],
     target_shapes: list[tuple[int, ...]],
 ) -> torch.Tensor | None:
+    """Resize ComfyUI's already-prepared packed AV denoise mask.
+
+    CFGGuider expands each user mask to the corresponding latent channel count
+    before OUTER_SAMPLE wrappers run, so this boundary sees the same packed shape
+    as the AV sampler state rather than the original single-channel mask.
+    """
     if mask is None:
         return None
     if tuple(mask.shape) != (source_shapes[0][0], 1, sum(math.prod(shape[1:]) for shape in source_shapes)):
@@ -712,6 +728,13 @@ def _has_exact_video_protection(
     mask: torch.Tensor | None,
     shapes: list[tuple[int, ...]],
 ) -> bool:
+    """Return whether a prepared packed H3 mask exactly protects video values.
+
+    ComfyUI's inpaint contract uses mask value zero for exact preservation and
+    supports fractional values as intentional blends.  Progressive target-input
+    sampling may therefore resize fractional masks, but it must not resize any
+    video value whose downstream sampler contract is exact.
+    """
     if mask is None:
         return False
     if len(shapes) != 2:
@@ -728,6 +751,13 @@ def _merge_preserved_noise(
     preserved_noise: torch.Tensor,
     denoise_mask: torch.Tensor | None,
 ) -> torch.Tensor:
+    """Keep native inpaint noise in protected regions.
+
+    MiniMax H3's scale_latent_inpaint uses the sampler's original noise for its
+    0.999 visual-conditioning injection. Replacing that noise in mask==0 regions
+    changes the protected context seen by the transformer even though ComfyUI
+    restores the clean latent after every denoised prediction.
+    """
     if denoise_mask is None:
         return generated_noise
     if generated_noise.shape != preserved_noise.shape or generated_noise.shape != denoise_mask.shape:
@@ -772,6 +802,15 @@ def _reset_guider_conds(
     template: dict[str, list[Any]] | None = None,
     target_video_hw: tuple[int, int] | None = None,
 ) -> None:
+    """Recreate conditioning before each independent geometry/sampler lifetime.
+
+    ComfyUI resolves percentage areas, masks, and model conditions in-place on
+    guider.conds. Reusing the processed low-resolution structure for the
+    probe/high stage can therefore leak low-grid shape metadata across a
+    progressive handoff. The progressive caller supplies a pristine snapshot of
+    guider.conds taken *after* ComfyUI's hook preprocessing/filtering so those
+    call-boundary hook semantics are not lost when geometry is rebuilt.
+    """
     source = template if template is not None else getattr(guider, "original_conds", None)
     if not isinstance(source, dict):
         return
@@ -889,6 +928,17 @@ def _run_target_sparse_exact_prefix(
     seed,
     latent_shapes,
 ):
+    """Progressively reduce H3 transformer tokens without resizing exact context.
+
+    This path is intentionally different from the normal low-grid handoff. The
+    sampler state, latent image, denoise mask, conditioning layout and RoPE all
+    remain on the caller's target grid. During the early sampler lifetime only,
+    H3 block wrappers keep every non-video row, every exact-protected target-video
+    row and a regular coarse lattice of generated video rows. The last block
+    lifts the coarse hidden field to the full target grid. A fresh full-transformer
+    sampler lifetime begins at the configured handoff coordinate.
+    """
+
     if denoise_mask is None:
         raise ValueError("target-sparse exact-prefix mode requires a prepared H3 denoise mask")
     _validate_progressive_sampler_state(sampler)
@@ -1090,6 +1140,7 @@ def _run_progressive(
     if len(latent_shapes) != 2:
         raise ValueError("progressive handoff supports native packed H3 AV latents only")
     if isinstance(config, ProgressiveTargetInputConfig) and config.exact_prefix_mode == "mixed_grid_low_suffix":
+        # Recheck the assembled workflow, including VDN applied after Flow.
         from .comfy_compat import _validate_vdn_target_sparse_compat
 
         patcher = guider.model_patcher
@@ -1122,6 +1173,12 @@ def _run_progressive(
                 seed,
                 latent_shapes,
             )
+        # Native masked continuation promises exact video-prefix preservation.
+        # A private low-grid lifetime would resize those clean prefix latents and
+        # expose the changed values to every generated row through H3's dense
+        # attention.  A later mask/noise merge can restore the returned prefix,
+        # but it cannot undo that altered low-stage context.  Preserve the exact
+        # contract by executing the untouched target-grid sampler once.
         binding.metrics.increment("progressive_target_fallbacks")
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.event(
@@ -1268,6 +1325,9 @@ def _run_progressive(
         if callback is None:
             return None
         if target_input:
+            # CFGGuider's packed callback closure was created against the caller's
+            # target latent_shapes. Feed it target-shaped preview/state tensors even
+            # though this private sampler lifetime runs on source_shapes.
             x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
             x = _resize_packed_latent_image(x, source_shapes, target_shapes)
         return callback(step, x0, x, len(sigmas) - 1)
@@ -1313,6 +1373,10 @@ def _run_progressive(
                 template=conditioning_template,
                 target_video_hw=(source_h, source_w) if target_input and not mixed else None,
             )
+            # The probe is a one-call sampler lifetime, but model-level patches such
+            # as DiffAid must still see the full H3 sigma reference. The explicit
+            # refinement contract provides that reference without carrying solver or
+            # Spectrum history across the split.
             sampler_invocation_count += 1
             history_boundary_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
@@ -1347,6 +1411,8 @@ def _run_progressive(
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
         if mixed_plan is not None:
+            # Use all prefix frames as transient upscaler context. Its 3D attention
+            # has no proven finite temporal receptive field permitting truncation.
             clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
             clean_video = clean_video.clone()
             clean_video[:, :, : mixed_plan.prefix_t] = resize_spatial_5d(
