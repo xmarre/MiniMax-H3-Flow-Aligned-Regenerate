@@ -36,6 +36,27 @@ def main() -> None:
     args = parser.parse_args()
 
     require(
+        args.comfy / "comfy/ldm/minimax/vae.py",
+        "clip_length=17",
+        "token_drop=3",
+        "time_down=(1, 2, 2, 1, 1, 1)",
+        "self.frame_pre_padding = (-clip_length) % self.vae_ratio_t",
+        "self.tokens_chunk_size = math.ceil(clip_length / self.vae_ratio_t)",
+        "self.token_overlap = (-token_drop) % self.tokens_chunk_size",
+        "self.frame_overlap = max(self.token_overlap * self.vae_ratio_t - self.frame_pre_padding, 0)",
+        "t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap",
+        "if i == num_chunks - 1 and dec_overlap is not None:",
+    )
+    require(
+        args.continuum / "v3/assembly.py",
+        "segment_images = raw_images[:total_frames][trim_frames:]",
+    )
+    require(
+        args.continuum / "hardening.py",
+        "if int(image.shape[0]) < total_frames:",
+    )
+
+    require(
         args.comfy / "comfy/ldm/minimax/model.py",
         "latents_dim=24",
         "audio_latents_dim=32",

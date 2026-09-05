@@ -51,6 +51,11 @@ The handoff is not a blind resize of noisy state. The wrapper performs an exact 
 
 For **Continuum**, use **MiniMax H3 Progressive Handoff (Target Input)**. Continuum stays configured for the final target size while the node privately runs the early stage on a smaller video grid. If Continuum's Native Masked path exactly protects any video prefix (`mask == 0`), the ordinary Target Input node preserves that stronger contract by skipping the private resize/handoff and running the original target-grid sampler once. This means the conservative node does **not** progressively accelerate exact-prefix continuation chunks; normally only chunk 1 receives the low-grid handoff.
 
+For exact-prefix chunk boundaries, place **MiniMax H3 Continuum Decode Context**
+immediately before Video VAE Decode, after all latent processing. It supplies
+real future context to H3's overlapping decoder at the join. Keep the original
+assembly plan and audio path. See [wiring and limitations](docs/CONTINUUM_DECODE_CONTEXT.md).
+
 ### 3. Experimental exact-prefix Continuum acceleration
 
 **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** samples a real

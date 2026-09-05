@@ -277,6 +277,14 @@ Absence of a top-level license in an inspected research snapshot must **not** be
 
 ## Attribution policy for future changes
 
+**Continuum Decode Context** is derived from the native temporal-window contract
+in ComfyUI `1af040bf022569d7a890241c8dd79b296cda483f`
+(`comfy/ldm/minimax/vae.py`) and Continuum
+`bf25353d8bec44afea22c89717c4301ce13c2036` (`temporal.py`, `v3/assembly.py`,
+`hardening.py`). The node independently supplies real right context to the
+existing VAE; it does not vendor the decoder or introduce a new blending law.
+Tests execute temporal methods from the external pinned ComfyUI checkout.
+
 When a new paper or repository materially influences an algorithm, heuristic, node, or default in this project:
 
 1. add the paper and official implementation here;

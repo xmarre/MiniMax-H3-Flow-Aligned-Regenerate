@@ -99,10 +99,10 @@ jobs:
             --continuum .contracts/Continuum \
             --diffaid .contracts/DiffAid \
             --vdn .contracts/VDN
-      - name: Execute mixed-grid native source oracles
+      - name: Execute mixed-grid and temporal VAE native source oracles
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
-          python -m pytest tests/test_mixed_grid.py -q
+          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q

@@ -7,6 +7,11 @@ existing low-grid/probe/learned-transfer/high-grid path. Exact-prefix chunks
 use the mixed-grid path described below. This remains a draft implementation
 pending matched GPU and decoded-media acceptance.
 
+Use [Continuum Decode Context](CONTINUUM_DECODE_CONTEXT.md) before the final
+video decoder to correct missing right context at exact-prefix decode joins.
+This shared decoder issue also affects the other progressive paths. It is
+separate from a learned-transfer latent discontinuity.
+
 ## Call contract
 
 The low sampler owns `[1,24,T,source_h,source_w]`. Its whole-frame prefix mask
