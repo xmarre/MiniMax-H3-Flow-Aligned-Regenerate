@@ -157,9 +157,7 @@ def measure_exact_prefix_splice(
             seam_lowpass_amplification=_safe_ratio(restored["lowpass_rms"], native["lowpass_rms"]),
             upscaler_native_seam_spatial_mean_rms=native["spatial_mean_rms"],
             exact_restored_seam_spatial_mean_rms=restored["spatial_mean_rms"],
-            seam_spatial_mean_amplification=_safe_ratio(
-                restored["spatial_mean_rms"], native["spatial_mean_rms"]
-            ),
+            seam_spatial_mean_amplification=_safe_ratio(restored["spatial_mean_rms"], native["spatial_mean_rms"]),
         )
     return fields
 
