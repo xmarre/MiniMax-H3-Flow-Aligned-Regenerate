@@ -1,20 +1,84 @@
-# Unreleased
+# MiniMax H3 Flow-Aligned Regenerate v0.3.0
 
-## Exact Continuum prefix safety
+v0.3.0 promotes the real mixed-grid Continuum handoff path after the remaining exact-prefix boundary flash was fixed in decoded media, adds the shared H3 Continuum decode-context correction, and keeps the previous target-sparse experiment available as a control path.
 
-- Progressive Target Input now bypasses the private low-grid handoff when the prepared video denoise mask contains exact-zero values.
-- The fallback forwards the original target-grid noise, latent, mask, schedule, sampler, callback, and mutable shape metadata through one sampler lifetime, preserving ComfyUI's exact mask contract and stateful sampler behavior.
-- Audio-only protection and fractional video blends retain the existing progressive path.
-- Metrics distinguish the fallback from both ordinary and split-progressive sampling.
+## Mixed-grid exact-prefix Continuum
 
-## Attention Lab
+- Adds **MiniMax H3 Progressive Mixed-Grid Continuum** for continuation chunks that have an exact Native Masked prefix.
+- Samples a genuine lower-resolution suffix while H3 attends to the authoritative original target-grid prefix.
+- Keeps target-grid prefix RoPE/modulation and source-grid suffix RoPE/modulation in one dense transformer sequence without interpolating generated hidden rows between blocks.
+- Collapses back to the native low-carrier layout before H3 final projection/Spectrum observation, then performs an exact handoff probe, learned 3D transfer, exact target-prefix restoration, and a fresh target-grid refinement sampler lifetime.
+- Requires the learned H3 latent-upscaler provider. When VDN is enabled, mixed calls use the companion VDN external-sequence API 2 contract; the high-grid stage returns to ordinary VDN execution.
 
-- Output-neutral diagnostics now measure native dense-attention mass retained by the public OpenVDN temporal topology, plus outside mass, boundary-frame mass, exact analytic pair density, and an optional authoritative Continuum seam.
-- Adds `vdn_reference_dense`, an all-head query-chunked dense-mask correctness oracle using complete 5-frame chunks, radius 1, global non-video tokens, and first/last row-and-column anchors.
-- The seam anchor requires `protected_video_prefix_latent_slots`; frame-count metadata is never guessed into latent indices.
-- No sparse-kernel or speed claim is made. OpenVDN's trained hybrid branch, compiled kernel, and separately licensed weights are not included.
+## Validated suffix DC bridge
 
-Decoded H3 media validation remains required before release or recommendation.
+The remaining mixed-grid handoff flash was traced to the learned-transfer/exact-prefix splice and fixed with the one-token suffix DC bridge.
+
+- `suffix_dc_bridge` is now **enabled by default on the Mixed-Grid node**.
+- The bridge measures the per-channel spatial-mean offset between the last discarded learned prefix token and the authoritative exact prefix, then applies that constant offset only to the first generated learned suffix latent token.
+- The authoritative prefix is never modified; later suffix tokens are untouched by the bridge.
+- The correction is mapped through the same conditional re-noise equation with unchanged deterministic noise, so it adds no H3 transformer NFE.
+- A/B/C/D seam telemetry remains available for learned-native, exact-restored, corrected, and post-refinement boundaries.
+
+Matched real GPU decoded-media testing confirmed that enabling this bridge removes the visible boundary flash, including multi-boundary Continuum generation. The successful telemetry reports one corrected token at weight `1.0`, exact final-prefix preservation, and clean mixed-grid/high-grid lifecycle completion.
+
+The off switch remains available for diagnostics/regression comparison, but it is no longer the node default.
+
+## Continuum Decode Context
+
+Adds **MiniMax H3 Continuum Decode Context**, a decode-only node for the separate native H3 temporal-VAE boundary issue.
+
+- H3's native temporal decoder uses overlapping windows, so independently decoded Continuum chunks can lack the real right context available in a continuous latent timeline even when their protected latent overlap is exact.
+- Decode Context appends the next five real generated latent tokens to the preceding chunk only for decoding, while leaving accepted sampling latents, masks, audio, plan contents and output timeline length unchanged.
+- The native source oracle reproduces the independent-chunk discrepancy and shows continuous-decode equivalence when the required future context is supplied.
+
+This mechanism is distinct from the mixed-grid transfer seam fixed by the DC bridge.
+
+## VDN / Spectrum / sampler interoperability
+
+The validated mixed-grid workflow exercises:
+
+- companion VDN-H3 API 2 mixed sequence handling;
+- streamed INT8 ConvRot VDN branch weights with retained state-owned buffers;
+- runtime low-VRAM adapter bypass;
+- grouped attention backend;
+- Spectrum + SA-Solver-PECE;
+- DiffAid;
+- Untwisting RoPE;
+- learned 3D handoff;
+- exact probe and fresh target-grid high stage;
+- multi-chunk Continuum with exact final-prefix preservation.
+
+The companion VDN fork release for this contract is v1.5.0.
+
+## Diagnostics and invariants
+
+- `mixed_grid_plan` records target/source geometry, exact-prefix length and mixed row counts.
+- `mixed_grid_transformer` records API 2 layout/VDN contract use.
+- `mixed_grid_transfer` records bridge state plus A/B/C splice diagnostics.
+- `mixed_grid_complete` records D/post-refinement seam diagnostics and verifies `final_prefix_exact=true`.
+- Low/probe/high sampler lifetimes remain separate where geometry/history requires it.
+- The high stage must begin with an actual H3 evaluation.
+- The learned transfer and bridge add no H3 NFE.
+
+## Target-sparse status
+
+**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** remains available as the previous reduced-hidden-row research/control path. It is not promoted by this release.
+
+## Validation
+
+The release tree is covered by:
+
+- Python 3.10, 3.11, 3.12 and 3.13 CI;
+- Ruff and format checks;
+- package build, Apache-2.0 metadata and isolated-wheel import;
+- 220-test Python 3.12 suite (`209 passed`, `11` native-source-oracle skips in the ordinary lane);
+- pinned native/sibling source-contract lane (`35 passed`), including native H3 mixed-grid and temporal-decoder oracles;
+- real RTX Pro 6000 decoded-media validation of the mixed-grid bridge and multi-boundary Continuum path.
+
+## Distribution
+
+The package version is `0.3.0`. A successful CI push on `main` creates the GitHub `v0.3.0` release/archive and triggers the existing Comfy Registry publication workflow from the same tested source revision.
 
 ---
 
