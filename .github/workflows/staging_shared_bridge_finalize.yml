@@ -1,0 +1,46 @@
+name: staging shared Continuum bridge finalize
+
+on:
+  push:
+    branches: [staging/continuum-shared-dc-bridge-20260905]
+    paths:
+      - .github/staging_shared_bridge_finalize.py
+      - .github/workflows/staging_shared_bridge_finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: staging/continuum-shared-dc-bridge-20260905
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply documentation and runtime hardening
+        run: python .github/staging_shared_bridge_finalize.py
+      - name: Validate production tree
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]' build
+          ruff format h3_flow_regenerate tests
+          ruff check --fix h3_flow_regenerate tests
+          ruff format --check h3_flow_regenerate tests
+          ruff check h3_flow_regenerate tests
+          pytest -q
+          python -m compileall -q h3_flow_regenerate tests
+          git diff --check
+      - name: Commit validated production changes
+        shell: bash
+        run: |
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add README.md docs/MIXED_GRID_CONTINUUM.md docs/TARGET_SPARSE_CONTINUUM.md docs/USAGE.md h3_flow_regenerate/runtime.py tests/test_continuum_suffix_bridge.py
+          git commit -m "Document and harden shared Continuum suffix bridge"
+          git push origin HEAD:staging/continuum-shared-dc-bridge-20260905
