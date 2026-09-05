@@ -62,7 +62,7 @@ def main() -> None:
         'contract.get("full_sequence_rows", -1)',
         'contract.get("reduced_sequence_rows", -1)',
         "window_active = not layout.full_cover and not external_reduced",
-        'vdn_forward._vdn_external_sequence_api = VDN_EXTERNAL_SEQUENCE_API_VERSION',
+        "vdn_forward._vdn_external_sequence_api = VDN_EXTERNAL_SEQUENCE_API_VERSION",
     )
 
 
