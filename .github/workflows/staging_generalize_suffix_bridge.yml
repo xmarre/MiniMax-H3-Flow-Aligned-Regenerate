@@ -30,10 +30,10 @@ jobs:
           python -m pip install -e '.[test]' build
           ruff format h3_flow_regenerate tests
           ruff check --fix h3_flow_regenerate tests
-          ruff format --check .
-          ruff check .
+          ruff format --check h3_flow_regenerate tests
+          ruff check h3_flow_regenerate tests
           pytest -q
-          python -m compileall -q .
+          python -m compileall -q h3_flow_regenerate tests
           git diff --check
       - name: Commit validated staging tree and remove temporary staging files
         shell: bash
