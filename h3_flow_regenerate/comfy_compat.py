@@ -4,6 +4,8 @@ import copy
 from dataclasses import replace
 from typing import Any
 
+import torch
+
 from .attention import AttentionConfig, make_attention_override, make_layout_block_wrapper, mark_layout_wrapper
 from .contracts import H3FlowTrajectory
 from .guidance import GuidanceConfig
@@ -13,6 +15,7 @@ from .mixed_grid import MIXED_WRAPPER_KEY, mixed_diffusion_wrapper
 from .runtime import (
     CLONE_CALLBACK_KEY,
     FLOW_BINDING_KEY,
+    FLOW_STAGE_KEY,
     OUTER_WRAPPER_KEY,
     PREDICT_WRAPPER_KEY,
     PROGRESSIVE_KEY,
@@ -20,6 +23,7 @@ from .runtime import (
     flow_model_clone_callback,
     flow_outer_wrapper,
     flow_predict_wrapper,
+    sampler_name,
 )
 from .target_sparse import VDN_EXTERNAL_SEQUENCE_API_VERSION, make_target_sparse_block_wrapper
 
@@ -65,6 +69,200 @@ def _put_wrapper_last(model: Any, wrapper_type: str, key: str, wrapper) -> None:
     model.remove_wrappers_with_key(wrapper_type, key)
     existing = model.wrappers.get(wrapper_type, {})
     model.wrappers[wrapper_type] = {**existing, key: [wrapper]}
+
+
+def _canonicalize_exact_masked_output(
+    result: torch.Tensor,
+    latent_image: torch.Tensor,
+    denoise_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Restore exact mask==0 sampler outputs without touching generated values.
+
+    Comfy's inpaint wrapper restores protected values for every model evaluation,
+    but a solver may perform one final arithmetic update after the last evaluation.
+    Algebraically equivalent endpoint formulas (notably res_multistep's final Euler
+    update) can therefore return a few-ULP difference in protected values. The
+    progressive exact-prefix contract is stronger: those caller-owned values must
+    be exact in the returned packed latent as well.
+    """
+
+    stats: dict[str, Any] = {
+        "protected_elements": 0,
+        "pre_restore_exact": True,
+        "canonicalized": False,
+        "changed_elements": 0,
+        "nonfinite_changed_elements": 0,
+        "max_abs_delta": 0.0,
+        "rms_delta": 0.0,
+        "final_exact": True,
+    }
+    if denoise_mask is None:
+        return result, stats
+    if result.shape != latent_image.shape or result.shape != denoise_mask.shape:
+        raise ValueError("exact-mask output canonicalization requires matching packed sampler tensors")
+
+    exact_mask = denoise_mask.to(device=result.device) == 0
+    protected_elements = int(torch.count_nonzero(exact_mask).item())
+    stats["protected_elements"] = protected_elements
+    if protected_elements == 0:
+        return result, stats
+
+    reference = latent_image.to(device=result.device, dtype=result.dtype)
+    mismatch = exact_mask & torch.ne(result, reference)
+    changed_elements = int(torch.count_nonzero(mismatch).item())
+    stats["pre_restore_exact"] = changed_elements == 0
+    stats["changed_elements"] = changed_elements
+
+    if changed_elements:
+        delta = result[mismatch].to(torch.float32) - reference[mismatch].to(torch.float32)
+        finite = torch.isfinite(delta)
+        finite_count = int(torch.count_nonzero(finite).item())
+        stats["nonfinite_changed_elements"] = changed_elements - finite_count
+        if finite_count:
+            finite_delta = delta[finite]
+            stats["max_abs_delta"] = float(finite_delta.abs().max().item())
+            stats["rms_delta"] = float(finite_delta.square().mean().sqrt().item())
+        else:
+            stats["max_abs_delta"] = None
+            stats["rms_delta"] = None
+
+        result = result.clone()
+        result[exact_mask] = reference[exact_mask]
+        stats["canonicalized"] = True
+
+    if bool(torch.any(exact_mask & torch.ne(result, reference)).item()):
+        raise RuntimeError("exact-mask output canonicalization failed")
+    return result, stats
+
+
+def _record_exact_mask_output(
+    binding: FlowBinding,
+    sampler: Any,
+    *,
+    source: str,
+    stats: dict[str, Any],
+) -> None:
+    if int(stats.get("protected_elements", 0)) <= 0:
+        return
+    if bool(stats.get("canonicalized")):
+        binding.metrics.increment("exact_mask_output_canonicalizations")
+    binding.metrics.event(
+        "exact_mask_output",
+        source=str(source),
+        sampler=sampler_name(sampler),
+        **stats,
+    )
+
+
+class _ProgressiveExactMaskExecutor:
+    """Adapt Comfy sampler returns before runtime exact-prefix postconditions."""
+
+    def __init__(
+        self,
+        executor: Any,
+        *,
+        binding: FlowBinding,
+        progressive: ProgressiveTargetInputConfig,
+        latent_image: torch.Tensor,
+        denoise_mask: torch.Tensor | None,
+        sampler: Any,
+    ) -> None:
+        self._executor = executor
+        self.class_obj = executor.class_obj
+        self._binding = binding
+        self._progressive = progressive
+        self._latent_image = latent_image
+        self._denoise_mask = denoise_mask
+        self._sampler = sampler
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._executor, name)
+
+    def __call__(self, *args: Any, **kwargs: Any):
+        result = self._executor(*args, **kwargs)
+        transformer = (getattr(self.class_obj, "model_options", None) or {}).get("transformer_options") or {}
+        stage = str(transformer.get(FLOW_STAGE_KEY, ""))
+        if stage == "high":
+            source = f"{self._progressive.exact_prefix_mode}_high"
+        elif stage == "" and self._progressive.exact_prefix_mode == "fallback":
+            # Conservative exact-prefix fallback is one ordinary target-grid
+            # sampler lifetime and therefore has no Flow stage marker.
+            source = "target_input_fallback_return"
+        else:
+            return result
+
+        result, stats = _canonicalize_exact_masked_output(
+            result,
+            self._latent_image,
+            self._denoise_mask,
+        )
+        _record_exact_mask_output(
+            self._binding,
+            self._sampler,
+            source=source,
+            stats=stats,
+        )
+        return result
+
+
+def flow_outer_wrapper_with_exact_mask(
+    executor,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask=None,
+    callback=None,
+    disable_pbar=False,
+    seed=None,
+    latent_shapes=None,
+):
+    """Comfy adapter around the sampler-agnostic Flow outer runtime.
+
+    Target-input exact masks are canonicalized at the framework boundary after
+    each final target-grid sampler lifetime returns. Progressive high stages are
+    fixed before runtime's hard exact-prefix check and seam diagnostics; the
+    conservative fallback is fixed inside its single stage-less target-grid call.
+    """
+
+    guider = executor.class_obj
+    model_options = getattr(guider, "model_options", None) or {}
+    binding = model_options.get(FLOW_BINDING_KEY)
+    progressive = model_options.get(PROGRESSIVE_KEY)
+    if not isinstance(binding, FlowBinding) or not isinstance(progressive, ProgressiveTargetInputConfig):
+        return flow_outer_wrapper(
+            executor,
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
+
+    adapted = _ProgressiveExactMaskExecutor(
+        executor,
+        binding=binding,
+        progressive=progressive,
+        latent_image=latent_image,
+        denoise_mask=denoise_mask,
+        sampler=sampler,
+    )
+    return flow_outer_wrapper(
+        adapted,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        denoise_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes=latent_shapes,
+    )
 
 
 def patch_flow_model(
@@ -136,7 +334,12 @@ def patch_flow_model(
 
     import comfy.patcher_extension
 
-    _put_wrapper_first(patched, comfy.patcher_extension.WrappersMP.OUTER_SAMPLE, OUTER_WRAPPER_KEY, flow_outer_wrapper)
+    _put_wrapper_first(
+        patched,
+        comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
+        OUTER_WRAPPER_KEY,
+        flow_outer_wrapper_with_exact_mask,
+    )
     # OUTER_SAMPLE must remain outside Spectrum so progressive low/probe/high
     # invocations each traverse Spectrum independently. PREDICT_NOISE must be
     # inside Spectrum so it receives Spectrum's per-call copied model_options

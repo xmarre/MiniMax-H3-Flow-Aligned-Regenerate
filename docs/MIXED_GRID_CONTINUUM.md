@@ -1,6 +1,6 @@
 # Mixed-Grid Continuum continuation
 
-**MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** is the recommended accelerated exact-prefix Continuum path in v0.3.0.
+**MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** is the recommended accelerated exact-prefix Continuum path in v0.3.x.
 
 It requires `handoff_transfer=learned_3d` and the companion `H3_LATENT_UPSCALER` provider. Continuum stays configured for the final target geometry.
 
@@ -21,9 +21,17 @@ Mixed-Grid instead keeps the exact target-grid prefix authoritative while genera
 7. Run the exact handoff probe through the same mixed topology in a separate sampler lifetime.
 8. Feed the complete clean low-grid sequence plus resized prefix context to the learned 3D upscaler.
 9. Discard the upscaler's prefix output, restore the authoritative target-grid prefix, rebuild the high-stage conditional state/noise, and start a fresh full-grid sampler lifetime.
-10. Require the first high-stage call to be an actual H3 evaluation and verify the returned protected prefix remains exact.
+10. Require the first high-stage call to be an actual H3 evaluation. At the final Comfy sampler-return boundary, restore only exact `mask == 0` packed elements from the authoritative target input, then verify the returned protected prefix bitwise and measure the final seam.
 
 The authoritative target-grid prefix is never spatially resized for H3 transformer conditioning.
+
+### Final exact-mask return canonicalization
+
+The final restoration in step 10 is intentionally narrower than a tolerance check. ComfyUI already restores protected values after each model evaluation, but some solvers can perform a terminal arithmetic update after the final evaluation. `res_multistep`, for example, reaches its zero-sigma endpoint through an Euler-form expression that is mathematically equal to the final denoised estimate but can differ by a few floating-point ULPs.
+
+Flow therefore canonicalizes exactly protected `mask == 0` packed elements at the Comfy sampler-return boundary before the existing strict `torch.equal` contract and before final seam diagnostics. It does not use `allclose`, does not edit any generated/unmasked value, performs no extra H3 NFE, and avoids a clone when the returned protected values are already bitwise exact.
+
+The runtime records an `exact_mask_output` event for final target-grid returns with the sampler/source identity, protected and changed element counts, pre-restore exactness, non-finite drift count, maximum absolute drift and RMS drift. `exact_mask_output_canonicalizations` counts returns that required restoration.
 
 ## Suffix DC bridge
 
@@ -105,12 +113,14 @@ Mixed-Grid records four seam states:
 - **A** — native learned-upscaler boundary `[U_prefix | U_suffix]`;
 - **B** — authoritative prefix restored without the bridge `[P_exact | U_suffix]`;
 - **C** — authoritative prefix plus corrected first suffix token;
-- **D** — final boundary after target-grid refinement.
+- **D** — final boundary after target-grid refinement and exact-mask return canonicalization.
 
-Diagnostics include raw RMS, spatial low-pass RMS, per-channel spatial-mean/DC RMS, bridge magnitude/count/weight and final/B/final/C ratios.
+Diagnostics include raw RMS, spatial low-pass RMS, per-channel spatial-mean/DC RMS, bridge magnitude/count/weight and final/B/final/C ratios. Exact-mask return telemetry separately reports whether final protected values needed canonicalization and the magnitude of any pre-restore solver drift.
 
 ## Current status
 
 The mixed-grid path is still labeled Experimental because it is an independent research topology, but its previously open production acceptance gate is closed for the tested stack: real GPU/media validation, multiple Continuum boundaries, VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact probe, fresh target-grid refinement and the suffix DC bridge have all been exercised together successfully.
+
+The v0.3.1 exact-mask return fix is structurally regression-tested against `res_multistep` endpoint roundoff. A real workflow rerun remains the empirical check for that sampler/configuration; the prior real-media validation above used the v0.3.0 stack before this patch.
 
 Quality/speed remain workflow dependent; the documented result is evidence for this implementation and tested stack, not a universal model guarantee.
