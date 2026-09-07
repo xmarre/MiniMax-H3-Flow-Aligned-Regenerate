@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,6 +151,7 @@ class ProgressiveTargetInputConfig:
     exact_prefix_mode: str = "fallback"
     suffix_dc_bridge: bool = False
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
+    suffix_geometric_bridge: bool = False
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -182,6 +184,10 @@ class ProgressiveTargetInputConfig:
             raise TypeError("suffix_dc_bridge must be boolean")
         if self.suffix_dc_bridge and self.exact_prefix_mode not in {"target_sparse_lifter", "mixed_grid_low_suffix"}:
             raise ValueError("suffix_dc_bridge is only supported by Continuum-specific exact-prefix modes")
+        if not isinstance(self.suffix_geometric_bridge, bool):
+            raise TypeError("suffix_geometric_bridge must be boolean")
+        if self.suffix_geometric_bridge and self.exact_prefix_mode != "mixed_grid_low_suffix":
+            raise ValueError("suffix_geometric_bridge requires mixed-grid Continuum")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
@@ -258,6 +264,7 @@ def build_handoff_state(
     transfer_mode: str = "bicubic",
     learned_upscaler: Any | None = None,
     transfer_metrics: dict[str, Any] | None = None,
+    clean_video_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -312,6 +319,10 @@ def build_handoff_state(
             raise TypeError("H3 latent-upscaler provider returned a non-floating tensor")
         if not bool(torch.isfinite(learned_x0).all().item()):
             raise RuntimeError("H3 latent-upscaler provider returned NaN or Inf values")
+        if clean_video_transform is not None:
+            learned_x0 = clean_video_transform(learned_x0)
+            if tuple(learned_x0.shape) != expected_shape or not bool(torch.isfinite(learned_x0).all()):
+                raise RuntimeError("clean handoff transform returned invalid video")
         target_video = conditional_renoise_target(
             learned_x0,
             sigma=float(sigma),

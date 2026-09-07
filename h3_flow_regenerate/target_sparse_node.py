@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .comfy_compat import patch_flow_model
+from .geometric_provider import with_source_trajectory_context
 from .geometry import pixel_to_safe_latent
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
@@ -66,7 +67,10 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         handoff_transfer="bicubic",
         learned_upscaler=None,
         suffix_dc_bridge=True,
+        suffix_geometric_bridge=False,
     ):
+        if self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix":
+            learned_upscaler = with_source_trajectory_context(learned_upscaler)
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
                 source_scale=source_scale,
@@ -75,6 +79,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=suffix_geometric_bridge,
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -87,6 +92,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=suffix_geometric_bridge,
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -119,7 +125,7 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
         "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash while preserving the authoritative prefix bit-exactly."
+        "flash. An optional low-grid motion-residual geometric bridge remains experimental and off by default."
     )
 
     @classmethod
@@ -139,6 +145,18 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
                     "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
                     "default after matched multi-boundary decoded-media validation removed the handoff flash."
+                ),
+            },
+        )
+        inputs.setdefault("optional", {})["suffix_geometric_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Experimental low-grid motion-residual seam bridge. It measures the genuine clean "
+                    "low-resolution trajectory before learned upsampling, extrapolates recent exact-prefix "
+                    "motion, and applies only a persistent significant residual across the learned suffix. "
+                    "It remains off until decoded-media validation; diagnostics still run when disabled."
                 ),
             },
         )
