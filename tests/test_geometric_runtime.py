@@ -5,11 +5,12 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
-from test_geometric_bridge import append_biased_suffix, motion_sequence
+from test_geometric_bridge import IDENTITY, append_biased_suffix, motion_sequence
 from test_handoff import FakeLearnedProvider
 
 from h3_flow_regenerate.geometric_bridge import geometric_seam_bridge
-from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.geometric_provider import with_source_trajectory_context
+from h3_flow_regenerate.geometry import pack_streams, resize_spatial_5d, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig, deterministic_video_noise
 from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
 from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
@@ -27,16 +28,22 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     monkeypatch.setitem(sys.modules, "comfy", fake)
     monkeypatch.setitem(sys.modules, "comfy.samplers", fake.samplers)
 
-    natural = (1.0, 1.0, -0.5, 0.0)
-    prefix = motion_sequence([natural] * 4).repeat(1, 3, 1, 1, 1)
-    prefix_t = prefix.shape[2]
-    residual = (1.0, 0.98, 0.0, 0.0) if seam else (1.0, 1.0, 0.0, 0.0)
-    learned = append_biased_suffix(prefix, natural, residual, count=4)
-    exact = prefix + 2
+    natural = IDENTITY
+    learned_prefix = motion_sequence([natural] * 4).repeat(1, 3, 1, 1, 1)
+    prefix_t = learned_prefix.shape[2]
+    residual = (1.0, 0.98, 0.0, 0.0) if seam else IDENTITY
+    learned = append_biased_suffix(learned_prefix, natural, residual, count=4)
+    exact = learned_prefix + 2
+    source_prefix = resize_spatial_5d(exact, 40, 54, mode="bicubic")
+    source_clean = append_biased_suffix(source_prefix, natural, residual, count=4)
+
     video = learned.clone()
     video[:, :, :prefix_t] = exact
     audio = torch.randn(1, 32, 2, 11)
     packed, shapes = pack_streams((video, audio))
+    source_probe, source_shapes = pack_streams((source_clean, audio.clone()))
+    assert source_shapes[0][-2:] == (40, 54)
+
     vm = torch.ones_like(video)
     vm[:, :, :prefix_t] = 0
     mask = pack_streams((vm, torch.ones_like(audio)))[0]
@@ -47,7 +54,8 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
         model_options={"transformer_options": {}}, model_patcher=SimpleNamespace(model=base), conds={"positive": []}
     )
     binding = FlowBinding()
-    provider = FakeLearnedProvider(learned)
+    base_provider = FakeLearnedProvider(learned)
+    provider = with_source_trajectory_context(base_provider)
     config = ProgressiveTargetInputConfig(
         source_latent_h=40,
         source_latent_w=54,
@@ -67,7 +75,8 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
             binding.metrics.event("model_call", actual=True)
             return packed.clone()
         if stage == "probe":
-            return latent.clone()
+            assert latent_shapes[0][-2:] == (40, 54)
+            return source_probe.clone()
         return latent / (1 - sigmas[-1])
 
     # Reuse binding and guider to exercise invocation-local state and chunk lifetimes.
@@ -123,11 +132,14 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     assert torch.equal(got_video[:, :, :prefix_t], original_video_noise[:, :, :prefix_t])
     assert torch.equal(caller_noise, saved_noise) and torch.equal(mask, saved_mask)
     assert torch.equal(learned, saved_learned)
-    assert len(provider.calls) == 2
+    assert len(base_provider.calls) == 2
     geometry = [event.fields for event in binding.metrics.events if event.kind == "mixed_grid_geometry"]
     assert len(geometry) == 2 and all(event["final_prefix_exact"] for event in geometry)
     assert all(event["accepted"] == (enabled and seam) for event in geometry)
-    assert all(event["policy"] == "persistent_motion_residual" for event in geometry)
+    assert all(
+        event["policy"] == "persistent_low_grid_motion_residual_cross_grid_corroborated" for event in geometry
+    )
+    assert all(event["low_grid_trajectory"]["available"] for event in geometry)
     assert "h3_flow_mixed_grid_v1" not in guider.model_options["transformer_options"]
     assert binding.metrics.counters["handoff_exact_probe_nfe"] == 2
 
