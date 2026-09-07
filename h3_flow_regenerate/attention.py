@@ -503,6 +503,17 @@ def _record_attention_diagnostic(q, k, layout, layer, config, metrics, transform
     )
 
 
+def _layout_from_block_args(args: dict[str, Any], transformer: dict[str, Any]) -> Any | None:
+    """Resolve H3's packed layout across the old and current ComfyUI block-patch contracts."""
+    layout = args.get("layout")
+    if layout is not None:
+        return layout
+    # ComfyUI #16072 publishes the same layout in transformer_options for
+    # attention patches. This also survives third-party wrappers that rebuild
+    # the per-block argument dictionary without copying the direct layout key.
+    return transformer.get("minimax_h3_layout")
+
+
 def make_layout_block_wrapper(
     layer: int,
     metrics: H3FlowMetrics,
@@ -511,11 +522,31 @@ def make_layout_block_wrapper(
     record_layout: bool = True,
 ):
     def wrapper(args, extra):
-        transformer = args["transformer_options"]
+        transformer = args.get("transformer_options")
+        if not isinstance(transformer, dict):
+            if layer == 0 and record_layout:
+                metrics.increment("packed_layout_unavailable_calls")
+            if previous is not None:
+                return previous(args, extra)
+            return extra["original_block"](args)
+
+        layout = _layout_from_block_args(args, transformer)
+        if layout is None:
+            # ComfyUI before #15975 did not pass `layout` to DiT block patches.
+            # Layout is diagnostic/attention context for the generic Flow paths;
+            # absence must not turn an otherwise valid native H3 evaluation into
+            # a hard KeyError. Attention overrides see no Flow context and retain
+            # the pre-existing/native backend unchanged.
+            if layer == 0 and record_layout:
+                metrics.increment("packed_layout_unavailable_calls")
+            if previous is not None:
+                return previous(args, extra)
+            return extra["original_block"](args)
+
         old = transformer.get("h3_flow_attention_context")
-        transformer["h3_flow_attention_context"] = {"layout": args["layout"], "layer": layer}
+        transformer["h3_flow_attention_context"] = {"layout": layout, "layer": layer}
         if layer == 0 and record_layout:
-            metrics.event("packed_layout", **layout_summary(args["layout"]))
+            metrics.event("packed_layout", **layout_summary(layout))
         try:
             if previous is not None:
                 return previous(args, extra)

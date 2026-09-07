@@ -24,6 +24,15 @@ Restart ComfyUI.
 
 The core package has no mandatory sibling-node dependency. The learned transfer paths require the companion [MiniMax H3 Latent Upscaler](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler).
 
+## Example workflows
+
+Basic dependency-minimal examples are under [`workflows/examples/`](workflows/examples/):
+
+- [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — loadable target-input progressive workflow using `source_scale=0.70` and bicubic handoff;
+- [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — loadable source-input progressive workflow using a `1.20x` target handoff.
+
+Matching `.api.json` prompt graphs are included for API execution. These examples use stock MiniMax H3 loading/conditioning/decoding, `res_multistep`, and no Turbo LoRA or optional companion integrations. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
+
 ## Recommended Continuum path
 
 ### Progressive Mixed-Grid Continuum
