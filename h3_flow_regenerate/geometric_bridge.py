@@ -1,11 +1,11 @@
 """Motion-aware geometric seam diagnostics for progressive H3 Continuum.
 
 Transforms use output->input sampling coordinates about image centre, in latent
-pixels. The bridge measures the genuine low-grid trajectory before learned
-upsampling, predicts natural motion from the exact-prefix history, and corrects
-only a statistically supported framing residual whose persistence is verified by
-subsequent low-grid suffix transitions. The authoritative prefix is never warped.
-No gradients are used.
+pixels. The bridge uses the source-grid clean handoff sequence to determine
+whether the low-resolution trajectory introduced a persistent framing offset,
+then requires the same residual to be independently visible on the learned
+target-grid boundary before correcting it. The authoritative prefix is never
+warped. No gradients are used.
 """
 
 from __future__ import annotations
@@ -23,48 +23,59 @@ PERSISTENCE_TRANSITIONS = 4
 SOURCE_CLEAN_CONTEXT_ATTR = "_h3_flow_source_clean_video"
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
+_MAX_SCALE = math.log(1.03)
 
 
 def warp_frame(frame: torch.Tensor, transform: tuple[float, ...]) -> torch.Tensor:
-    """One bilinear resampling, border extension, pixel-centre coordinates."""
+    """Resample BxCxHxW with one centred output->input affine transform."""
     if frame.ndim != 4 or not frame.is_floating_point():
         raise ValueError("geometric warp requires floating BxCxHxW")
-    sx, sy, tx, ty = transform
-    if not all(math.isfinite(v) for v in transform) or min(sx, sy) <= 0:
+    sx, sy, tx, ty = (float(value) for value in transform)
+    if not all(math.isfinite(v) for v in (sx, sy, tx, ty)) or min(sx, sy) <= 0:
         raise ValueError("geometric warp requires finite positive scales")
-    if tuple(transform) == IDENTITY:
+    if (sx, sy, tx, ty) == IDENTITY:
         return frame
     h, w = frame.shape[-2:]
     with torch.autocast(device_type=frame.device.type, enabled=False):
-        theta = frame.new_tensor([[sx, 0, 2 * tx / w], [0, sy, 2 * ty / h]], dtype=torch.float32)
+        theta = frame.new_tensor([[sx, 0.0, 2.0 * tx / w], [0.0, sy, 2.0 * ty / h]], dtype=torch.float32)
         grid = F.affine_grid(theta[None].expand(frame.shape[0], -1, -1), frame.shape, align_corners=False)
-        return F.grid_sample(frame.float(), grid, mode="bilinear", padding_mode="border", align_corners=False).to(frame)
+        return F.grid_sample(
+            frame.float(),
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
+        ).to(frame)
 
 
 def invert_transform(transform: tuple[float, ...]) -> tuple[float, float, float, float]:
-    sx, sy, tx, ty = transform
-    if min(sx, sy) <= 0 or not all(math.isfinite(v) for v in transform):
+    sx, sy, tx, ty = (float(value) for value in transform)
+    if not all(math.isfinite(v) for v in (sx, sy, tx, ty)) or min(sx, sy) <= 0:
         raise ValueError("cannot invert invalid geometric transform")
     return (1.0 / sx, 1.0 / sy, -tx / sx, -ty / sy)
 
 
 def compose_transform(first: tuple[float, ...], second: tuple[float, ...]) -> tuple[float, float, float, float]:
-    """Return first∘second for output->input centred affine transforms."""
+    """Return first∘second for centred output->input diagonal affines."""
     sx1, sy1, tx1, ty1 = first
     sx2, sy2, tx2, ty2 = second
     return (sx1 * sx2, sy1 * sy2, sx1 * tx2 + tx1, sy1 * ty2 + ty1)
 
 
 def residual_transform(observed: tuple[float, ...], expected: tuple[float, ...]) -> tuple[float, float, float, float]:
-    """Sampling transform C such that C∘expected == observed."""
+    """Return C such that C∘expected == observed."""
     return compose_transform(observed, invert_transform(expected))
 
 
-def _features(video):
+def _signed_components(transform: tuple[float, ...]) -> tuple[float, float, float, float]:
+    return (math.log(transform[0]), math.log(transform[1]), transform[2], transform[3])
+
+
+def _features(video: torch.Tensor):
     b, c, t, h, w = video.shape
     x = video.detach().permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w).float()
     x = F.avg_pool2d(F.pad(x, (2, 2, 2, 2), mode="replicate"), 5, stride=1)
-    ratio = min(1.0, 48 / max(h, w))
+    ratio = min(1.0, 48.0 / max(h, w))
     x = F.interpolate(x, size=(round(h * ratio), round(w * ratio)), mode="area")
     x = x.cpu()
     x = x - x.mean((-2, -1), keepdim=True)
@@ -128,26 +139,26 @@ def _fit(a, z, hw):
 def _transform_fields(theta, hw):
     sx, sy, tx, ty = theta
     h, w = hw
-    return dict(
-        scale_x=sx,
-        scale_y=sy,
-        translate_x=tx,
-        translate_y=ty,
-        translate_x_normalized=2 * tx / w,
-        translate_y_normalized=2 * ty / h,
-    )
+    return {
+        "scale_x": sx,
+        "scale_y": sy,
+        "translate_x": tx,
+        "translate_y": ty,
+        "translate_x_normalized": 2 * tx / w,
+        "translate_y_normalized": 2 * ty / h,
+    }
 
 
 def _estimate_registration(reference: torch.Tensor, moving: torch.Tensor, *, comparison=None) -> dict:
-    report = dict(
-        accepted=False,
-        reason="invalid_geometry",
-        confidence=0.0,
-        transform=IDENTITY,
-        identity_error=None,
-        aligned_error=None,
-        improvement=0.0,
-    )
+    report = {
+        "accepted": False,
+        "reason": "invalid_geometry",
+        "confidence": 0.0,
+        "transform": IDENTITY,
+        "identity_error": None,
+        "aligned_error": None,
+        "improvement": 0.0,
+    }
     if reference.ndim != 5 or reference.shape != moving.shape or min(reference.shape) < 1:
         return report
     hw = tuple(reference.shape[-2:])
@@ -175,9 +186,9 @@ def _estimate_registration(reference: torch.Tensor, moving: torch.Tensor, *, com
     if min(float(gx), float(gy)) < 1e-3:
         report["reason"] = "insufficient_axis_structure"
         return report
-    a, z = a.numpy(), z.numpy()
-    identity = float(_errors(a, z, IDENTITY, hw).mean())
-    theta, error = _fit(a, z, hw)
+    a_np, z_np = a.numpy(), z.numpy()
+    identity = float(_errors(a_np, z_np, IDENTITY, hw).mean())
+    theta, error = _fit(a_np, z_np, hw)
     improvement = max(0.0, (identity - error) / max(identity, 1e-8))
     separations = []
     for axis, step in enumerate((0.01, 0.01, 0.5, 0.5)):
@@ -185,7 +196,7 @@ def _estimate_registration(reference: torch.Tensor, moving: torch.Tensor, *, com
         for sign in (-1, 1):
             probe = list(theta)
             probe[axis] += sign * step
-            losses.append(float(_errors(a, z, probe, hw).mean()) - error)
+            losses.append(float(_errors(a_np, z_np, probe, hw).mean()) - error)
         separations.append(min(losses))
     report.update(
         _transform_fields(theta, hw),
@@ -193,17 +204,17 @@ def _estimate_registration(reference: torch.Tensor, moving: torch.Tensor, *, com
         identity_error=identity,
         aligned_error=error,
         improvement=improvement,
-        paired_tokens=a.shape[0],
+        paired_tokens=a_np.shape[0],
         axis_objective_separation=separations,
     )
     if comparison is not None:
-        comparison = tuple(float(v) for v in comparison)
-        comparison_error = float(_errors(a, z, comparison, hw).mean())
+        comparison = tuple(float(value) for value in comparison)
+        comparison_error = float(_errors(a_np, z_np, comparison, hw).mean())
         axis_gains = []
         for axis in range(4):
             probe = list(theta)
             probe[axis] = comparison[axis]
-            axis_gains.append(float(_errors(a, z, probe, hw).mean()) - error)
+            axis_gains.append(float(_errors(a_np, z_np, probe, hw).mean()) - error)
         report.update(
             comparison_transform=comparison,
             comparison_error=comparison_error,
@@ -229,11 +240,10 @@ def register_prefix(reference: torch.Tensor, moving: torch.Tensor) -> dict:
     if error > 0.25:
         report["reason"] = "poor_alignment"
         return report
-    hw = tuple(reference.shape[-2:])
-    if any(
-        abs(theta[i] - IDENTITY[i]) > limit + 1e-8
-        for i, limit in enumerate((0.03, 0.03, min(1.5, hw[1] * 0.025), min(1.5, hw[0] * 0.025)))
-    ):
+    h, w = reference.shape[-2:]
+    safety = (_MAX_SCALE, _MAX_SCALE, min(1.5, w * 0.025), min(1.5, h * 0.025))
+    signed = _signed_components(theta)
+    if any(abs(value) > limit + 1e-8 for value, limit in zip(signed, safety, strict=True)):
         report["reason"] = "outside_safety_bounds"
         return report
     if min(report["axis_objective_separation"]) < max(1e-4, 0.005 * identity):
@@ -242,11 +252,11 @@ def register_prefix(reference: torch.Tensor, moving: torch.Tensor) -> dict:
     reference3, moving3 = reference[:, :, -3:], moving[:, :, -3:]
     a, _ = _features(reference3)
     z, _ = _features(moving3)
-    a, z = a.numpy(), z.numpy()
-    fits = [_fit(a[i : i + 1], z[i : i + 1], hw)[0] for i in range(a.shape[0])]
+    a_np, z_np = a.numpy(), z.numpy()
+    fits = [_fit(a_np[i : i + 1], z_np[i : i + 1], (h, w))[0] for i in range(a_np.shape[0])]
     spread = [max(abs(f[i] - theta[i]) for f in fits) for i in range(4)]
     report.update(per_token_transforms=fits, parameter_spread=spread)
-    if a.shape[0] < 2:
+    if a_np.shape[0] < 2:
         report["reason"] = "insufficient_paired_tokens"
         return report
     if any(s > limit for s, limit in zip(spread, (0.0075, 0.0075, 0.375, 0.375), strict=True)):
@@ -257,7 +267,7 @@ def register_prefix(reference: torch.Tensor, moving: torch.Tensor) -> dict:
 
 
 def register_pair(reference: torch.Tensor, moving: torch.Tensor, *, comparison=None) -> dict:
-    """Diagnostic one-transition fit. It never authorizes a bridge by itself."""
+    """Diagnostic one-transition fit; it never authorizes correction alone."""
     report = _estimate_registration(reference, moving, comparison=comparison)
     if report["reason"] == "measured":
         report["reason"] = "single_transition_diagnostic"
@@ -339,10 +349,6 @@ def _predict_motion_transform(motion: dict, offset: int) -> tuple[float, float, 
     )
 
 
-def _signed_components(transform: tuple[float, ...]) -> tuple[float, float, float, float]:
-    return (math.log(transform[0]), math.log(transform[1]), transform[2], transform[3])
-
-
 def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
     report = {
         "accepted": False,
@@ -372,7 +378,7 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
         max(_TRANSLATION_FLOOR, 2.5 * dispersions[3]),
     )
     gain_floor = max(1e-4, 0.002 * comparison_error)
-    safety = (math.log(1.03), math.log(1.03), min(1.5, w * 0.025), min(1.5, h * 0.025))
+    safety = (_MAX_SCALE, _MAX_SCALE, min(1.5, w * 0.025), min(1.5, h * 0.025))
     axis_applied = [
         magnitudes[i] >= significance[i] and axis_gains[i] >= gain_floor and magnitudes[i] <= safety[i] + 1e-8
         for i in range(4)
@@ -402,6 +408,12 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
 
 
 def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candidate: dict) -> dict:
+    """Verify that the boundary step behaves like a constant framing offset.
+
+    A persistent offset is introduced once at the boundary, so later suffix-to-
+    suffix transitions should return to the extrapolated natural transform rather
+    than repeat the residual or immediately compensate it in the opposite direction.
+    """
     report = {
         "accepted": False,
         "reason": "candidate_unavailable",
@@ -440,14 +452,12 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
             axis_reports.append({"selected": False})
             continue
         values = [float(item["motion_residual_signed"][axis]) for item in usable]
-        absolute = [abs(value) for value in values]
         boundary = float(boundary_signed[axis])
         floor = _SCALE_FLOOR if axis < 2 else _TRANSLATION_FLOOR
-        residual_limit = max(floor, 0.60 * abs(boundary))
-        recovery_limit = max(floor, 0.60 * abs(boundary))
-        median_abs = float(np.median(absolute))
+        limit = max(floor, 0.60 * abs(boundary))
+        median_abs = float(np.median([abs(value) for value in values]))
         opposite_max = max((abs(value) for value in values if value * boundary < 0), default=0.0)
-        axis_ok = median_abs <= residual_limit and opposite_max < recovery_limit
+        axis_ok = median_abs <= limit and opposite_max < limit
         persistent &= axis_ok
         axis_reports.append(
             {
@@ -455,9 +465,9 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
                 "boundary_signed_residual": boundary,
                 "followup_signed_residuals": values,
                 "median_followup_abs_residual": median_abs,
-                "followup_residual_limit": residual_limit,
+                "followup_residual_limit": limit,
                 "opposite_recovery_max": opposite_max,
-                "opposite_recovery_limit": recovery_limit,
+                "opposite_recovery_limit": limit,
                 "persistent_offset_supported": axis_ok,
             }
         )
@@ -469,41 +479,68 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
     return report
 
 
-def _target_transform(candidate: dict, source_hw, target_hw) -> dict:
+def _project_source_transform(candidate: dict, source_hw, target_hw) -> tuple[float, float, float, float]:
+    sh, sw = source_hw
+    th, tw = target_hw
+    sx, sy, tx, ty = candidate["transform"]
+    return (sx, sy, tx * tw / sw, ty * th / sh)
+
+
+def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict, source_hw, target_hw) -> dict:
     report = {
         "accepted": False,
         "reason": "candidate_unavailable",
         "transform": IDENTITY,
         "axis_applied": [False] * 4,
     }
-    if not candidate.get("accepted"):
+    if not source_candidate.get("accepted"):
+        report["reason"] = "source_candidate_unavailable"
         return report
-    sh, sw = source_hw
-    th, tw = target_hw
-    sx, sy, tx, ty = candidate["transform"]
-    raw = (sx, sy, tx * tw / sw, ty * th / sh)
-    axis_applied = list(candidate["axis_applied"])
-    safety = (math.log(1.03), math.log(1.03), min(1.5, tw * 0.025), min(1.5, th * 0.025))
-    signed = _signed_components(raw)
-    target_safety_rejected = [axis_applied[i] and abs(signed[i]) > safety[i] + 1e-8 for i in range(4)]
-    axis_applied = [axis_applied[i] and not target_safety_rejected[i] for i in range(4)]
+    projected = _project_source_transform(source_candidate, source_hw, target_hw)
+    report["projected_source_transform"] = projected
+    if not target_candidate.get("accepted"):
+        report["reason"] = "target_boundary_not_significant"
+        return report
+    source_signed = _signed_components(projected)
+    target_signed = _signed_components(target_candidate["transform"])
+    source_axes = source_candidate["axis_applied"]
+    target_axes = target_candidate["axis_applied"]
+    sign_agreement = []
+    magnitude_ratio = []
+    axis_applied = []
+    for axis in range(4):
+        selected = bool(source_axes[axis] and target_axes[axis])
+        source_value = float(source_signed[axis])
+        target_value = float(target_signed[axis])
+        same_sign = selected and source_value * target_value > 0
+        if selected and abs(source_value) > 1e-12:
+            ratio = abs(target_value) / abs(source_value)
+        else:
+            ratio = None
+        magnitude_ok = ratio is not None and 0.35 <= ratio <= 2.85
+        sign_agreement.append(bool(same_sign))
+        magnitude_ratio.append(ratio)
+        axis_applied.append(bool(same_sign and magnitude_ok))
+    target_transform = target_candidate["transform"]
     applied = (
-        raw[0] if axis_applied[0] else 1.0,
-        raw[1] if axis_applied[1] else 1.0,
-        raw[2] if axis_applied[2] else 0.0,
-        raw[3] if axis_applied[3] else 0.0,
+        target_transform[0] if axis_applied[0] else 1.0,
+        target_transform[1] if axis_applied[1] else 1.0,
+        target_transform[2] if axis_applied[2] else 0.0,
+        target_transform[3] if axis_applied[3] else 0.0,
     )
     report.update(
-        raw_target_transform=raw,
-        transform=applied,
+        target_transform=target_transform,
+        source_signed_residual=source_signed,
+        target_signed_residual=target_signed,
+        sign_agreement=sign_agreement,
+        magnitude_ratio=magnitude_ratio,
         axis_applied=axis_applied,
-        target_safety_rejected=target_safety_rejected,
-        source_to_target_translation_scale=(tw / sw, th / sh),
+        transform=applied,
     )
     if not any(axis_applied):
-        report["reason"] = "target_safety_bounds"
+        report["reason"] = "cross_grid_residual_not_corroborated"
         return report
-    report.update(accepted=True, reason="target_transform_safe")
+    report.update(accepted=True, reason="cross_grid_residual_corroborated")
     return report
 
 
@@ -539,30 +576,21 @@ def _valid_source_context(source, learned, prefix_t: int, source_hw) -> tuple[bo
 
 @torch.no_grad()
 def geometric_seam_bridge(learned, exact, *, source_hw, requested):
-    """Correct a persistent low-grid framing step relative to recent natural motion.
-
-    Same-time learned-prefix registration remains diagnostic. Correction is driven
-    only by the genuine source-grid clean trajectory attached invocation-locally by
-    ``build_handoff_state``. A full-suffix correction is allowed only when early
-    suffix transitions support a persistent framing offset rather than recovery.
-    """
+    """Correct only a persistent, cross-grid-corroborated trajectory residual."""
     started = time.perf_counter()
-    p = exact.shape[2]
+    p = int(exact.shape[2])
     h, w = learned.shape[-2:]
     ry, rx = h / source_hw[0], w / source_hw[1]
 
     prefix_registration = register_prefix(exact, learned[:, :, :p])
     target_motion = _motion_model(exact)
-    target_comparison = target_motion.get("expected_transform") if target_motion.get("accepted") else None
-    target_boundary = register_pair(exact[:, :, -1:], learned[:, :, p : p + 1], comparison=target_comparison)
+    target_expected = target_motion.get("expected_transform") if target_motion.get("accepted") else None
+    target_boundary = register_pair(exact[:, :, -1:], learned[:, :, p : p + 1], comparison=target_expected)
+    target_candidate = _motion_residual_candidate(target_boundary, target_motion, (h, w))
 
     source = getattr(learned, SOURCE_CLEAN_CONTEXT_ATTR, None)
     source_valid, source_reason = _valid_source_context(source, learned, p, source_hw)
-    low_report = {
-        "available": source_valid,
-        "reason": source_reason,
-        "source_hw": tuple(source_hw),
-    }
+    low_report = {"available": source_valid, "reason": source_reason, "source_hw": tuple(source_hw)}
     source_candidate = {
         "accepted": False,
         "reason": source_reason,
@@ -575,7 +603,7 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
         "transitions": [],
         "usable_transitions": 0,
     }
-    target_application = {
+    corroboration = {
         "accepted": False,
         "reason": source_reason,
         "transform": IDENTITY,
@@ -583,27 +611,29 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
     }
     if source_valid:
         source_motion = _motion_model(source, p)
-        source_comparison = source_motion.get("expected_transform") if source_motion.get("accepted") else None
+        source_expected = source_motion.get("expected_transform") if source_motion.get("accepted") else None
         source_boundary = register_pair(
             source[:, :, p - 1 : p],
             source[:, :, p : p + 1],
-            comparison=source_comparison,
+            comparison=source_expected,
         )
         source_candidate = _motion_residual_candidate(source_boundary, source_motion, tuple(source_hw))
         persistence = _suffix_persistence(source, p, source_motion, source_candidate)
         if source_candidate.get("accepted") and persistence.get("accepted"):
-            target_application = _target_transform(source_candidate, tuple(source_hw), (h, w))
+            corroboration = _corroborate_target_candidate(
+                source_candidate,
+                target_candidate,
+                tuple(source_hw),
+                (h, w),
+            )
         low_report.update(
             natural_motion_model=source_motion,
             boundary_before=source_boundary,
             motion_residual=source_candidate,
             suffix_persistence=persistence,
-            target_application=target_application,
         )
 
-    candidate_ready = bool(
-        source_candidate.get("accepted") and persistence.get("accepted") and target_application.get("accepted")
-    )
+    candidate_ready = bool(persistence.get("accepted") and corroboration.get("accepted"))
     accepted = bool(requested and candidate_ready)
     if not requested:
         reason = "disabled"
@@ -613,35 +643,41 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
         reason = source_candidate["reason"]
     elif not persistence.get("accepted"):
         reason = persistence["reason"]
+    elif not target_candidate.get("accepted"):
+        reason = "target_boundary_not_significant"
     else:
-        reason = target_application["reason"]
+        reason = corroboration["reason"]
 
-    report = dict(
-        source_hw=source_hw,
-        target_hw=(h, w),
-        grid_scale_x=rx,
-        grid_scale_y=ry,
-        grid_anisotropy=abs(rx / ry - 1),
-        prefix_registration=prefix_registration,
-        transfer_bias_candidate=prefix_registration["accepted"],
-        target_natural_motion_model=target_motion,
-        boundary_before=target_boundary,
-        low_grid_trajectory=low_report,
-        motion_residual=source_candidate,
-        suffix_persistence=persistence,
-        requested=bool(requested),
-        accepted=accepted,
-        reason=reason,
-        policy="persistent_low_grid_motion_residual",
-        persistent_bias_candidate=candidate_ready,
-        tokens_corrected=0,
-        applied_transforms=[],
-        out_of_bounds_fraction=0.0,
-    )
+    report = {
+        "source_hw": tuple(source_hw),
+        "target_hw": (h, w),
+        "grid_scale_x": rx,
+        "grid_scale_y": ry,
+        "grid_anisotropy": abs(rx / ry - 1),
+        "prefix_registration": prefix_registration,
+        "transfer_bias_candidate": prefix_registration["accepted"],
+        "target_natural_motion_model": target_motion,
+        "boundary_before": target_boundary,
+        "target_motion_residual": target_candidate,
+        "low_grid_trajectory": low_report,
+        "motion_residual": source_candidate,
+        "suffix_persistence": persistence,
+        "cross_grid_corroboration": corroboration,
+        "requested": bool(requested),
+        "accepted": accepted,
+        "reason": reason,
+        "policy": "persistent_low_grid_motion_residual_cross_grid_corroborated",
+        "persistent_bias_candidate": bool(source_candidate.get("accepted") and persistence.get("accepted")),
+        "corroborated_bias_candidate": candidate_ready,
+        "tokens_corrected": 0,
+        "applied_transforms": [],
+        "out_of_bounds_fraction": 0.0,
+    }
+
     corrected = learned
     aligned_last = learned[:, :, p - 1]
     if accepted:
-        theta = target_application["transform"]
+        theta = corroboration["transform"]
         corrected = _warp_video_suffix(learned, p, theta)
         sx, sy, tx, ty = theta
         xx = sx * (torch.arange(w) - (w - 1) / 2) + (w - 1) / 2 + tx
@@ -652,11 +688,14 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
             applied_transforms=[theta],
             out_of_bounds_fraction=1 - float(inside.float().mean()),
         )
+
     report.update(
         pre_alignment_dc_rms=_dc(exact[:, :, -1], learned[:, :, p - 1]),
         post_geometry_dc_rms=_dc(exact[:, :, -1], aligned_last),
         boundary_after_geometry=register_pair(
-            exact[:, :, -1:], corrected[:, :, p : p + 1], comparison=target_comparison
+            exact[:, :, -1:],
+            corrected[:, :, p : p + 1],
+            comparison=target_expected,
         ),
         learned_prefix_unchanged=torch.equal(corrected[:, :, :p], learned[:, :, :p]),
         elapsed_ms=(time.perf_counter() - started) * 1000,
