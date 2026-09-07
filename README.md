@@ -218,3 +218,5 @@ MiniMax H3 Flow-Aligned Regenerate is licensed under the [Apache License 2.0](LI
 Copyright 2026 xmarre.
 
 Referenced papers and third-party repositories retain their own copyrights and licenses.
+
+Experimental geometric Continuum seam diagnostics and opt-in validation: [protocol](docs/geometric-seam-bridge.md).

@@ -66,6 +66,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         handoff_transfer="bicubic",
         learned_upscaler=None,
         suffix_dc_bridge=True,
+        suffix_geometric_bridge=False,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -75,6 +76,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=suffix_geometric_bridge,
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -87,6 +89,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=suffix_geometric_bridge,
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -140,6 +143,14 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
                     "default after matched multi-boundary decoded-media validation removed the handoff flash."
                 ),
+            },
+        )
+        inputs.setdefault("optional", {})["suffix_geometric_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": "Experimental three-token geometric seam bridge. Confidence-gated; "
+                "requires decoded-media validation. Registration diagnostics run even when disabled.",
             },
         )
         return inputs

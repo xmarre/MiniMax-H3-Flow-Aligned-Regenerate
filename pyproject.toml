@@ -12,7 +12,7 @@ authors = [{ name = "xmarre" }]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 keywords = ["comfyui", "minimax-h3", "rectified-flow", "video", "audio"]
-dependencies = []
+dependencies = ["numpy>=1.25"]
 
 [project.urls]
 Repository = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate"
