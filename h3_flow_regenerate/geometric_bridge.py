@@ -24,6 +24,10 @@ SOURCE_CLEAN_CONTEXT_ATTR = "_h3_flow_source_clean_video"
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 _MAX_SCALE = math.log(1.03)
+_MIN_DOMAIN_EVIDENCE = 1.25
+_COMBINED_EVIDENCE_THRESHOLD = 2.5
+_CORROBORATION_RATIO_MIN = 0.35
+_CORROBORATION_RATIO_MAX = 2.85
 
 
 def warp_frame(frame: torch.Tensor, transform: tuple[float, ...]) -> torch.Tensor:
@@ -350,11 +354,18 @@ def _predict_motion_transform(motion: dict, offset: int) -> tuple[float, float, 
 
 
 def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
+    """Build a provisional per-axis residual candidate without standalone sigma gating.
+
+    A domain can contribute a moderate but coherent signal. Authorization is
+    deferred until source persistence and cross-grid evidence are available.
+    """
     report = {
         "accepted": False,
+        "provisional": False,
         "reason": "motion_model_unavailable",
         "transform": IDENTITY,
         "axis_applied": [False] * 4,
+        "axis_evidence_score": [0.0] * 4,
     }
     if not motion.get("accepted") or boundary.get("aligned_error") is None:
         return report
@@ -363,24 +374,26 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
     correction = residual_transform(observed, expected)
     comparison_error = boundary.get("comparison_error")
     comparison_improvement = boundary.get("comparison_improvement", 0.0)
-    if comparison_error is None or comparison_improvement < 0.05 or boundary["aligned_error"] > 0.25:
+    if comparison_error is None or boundary["aligned_error"] > 0.25:
+        report.update(reason="boundary_alignment_unusable", raw_transform=correction)
+        return report
+    if comparison_error <= boundary["aligned_error"] + 1e-12:
         report.update(reason="boundary_not_better_than_motion_model", raw_transform=correction)
         return report
-    dispersions = motion["dispersion"]
-    axis_gains = boundary.get("residual_axis_gains", [0.0] * 4)
+
+    dispersions = tuple(float(value) for value in motion["dispersion"])
+    axis_gains = tuple(float(value) for value in boundary.get("residual_axis_gains", [0.0] * 4))
     h, w = hw
     signed = _signed_components(correction)
     magnitudes = tuple(abs(value) for value in signed)
-    significance = (
-        max(_SCALE_FLOOR, 2.5 * dispersions[0]),
-        max(_SCALE_FLOOR, 2.5 * dispersions[1]),
-        max(_TRANSLATION_FLOOR, 2.5 * dispersions[2]),
-        max(_TRANSLATION_FLOOR, 2.5 * dispersions[3]),
-    )
+    floors = (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR)
+    evidence_units = tuple(max(floors[i], dispersions[i]) for i in range(4))
+    evidence_scores = tuple(magnitudes[i] / evidence_units[i] for i in range(4))
+    standalone_thresholds = tuple(max(floors[i], 2.5 * dispersions[i]) for i in range(4))
     gain_floor = max(1e-4, 0.002 * comparison_error)
     safety = (_MAX_SCALE, _MAX_SCALE, min(1.5, w * 0.025), min(1.5, h * 0.025))
     axis_applied = [
-        magnitudes[i] >= significance[i] and axis_gains[i] >= gain_floor and magnitudes[i] <= safety[i] + 1e-8
+        magnitudes[i] >= floors[i] and axis_gains[i] >= gain_floor and magnitudes[i] <= safety[i] + 1e-8
         for i in range(4)
     ]
     applied = (
@@ -395,30 +408,36 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
         transform=applied,
         axis_applied=axis_applied,
         axis_magnitude=magnitudes,
-        axis_significance_threshold=significance,
+        axis_estimator_floor=floors,
+        axis_motion_dispersion=dispersions,
+        axis_evidence_unit=evidence_units,
+        axis_evidence_score=evidence_scores,
+        axis_standalone_2p5_dispersion_threshold=standalone_thresholds,
+        axis_standalone_significant=[magnitudes[i] >= standalone_thresholds[i] for i in range(4)],
         axis_objective_gain=axis_gains,
         axis_objective_gain_floor=gain_floor,
         comparison_improvement=comparison_improvement,
     )
     if not any(axis_applied):
-        report["reason"] = "motion_residual_not_significant"
+        report["reason"] = "motion_residual_not_provisional"
         return report
-    report.update(accepted=True, reason="significant_motion_residual", confidence=comparison_improvement)
+    report.update(
+        accepted=True,
+        provisional=True,
+        reason="provisional_motion_residual",
+        confidence=comparison_improvement,
+    )
     return report
 
 
 def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candidate: dict) -> dict:
-    """Verify that the boundary step behaves like a constant framing offset.
-
-    A persistent offset is introduced once at the boundary, so later suffix-to-
-    suffix transitions should return to the extrapolated natural transform rather
-    than repeat the residual or immediately compensate it in the opposite direction.
-    """
+    """Verify per axis that a boundary residual behaves like a constant framing offset."""
     report = {
         "accepted": False,
         "reason": "candidate_unavailable",
         "transitions": [],
         "usable_transitions": 0,
+        "axis_persistent": [False] * 4,
     }
     if not candidate.get("accepted") or not motion.get("accepted"):
         return report
@@ -443,13 +462,14 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
     if len(usable) < 2:
         report["reason"] = "insufficient_suffix_persistence_evidence"
         return report
+
     boundary_signed = candidate["raw_signed_residual"]
-    axis_applied = candidate["axis_applied"]
+    selected_axes = candidate["axis_applied"]
     axis_reports = []
-    persistent = True
+    axis_persistent = [False] * 4
     for axis in range(4):
-        if not axis_applied[axis]:
-            axis_reports.append({"selected": False})
+        if not selected_axes[axis]:
+            axis_reports.append({"selected": False, "persistent_offset_supported": False})
             continue
         values = [float(item["motion_residual_signed"][axis]) for item in usable]
         boundary = float(boundary_signed[axis])
@@ -458,7 +478,7 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
         median_abs = float(np.median([abs(value) for value in values]))
         opposite_max = max((abs(value) for value in values if value * boundary < 0), default=0.0)
         axis_ok = median_abs <= limit and opposite_max < limit
-        persistent &= axis_ok
+        axis_persistent[axis] = axis_ok
         axis_reports.append(
             {
                 "selected": True,
@@ -471,11 +491,11 @@ def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candid
                 "persistent_offset_supported": axis_ok,
             }
         )
-    report["axis"] = axis_reports
-    if not persistent:
+    report.update(axis=axis_reports, axis_persistent=axis_persistent)
+    if not any(axis_persistent):
         report["reason"] = "suffix_recovery_or_drift_detected"
         return report
-    report.update(accepted=True, reason="persistent_offset_supported")
+    report.update(accepted=True, reason="persistent_axes_supported")
     return report
 
 
@@ -486,12 +506,20 @@ def _project_source_transform(candidate: dict, source_hw, target_hw) -> tuple[fl
     return (sx, sy, tx * tw / sw, ty * th / sh)
 
 
-def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict, source_hw, target_hw) -> dict:
+def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict, persistence: dict, source_hw, target_hw) -> dict:
+    """Authorize only persistent, same-axis cross-grid evidence with combined support.
+
+    The quadrature score is an engineering concordance score, not a p-value or a
+    claim that source and target measurements are statistically independent.
+    Each domain must independently contribute at least `_MIN_DOMAIN_EVIDENCE`.
+    """
     report = {
         "accepted": False,
         "reason": "candidate_unavailable",
         "transform": IDENTITY,
         "axis_applied": [False] * 4,
+        "combined_evidence_threshold": _COMBINED_EVIDENCE_THRESHOLD,
+        "minimum_domain_evidence": _MIN_DOMAIN_EVIDENCE,
     }
     if not source_candidate.get("accepted"):
         report["reason"] = "source_candidate_unavailable"
@@ -499,25 +527,60 @@ def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict
     projected = _project_source_transform(source_candidate, source_hw, target_hw)
     report["projected_source_transform"] = projected
     if not target_candidate.get("accepted"):
-        report["reason"] = "target_boundary_not_significant"
+        report["reason"] = "target_boundary_not_provisional"
         return report
+    if not persistence.get("accepted"):
+        report["reason"] = "source_persistence_unavailable"
+        return report
+
     source_signed = _signed_components(projected)
     target_signed = _signed_components(target_candidate["transform"])
     source_axes = source_candidate["axis_applied"]
     target_axes = target_candidate["axis_applied"]
+    persistent_axes = persistence.get("axis_persistent", [False] * 4)
+    source_scores = source_candidate.get("axis_evidence_score", [0.0] * 4)
+    target_scores = target_candidate.get("axis_evidence_score", [0.0] * 4)
+
     sign_agreement = []
     magnitude_ratio = []
+    combined_scores = []
+    domain_floor_pass = []
     axis_applied = []
+    axis_reasons = []
     for axis in range(4):
-        selected = bool(source_axes[axis] and target_axes[axis])
+        selected = bool(source_axes[axis] and target_axes[axis] and persistent_axes[axis])
         source_value = float(source_signed[axis])
         target_value = float(target_signed[axis])
         same_sign = selected and source_value * target_value > 0
         ratio = abs(target_value) / abs(source_value) if selected and abs(source_value) > 1e-12 else None
-        magnitude_ok = ratio is not None and 0.35 <= ratio <= 2.85
+        magnitude_ok = ratio is not None and _CORROBORATION_RATIO_MIN <= ratio <= _CORROBORATION_RATIO_MAX
+        source_score = float(source_scores[axis])
+        target_score = float(target_scores[axis])
+        domain_ok = selected and min(source_score, target_score) >= _MIN_DOMAIN_EVIDENCE
+        combined = math.hypot(source_score, target_score) if selected else 0.0
+        combined_ok = combined >= _COMBINED_EVIDENCE_THRESHOLD
+        authorized = bool(same_sign and magnitude_ok and domain_ok and combined_ok)
+
+        if not selected:
+            axis_reason = "axis_not_shared_or_persistent"
+        elif not same_sign:
+            axis_reason = "residual_sign_disagrees"
+        elif not magnitude_ok:
+            axis_reason = "residual_magnitude_disagrees"
+        elif not domain_ok:
+            axis_reason = "domain_evidence_too_weak"
+        elif not combined_ok:
+            axis_reason = "combined_evidence_insufficient"
+        else:
+            axis_reason = "combined_evidence_authorized"
+
         sign_agreement.append(bool(same_sign))
         magnitude_ratio.append(ratio)
-        axis_applied.append(bool(same_sign and magnitude_ok))
+        combined_scores.append(combined)
+        domain_floor_pass.append(bool(domain_ok))
+        axis_applied.append(authorized)
+        axis_reasons.append(axis_reason)
+
     target_transform = target_candidate["transform"]
     applied = (
         target_transform[0] if axis_applied[0] else 1.0,
@@ -529,15 +592,26 @@ def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict
         target_transform=target_transform,
         source_signed_residual=source_signed,
         target_signed_residual=target_signed,
+        source_evidence_score=list(source_scores),
+        target_evidence_score=list(target_scores),
+        combined_evidence_score=combined_scores,
+        domain_evidence_floor_pass=domain_floor_pass,
+        persistence_axis=persistent_axes,
         sign_agreement=sign_agreement,
         magnitude_ratio=magnitude_ratio,
+        axis_reason=axis_reasons,
         axis_applied=axis_applied,
         transform=applied,
     )
     if not any(axis_applied):
-        report["reason"] = "cross_grid_residual_not_corroborated"
+        if any(reason == "combined_evidence_insufficient" for reason in axis_reasons):
+            report["reason"] = "combined_evidence_insufficient"
+        elif any(reason == "domain_evidence_too_weak" for reason in axis_reasons):
+            report["reason"] = "domain_evidence_too_weak"
+        else:
+            report["reason"] = "cross_grid_residual_not_corroborated"
         return report
-    report.update(accepted=True, reason="cross_grid_residual_corroborated")
+    report.update(accepted=True, reason="combined_cross_grid_evidence_authorized")
     return report
 
 
@@ -573,7 +647,7 @@ def _valid_source_context(source, learned, prefix_t: int, source_hw) -> tuple[bo
 
 @torch.no_grad()
 def geometric_seam_bridge(learned, exact, *, source_hw, requested):
-    """Correct only a persistent, cross-grid-corroborated trajectory residual."""
+    """Correct only a persistent residual authorized by combined cross-grid evidence."""
     started = time.perf_counter()
     p = int(exact.shape[2])
     h, w = learned.shape[-2:]
@@ -590,21 +664,26 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
     low_report = {"available": source_valid, "reason": source_reason, "source_hw": tuple(source_hw)}
     source_candidate = {
         "accepted": False,
+        "provisional": False,
         "reason": source_reason,
         "transform": IDENTITY,
         "axis_applied": [False] * 4,
+        "axis_evidence_score": [0.0] * 4,
     }
     persistence = {
         "accepted": False,
         "reason": source_reason,
         "transitions": [],
         "usable_transitions": 0,
+        "axis_persistent": [False] * 4,
     }
     corroboration = {
         "accepted": False,
         "reason": source_reason,
         "transform": IDENTITY,
         "axis_applied": [False] * 4,
+        "combined_evidence_threshold": _COMBINED_EVIDENCE_THRESHOLD,
+        "minimum_domain_evidence": _MIN_DOMAIN_EVIDENCE,
     }
     if source_valid:
         source_motion = _motion_model(source, p)
@@ -620,6 +699,7 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
             corroboration = _corroborate_target_candidate(
                 source_candidate,
                 target_candidate,
+                persistence,
                 tuple(source_hw),
                 (h, w),
             )
@@ -630,7 +710,7 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
             suffix_persistence=persistence,
         )
 
-    candidate_ready = bool(persistence.get("accepted") and corroboration.get("accepted"))
+    candidate_ready = bool(corroboration.get("accepted"))
     accepted = bool(requested and candidate_ready)
     if not requested:
         reason = "disabled"
@@ -641,7 +721,7 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
     elif not persistence.get("accepted"):
         reason = persistence["reason"]
     elif not target_candidate.get("accepted"):
-        reason = "target_boundary_not_significant"
+        reason = "target_boundary_not_provisional"
     else:
         reason = corroboration["reason"]
 
@@ -663,8 +743,8 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
         "requested": bool(requested),
         "accepted": accepted,
         "reason": reason,
-        "policy": "persistent_low_grid_motion_residual_cross_grid_corroborated",
-        "persistent_bias_candidate": bool(source_candidate.get("accepted") and persistence.get("accepted")),
+        "policy": "persistent_low_grid_motion_residual_combined_cross_grid_evidence",
+        "persistent_bias_candidate": bool(any(persistence.get("axis_persistent", [False] * 4))),
         "corroborated_bias_candidate": candidate_ready,
         "tokens_corrected": 0,
         "applied_transforms": [],
