@@ -122,7 +122,7 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
         "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash while preserving the authoritative prefix bit-exactly."
+        "flash. An optional motion-residual geometric bridge remains experimental and off by default."
     )
 
     @classmethod
@@ -149,8 +149,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             "BOOLEAN",
             {
                 "default": False,
-                "tooltip": "Experimental three-token geometric seam bridge. Confidence-gated; "
-                "requires decoded-media validation. Registration diagnostics run even when disabled.",
+                "tooltip": (
+                    "Experimental motion-residual geometric seam bridge. It extrapolates recent exact-prefix "
+                    "motion, corrects only significant residual scale/translation axes across the learned "
+                    "suffix, and remains off until decoded-media validation. Diagnostics run when disabled."
+                ),
             },
         )
         return inputs

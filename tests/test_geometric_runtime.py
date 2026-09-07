@@ -5,7 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
-from test_geometric_bridge import pattern, transform_video
+from test_geometric_bridge import append_biased_suffix, motion_sequence
 from test_handoff import FakeLearnedProvider
 
 from h3_flow_regenerate.geometric_bridge import geometric_seam_bridge
@@ -18,23 +18,27 @@ from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff,
 from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
 
 
-@pytest.mark.parametrize("enabled,shift", [(False, True), (True, False), (True, True)])
+@pytest.mark.parametrize("enabled,seam", [(False, True), (True, False), (True, True)])
 @pytest.mark.parametrize("dc", [False, True])
-def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, shift, dc):
+def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, seam, dc):
     fake = ModuleType("comfy")
     fake.samplers = ModuleType("comfy.samplers")
     fake.samplers.KSAMPLER = lambda function, **kw: SimpleNamespace(sampler_function=function, extra_options={})
     monkeypatch.setitem(sys.modules, "comfy", fake)
     monkeypatch.setitem(sys.modules, "comfy.samplers", fake.samplers)
-    learned = pattern(7).repeat(1, 3, 1, 1, 1)
-    exact = transform_video(learned[:, :, :3], (1.02, 0.99, 0.75, -0.5)) if shift else learned[:, :, :3].clone()
-    exact = exact + 2
+
+    natural = (1.0, 1.0, -0.5, 0.0)
+    prefix = motion_sequence([natural] * 4).repeat(1, 3, 1, 1, 1)
+    prefix_t = prefix.shape[2]
+    residual = (1.0, 0.98, 0.0, 0.0) if seam else (1.0, 1.0, 0.0, 0.0)
+    learned = append_biased_suffix(prefix, natural, residual, count=4)
+    exact = prefix + 2
     video = learned.clone()
-    video[:, :, :3] = exact
+    video[:, :, :prefix_t] = exact
     audio = torch.randn(1, 32, 2, 11)
     packed, shapes = pack_streams((video, audio))
     vm = torch.ones_like(video)
-    vm[:, :, :3] = 0
+    vm[:, :, :prefix_t] = 0
     mask = pack_streams((vm, torch.ones_like(audio)))[0]
     caller_noise = torch.randn_like(packed)
     saved_noise, saved_mask, saved_learned = caller_noise.clone(), mask.clone(), learned.clone()
@@ -93,7 +97,7 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     if report["accepted"]:
         if dc:
             calibrated = geometric.clone()
-            calibrated[:, :, 2] = aligned
+            calibrated[:, :, prefix_t - 1] = aligned
             geometric, _ = apply_suffix_dc_bridge(calibrated, exact)
         state = (1 - sigma) * geometric + sigma * handoff_noise
     else:
@@ -103,22 +107,27 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
             recovered = recover_conditional_clean_for_diagnostics(state, handoff_noise, sigma=sigma)
             corrected, _ = apply_suffix_dc_bridge(recovered, exact)
             state = map_clean_bridge_to_conditional_state(
-                state, recovered, corrected, sigma=sigma, prefix_t=3, corrected_tokens=1
+                state,
+                recovered,
+                corrected,
+                sigma=sigma,
+                prefix_t=prefix_t,
+                corrected_tokens=1,
             )
     expected = (state - (1 - sigma) * video) / sigma
     got_video, got_audio = unpack_streams(high_noise, shapes)
-    assert torch.equal(got_video[:, :, 3:], expected[:, :, 3:])
-    # Audio low-stage state is unaffected by either bridge; same deterministic fixture.
+    assert torch.equal(got_video[:, :, prefix_t:], expected[:, :, prefix_t:])
     expected_audio = (audio - (1 - sigma) * audio) / sigma
     assert torch.allclose(got_audio, expected_audio, atol=1e-6, rtol=1e-6)
     original_video_noise, _ = unpack_streams(caller_noise, shapes)
-    assert torch.equal(got_video[:, :, :3], original_video_noise[:, :, :3])
+    assert torch.equal(got_video[:, :, :prefix_t], original_video_noise[:, :, :prefix_t])
     assert torch.equal(caller_noise, saved_noise) and torch.equal(mask, saved_mask)
     assert torch.equal(learned, saved_learned)
     assert len(provider.calls) == 2
-    geometry = [e.fields for e in binding.metrics.events if e.kind == "mixed_grid_geometry"]
-    assert len(geometry) == 2 and all(e["final_prefix_exact"] for e in geometry)
-    assert all(e["accepted"] == (enabled and shift) for e in geometry)
+    geometry = [event.fields for event in binding.metrics.events if event.kind == "mixed_grid_geometry"]
+    assert len(geometry) == 2 and all(event["final_prefix_exact"] for event in geometry)
+    assert all(event["accepted"] == (enabled and seam) for event in geometry)
+    assert all(event["policy"] == "persistent_motion_residual" for event in geometry)
     assert "h3_flow_mixed_grid_v1" not in guider.model_options["transformer_options"]
     assert binding.metrics.counters["handoff_exact_probe_nfe"] == 2
 
