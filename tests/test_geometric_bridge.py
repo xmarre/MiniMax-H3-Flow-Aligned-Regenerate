@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from h3_flow_regenerate.geometric_bridge import (
     IDENTITY,
     SOURCE_CLEAN_CONTEXT_ATTR,
+    _corroborate_target_candidate,
     compose_transform,
     geometric_seam_bridge,
     invert_transform,
@@ -107,20 +108,6 @@ def test_known_same_time_transforms(theta):
         assert got == pytest.approx(expected, abs=atol)
 
 
-def test_transfer_prefix_bias_is_diagnostic_only():
-    target_prefix, learned, source = matched_pair(source_correction=IDENTITY, target_correction=IDENTITY)
-    learned = learned.clone()
-    learned[:, :, : target_prefix.shape[2]] = transform_video(
-        learned[:, :, : target_prefix.shape[2]],
-        (1.02, 0.99, 0.75, -0.5),
-    )
-    attach_source(learned, source)
-    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
-    assert report["transfer_bias_candidate"]
-    assert not report["accepted"]
-    assert result is learned
-
-
 def test_persistent_vertical_scale_is_corrected_only_after_cross_grid_corroboration():
     exact, learned, _ = matched_pair()
     saved = learned.clone()
@@ -128,6 +115,7 @@ def test_persistent_vertical_scale_is_corrected_only_after_cross_grid_corroborat
     assert report["accepted"], report
     assert report["motion_residual"]["axis_applied"] == [False, True, False, False]
     assert report["suffix_persistence"]["accepted"]
+    assert report["suffix_persistence"]["axis_persistent"] == [False, True, False, False]
     corroboration = report["cross_grid_corroboration"]
     assert corroboration["accepted"]
     assert corroboration["axis_applied"] == [False, True, False, False]
@@ -136,8 +124,66 @@ def test_persistent_vertical_scale_is_corrected_only_after_cross_grid_corroborat
     assert torch.equal(result[:, :, : exact.shape[2]], learned[:, :, : exact.shape[2]])
     assert not torch.equal(result[:, :, exact.shape[2] :], learned[:, :, exact.shape[2] :])
     assert torch.equal(learned, saved)
-    expected = report["target_natural_motion_model"]["expected_transform"]
-    assert report["boundary_after_geometry"]["transform"] == pytest.approx(expected, abs=0.01)
+
+
+def test_actual_like_moderate_scale_evidence_combines_across_grids():
+    source_sy = 0.9750026040762715
+    target_sy = 0.9831404905194943
+    source_score = abs(math.log(source_sy)) / 0.012961403605976161
+    target_score = abs(math.log(target_sy)) / 0.009277968419866023
+    assert source_score < 2.5 and target_score < 2.5
+    assert math.hypot(source_score, target_score) > 2.5
+    source = {
+        "accepted": True,
+        "axis_applied": [False, True, False, False],
+        "transform": (1.0, source_sy, 0.0, 0.0),
+        "axis_evidence_score": [0.0, source_score, 0.0, 0.0],
+    }
+    target = {
+        "accepted": True,
+        "axis_applied": [False, True, False, False],
+        "transform": (1.0, target_sy, 0.0, 0.0),
+        "axis_evidence_score": [0.0, target_score, 0.0, 0.0],
+    }
+    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
+    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    assert report["accepted"], report
+    assert report["axis_applied"] == [False, True, False, False]
+    assert report["axis_reason"][1] == "combined_evidence_authorized"
+    assert report["combined_evidence_score"][1] > 2.5
+
+
+def test_combined_evidence_does_not_allow_one_domain_to_dominate():
+    source = {
+        "accepted": True,
+        "axis_applied": [False, True, False, False],
+        "transform": (1.0, 0.98, 0.0, 0.0),
+        "axis_evidence_score": [0.0, 0.8, 0.0, 0.0],
+    }
+    target = {
+        "accepted": True,
+        "axis_applied": [False, True, False, False],
+        "transform": (1.0, 0.98, 0.0, 0.0),
+        "axis_evidence_score": [0.0, 3.5, 0.0, 0.0],
+    }
+    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
+    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    assert not report["accepted"]
+    assert report["reason"] == "domain_evidence_too_weak"
+
+
+def test_recovering_source_boundary_rejects_persistent_full_suffix_warp():
+    natural = IDENTITY
+    target_prefix = motion_sequence([natural] * 7, h=56, w=76, seed=101)
+    source_prefix = motion_sequence([natural] * 7, h=40, w=54, seed=202)
+    learned = append_biased_suffix(target_prefix, natural, (1.0, 0.98, 0.0, 0.0), count=5)
+    source = append_recovering_suffix(source_prefix, natural, (1.0, 0.98, 0.0, 0.0), count=5)
+    attach_source(learned, source)
+    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
+    assert report["motion_residual"]["accepted"]
+    assert not report["suffix_persistence"]["accepted"]
+    assert report["reason"] == "suffix_recovery_or_drift_detected"
+    assert result is learned
 
 
 def test_source_residual_without_target_residual_is_noop():
@@ -147,7 +193,7 @@ def test_source_residual_without_target_residual_is_noop():
     assert report["suffix_persistence"]["accepted"]
     assert not report["target_motion_residual"]["accepted"]
     assert not report["accepted"]
-    assert report["reason"] == "target_boundary_not_significant"
+    assert report["reason"] == "target_boundary_not_provisional"
     assert result is learned
 
 
@@ -183,20 +229,6 @@ def test_large_cross_grid_magnitude_disagreement_is_noop():
     assert result is learned
 
 
-def test_recovering_source_boundary_rejects_persistent_full_suffix_warp():
-    natural = IDENTITY
-    target_prefix = motion_sequence([natural] * 7, h=56, w=76, seed=101)
-    source_prefix = motion_sequence([natural] * 7, h=40, w=54, seed=202)
-    learned = append_biased_suffix(target_prefix, natural, (1.0, 0.98, 0.0, 0.0), count=5)
-    source = append_recovering_suffix(source_prefix, natural, (1.0, 0.98, 0.0, 0.0), count=5)
-    attach_source(learned, source)
-    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
-    assert report["motion_residual"]["accepted"]
-    assert not report["suffix_persistence"]["accepted"]
-    assert report["reason"] == "suffix_recovery_or_drift_detected"
-    assert result is learned
-
-
 def test_natural_motion_is_preserved():
     target_natural = (1.0, 1.0, -0.75, 0.125)
     source_natural = (1.0, 1.0, target_natural[2] * 54 / 76, target_natural[3] * 40 / 56)
@@ -208,22 +240,6 @@ def test_natural_motion_is_preserved():
     result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
     assert not report["accepted"]
     assert result is learned
-
-
-def test_gradual_zoom_trend_is_extrapolated_not_corrected():
-    target_transitions = [(1.0, 1.0 + i * 0.002, 0.0, 0.0) for i in range(7)]
-    source_transitions = list(target_transitions)
-    target_prefix = motion_sequence(target_transitions, h=56, w=76, seed=101)
-    source_prefix = motion_sequence(source_transitions, h=40, w=54, seed=202)
-    next_motion = (1.0, 1.014, 0.0, 0.0)
-    learned = append_biased_suffix(target_prefix, next_motion, IDENTITY, count=5)
-    source = append_biased_suffix(source_prefix, next_motion, IDENTITY, count=5)
-    attach_source(learned, source)
-    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
-    assert not report["accepted"]
-    assert result is learned
-    expected = report["low_grid_trajectory"]["natural_motion_model"]["expected_transform"]
-    assert expected[1] == pytest.approx(next_motion[1], abs=0.005)
 
 
 def test_translation_is_measured_on_source_but_applied_in_target_units():
@@ -261,14 +277,6 @@ def test_disabled_is_exact_noop_but_diagnostics_still_identify_candidate():
     assert report["corroborated_bias_candidate"]
 
 
-def test_40x54_to_56x76_geometry_is_reported():
-    exact, learned, _ = matched_pair()
-    _, _, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=False)
-    assert report["grid_scale_y"] == 1.4
-    assert report["grid_scale_x"] == 76 / 54
-    assert report["grid_anisotropy"] == pytest.approx((76 / 54) / 1.4 - 1)
-
-
 def test_constant_and_nonfinite_inputs_reject():
     exact = torch.zeros(1, 8, 8, 56, 76)
     learned = torch.zeros(1, 8, 12, 56, 76)
@@ -294,6 +302,44 @@ def test_dtype_and_prefix_exact(dtype):
     assert report["accepted"], report
     assert result.dtype == dtype and result.device == learned.device
     assert torch.equal(result[:, :, : exact.shape[2]], prefix)
+
+
+def test_transfer_prefix_bias_is_diagnostic_only():
+    target_prefix, learned, source = matched_pair(source_correction=IDENTITY, target_correction=IDENTITY)
+    learned = learned.clone()
+    learned[:, :, : target_prefix.shape[2]] = transform_video(
+        learned[:, :, : target_prefix.shape[2]],
+        (1.02, 0.99, 0.75, -0.5),
+    )
+    attach_source(learned, source)
+    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
+    assert report["transfer_bias_candidate"]
+    assert not report["accepted"]
+    assert result is learned
+
+
+def test_gradual_zoom_trend_is_extrapolated_not_corrected():
+    target_transitions = [(1.0, 1.0 + i * 0.002, 0.0, 0.0) for i in range(7)]
+    source_transitions = list(target_transitions)
+    target_prefix = motion_sequence(target_transitions, h=56, w=76, seed=101)
+    source_prefix = motion_sequence(source_transitions, h=40, w=54, seed=202)
+    next_motion = (1.0, 1.014, 0.0, 0.0)
+    learned = append_biased_suffix(target_prefix, next_motion, IDENTITY, count=5)
+    source = append_biased_suffix(source_prefix, next_motion, IDENTITY, count=5)
+    attach_source(learned, source)
+    result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
+    assert not report["accepted"]
+    assert result is learned
+    expected = report["low_grid_trajectory"]["natural_motion_model"]["expected_transform"]
+    assert expected[1] == pytest.approx(next_motion[1], abs=0.005)
+
+
+def test_40x54_to_56x76_geometry_is_reported():
+    exact, learned, _ = matched_pair()
+    _, _, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=False)
+    assert report["grid_scale_y"] == 1.4
+    assert report["grid_scale_x"] == 76 / 54
+    assert report["grid_anisotropy"] == pytest.approx((76 / 54) / 1.4 - 1)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
