@@ -513,10 +513,7 @@ def _corroborate_target_candidate(source_candidate: dict, target_candidate: dict
         source_value = float(source_signed[axis])
         target_value = float(target_signed[axis])
         same_sign = selected and source_value * target_value > 0
-        if selected and abs(source_value) > 1e-12:
-            ratio = abs(target_value) / abs(source_value)
-        else:
-            ratio = None
+        ratio = abs(target_value) / abs(source_value) if selected and abs(source_value) > 1e-12 else None
         magnitude_ok = ratio is not None and 0.35 <= ratio <= 2.85
         sign_agreement.append(bool(same_sign))
         magnitude_ratio.append(ratio)
