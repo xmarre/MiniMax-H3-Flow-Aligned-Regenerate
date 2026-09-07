@@ -20,12 +20,16 @@ class Provider:
 
     def upscale_clean_video(self, video, *, target_h, target_w):
         self.calls.append((video, target_h, target_w))
-        return torch.nn.functional.interpolate(
-            video.permute(0, 2, 1, 3, 4).reshape(-1, video.shape[1], *video.shape[-2:]),
-            size=(target_h, target_w),
-            mode="bilinear",
-            align_corners=False,
-        ).reshape(video.shape[0], video.shape[2], video.shape[1], target_h, target_w).permute(0, 2, 1, 3, 4)
+        return (
+            torch.nn.functional.interpolate(
+                video.permute(0, 2, 1, 3, 4).reshape(-1, video.shape[1], *video.shape[-2:]),
+                size=(target_h, target_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+            .reshape(video.shape[0], video.shape[2], video.shape[1], target_h, target_w)
+            .permute(0, 2, 1, 3, 4)
+        )
 
 
 def test_proxy_delegates_provider_contract_and_attaches_invocation_local_source():
