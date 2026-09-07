@@ -136,9 +136,7 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     geometry = [event.fields for event in binding.metrics.events if event.kind == "mixed_grid_geometry"]
     assert len(geometry) == 2 and all(event["final_prefix_exact"] for event in geometry)
     assert all(event["accepted"] == (enabled and seam) for event in geometry)
-    assert all(
-        event["policy"] == "persistent_low_grid_motion_residual_cross_grid_corroborated" for event in geometry
-    )
+    assert all(event["policy"] == "persistent_low_grid_motion_residual_cross_grid_corroborated" for event in geometry)
     assert all(event["low_grid_trajectory"]["available"] for event in geometry)
     assert "h3_flow_mixed_grid_v1" not in guider.model_options["transformer_options"]
     assert binding.metrics.counters["handoff_exact_probe_nfe"] == 2
