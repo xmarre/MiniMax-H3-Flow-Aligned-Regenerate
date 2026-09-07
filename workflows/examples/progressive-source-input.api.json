@@ -1,0 +1,136 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {"title": "Load MiniMax H3 diffusion model"}
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {"title": "Load MiniMax H3 text encoder"}
+  },
+  "3": {
+    "inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"},
+    "class_type": "VAELoader",
+    "_meta": {"title": "Load video VAE"}
+  },
+  "4": {
+    "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"},
+    "class_type": "VAELoader",
+    "_meta": {"title": "Load audio VAE"}
+  },
+  "5": {
+    "inputs": {
+      "clip": ["2", 0],
+      "vae": ["3", 0],
+      "prompt": "A single continuous cinematic shot of a cyclist crossing a wet city street at dusk. The camera tracks smoothly from the side while reflections move across the pavement. Natural traffic ambience and bicycle sounds, no cuts, no text or subtitles.",
+      "width": 864,
+      "height": 480,
+      "length": 124
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {"title": "MiniMax H3 conditioning + source-grid latent"}
+  },
+  "6": {
+    "inputs": {"storage": "system_ram", "max_runs": 4},
+    "class_type": "H3FlowTrajectory",
+    "_meta": {"title": "MiniMax H3 Flow Trajectory"}
+  },
+  "7": {
+    "inputs": {
+      "model": ["1", 0],
+      "trajectory": ["6", 0],
+      "target_mode": "scale",
+      "scale": 1.2,
+      "target_width": 1024,
+      "target_height": 576,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction",
+      "direction_weight": 0.25,
+      "acceleration_weight": 0.0,
+      "consistency_weight": 0.0,
+      "low_frequency_cutoff": 0.25,
+      "temporal_weight": 0.2
+    },
+    "class_type": "H3ProgressiveHandoff",
+    "_meta": {"title": "Progressive Handoff"}
+  },
+  "8": {
+    "inputs": {"noise_seed": 424242},
+    "class_type": "RandomNoise",
+    "_meta": {"title": "Noise"}
+  },
+  "9": {
+    "inputs": {"sampler_name": "res_multistep"},
+    "class_type": "KSamplerSelect",
+    "_meta": {"title": "Sampler"}
+  },
+  "10": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 19,
+      "denoise": 1.0,
+      "model": ["7", 0]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {"title": "19-step schedule"}
+  },
+  "11": {
+    "inputs": {
+      "model": ["7", 0],
+      "conditioning": ["5", 0]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {"title": "Basic Guider"}
+  },
+  "12": {
+    "inputs": {
+      "noise": ["8", 0],
+      "guider": ["11", 0],
+      "sampler": ["9", 0],
+      "sigmas": ["10", 0],
+      "latent_image": ["5", 1]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {"title": "Progressive sampling"}
+  },
+  "13": {
+    "inputs": {"samples": ["12", 0], "vae": ["3", 0]},
+    "class_type": "VAEDecode",
+    "_meta": {"title": "Decode video"}
+  },
+  "14": {
+    "inputs": {"samples": ["12", 0], "vae": ["4", 0]},
+    "class_type": "VAEDecodeAudio",
+    "_meta": {"title": "Decode audio"}
+  },
+  "15": {
+    "inputs": {
+      "fps": 24,
+      "bit_depth": 8,
+      "images": ["13", 0],
+      "audio": ["14", 0]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {"title": "Create video"}
+  },
+  "16": {
+    "inputs": {
+      "filename_prefix": "video/MiniMax_H3_Flow_Progressive_Source_Input",
+      "format": "mp4",
+      "codec": "h264",
+      "codec.encoding": "auto",
+      "video": ["15", 0]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {"title": "Save video"}
+  }
+}
