@@ -1,10 +1,11 @@
 """Motion-aware geometric seam diagnostics for progressive H3 Continuum.
 
 Transforms use output->input sampling coordinates about image centre, in latent
-pixels. The bridge estimates the natural transform between recent exact-prefix
-tokens, compares it with the protected-prefix -> learned-suffix boundary, and
-corrects only the statistically supported residual. The authoritative prefix is
-never warped. No gradients are used.
+pixels. The bridge measures the genuine low-grid trajectory before learned
+upsampling, predicts natural motion from the exact-prefix history, and corrects
+only a statistically supported framing residual whose persistence is verified by
+subsequent low-grid suffix transitions. The authoritative prefix is never warped.
+No gradients are used.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from torch.nn import functional as F
 
 IDENTITY = (1.0, 1.0, 0.0, 0.0)
 MOTION_BASELINE_TRANSITIONS = 6
+PERSISTENCE_TRANSITIONS = 4
+SOURCE_CLEAN_CONTEXT_ATTR = "_h3_flow_source_clean_video"
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 
@@ -73,8 +76,16 @@ def _errors(reference, moving, transform, original_hw):
     h, w = original_hw
     fh, fw = moving.shape[-2:]
     sx, sy, tx, ty = transform
-    xx = np.clip(sx * (np.arange(fw, dtype=np.float32) - (fw - 1) / 2) + (fw - 1) / 2 + tx * fw / w, 0, fw - 1)
-    yy = np.clip(sy * (np.arange(fh, dtype=np.float32) - (fh - 1) / 2) + (fh - 1) / 2 + ty * fh / h, 0, fh - 1)
+    xx = np.clip(
+        sx * (np.arange(fw, dtype=np.float32) - (fw - 1) / 2) + (fw - 1) / 2 + tx * fw / w,
+        0,
+        fw - 1,
+    )
+    yy = np.clip(
+        sy * (np.arange(fh, dtype=np.float32) - (fh - 1) / 2) + (fh - 1) / 2 + ty * fh / h,
+        0,
+        fh - 1,
+    )
     x0, y0 = xx.astype(np.int64), yy.astype(np.int64)
     x1, y1 = np.minimum(x0 + 1, fw - 1), np.minimum(y0 + 1, fh - 1)
     wx, wy = xx - x0, yy - y0
@@ -253,49 +264,83 @@ def register_pair(reference: torch.Tensor, moving: torch.Tensor, *, comparison=N
     return report
 
 
-def _theil_sen_next(values: list[float]) -> tuple[float, float, float]:
-    arr = np.asarray(values, dtype=np.float64)
-    n = len(arr)
-    slopes = [(arr[j] - arr[i]) / (j - i) for i in range(n) for j in range(i + 1, n)]
+def _theil_sen_predict(samples: list[tuple[int, float]], next_index: int) -> tuple[float, float, float, float]:
+    indices = np.asarray([item[0] for item in samples], dtype=np.float64)
+    values = np.asarray([item[1] for item in samples], dtype=np.float64)
+    slopes = [
+        (values[j] - values[i]) / (indices[j] - indices[i])
+        for i in range(len(samples))
+        for j in range(i + 1, len(samples))
+        if indices[j] != indices[i]
+    ]
     slope = float(np.median(slopes)) if slopes else 0.0
-    predicted = float(np.median([arr[i] + slope * (n - i) for i in range(n)]))
-    residuals = np.asarray([arr[i] - (predicted + slope * (i - n)) for i in range(n)])
+    intercept = float(np.median(values - slope * indices))
+    predicted = intercept + slope * next_index
+    residuals = values - (intercept + slope * indices)
     dispersion = float(1.4826 * np.median(np.abs(residuals - np.median(residuals))))
-    return predicted, slope, dispersion
+    return float(predicted), slope, dispersion, intercept
 
 
-def _motion_model(exact: torch.Tensor) -> dict:
-    p = exact.shape[2]
+def _motion_model(video: torch.Tensor, prefix_t: int | None = None) -> dict:
+    p = int(video.shape[2] if prefix_t is None else prefix_t)
     transitions = []
     start = max(1, p - MOTION_BASELINE_TRANSITIONS)
     for i in range(start, p):
-        transitions.append(register_pair(exact[:, :, i - 1 : i], exact[:, :, i : i + 1]))
-    usable = [r for r in transitions if r.get("aligned_error") is not None and r["aligned_error"] <= 0.30]
+        item = register_pair(video[:, :, i - 1 : i], video[:, :, i : i + 1])
+        item["transition_index"] = i
+        transitions.append(item)
+    usable = [
+        item
+        for item in transitions
+        if item.get("aligned_error") is not None
+        and math.isfinite(float(item["aligned_error"]))
+        and item["aligned_error"] <= 0.30
+    ]
     report = {
         "transitions": transitions,
         "usable_transitions": len(usable),
         "accepted": False,
         "reason": "insufficient_motion_history",
+        "next_transition_index": p,
     }
-    if len(usable) < 3:
+    if len(usable) < 3 or usable[-1]["transition_index"] - usable[0]["transition_index"] < 2:
         return report
     params = [[], [], [], []]
     for item in usable:
+        index = int(item["transition_index"])
         sx, sy, tx, ty = item["transform"]
-        params[0].append(math.log(sx))
-        params[1].append(math.log(sy))
-        params[2].append(tx)
-        params[3].append(ty)
-    predictions, slopes, dispersions = zip(*(_theil_sen_next(v) for v in params), strict=True)
-    expected = (math.exp(predictions[0]), math.exp(predictions[1]), predictions[2], predictions[3])
+        params[0].append((index, math.log(sx)))
+        params[1].append((index, math.log(sy)))
+        params[2].append((index, tx))
+        params[3].append((index, ty))
+    fits = [_theil_sen_predict(values, p) for values in params]
+    expected = (math.exp(fits[0][0]), math.exp(fits[1][0]), fits[2][0], fits[3][0])
     report.update(
         accepted=True,
         reason="robust_recent_motion",
         expected_transform=expected,
-        trend=(slopes[0], slopes[1], slopes[2], slopes[3]),
-        dispersion=(dispersions[0], dispersions[1], dispersions[2], dispersions[3]),
+        trend=(fits[0][1], fits[1][1], fits[2][1], fits[3][1]),
+        dispersion=(fits[0][2], fits[1][2], fits[2][2], fits[3][2]),
+        intercept=(fits[0][3], fits[1][3], fits[2][3], fits[3][3]),
     )
     return report
+
+
+def _predict_motion_transform(motion: dict, offset: int) -> tuple[float, float, float, float] | None:
+    if not motion.get("accepted"):
+        return None
+    base = motion["expected_transform"]
+    trend = motion["trend"]
+    return (
+        math.exp(math.log(base[0]) + trend[0] * offset),
+        math.exp(math.log(base[1]) + trend[1] * offset),
+        base[2] + trend[2] * offset,
+        base[3] + trend[3] * offset,
+    )
+
+
+def _signed_components(transform: tuple[float, ...]) -> tuple[float, float, float, float]:
+    return (math.log(transform[0]), math.log(transform[1]), transform[2], transform[3])
 
 
 def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
@@ -318,7 +363,8 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
     dispersions = motion["dispersion"]
     axis_gains = boundary.get("residual_axis_gains", [0.0] * 4)
     h, w = hw
-    magnitudes = (abs(math.log(correction[0])), abs(math.log(correction[1])), abs(correction[2]), abs(correction[3]))
+    signed = _signed_components(correction)
+    magnitudes = tuple(abs(value) for value in signed)
     significance = (
         max(_SCALE_FLOOR, 2.5 * dispersions[0]),
         max(_SCALE_FLOOR, 2.5 * dispersions[1]),
@@ -339,6 +385,7 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
     )
     report.update(
         raw_transform=correction,
+        raw_signed_residual=signed,
         transform=applied,
         axis_applied=axis_applied,
         axis_magnitude=magnitudes,
@@ -354,28 +401,221 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
     return report
 
 
+def _suffix_persistence(video: torch.Tensor, prefix_t: int, motion: dict, candidate: dict) -> dict:
+    report = {
+        "accepted": False,
+        "reason": "candidate_unavailable",
+        "transitions": [],
+        "usable_transitions": 0,
+    }
+    if not candidate.get("accepted") or not motion.get("accepted"):
+        return report
+    available = int(video.shape[2]) - int(prefix_t) - 1
+    if available < 2:
+        report["reason"] = "insufficient_suffix_persistence_evidence"
+        return report
+    transitions = []
+    usable = []
+    for offset in range(min(PERSISTENCE_TRANSITIONS, available)):
+        expected = _predict_motion_transform(motion, offset + 1)
+        index = prefix_t + offset
+        item = register_pair(video[:, :, index : index + 1], video[:, :, index + 1 : index + 2], comparison=expected)
+        item["suffix_transition_offset"] = offset + 1
+        if item.get("aligned_error") is not None and math.isfinite(float(item["aligned_error"])):
+            item["motion_residual_transform"] = residual_transform(item["transform"], expected)
+            item["motion_residual_signed"] = _signed_components(item["motion_residual_transform"])
+            if item["aligned_error"] <= 0.30:
+                usable.append(item)
+        transitions.append(item)
+    report.update(transitions=transitions, usable_transitions=len(usable))
+    if len(usable) < 2:
+        report["reason"] = "insufficient_suffix_persistence_evidence"
+        return report
+    boundary_signed = candidate["raw_signed_residual"]
+    axis_applied = candidate["axis_applied"]
+    axis_reports = []
+    persistent = True
+    for axis in range(4):
+        if not axis_applied[axis]:
+            axis_reports.append({"selected": False})
+            continue
+        values = [float(item["motion_residual_signed"][axis]) for item in usable]
+        absolute = [abs(value) for value in values]
+        boundary = float(boundary_signed[axis])
+        floor = _SCALE_FLOOR if axis < 2 else _TRANSLATION_FLOOR
+        residual_limit = max(floor, 0.60 * abs(boundary))
+        recovery_limit = max(floor, 0.60 * abs(boundary))
+        median_abs = float(np.median(absolute))
+        opposite_max = max((abs(value) for value in values if value * boundary < 0), default=0.0)
+        axis_ok = median_abs <= residual_limit and opposite_max < recovery_limit
+        persistent &= axis_ok
+        axis_reports.append(
+            {
+                "selected": True,
+                "boundary_signed_residual": boundary,
+                "followup_signed_residuals": values,
+                "median_followup_abs_residual": median_abs,
+                "followup_residual_limit": residual_limit,
+                "opposite_recovery_max": opposite_max,
+                "opposite_recovery_limit": recovery_limit,
+                "persistent_offset_supported": axis_ok,
+            }
+        )
+    report["axis"] = axis_reports
+    if not persistent:
+        report["reason"] = "suffix_recovery_or_drift_detected"
+        return report
+    report.update(accepted=True, reason="persistent_offset_supported")
+    return report
+
+
+def _target_transform(candidate: dict, source_hw, target_hw) -> dict:
+    report = {
+        "accepted": False,
+        "reason": "candidate_unavailable",
+        "transform": IDENTITY,
+        "axis_applied": [False] * 4,
+    }
+    if not candidate.get("accepted"):
+        return report
+    sh, sw = source_hw
+    th, tw = target_hw
+    sx, sy, tx, ty = candidate["transform"]
+    raw = (sx, sy, tx * tw / sw, ty * th / sh)
+    axis_applied = list(candidate["axis_applied"])
+    safety = (math.log(1.03), math.log(1.03), min(1.5, tw * 0.025), min(1.5, th * 0.025))
+    signed = _signed_components(raw)
+    target_safety_rejected = [axis_applied[i] and abs(signed[i]) > safety[i] + 1e-8 for i in range(4)]
+    axis_applied = [axis_applied[i] and not target_safety_rejected[i] for i in range(4)]
+    applied = (
+        raw[0] if axis_applied[0] else 1.0,
+        raw[1] if axis_applied[1] else 1.0,
+        raw[2] if axis_applied[2] else 0.0,
+        raw[3] if axis_applied[3] else 0.0,
+    )
+    report.update(
+        raw_target_transform=raw,
+        transform=applied,
+        axis_applied=axis_applied,
+        target_safety_rejected=target_safety_rejected,
+        source_to_target_translation_scale=(tw / sw, th / sh),
+    )
+    if not any(axis_applied):
+        report["reason"] = "target_safety_bounds"
+        return report
+    report.update(accepted=True, reason="target_transform_safe")
+    return report
+
+
+def _warp_video_suffix(video: torch.Tensor, prefix_t: int, transform: tuple[float, ...]) -> torch.Tensor:
+    corrected = video.clone()
+    suffix = video[:, :, prefix_t:]
+    if suffix.shape[2] == 0 or transform == IDENTITY:
+        return corrected
+    b, c, t, h, w = suffix.shape
+    flat = suffix.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+    flat = warp_frame(flat, transform)
+    corrected[:, :, prefix_t:] = flat.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
+    return corrected
+
+
 def _dc(a, b):
     return float((a.float().mean((-2, -1)) - b.float().mean((-2, -1))).square().mean().sqrt())
 
 
+def _valid_source_context(source, learned, prefix_t: int, source_hw) -> tuple[bool, str]:
+    if not isinstance(source, torch.Tensor):
+        return False, "source_trajectory_context_unavailable"
+    if source.ndim != 5 or source.shape[:3] != learned.shape[:3]:
+        return False, "source_trajectory_context_shape_mismatch"
+    if tuple(source.shape[-2:]) != tuple(source_hw):
+        return False, "source_trajectory_context_geometry_mismatch"
+    if not source.is_floating_point() or not bool(torch.isfinite(source).all()):
+        return False, "source_trajectory_context_invalid"
+    if not 0 < prefix_t < source.shape[2]:
+        return False, "source_trajectory_context_prefix_mismatch"
+    return True, "source_trajectory_context_valid"
+
+
 @torch.no_grad()
 def geometric_seam_bridge(learned, exact, *, source_hw, requested):
-    """Correct a persistent suffix framing residual relative to recent exact motion.
+    """Correct a persistent low-grid framing step relative to recent natural motion.
 
-    Paired-prefix registration remains diagnostic; it no longer drives correction.
-    The bridge applies one confidence-gated residual transform to the full learned
-    suffix, avoiding the delayed wobble created by a short decay-to-identity.
+    Same-time learned-prefix registration remains diagnostic. Correction is driven
+    only by the genuine source-grid clean trajectory attached invocation-locally by
+    ``build_handoff_state``. A full-suffix correction is allowed only when early
+    suffix transitions support a persistent framing offset rather than recovery.
     """
     started = time.perf_counter()
     p = exact.shape[2]
     h, w = learned.shape[-2:]
     ry, rx = h / source_hw[0], w / source_hw[1]
+
     prefix_registration = register_prefix(exact, learned[:, :, :p])
-    motion = _motion_model(exact)
-    comparison = motion.get("expected_transform") if motion.get("accepted") else None
-    boundary = register_pair(exact[:, :, -1:], learned[:, :, p : p + 1], comparison=comparison)
-    candidate = _motion_residual_candidate(boundary, motion, (h, w))
-    accepted = bool(requested and candidate["accepted"])
+    target_motion = _motion_model(exact)
+    target_comparison = target_motion.get("expected_transform") if target_motion.get("accepted") else None
+    target_boundary = register_pair(exact[:, :, -1:], learned[:, :, p : p + 1], comparison=target_comparison)
+
+    source = getattr(learned, SOURCE_CLEAN_CONTEXT_ATTR, None)
+    source_valid, source_reason = _valid_source_context(source, learned, p, source_hw)
+    low_report = {
+        "available": source_valid,
+        "reason": source_reason,
+        "source_hw": tuple(source_hw),
+    }
+    source_candidate = {
+        "accepted": False,
+        "reason": source_reason,
+        "transform": IDENTITY,
+        "axis_applied": [False] * 4,
+    }
+    persistence = {
+        "accepted": False,
+        "reason": source_reason,
+        "transitions": [],
+        "usable_transitions": 0,
+    }
+    target_application = {
+        "accepted": False,
+        "reason": source_reason,
+        "transform": IDENTITY,
+        "axis_applied": [False] * 4,
+    }
+    if source_valid:
+        source_motion = _motion_model(source, p)
+        source_comparison = source_motion.get("expected_transform") if source_motion.get("accepted") else None
+        source_boundary = register_pair(
+            source[:, :, p - 1 : p],
+            source[:, :, p : p + 1],
+            comparison=source_comparison,
+        )
+        source_candidate = _motion_residual_candidate(source_boundary, source_motion, tuple(source_hw))
+        persistence = _suffix_persistence(source, p, source_motion, source_candidate)
+        if source_candidate.get("accepted") and persistence.get("accepted"):
+            target_application = _target_transform(source_candidate, tuple(source_hw), (h, w))
+        low_report.update(
+            natural_motion_model=source_motion,
+            boundary_before=source_boundary,
+            motion_residual=source_candidate,
+            suffix_persistence=persistence,
+            target_application=target_application,
+        )
+
+    candidate_ready = bool(
+        source_candidate.get("accepted") and persistence.get("accepted") and target_application.get("accepted")
+    )
+    accepted = bool(requested and candidate_ready)
+    if not requested:
+        reason = "disabled"
+    elif not source_valid:
+        reason = source_reason
+    elif not source_candidate.get("accepted"):
+        reason = source_candidate["reason"]
+    elif not persistence.get("accepted"):
+        reason = persistence["reason"]
+    else:
+        reason = target_application["reason"]
+
     report = dict(
         source_hw=source_hw,
         target_hw=(h, w),
@@ -384,14 +624,16 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
         grid_anisotropy=abs(rx / ry - 1),
         prefix_registration=prefix_registration,
         transfer_bias_candidate=prefix_registration["accepted"],
-        natural_motion_model=motion,
-        boundary_before=boundary,
-        motion_residual=candidate,
+        target_natural_motion_model=target_motion,
+        boundary_before=target_boundary,
+        low_grid_trajectory=low_report,
+        motion_residual=source_candidate,
+        suffix_persistence=persistence,
         requested=bool(requested),
         accepted=accepted,
-        reason=candidate["reason"] if requested else "disabled",
-        policy="persistent_motion_residual",
-        persistent_bias_candidate=candidate["accepted"],
+        reason=reason,
+        policy="persistent_low_grid_motion_residual",
+        persistent_bias_candidate=candidate_ready,
         tokens_corrected=0,
         applied_transforms=[],
         out_of_bounds_fraction=0.0,
@@ -399,10 +641,8 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
     corrected = learned
     aligned_last = learned[:, :, p - 1]
     if accepted:
-        theta = candidate["transform"]
-        corrected = learned.clone()
-        for k in range(p, learned.shape[2]):
-            corrected[:, :, k] = warp_frame(learned[:, :, k], theta)
+        theta = target_application["transform"]
+        corrected = _warp_video_suffix(learned, p, theta)
         sx, sy, tx, ty = theta
         xx = sx * (torch.arange(w) - (w - 1) / 2) + (w - 1) / 2 + tx
         yy = sy * (torch.arange(h) - (h - 1) / 2) + (h - 1) / 2 + ty
@@ -412,13 +652,11 @@ def geometric_seam_bridge(learned, exact, *, source_hw, requested):
             applied_transforms=[theta],
             out_of_bounds_fraction=1 - float(inside.float().mean()),
         )
-    if prefix_registration["accepted"]:
-        aligned_last = warp_frame(aligned_last, prefix_registration["transform"])
     report.update(
         pre_alignment_dc_rms=_dc(exact[:, :, -1], learned[:, :, p - 1]),
         post_geometry_dc_rms=_dc(exact[:, :, -1], aligned_last),
         boundary_after_geometry=register_pair(
-            exact[:, :, -1:], corrected[:, :, p : p + 1], comparison=comparison
+            exact[:, :, -1:], corrected[:, :, p : p + 1], comparison=target_comparison
         ),
         learned_prefix_unchanged=torch.equal(corrected[:, :, :p], learned[:, :, :p]),
         elapsed_ms=(time.perf_counter() - started) * 1000,
