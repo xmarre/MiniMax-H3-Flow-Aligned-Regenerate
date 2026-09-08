@@ -44,31 +44,32 @@ def test_combined_evidence_still_rejects_two_weak_domains():
         "transform": (1.0, 0.99, 0.0, 0.0),
         "axis_evidence_score": [0.0, 1.4, 0.0, 0.0],
     }
-    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
 
-    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    report = _corroborate_target_candidate(source, target, (40, 54), (56, 76))
 
     assert not report["accepted"]
     assert report["reason"] == "combined_evidence_insufficient"
 
 
-def test_persistence_is_axis_specific_during_cross_grid_authorization():
+def test_cross_grid_authorization_is_source_axis_specific_before_temporal_classification():
     source = {
         "accepted": True,
-        "axis_applied": [False, True, True, False],
-        "transform": (1.0, 0.98, 0.75, 0.0),
-        "axis_evidence_score": [0.0, 3.0, 3.0, 0.0],
+        "axis_applied": [False, True, False, False],
+        "transform": (1.0, 0.98, 0.0, 0.0),
+        "axis_evidence_score": [0.0, 3.0, 0.0, 0.0],
     }
     target = {
         "accepted": True,
-        "axis_applied": [False, True, True, False],
-        "transform": (1.0, 0.98, 0.75 * 76 / 54, 0.0),
-        "axis_evidence_score": [0.0, 3.0, 3.0, 0.0],
+        "axis_applied": [True, True, True, True],
+        "transform": (1.02, 0.98, 0.75, -0.75),
+        "axis_evidence_score": [3.0, 3.0, 3.0, 3.0],
     }
-    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
 
-    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    report = _corroborate_target_candidate(source, target, (40, 54), (56, 76))
 
     assert report["accepted"], report
-    assert report["axis_applied"] == [False, True, False, False]
-    assert report["axis_reason"][2] == "axis_not_shared_or_persistent"
+    assert report["axis_authorized"] == [False, True, False, False]
+    assert report["axis_reason"][0] == "source_axis_not_provisional"
+    assert report["axis_reason"][2] == "source_axis_not_provisional"
+    assert report["axis_reason"][3] == "source_axis_not_provisional"
+    assert report["axis_reason"][1] == "combined_evidence_authorized"
