@@ -45,9 +45,10 @@ def test_structure_bridge_transfers_zero_mean_residual_only():
     corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
     change = corrected[:, :, 2].float() - learned[:, :, 2].float()
     assert torch.allclose(change.mean(dim=(-2, -1)), torch.zeros_like(change.mean(dim=(-2, -1))), atol=2e-7)
-    assert report["suffix_representation_bridge_centered_error_after"] < report[
-        "suffix_representation_bridge_centered_error_before"
-    ]
+    assert (
+        report["suffix_representation_bridge_centered_error_after"]
+        < report["suffix_representation_bridge_centered_error_before"]
+    )
     assert report["suffix_representation_bridge_centered_error_ratio"] < 1e-4
 
 
