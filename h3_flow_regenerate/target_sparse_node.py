@@ -122,10 +122,10 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
         "The validated one-token DC bridge remains enabled by default. The optional legacy-named "
-        "suffix_geometric_bridge now enables an experimental two-stage seam repair: first it measures and "
-        "closes an independently strong, temporally safe geometric residual on the genuine source-grid clean "
-        "trajectory before learned upscaling; then it reconciles the exact-prefix representation splice on "
-        "the first target-grid suffix token. It remains off by default pending decoded-media validation."
+        "suffix_geometric_bridge now enables an experimental two-stage seam repair: it first attempts to "
+        "close an independently strong, temporally safe geometric residual on the genuine source-grid clean "
+        "trajectory before learned upscaling, and independently reconciles the exact-prefix representation "
+        "splice on the first target-grid suffix token. It remains off by default pending decoded-media validation."
     )
 
     @classmethod
@@ -157,10 +157,10 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "kept for workflow compatibility). Before the learned 3D upscaler it measures the genuine "
                     "source-grid clean continuation against robust recent prefix motion, requires strong "
                     "source evidence plus a measured recovering/persistent temporal state, and corrects only "
-                    "the authorized early suffix tokens. If that source correction is accepted, the target "
-                    "exact-overlap bridge then preserves the upscaler's native prefix→suffix transition while "
-                    "suffix_dc_bridge owns the DC component. No protected-prefix warp, handcrafted fade, "
-                    "extra H3 call, audio/noise/mask/conditioning change, or unmeasured later-suffix correction."
+                    "the authorized, directly observed early suffix tokens. Independently, the target exact-overlap "
+                    "bridge preserves the upscaler's native prefix→suffix transition while suffix_dc_bridge owns "
+                    "the DC component. No protected-prefix warp, handcrafted fade, extra H3 call, "
+                    "audio/noise/mask/conditioning change, or unmeasured later-suffix correction."
                 ),
             },
         )
