@@ -231,6 +231,101 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
     assert MIXED_GRID_KEY not in guider.model_options["transformer_options"]
 
 
+def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    from test_handoff import FakeLearnedProvider
+
+    import h3_flow_regenerate.runtime as runtime
+    from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
+    from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
+
+    fake = ModuleType("comfy")
+    fake.samplers = ModuleType("comfy.samplers")
+    fake.samplers.KSAMPLER = lambda function, **kw: SimpleNamespace(sampler_function=function, extra_options={})
+    monkeypatch.setitem(sys.modules, "comfy", fake)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake.samplers)
+
+    packed, shapes, mask = inputs(t=9, prefix=6)
+    base = SimpleNamespace(process_latent_in=lambda value: value, diffusion_model=SimpleNamespace(blocks=[]))
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        model_patcher=SimpleNamespace(model=base),
+        conds={"positive": []},
+    )
+    binding = FlowBinding()
+    provider = FakeLearnedProvider()
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        suffix_geometric_bridge=True,
+    )
+    marker = 123.0
+    bridge_input = {}
+
+    def bridge(video, prefix_t, *, requested):
+        bridge_input["value"] = video.clone()
+        assert requested is True
+        assert prefix_t == 6
+        corrected = video.clone()
+        corrected[:, :, prefix_t] += marker
+        return corrected, {
+            "source_trajectory_bridge_requested": True,
+            "source_trajectory_bridge_enabled": True,
+            "source_trajectory_bridge_accepted": True,
+            "source_trajectory_bridge_reason": "test",
+            "source_trajectory_bridge_prefix_t": prefix_t,
+            "source_trajectory_bridge_tokens_corrected": 1,
+            "source_trajectory_bridge_effective_active_temporal_length": 1,
+            "source_trajectory_bridge_applied_transforms": [],
+            "source_trajectory_bridge_applied_transform_sequence_length": 1,
+            "source_trajectory_bridge_applied_transforms_compact": False,
+            "source_trajectory_bridge_out_of_bounds_fraction": 0.0,
+            "source_trajectory_bridge_minimum_evidence": 0.0,
+            "source_trajectory_axis_authorized": [False, True, False, False],
+            "source_trajectory_residual_reduction_ratio": [None, 0.0, None, None],
+        }
+
+    monkeypatch.setattr(runtime, "apply_source_trajectory_bridge", bridge)
+
+    def execute(noise, latent, sampler, sigmas, call_mask, *args, latent_shapes):
+        stage = guider.model_options["transformer_options"]["h3_flow_stage"]
+        if stage == "high":
+            binding.metrics.event("model_call", actual=True)
+            return packed.clone()
+        if stage == "probe":
+            return latent.clone()
+        return latent / (1 - sigmas[-1])
+
+    sampler = SimpleNamespace(sampler_function=lambda: None, extra_options={})
+    _run_progressive(
+        execute,
+        guider,
+        binding,
+        config,
+        torch.randn_like(packed),
+        packed,
+        sampler,
+        torch.tensor([1.0, 0.9, 0.7, 0.4, 0.0]),
+        mask,
+        None,
+        True,
+        7,
+        list(shapes),
+    )
+    provider_input = provider.calls[0][0]
+    expected_provider_input = bridge_input["value"].clone()
+    expected_provider_input[:, :, 6] += marker
+    assert torch.equal(provider_input, expected_provider_input)
+    source_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_source_trajectory_bridge"]
+    assert len(source_events) == 1
+    assert source_events[0].fields["learned_upscaler_input_modified"] is True
+
+
 def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, native):
 
     from h3_flow_regenerate.metrics import H3FlowMetrics
@@ -335,3 +430,17 @@ def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, n
     assert torch.equal(seen[0][0][25 : 25 + plan.prefix_rows], expected)
     expected_suffix = model.video_patch_proj(model_module.patchify_video(x[0][:, :, 2:]))
     assert torch.equal(seen[0][0][25 + plan.prefix_rows :], expected_suffix)
+
+
+def test_representation_bridge_ui_is_mixed_grid_only():
+    from h3_flow_regenerate.target_sparse_node import (
+        H3ProgressiveMixedGridHandoff,
+        H3ProgressiveTargetSparseHandoff,
+    )
+
+    sparse = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    assert all("suffix_geometric_bridge" not in group for group in sparse.values())
+    mixed = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
+    assert "suffix_geometric_bridge" in mixed.get("optional", {})
+    spec = mixed["optional"]["suffix_geometric_bridge"]
+    assert spec[1]["default"] is False
