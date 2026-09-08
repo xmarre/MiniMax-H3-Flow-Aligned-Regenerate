@@ -81,20 +81,6 @@ The validated metrics were approximately:
 
 This is the basis for making the bridge default on for Mixed-Grid in v0.3.0.
 
-## Experimental geometric framing bridge
-
-`suffix_geometric_bridge` is a separate Mixed-Grid-only experiment for a residual whole-frame framing discontinuity such as a small shrink/zoom-out or edge reveal. It defaults **off** and does not replace the validated DC bridge.
-
-The geometric path is closed-loop but deliberately narrow:
-
-1. before re-noise/high refinement, source- and target-grid measurements must independently corroborate the same safe scale/translation axis; genuine low-grid suffix motion supplies the temporal envelope and only the learned clean suffix is warped;
-2. after the high sampler returns and the authoritative exact mask is canonicalized, the runtime re-measures the final target-grid boundary and may close only a same-sign, still-evidenced residual on those already-authorized axes and the same measured temporal envelope;
-3. the final projection is retained only when re-registration shows strictly smaller residual magnitude on every applied axis; otherwise the original sampler result is returned unchanged.
-
-The protected prefix is never warped, target-only nuisance axes are never promoted, audio/noise/masks/conditioning are unchanged, and neither stage adds an H3 transformer evaluation or changes Spectrum history/forecast decisions.
-
-The feature remains experimental until matched decoded-media validation removes the framing discontinuity without delayed zoom/wobble, edge stretching, detail loss, or motion regression. See [geometric-seam-bridge.md](geometric-seam-bridge.md) for the measurements, fixed safety gates, diagnostics and validation protocol.
-
 ## VDN-H3 contract
 
 With VDN enabled, Mixed-Grid requires external-sequence capability API 2 using:
@@ -131,14 +117,29 @@ Mixed-Grid records four seam states:
 
 Diagnostics include raw RMS, spatial low-pass RMS, per-channel spatial-mean/DC RMS, bridge magnitude/count/weight and final/B/final/C ratios. Exact-mask return telemetry separately reports whether final protected values needed canonicalization and the magnitude of any pre-restore solver drift.
 
-When `suffix_geometric_bridge=true`, `mixed_grid_geometry` records the initial cross-grid authorization/temporal correction and `mixed_grid_final_geometry` records the returned-latent residual closure, including its current target evidence, axis reasons, before/after registration, residual-reduction ratios and exact-prefix preservation.
-
 ## Current status
 
 The mixed-grid path is still labeled Experimental because it is an independent research topology, but its previously open production acceptance gate is closed for the tested stack: real GPU/media validation, multiple Continuum boundaries, VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact probe, fresh target-grid refinement and the suffix DC bridge have all been exercised together successfully.
 
 The v0.3.1 exact-mask return fix is structurally regression-tested against `res_multistep` endpoint roundoff. A real workflow rerun remains the empirical check for that sampler/configuration; the prior real-media validation above used the v0.3.0 stack before this patch.
 
-The optional geometric framing bridge has a separate open decoded-media gate. Its presence does not change the validated status of the DC bridge and it remains disabled by default until that gate passes.
-
 Quality/speed remain workflow dependent; the documented result is evidence for this implementation and tested stack, not a universal model guarantee.
+
+## Experimental exact-overlap representation bridge
+
+The decoded `metrics_00276` validation falsified the affine-framing hypothesis as a sufficient repair. The optional affine correction closed the measured `sy` residual from roughly `-0.01025` to `+0.00236`, yet the visible whole-frame shrink/top-edge reveal remained. The more diagnostic measurement was already present at the learned-transfer splice: replacing the learned 3D upscaler's internally coherent prefix with the authoritative exact prefix amplified the boundary by about 23% in raw RMS, 37% in spatial-low-pass RMS, and 40% in per-channel spatial-mean RMS before the existing DC bridge.
+
+The experimental `suffix_geometric_bridge` input name is retained for workflow compatibility, but its implementation is now a representation-residual bridge rather than an affine warp. It uses the learned prefix only as private overlap calibration:
+
+```text
+L_p = learned upscaler last prefix token
+E_p = authoritative exact last prefix token
+L_s = learned first suffix token
+D   = E_p - L_p
+```
+
+The representation bridge transfers `D - mean_spatial(D)` to `L_s`. The existing suffix DC bridge independently transfers `mean_spatial(D)`. With both enabled, the corrected boundary satisfies `L_s + D - E_p == L_s - L_p`: restoring the exact prefix preserves the upscaler's native boundary transition algebraically before re-noise and fresh target-grid refinement.
+
+This is deliberately a one-boundary-token operation, not a fade. The overlap gives an exact same-frame residual only at the replacement boundary; applying it to later suffix tokens would be unsupported temporal extrapolation. The bridge therefore never modifies the authoritative prefix or suffix token 1+, and it adds no H3 NFE, VAE pass, optical-flow model, image/tensor crossfade, audio change, noise change, mask change, conditioning change, VDN API change, or Spectrum-history change.
+
+`mixed_grid_representation_bridge` reports the measured full/DC/zero-mean residual, centered-transition error before/after transplantation, whether one suffix token was corrected, and the explicit no-op/accept reason. `mixed_grid_transfer` continues to report native, exact-restored and corrected seam metrics. With both experimental representation and validated DC bridges enabled, the decisive pre-high invariant is that corrected/native seam ratios should be approximately 1 across raw, low-pass and spatial-mean metrics. Decoded media remains the release gate; the experimental bridge stays off by default.

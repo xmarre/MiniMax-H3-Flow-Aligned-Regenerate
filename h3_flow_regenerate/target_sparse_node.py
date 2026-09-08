@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .comfy_compat import patch_flow_model
-from .geometric_provider import with_source_trajectory_context
 from .geometry import pixel_to_safe_latent
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
@@ -69,8 +68,6 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         suffix_dc_bridge=True,
         suffix_geometric_bridge=False,
     ):
-        if self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix":
-            learned_upscaler = with_source_trajectory_context(learned_upscaler)
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
                 source_scale=source_scale,
@@ -79,7 +76,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
-                suffix_geometric_bridge=suffix_geometric_bridge,
+                suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -92,7 +89,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
-                suffix_geometric_bridge=suffix_geometric_bridge,
+                suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -124,10 +121,10 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "Real low-resolution Continuum suffix generation with original target-grid protected-prefix "
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
-        "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash. An optional cross-grid geometric bridge can correct authorized persistent or measured "
-        "transient framing residuals before refinement and close the same residual again on the returned "
-        "target latent if refinement recreates it. It remains experimental and off by default."
+        "The validated one-token DC bridge remains enabled by default. The optional legacy-named "
+        "suffix_geometric_bridge now enables an experimental exact-overlap representation bridge: it "
+        "transplants the measured non-DC learned-prefix replacement residual onto only the first suffix "
+        "token before refinement. It remains off by default pending decoded-media validation."
     )
 
     @classmethod
@@ -155,11 +152,13 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": False,
                 "tooltip": (
-                    "Experimental Mixed-Grid geometric seam bridge. Source/target evidence first authorizes "
-                    "safe framing axes and genuine low-grid motion defines their temporal envelope. The bridge "
-                    "corrects the learned clean suffix before refinement, then re-measures the returned target "
-                    "latent and closes only a same-sign, still-evidenced residual on those same axes. It never "
-                    "warps the exact prefix or promotes new axes. Off by default pending decoded-media validation."
+                    "Experimental Mixed-Grid exact-overlap representation bridge (legacy input name kept "
+                    "for workflow compatibility). It measures the discarded learned-upscaler prefix against "
+                    "the authoritative exact prefix on the same final overlap frame, transfers only that "
+                    "zero-mean structural residual to the first generated suffix token, and leaves the DC "
+                    "component to suffix_dc_bridge. With both enabled, the pre-refinement boundary exactly "
+                    "preserves the upscaler's native learned-prefix→suffix transition. No prefix warp, fade, "
+                    "extra H3 call, audio/noise/mask/conditioning change, or later-suffix extrapolation."
                 ),
             },
         )

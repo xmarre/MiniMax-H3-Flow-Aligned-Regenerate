@@ -8,8 +8,6 @@ import torch
 
 from .attention import AttentionConfig, make_attention_override, make_layout_block_wrapper, mark_layout_wrapper
 from .contracts import H3FlowTrajectory
-from .final_geometry import close_final_mixed_grid_residual
-from .geometry import pack_streams, unpack_streams
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
@@ -156,40 +154,6 @@ def _record_exact_mask_output(
     )
 
 
-def _latest_mixed_grid_geometry(metrics: H3FlowMetrics, *, start_index: int) -> dict | None:
-    for event in reversed(metrics.events[start_index:]):
-        if event.kind == "mixed_grid_geometry":
-            return event.fields
-    return None
-
-
-def _mixed_grid_prefix_t(video_mask: torch.Tensor) -> int:
-    if video_mask.ndim != 5:
-        raise ValueError("mixed-grid final geometry requires a BxCxTxHxW video mask")
-    frames = video_mask.permute(2, 0, 1, 3, 4).reshape(video_mask.shape[2], -1)
-    protected = (frames == 0).all(1)
-    generated = (frames == 1).all(1)
-    prefix_t = int(protected.sum().item())
-    if not 0 < prefix_t < int(video_mask.shape[2]):
-        raise ValueError("mixed-grid final geometry requires a nonempty protected prefix and generated suffix")
-    if not bool(protected[:prefix_t].all() and generated[prefix_t:].all()):
-        raise ValueError("mixed-grid final geometry requires contiguous whole-frame mask protection")
-    return prefix_t
-
-
-def _assert_protected_output_exact(
-    result: torch.Tensor,
-    latent_image: torch.Tensor,
-    denoise_mask: torch.Tensor | None,
-) -> None:
-    if denoise_mask is None:
-        return
-    exact_mask = denoise_mask.to(device=result.device) == 0
-    reference = latent_image.to(device=result.device, dtype=result.dtype)
-    if bool(torch.any(exact_mask & torch.ne(result, reference)).item()):
-        raise RuntimeError("final mixed-grid geometry violated the authoritative exact mask")
-
-
 class _ProgressiveExactMaskExecutor:
     """Adapt Comfy sampler returns before runtime exact-prefix postconditions."""
 
@@ -202,7 +166,6 @@ class _ProgressiveExactMaskExecutor:
         latent_image: torch.Tensor,
         denoise_mask: torch.Tensor | None,
         sampler: Any,
-        latent_shapes: list[tuple[int, ...]],
     ) -> None:
         self._executor = executor
         self.class_obj = executor.class_obj
@@ -211,8 +174,6 @@ class _ProgressiveExactMaskExecutor:
         self._latent_image = latent_image
         self._denoise_mask = denoise_mask
         self._sampler = sampler
-        self._latent_shapes = [tuple(int(value) for value in shape) for shape in latent_shapes]
-        self._metric_event_start = len(binding.metrics.events)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._executor, name)
@@ -241,37 +202,6 @@ class _ProgressiveExactMaskExecutor:
             source=source,
             stats=stats,
         )
-
-        if (
-            stage == "high"
-            and self._progressive.exact_prefix_mode == "mixed_grid_low_suffix"
-            and bool(self._progressive.suffix_geometric_bridge)
-        ):
-            initial_geometry = _latest_mixed_grid_geometry(
-                self._binding.metrics,
-                start_index=self._metric_event_start,
-            )
-            if initial_geometry is None:
-                self._binding.metrics.event(
-                    "mixed_grid_final_geometry",
-                    requested=True,
-                    accepted=False,
-                    reason="initial_geometry_metrics_unavailable",
-                    policy="final_target_residual_closure_from_initial_cross_grid_authorization",
-                )
-            elif self._denoise_mask is None:
-                raise RuntimeError("mixed-grid final geometry requires the exact target denoise mask")
-            else:
-                video, audio = unpack_streams(result, self._latent_shapes)
-                video_mask, _ = unpack_streams(self._denoise_mask.to(device=result.device), self._latent_shapes)
-                prefix_t = _mixed_grid_prefix_t(video_mask)
-                corrected_video, closure = close_final_mixed_grid_residual(video, prefix_t, initial_geometry)
-                if corrected_video is not video:
-                    result, packed_shapes = pack_streams((corrected_video, audio))
-                    if packed_shapes != self._latent_shapes:
-                        raise RuntimeError("final mixed-grid geometry changed packed H3 stream shapes")
-                    _assert_protected_output_exact(result, self._latent_image, self._denoise_mask)
-                self._binding.metrics.event("mixed_grid_final_geometry", **closure)
         return result
 
 
@@ -312,8 +242,6 @@ def flow_outer_wrapper_with_exact_mask(
             seed,
             latent_shapes=latent_shapes,
         )
-    if not isinstance(latent_shapes, list) or len(latent_shapes) != 2:
-        raise RuntimeError("progressive exact-mask adapter requires native H3 AV latent shapes")
 
     adapted = _ProgressiveExactMaskExecutor(
         executor,
@@ -322,7 +250,6 @@ def flow_outer_wrapper_with_exact_mask(
         latent_image=latent_image,
         denoise_mask=denoise_mask,
         sampler=sampler,
-        latent_shapes=latent_shapes,
     )
     return flow_outer_wrapper(
         adapted,

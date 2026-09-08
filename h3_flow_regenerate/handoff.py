@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -264,7 +263,6 @@ def build_handoff_state(
     transfer_mode: str = "bicubic",
     learned_upscaler: Any | None = None,
     transfer_metrics: dict[str, Any] | None = None,
-    clean_video_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -319,10 +317,6 @@ def build_handoff_state(
             raise TypeError("H3 latent-upscaler provider returned a non-floating tensor")
         if not bool(torch.isfinite(learned_x0).all().item()):
             raise RuntimeError("H3 latent-upscaler provider returned NaN or Inf values")
-        if clean_video_transform is not None:
-            learned_x0 = clean_video_transform(learned_x0)
-            if tuple(learned_x0.shape) != expected_shape or not bool(torch.isfinite(learned_x0).all()):
-                raise RuntimeError("clean handoff transform returned invalid video")
         target_video = conditional_renoise_target(
             learned_x0,
             sigma=float(sigma),

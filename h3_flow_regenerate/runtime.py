@@ -13,7 +13,6 @@ from typing import Any
 import torch
 
 from .contracts import H3FlowTrajectory, TrajectorySample
-from .geometric_bridge import geometric_seam_bridge, register_prefix
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import GuidanceConfig, GuidanceState, apply_guidance
 from .handoff import (
@@ -25,6 +24,10 @@ from .handoff import (
 )
 from .metrics import H3FlowMetrics
 from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
+from .representation_bridge import (
+    apply_suffix_representation_bridge,
+    disabled_suffix_representation_bridge_metrics,
+)
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
     measure_video_boundary,
@@ -1535,36 +1538,6 @@ def _run_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         splice_diagnostics: dict[str, Any] = {}
-        geometry_report = {}
-        geometry_splice = {}
-        geometry_dc = {}
-
-        def transform_clean_video(learned):
-            # This hook exists only for a valid mixed-grid plan, before re-noise.
-            exact = mixed_plan.prefix.to(learned)
-            corrected, aligned_last, report = geometric_seam_bridge(
-                learned,
-                exact,
-                source_hw=(source_h, source_w),
-                requested=config.suffix_geometric_bridge,
-            )
-            geometry_report.update(report)
-            if not report["accepted"]:
-                return learned  # Preserve released inverse-recovery DC arithmetic.
-            if config.suffix_dc_bridge:
-                # A diagnostic copy supplies the geometrically aligned learned
-                # prefix to DC calibration. Never expose it as the exact prefix.
-                calibration = corrected.clone()
-                calibration[:, :, mixed_plan.prefix_t - 1] = aligned_last
-                corrected, dc = apply_suffix_dc_bridge(calibration, exact, weights=(1.0,))
-                corrected[:, :, : mixed_plan.prefix_t] = learned[:, :, : mixed_plan.prefix_t]
-                geometry_dc.update(dc)
-            else:
-                geometry_dc.update(disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t))
-            geometry_splice.update(measure_exact_prefix_splice(learned, exact, corrected_clean_video=corrected))
-            geometry_report.update(report)
-            return corrected
-
         target_raw, target_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -1576,73 +1549,87 @@ def _run_progressive(
             transfer_mode=config.transfer_mode,
             learned_upscaler=getattr(config, "learned_upscaler", None),
             transfer_metrics=transfer_metrics,
-            clean_video_transform=transform_clean_video if mixed_plan is not None else None,
         )
         if mixed_plan is not None:
             target_video, target_audio = unpack_streams(target_raw, target_shapes)
             diagnostic_started = time.perf_counter()
-            bridge_enabled = bool(getattr(config, "suffix_dc_bridge", False))
-            if geometry_report["accepted"]:
-                bridge_metrics = geometry_dc
-                splice_diagnostics = geometry_splice
-            else:
-                diagnostic_noise = deterministic_video_noise(
-                    tuple(target_video.shape),
-                    seed=int(seed or 0) + config.seed_offset,
-                    device=target_video.device,
-                    dtype=target_video.dtype,
-                )
-                learned_clean = recover_conditional_clean_for_diagnostics(
-                    target_video,
-                    diagnostic_noise,
-                    sigma=sigma,
-                )
-                exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
-                if bridge_enabled:
-                    corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
-                        learned_clean,
-                        exact_prefix,
-                        weights=(1.0,),
-                    )
-                    target_video = map_clean_bridge_to_conditional_state(
-                        target_video,
-                        learned_clean,
-                        corrected_clean,
-                        sigma=sigma,
-                        prefix_t=mixed_plan.prefix_t,
-                        corrected_tokens=int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
-                    )
-                else:
-                    corrected_clean = learned_clean
-                    bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t)
-                splice_diagnostics = measure_exact_prefix_splice(
+            diagnostic_noise = deterministic_video_noise(
+                tuple(target_video.shape),
+                seed=int(seed or 0) + config.seed_offset,
+                device=target_video.device,
+                dtype=target_video.dtype,
+            )
+            learned_clean = recover_conditional_clean_for_diagnostics(
+                target_video,
+                diagnostic_noise,
+                sigma=sigma,
+            )
+            exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
+            representation_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            if representation_requested:
+                corrected_clean, representation_metrics = apply_suffix_representation_bridge(
                     learned_clean,
                     exact_prefix,
-                    corrected_clean_video=corrected_clean,
+                    requested=True,
                 )
-                del diagnostic_noise, learned_clean, corrected_clean
-            splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
-            splice_diagnostics["splice_recovery"] = (
-                "provider_clean_before_renoise" if geometry_report["accepted"] else "inverse_conditional_renoise"
+            else:
+                corrected_clean = learned_clean
+                representation_metrics = disabled_suffix_representation_bridge_metrics(
+                    prefix_t=mixed_plan.prefix_t,
+                    requested=False,
+                )
+
+            dc_enabled = bool(getattr(config, "suffix_dc_bridge", False))
+            if dc_enabled:
+                corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
+                    corrected_clean,
+                    exact_prefix,
+                    weights=(1.0,),
+                )
+            else:
+                bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t)
+
+            corrected_tokens = max(
+                int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
+                int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
             )
+            if corrected_tokens:
+                target_video = map_clean_bridge_to_conditional_state(
+                    target_video,
+                    learned_clean,
+                    corrected_clean,
+                    sigma=sigma,
+                    prefix_t=mixed_plan.prefix_t,
+                    corrected_tokens=corrected_tokens,
+                )
+            splice_diagnostics = measure_exact_prefix_splice(
+                learned_clean,
+                exact_prefix,
+                corrected_clean_video=corrected_clean,
+            )
+            splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
+            splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
             splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
-                ("direct_pre_renoise" if geometry_report["accepted"] else "affine_equivalent_pre_renoise")
-                if bridge_enabled
-                else "disabled"
+                "affine_equivalent_pre_renoise" if dc_enabled else "disabled"
+            )
+            splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
+                "affine_equivalent_pre_renoise"
+                if representation_metrics["suffix_representation_bridge_accepted"]
+                else "disabled_or_noop"
             )
             binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
+            binding.metrics.event(
+                "mixed_grid_representation_bridge",
+                legacy_option_name="suffix_geometric_bridge",
+                authoritative_prefix_modified=False,
+                later_suffix_extrapolated=False,
+                **representation_metrics,
+            )
 
-            if not bridge_enabled:
+            if not corrected_tokens:
                 target_video = target_video.clone()
             target_video[:, :, : mixed_plan.prefix_t] = mixed_plan.prefix.to(target_video)
             target_raw = pack_streams((target_video, target_audio))[0]
-            geometry_report["post_dc_boundary_spatial_mean_rms"] = splice_diagnostics[
-                "corrected_exact_seam_spatial_mean_rms"
-            ]
-            geometry_report["final_prefix_exact"] = torch.equal(
-                target_video[:, :, : mixed_plan.prefix_t], mixed_plan.prefix.to(target_video)
-            )
-            binding.metrics.event("mixed_grid_geometry", **geometry_report)
             binding.metrics.event(
                 "mixed_grid_transfer",
                 learned_transfer_performed=True,
@@ -1650,9 +1637,11 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
+                **representation_metrics,
                 **bridge_metrics,
                 **splice_diagnostics,
             )
+            del diagnostic_noise, learned_clean, corrected_clean
         if config.transfer_mode == "learned_3d":
             binding.metrics.event(
                 "handoff_learned_upscale_wall",
@@ -1752,10 +1741,6 @@ def _run_progressive(
                 final_prefix_exact=True,
                 high_stage_first_call_actual=first_high_actual,
                 total_chunk_sampler_elapsed_ms=(time.perf_counter() - chunk_started) * 1000.0,
-                final_boundary_registration=register_prefix(
-                    final_video[:, :, mixed_plan.prefix_t - 1 : mixed_plan.prefix_t],
-                    final_video[:, :, mixed_plan.prefix_t : mixed_plan.prefix_t + 1],
-                ),
                 final_seam_lowpass_kernel=final_boundary["lowpass_kernel"],
                 final_seam_rms=final_boundary["seam_rms"],
                 final_seam_lowpass_rms=final_boundary["seam_lowpass_rms"],
