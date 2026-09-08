@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +18,9 @@ jobs:
           ref: mirror/pr24-source-trajectory-pre-upscale
           fetch-depth: 0
       - name: Apply deterministic review fixes
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           def replace_once(path: str, old: str, new: str) -> None:
@@ -141,8 +142,9 @@ jobs:
           addition = '''\n\ndef test_persistent_source_state_is_limited_to_measured_window():\n    frame = _texture()\n    prefix = [frame.clone() for _ in range(6)]\n    shifted = _warp(frame, sy=1.0 / 0.975)\n    # Seven suffix tokens exceed the four-transition persistence observation\n    # window. Only token 0 plus those four directly measured follow-ups may be\n    # corrected; later suffix tokens must stay byte-identical.\n    video = torch.stack(prefix + [shifted.clone() for _ in range(7)], dim=2)\n    before = video.clone()\n\n    corrected, report = apply_source_trajectory_bridge(video, 6, requested=True)\n\n    assert report["source_trajectory_bridge_accepted"] is True\n    assert report["source_trajectory_temporal_profile"]["axis_mode"][1] == "persistent"\n    envelope = report["source_trajectory_temporal_profile"]["axis"][1]["applied_envelope"]\n    assert envelope["measured_followup_transitions"] == 4\n    assert envelope["extrapolated_beyond_observation"] is False\n    assert report["source_trajectory_bridge_tokens_corrected"] == 5\n    assert not torch.equal(corrected[:, :, 6:11], before[:, :, 6:11])\n    assert torch.equal(corrected[:, :, 11:], before[:, :, 11:])\n'''
           if "def test_persistent_source_state_is_limited_to_measured_window" not in text:
               test.write_text(text.rstrip() + addition + "\n")
-
+          PY
       - name: Remove one-shot workflow and commit
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
