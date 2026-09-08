@@ -156,8 +156,8 @@ def _record_exact_mask_output(
     )
 
 
-def _latest_mixed_grid_geometry(metrics: H3FlowMetrics) -> dict | None:
-    for event in reversed(metrics.events):
+def _latest_mixed_grid_geometry(metrics: H3FlowMetrics, *, start_index: int) -> dict | None:
+    for event in reversed(metrics.events[start_index:]):
         if event.kind == "mixed_grid_geometry":
             return event.fields
     return None
@@ -212,6 +212,7 @@ class _ProgressiveExactMaskExecutor:
         self._denoise_mask = denoise_mask
         self._sampler = sampler
         self._latent_shapes = [tuple(int(value) for value in shape) for shape in latent_shapes]
+        self._metric_event_start = len(binding.metrics.events)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._executor, name)
@@ -246,7 +247,10 @@ class _ProgressiveExactMaskExecutor:
             and self._progressive.exact_prefix_mode == "mixed_grid_low_suffix"
             and bool(self._progressive.suffix_geometric_bridge)
         ):
-            initial_geometry = _latest_mixed_grid_geometry(self._binding.metrics)
+            initial_geometry = _latest_mixed_grid_geometry(
+                self._binding.metrics,
+                start_index=self._metric_event_start,
+            )
             if initial_geometry is None:
                 self._binding.metrics.event(
                     "mixed_grid_final_geometry",
