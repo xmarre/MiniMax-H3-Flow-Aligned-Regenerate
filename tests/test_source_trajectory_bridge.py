@@ -67,6 +67,10 @@ def test_insufficient_motion_window_fails_safe(prefix_t):
 
 
 def test_estimator_floor_residual_can_be_temporally_authorized_without_cross_domain_gate():
+    # Mirrors the 00288 ty evidence. The boundary residual is exactly one
+    # estimator floor and the first observed follow-up does not move farther
+    # away, so the state is already inside the unresolved/recovered band.
+    # Correct only token 0; do not project a persistent correction.
     report = _temporal_axis_state(
         0.25,
         [0.0, 0.0, -0.125, 0.125],
@@ -74,9 +78,12 @@ def test_estimator_floor_residual_can_be_temporally_authorized_without_cross_dom
         suffix_length=8,
     )
     assert report["accepted"] is True
-    assert report["mode"] == "persistent"
-    assert report["active_tokens"] == 5
-    assert report["applied_envelope"]["extrapolated_beyond_observation"] is False
+    assert report["mode"] == "recovering"
+    assert report["recovery_suffix_token"] == 1
+    assert report["active_tokens"] == 1
+    assert report["applied_envelope"]["kind"] == "measured_monotonic"
+    assert report["applied_envelope"]["weights"] == [1.0, 0.0]
+    assert report["applied_envelope"]["terminal_zero_observed"] is True
 
 
 def test_diverging_source_state_is_rejected_even_after_provisional_measurement():
