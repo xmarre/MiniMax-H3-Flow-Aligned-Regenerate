@@ -125,7 +125,8 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
         "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash. An optional low-grid motion-residual geometric bridge remains experimental and off by default."
+        "flash. An optional cross-grid geometric bridge can correct persistent or measured transient "
+        "framing residuals; it remains experimental and off by default."
     )
 
     @classmethod
@@ -153,10 +154,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": False,
                 "tooltip": (
-                    "Experimental low-grid motion-residual seam bridge. It measures the genuine clean "
-                    "low-resolution trajectory before learned upsampling, extrapolates recent exact-prefix "
-                    "motion, and applies only a persistent significant residual across the learned suffix. "
-                    "It remains off until decoded-media validation; diagnostics still run when disabled."
+                    "Experimental Mixed-Grid geometric seam bridge. It independently corroborates source- "
+                    "and target-grid framing residuals, then uses genuine low-grid suffix motion to classify "
+                    "each authorized axis as persistent, recovering, or unsafe. Persistent axes correct the "
+                    "full suffix; measured recovery gets a monotonic transient envelope. Ambiguous axes are "
+                    "left unchanged. Off by default pending decoded-media validation."
                 ),
             },
         )
