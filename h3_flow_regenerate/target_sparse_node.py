@@ -125,8 +125,9 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
         "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash. An optional cross-grid geometric bridge can correct persistent or measured transient "
-        "framing residuals; it remains experimental and off by default."
+        "flash. An optional cross-grid geometric bridge can correct authorized persistent or measured "
+        "transient framing residuals before refinement and close the same residual again on the returned "
+        "target latent if refinement recreates it. It remains experimental and off by default."
     )
 
     @classmethod
@@ -154,11 +155,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": False,
                 "tooltip": (
-                    "Experimental Mixed-Grid geometric seam bridge. It independently corroborates source- "
-                    "and target-grid framing residuals, then uses genuine low-grid suffix motion to classify "
-                    "each authorized axis as persistent, recovering, or unsafe. Persistent axes correct the "
-                    "full suffix; measured recovery gets a monotonic transient envelope. Ambiguous axes are "
-                    "left unchanged. Off by default pending decoded-media validation."
+                    "Experimental Mixed-Grid geometric seam bridge. Source/target evidence first authorizes "
+                    "safe framing axes and genuine low-grid motion defines their temporal envelope. The bridge "
+                    "corrects the learned clean suffix before refinement, then re-measures the returned target "
+                    "latent and closes only a same-sign, still-evidenced residual on those same axes. It never "
+                    "warps the exact prefix or promotes new axes. Off by default pending decoded-media validation."
                 ),
             },
         )
