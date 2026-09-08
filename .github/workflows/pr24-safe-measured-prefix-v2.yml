@@ -1,0 +1,74 @@
+name: PR24 safe measured prefix patch v2
+
+on:
+  push:
+    branches: [mirror/pr24-safe-measured-prefix]
+    paths: [.github/workflows/pr24-safe-measured-prefix-v2.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr24-safe-measured-prefix
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply 00303 safety fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('h3_flow_regenerate/source_trajectory_bridge.py')
+          text = path.read_text()
+          replacements = [
+              (
+                  '''    report.update(\n        raw_transform=correction,\n        raw_signed_residual=signed,\n        transform=applied,\n        axis_applied=axis_applied,\n        axis_magnitude=magnitudes,\n        axis_estimator_floor=floors,\n        axis_motion_dispersion=dispersions,\n        axis_evidence_unit=evidence_units,\n        axis_evidence_score=evidence_scores,\n        axis_objective_gain=axis_gains,\n        axis_objective_gain_floor=gain_floor,\n    )''',
+                  '''    report.update(\n        raw_transform=correction,\n        raw_signed_residual=signed,\n        transform=applied,\n        axis_applied=axis_applied,\n        axis_magnitude=magnitudes,\n        axis_estimator_floor=floors,\n        axis_safety_bound=safety,\n        axis_motion_dispersion=dispersions,\n        axis_evidence_unit=evidence_units,\n        axis_evidence_score=evidence_scores,\n        axis_objective_gain=axis_gains,\n        axis_objective_gain_floor=gain_floor,\n    )''',
+              ),
+              (
+                  '''def _temporal_axis_state(\n    boundary_signed_residual: float,\n    followup_signed_residuals: list[float],\n    *,\n    estimator_floor: float,\n    suffix_length: int,\n) -> dict:''',
+                  '''def _temporal_axis_state(\n    boundary_signed_residual: float,\n    followup_signed_residuals: list[float],\n    *,\n    estimator_floor: float,\n    suffix_length: int,\n    safety_limit: float | None = None,\n) -> dict:''',
+              ),
+              (
+                  '''    if same_direction and same_side:\n        observed_tokens = min(suffix_length, len(states))\n        signed_states = states[:observed_tokens]\n        report.update(\n            accepted=True,\n            mode=\"measured_drift\",\n            reason=\"observed_same_direction_cumulative_drift\",\n            active_tokens=observed_tokens,\n            applied_envelope={\n                \"kind\": \"measured_cumulative\",\n                \"signed_states\": signed_states,\n                \"active_tokens\": observed_tokens,\n                \"measured_followup_transitions\": len(followup_signed_residuals),\n                \"extrapolated_beyond_observation\": False,\n            },\n        )\n        return report''',
+                  '''    if same_direction and same_side:\n        observed_tokens = min(suffix_length, len(states))\n        measured_states = states[:observed_tokens]\n        safe_tokens = observed_tokens\n        if safety_limit is not None:\n            limit = float(safety_limit)\n            if not math.isfinite(limit) or limit <= 0:\n                report[\"reason\"] = \"invalid_axis_safety_limit\"\n                return report\n            safe_tokens = 0\n            for state in measured_states:\n                if abs(float(state)) > limit + 1e-8:\n                    break\n                safe_tokens += 1\n            if safe_tokens <= 0:\n                report[\"reason\"] = \"measured_drift_exceeds_safety_at_boundary\"\n                return report\n        else:\n            limit = None\n        signed_states = measured_states[:safe_tokens]\n        report.update(\n            accepted=True,\n            mode=\"measured_drift\",\n            reason=(\n                \"observed_same_direction_cumulative_drift_safety_limited\"\n                if safe_tokens < observed_tokens\n                else \"observed_same_direction_cumulative_drift\"\n            ),\n            active_tokens=safe_tokens,\n            applied_envelope={\n                \"kind\": \"measured_cumulative\",\n                \"signed_states\": signed_states,\n                \"active_tokens\": safe_tokens,\n                \"measured_tokens_available\": observed_tokens,\n                \"measured_followup_transitions\": len(followup_signed_residuals),\n                \"safety_limit\": limit,\n                \"safety_limited\": safe_tokens < observed_tokens,\n                \"extrapolated_beyond_observation\": False,\n            },\n        )\n        return report''',
+              ),
+              (
+                  '''    floors = candidate[\"axis_estimator_floor\"]\n    boundary_signed = candidate[\"raw_signed_residual\"]\n    scores = candidate[\"axis_evidence_score\"]''',
+                  '''    floors = candidate[\"axis_estimator_floor\"]\n    safety = candidate.get(\"axis_safety_bound\")\n    boundary_signed = candidate[\"raw_signed_residual\"]\n    scores = candidate[\"axis_evidence_score\"]''',
+              ),
+              (
+                  '''        axis_report = _temporal_axis_state(\n            float(boundary_signed[axis]),\n            values,\n            estimator_floor=float(floors[axis]),\n            suffix_length=suffix_length,\n        )''',
+                  '''        axis_report = _temporal_axis_state(\n            float(boundary_signed[axis]),\n            values,\n            estimator_floor=float(floors[axis]),\n            suffix_length=suffix_length,\n            safety_limit=float(safety[axis]) if safety is not None else None,\n        )''',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit('source patch anchor missing')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          test = Path('tests/test_source_trajectory_bridge.py')
+          t = test.read_text()
+          anchor = 'def test_measured_cumulative_transform_uses_observed_state_not_scaled_boundary():\n'
+          insert = '''def test_measured_drift_truncates_at_existing_axis_safety_bound():\n    report = _temporal_axis_state(\n        0.026772269063550715,\n        [0.022834929080955513, 0.038891567782737106, 0.04992944577483918, 0.0459608545226586],\n        estimator_floor=0.005,\n        suffix_length=8,\n        safety_limit=float(torch.log(torch.tensor(1.03))),\n    )\n    assert report[\"accepted\"] is True\n    assert report[\"mode\"] == \"measured_drift\"\n    assert report[\"reason\"] == \"observed_same_direction_cumulative_drift_safety_limited\"\n    assert report[\"active_tokens\"] == 1\n    envelope = report[\"applied_envelope\"]\n    assert envelope[\"signed_states\"] == pytest.approx([0.026772269063550715])\n    assert envelope[\"measured_tokens_available\"] == 5\n    assert envelope[\"safety_limited\"] is True\n    assert envelope[\"extrapolated_beyond_observation\"] is False\n\n\n'''
+          if anchor not in t:
+              raise SystemExit('test insertion anchor missing')
+          test.write_text(t.replace(anchor, insert + anchor, 1))
+          PY
+          python -m pip install -e '.[test]' build
+          ruff check h3_flow_regenerate/source_trajectory_bridge.py tests/test_source_trajectory_bridge.py
+          ruff format --check h3_flow_regenerate/source_trajectory_bridge.py tests/test_source_trajectory_bridge.py
+          pytest -q tests/test_source_trajectory_bridge.py
+      - name: Commit patch
+        run: |
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add h3_flow_regenerate/source_trajectory_bridge.py tests/test_source_trajectory_bridge.py
+          git commit -m "Keep measured source repair inside existing safety bounds"
+          git push origin HEAD:mirror/pr24-safe-measured-prefix
