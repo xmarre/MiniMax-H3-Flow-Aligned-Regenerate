@@ -1,0 +1,31 @@
+name: PR24 mirror rewrite
+
+on:
+  push:
+    branches:
+      - mirror/pr24-representation-continuity
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    if: ${{ !contains(github.event.head_commit.message, '[pr24-rewrite-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Rewrite PR 24 on the mirror branch
+        run: python .github/pr24_rewrite.py
+      - name: Commit rewritten tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "[pr24-rewrite-done] Replace affine seam fix with representation bridge"
+          git push origin HEAD:mirror/pr24-representation-continuity
