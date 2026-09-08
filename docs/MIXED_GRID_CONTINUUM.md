@@ -81,6 +81,20 @@ The validated metrics were approximately:
 
 This is the basis for making the bridge default on for Mixed-Grid in v0.3.0.
 
+## Experimental geometric framing bridge
+
+`suffix_geometric_bridge` is a separate Mixed-Grid-only experiment for a residual whole-frame framing discontinuity such as a small shrink/zoom-out or edge reveal. It defaults **off** and does not replace the validated DC bridge.
+
+The geometric path is closed-loop but deliberately narrow:
+
+1. before re-noise/high refinement, source- and target-grid measurements must independently corroborate the same safe scale/translation axis; genuine low-grid suffix motion supplies the temporal envelope and only the learned clean suffix is warped;
+2. after the high sampler returns and the authoritative exact mask is canonicalized, the runtime re-measures the final target-grid boundary and may close only a same-sign, still-evidenced residual on those already-authorized axes and the same measured temporal envelope;
+3. the final projection is retained only when re-registration shows strictly smaller residual magnitude on every applied axis; otherwise the original sampler result is returned unchanged.
+
+The protected prefix is never warped, target-only nuisance axes are never promoted, audio/noise/masks/conditioning are unchanged, and neither stage adds an H3 transformer evaluation or changes Spectrum history/forecast decisions.
+
+The feature remains experimental until matched decoded-media validation removes the framing discontinuity without delayed zoom/wobble, edge stretching, detail loss, or motion regression. See [geometric-seam-bridge.md](geometric-seam-bridge.md) for the measurements, fixed safety gates, diagnostics and validation protocol.
+
 ## VDN-H3 contract
 
 With VDN enabled, Mixed-Grid requires external-sequence capability API 2 using:
@@ -117,10 +131,14 @@ Mixed-Grid records four seam states:
 
 Diagnostics include raw RMS, spatial low-pass RMS, per-channel spatial-mean/DC RMS, bridge magnitude/count/weight and final/B/final/C ratios. Exact-mask return telemetry separately reports whether final protected values needed canonicalization and the magnitude of any pre-restore solver drift.
 
+When `suffix_geometric_bridge=true`, `mixed_grid_geometry` records the initial cross-grid authorization/temporal correction and `mixed_grid_final_geometry` records the returned-latent residual closure, including its current target evidence, axis reasons, before/after registration, residual-reduction ratios and exact-prefix preservation.
+
 ## Current status
 
 The mixed-grid path is still labeled Experimental because it is an independent research topology, but its previously open production acceptance gate is closed for the tested stack: real GPU/media validation, multiple Continuum boundaries, VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact probe, fresh target-grid refinement and the suffix DC bridge have all been exercised together successfully.
 
 The v0.3.1 exact-mask return fix is structurally regression-tested against `res_multistep` endpoint roundoff. A real workflow rerun remains the empirical check for that sampler/configuration; the prior real-media validation above used the v0.3.0 stack before this patch.
+
+The optional geometric framing bridge has a separate open decoded-media gate. Its presence does not change the validated status of the DC bridge and it remains disabled by default until that gate passes.
 
 Quality/speed remain workflow dependent; the documented result is evidence for this implementation and tested stack, not a universal model guarantee.
