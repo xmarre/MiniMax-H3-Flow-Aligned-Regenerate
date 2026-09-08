@@ -408,7 +408,7 @@ def _temporal_axis_state(
     raw = [1.0]
     recovery_index = None
     best_abs = abs(boundary)
-    unsafe_reason = None
+    recovery_unsafe = False
     for index, state in enumerate(states[1:], start=1):
         if recovery_index is not None:
             raw.append(0.0)
@@ -417,12 +417,9 @@ def _temporal_axis_state(
             recovery_index = index
             raw.append(0.0)
             continue
-
         state_abs = abs(state)
-        if state_abs > abs(boundary) + floor:
-            unsafe_reason = "temporal_state_diverged"
-        elif state_abs > best_abs + floor:
-            unsafe_reason = "temporal_state_reversed_away_from_recovery"
+        if state_abs > best_abs + floor:
+            recovery_unsafe = True
         best_abs = min(best_abs, state_abs)
         raw.append(max(0.0, min(1.0, state / boundary)))
 
@@ -436,11 +433,7 @@ def _temporal_axis_state(
         recovery_suffix_token=recovery_index,
     )
 
-    if unsafe_reason is not None:
-        report["reason"] = unsafe_reason
-        return report
-
-    if recovery_index is not None:
+    if recovery_index is not None and not recovery_unsafe:
         weights = monotonic[: recovery_index + 1]
         active_tokens = min(
             suffix_length,
@@ -468,9 +461,6 @@ def _temporal_axis_state(
         return report
 
     if all(abs(state - boundary) <= floor for state in states[1:]):
-        # Persistence is proven only through the contiguous follow-up transitions
-        # we actually measured. Never project a constant correction beyond that
-        # observed temporal window.
         observed_tokens = min(suffix_length, len(followup_signed_residuals) + 1)
         report.update(
             accepted=True,
@@ -487,7 +477,32 @@ def _temporal_axis_state(
         )
         return report
 
-    report["reason"] = "unresolved_temporal_drift"
+    same_direction = all(
+        float(residual) * boundary >= 0 or abs(float(residual)) <= floor for residual in followup_signed_residuals
+    )
+    same_side = all(state * boundary > 0 and abs(state) > floor for state in states[1:])
+    if same_direction and same_side:
+        observed_tokens = min(suffix_length, len(states))
+        signed_states = states[:observed_tokens]
+        report.update(
+            accepted=True,
+            mode="measured_drift",
+            reason="observed_same_direction_cumulative_drift",
+            active_tokens=observed_tokens,
+            applied_envelope={
+                "kind": "measured_cumulative",
+                "signed_states": signed_states,
+                "active_tokens": observed_tokens,
+                "measured_followup_transitions": len(followup_signed_residuals),
+                "extrapolated_beyond_observation": False,
+            },
+        )
+        return report
+
+    if recovery_index is not None and recovery_unsafe:
+        report["reason"] = "recovery_after_unresolved_excursion"
+    else:
+        report["reason"] = "unresolved_temporal_drift"
     return report
 
 
@@ -617,17 +632,34 @@ def _axis_weight(axis_report: dict, token_index: int) -> float:
     return 0.0
 
 
+def _axis_signed_component(
+    axis_report: dict,
+    token_index: int,
+    base_component: float,
+) -> float:
+    if not axis_report.get("accepted"):
+        return 0.0
+    policy = axis_report.get("applied_envelope", {})
+    if policy.get("kind") == "measured_cumulative":
+        states = policy.get("signed_states", [])
+        if token_index < len(states):
+            return float(states[token_index])
+        return 0.0
+    return _axis_weight(axis_report, token_index) * float(base_component)
+
+
 def _effective_transform(
     base_transform: tuple[float, ...],
     axis_reports: list[dict],
     token_index: int,
 ) -> tuple[float, float, float, float]:
-    weights = [_axis_weight(axis_reports[axis], token_index) for axis in range(4)]
+    base_signed = _signed_components(base_transform)
+    components = [_axis_signed_component(axis_reports[axis], token_index, base_signed[axis]) for axis in range(4)]
     return (
-        math.exp(weights[0] * math.log(base_transform[0])),
-        math.exp(weights[1] * math.log(base_transform[1])),
-        weights[2] * base_transform[2],
-        weights[3] * base_transform[3],
+        math.exp(components[0]),
+        math.exp(components[1]),
+        components[2],
+        components[3],
     )
 
 
@@ -826,10 +858,64 @@ def apply_source_trajectory_bridge(
         if float(after_signed[axis]) * float(before_signed[axis]) < 0 and after_abs > float(floors[axis]):
             verification_ok = False
 
+    transition_verification = []
+    active = int(warp["tokens_corrected"])
+    measured_drift_axes = [
+        axis for axis in range(4) if authorized[axis] and profile["axis"][axis].get("mode") == "measured_drift"
+    ]
+    for offset in range(1, active):
+        if not measured_drift_axes:
+            break
+        expected_transition = _predict_motion_transform(motion, offset)
+        if expected_transition is None:
+            verification_ok = False
+            break
+        before_item = profile["transitions"][offset - 1]
+        before_transition_signed = before_item.get("motion_residual_signed")
+        after_item = register_pair(
+            corrected[:, :, p + offset - 1 : p + offset],
+            corrected[:, :, p + offset : p + offset + 1],
+            comparison=expected_transition,
+        )
+        after_transition_signed = None
+        if after_item.get("aligned_error") is not None:
+            after_transition_signed = _signed_components(
+                residual_transform(after_item["transform"], expected_transition)
+            )
+        item_report = {
+            "suffix_transition_offset": offset,
+            "before_signed_residual": before_transition_signed,
+            "after_signed_residual": after_transition_signed,
+            "axis_reduction_ratio": [None] * 4,
+            "verified": True,
+        }
+        if before_transition_signed is None or after_transition_signed is None:
+            item_report["verified"] = False
+            verification_ok = False
+        else:
+            for axis in measured_drift_axes:
+                before_abs = abs(float(before_transition_signed[axis]))
+                after_abs = abs(float(after_transition_signed[axis]))
+                item_report["axis_reduction_ratio"][axis] = after_abs / max(before_abs, 1e-12)
+                if before_abs > float(floors[axis]):
+                    if not after_abs < before_abs:
+                        item_report["verified"] = False
+                        verification_ok = False
+                elif after_abs > float(floors[axis]):
+                    item_report["verified"] = False
+                    verification_ok = False
+                if float(after_transition_signed[axis]) * float(
+                    before_transition_signed[axis]
+                ) < 0 and after_abs > float(floors[axis]):
+                    item_report["verified"] = False
+                    verification_ok = False
+        transition_verification.append(item_report)
+
     metrics.update(
         source_trajectory_boundary_after=after,
         source_trajectory_post_signed_residual=after_signed,
         source_trajectory_residual_reduction_ratio=reductions,
+        source_trajectory_post_transition_verification=transition_verification,
         source_trajectory_bridge_tokens_corrected=int(warp["tokens_corrected"]),
         source_trajectory_bridge_effective_active_temporal_length=int(warp["effective_active_temporal_length"]),
         source_trajectory_bridge_applied_transforms=warp["applied_transforms"],

@@ -5,6 +5,7 @@ import torch
 from torch.nn import functional as F
 
 from h3_flow_regenerate.source_trajectory_bridge import (
+    _effective_transform,
     _temporal_axis_state,
     apply_source_trajectory_bridge,
 )
@@ -86,15 +87,41 @@ def test_estimator_floor_residual_can_be_temporally_authorized_without_cross_dom
     assert report["applied_envelope"]["terminal_zero_observed"] is True
 
 
-def test_diverging_source_state_is_rejected_even_after_provisional_measurement():
+def test_same_direction_source_drift_uses_measured_cumulative_state_only():
     report = _temporal_axis_state(
         0.010161524669189069,
         [0.007677082358897666, 0.012664654887307421, 0.020149107614304457, 0.01762725812058288],
         estimator_floor=0.005,
         suffix_length=8,
     )
-    assert report["accepted"] is False
-    assert report["reason"] == "temporal_state_diverged"
+    assert report["accepted"] is True
+    assert report["mode"] == "measured_drift"
+    assert report["active_tokens"] == 5
+    envelope = report["applied_envelope"]
+    assert envelope["kind"] == "measured_cumulative"
+    assert envelope["measured_followup_transitions"] == 4
+    assert envelope["extrapolated_beyond_observation"] is False
+    assert envelope["signed_states"] == pytest.approx(report["cumulative_signed_state"])
+
+
+def test_measured_cumulative_transform_uses_observed_state_not_scaled_boundary():
+    axis_reports = [
+        {
+            "accepted": True,
+            "mode": "measured_drift",
+            "applied_envelope": {
+                "kind": "measured_cumulative",
+                "signed_states": [0.01, 0.03, 0.06],
+                "active_tokens": 3,
+            },
+        },
+        {"accepted": False},
+        {"accepted": False},
+        {"accepted": False},
+    ]
+    transform = _effective_transform((1.01, 1.0, 0.0, 0.0), axis_reports, 2)
+    assert transform[0] == pytest.approx(torch.exp(torch.tensor(0.06)).item(), rel=1e-6)
+    assert transform[1:] == pytest.approx((1.0, 0.0, 0.0))
 
 
 def test_persistent_source_state_is_limited_to_measured_window():
