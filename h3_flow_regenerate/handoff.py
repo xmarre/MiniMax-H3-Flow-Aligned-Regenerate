@@ -150,6 +150,7 @@ class ProgressiveTargetInputConfig:
     exact_prefix_mode: str = "fallback"
     suffix_dc_bridge: bool = False
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
+    suffix_geometric_bridge: bool = False
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -182,6 +183,10 @@ class ProgressiveTargetInputConfig:
             raise TypeError("suffix_dc_bridge must be boolean")
         if self.suffix_dc_bridge and self.exact_prefix_mode not in {"target_sparse_lifter", "mixed_grid_low_suffix"}:
             raise ValueError("suffix_dc_bridge is only supported by Continuum-specific exact-prefix modes")
+        if not isinstance(self.suffix_geometric_bridge, bool):
+            raise TypeError("suffix_geometric_bridge must be boolean")
+        if self.suffix_geometric_bridge and self.exact_prefix_mode != "mixed_grid_low_suffix":
+            raise ValueError("suffix_geometric_bridge requires mixed-grid Continuum")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
