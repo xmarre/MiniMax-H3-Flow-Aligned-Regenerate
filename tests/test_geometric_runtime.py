@@ -5,7 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
-from test_geometric_bridge import IDENTITY, append_biased_suffix, motion_sequence
+from test_geometric_bridge import IDENTITY, append_biased_suffix, append_recovering_suffix, motion_sequence
 from test_handoff import FakeLearnedProvider
 
 from h3_flow_regenerate.geometric_bridge import geometric_seam_bridge
@@ -19,9 +19,12 @@ from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff,
 from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
 
 
-@pytest.mark.parametrize("enabled,seam", [(False, True), (True, False), (True, True)])
+@pytest.mark.parametrize(
+    "enabled,seam_mode",
+    [(False, "persistent"), (True, "none"), (True, "persistent"), (True, "recovering")],
+)
 @pytest.mark.parametrize("dc", [False, True])
-def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, seam, dc):
+def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, seam_mode, dc):
     fake = ModuleType("comfy")
     fake.samplers = ModuleType("comfy.samplers")
     fake.samplers.KSAMPLER = lambda function, **kw: SimpleNamespace(sampler_function=function, extra_options={})
@@ -31,11 +34,12 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     natural = IDENTITY
     learned_prefix = motion_sequence([natural] * 4).repeat(1, 3, 1, 1, 1)
     prefix_t = learned_prefix.shape[2]
-    residual = (1.0, 0.98, 0.0, 0.0) if seam else IDENTITY
+    residual = (1.0, 0.98, 0.0, 0.0) if seam_mode != "none" else IDENTITY
     learned = append_biased_suffix(learned_prefix, natural, residual, count=4)
     exact = learned_prefix + 2
     source_prefix = resize_spatial_5d(exact, 40, 54, mode="bicubic")
-    source_clean = append_biased_suffix(source_prefix, natural, residual, count=4)
+    source_builder = append_recovering_suffix if seam_mode == "recovering" else append_biased_suffix
+    source_clean = source_builder(source_prefix, natural, residual, count=4)
 
     video = learned.clone()
     video[:, :, :prefix_t] = exact
@@ -135,10 +139,12 @@ def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, s
     assert len(base_provider.calls) == 2
     geometry = [event.fields for event in binding.metrics.events if event.kind == "mixed_grid_geometry"]
     assert len(geometry) == 2 and all(event["final_prefix_exact"] for event in geometry)
-    assert all(event["accepted"] == (enabled and seam) for event in geometry)
-    assert all(
-        event["policy"] == "persistent_low_grid_motion_residual_combined_cross_grid_evidence" for event in geometry
-    )
+    expected_accept = enabled and seam_mode != "none"
+    assert all(event["accepted"] == expected_accept for event in geometry)
+    assert all(event["policy"] == "cross_grid_authorized_per_axis_temporal_residual_envelope" for event in geometry)
+    if enabled and seam_mode == "recovering":
+        assert all(event["transient_bias_candidate"] for event in geometry)
+        assert all(event["effective_active_temporal_length"] < learned.shape[2] - prefix_t for event in geometry)
     assert all(event["low_grid_trajectory"]["available"] for event in geometry)
     assert "h3_flow_mixed_grid_v1" not in guider.model_options["transformer_options"]
     assert binding.metrics.counters["handoff_exact_probe_nfe"] == 2
