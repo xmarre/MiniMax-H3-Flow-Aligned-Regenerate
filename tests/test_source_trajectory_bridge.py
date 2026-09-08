@@ -19,7 +19,7 @@ def _texture() -> torch.Tensor:
 
 
 def _warp(frame: torch.Tensor, *, sy: float) -> torch.Tensor:
-    b, _c, h, w = frame.shape
+    b, _c, _h, _w = frame.shape
     theta = frame.new_tensor([[1.0, 0.0, 0.0], [0.0, sy, 0.0]], dtype=torch.float32)
     grid = F.affine_grid(theta[None].expand(b, -1, -1), frame.shape, align_corners=False)
     return F.grid_sample(frame, grid, mode="bilinear", padding_mode="border", align_corners=False)
@@ -30,7 +30,7 @@ def _recovering_video() -> torch.Tensor:
     prefix = [frame.clone() for _ in range(6)]
     # Registration of the first suffix against an identity-motion prefix is ~0.9775 sy.
     first_suffix = _warp(frame, sy=1.0 / 0.975)
-    return torch.stack(prefix + [first_suffix, frame.clone(), frame.clone()], dim=2)
+    return torch.stack([*prefix, first_suffix, frame.clone(), frame.clone()], dim=2)
 
 
 def test_recovering_source_sy_is_closed_before_upscale_and_tail_is_exact():
@@ -69,14 +69,15 @@ def test_insufficient_motion_window_fails_safe(prefix_t):
 
 
 def test_source_evidence_threshold_is_derived_from_existing_combined_gate():
-    assert _MIN_SOURCE_EVIDENCE == pytest.approx(2.5 / math.sqrt(2.0))
+    assert pytest.approx(2.5 / math.sqrt(2.0)) == _MIN_SOURCE_EVIDENCE
 
 
 def test_persistent_source_state_is_limited_to_measured_window():
     frame = _texture()
     prefix = [frame.clone() for _ in range(6)]
     shifted = _warp(frame, sy=1.0 / 0.975)
-    video = torch.stack(prefix + [shifted.clone() for _ in range(7)], dim=2)
+    suffix = [shifted.clone() for _ in range(7)]
+    video = torch.stack([*prefix, *suffix], dim=2)
     before = video.clone()
     corrected, report = apply_source_trajectory_bridge(video, 6, requested=True)
     assert report["source_trajectory_bridge_accepted"] is True

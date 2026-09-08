@@ -266,8 +266,10 @@ def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
         suffix_geometric_bridge=True,
     )
     marker = 123.0
+    bridge_input = {}
 
     def bridge(video, prefix_t, *, requested):
+        bridge_input["value"] = video.clone()
         assert requested is True
         assert prefix_t == 6
         corrected = video.clone()
@@ -317,7 +319,9 @@ def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
         list(shapes),
     )
     provider_input = provider.calls[0][0]
-    assert torch.count_nonzero(provider_input[:, :, 6] - marker) < provider_input[:, :, 6].numel()
+    expected_provider_input = bridge_input["value"].clone()
+    expected_provider_input[:, :, 6] += marker
+    assert torch.equal(provider_input, expected_provider_input)
     source_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_source_trajectory_bridge"]
     assert len(source_events) == 1
     assert source_events[0].fields["learned_upscaler_input_modified"] is True
