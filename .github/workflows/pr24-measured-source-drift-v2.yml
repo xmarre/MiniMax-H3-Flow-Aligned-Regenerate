@@ -1,0 +1,416 @@
+name: PR24 measured source drift patch v2
+
+on:
+  push:
+    branches:
+      - mirror/pr24-measured-source-drift
+    paths:
+      - .pr24-measured-drift-trigger-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr24-measured-source-drift
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply measured cumulative source-drift repair
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source_path = Path('h3_flow_regenerate/source_trajectory_bridge.py')
+          text = source_path.read_text()
+
+          temporal_axis = '''def _temporal_axis_state(
+              boundary_signed_residual: float,
+              followup_signed_residuals: list[float],
+              *,
+              estimator_floor: float,
+              suffix_length: int,
+          ) -> dict:
+              boundary = float(boundary_signed_residual)
+              floor = float(estimator_floor)
+              report = {
+                  "accepted": False,
+                  "mode": "ambiguous",
+                  "reason": "invalid_temporal_state",
+                  "boundary_signed_residual": boundary,
+                  "followup_signed_residuals": [float(value) for value in followup_signed_residuals],
+                  "cumulative_signed_state": [],
+                  "normalized_raw_envelope": [],
+                  "monotonic_envelope": [],
+                  "estimator_floor": floor,
+                  "recovery_suffix_token": None,
+                  "active_tokens": 0,
+                  "applied_envelope": {"kind": "none", "active_tokens": 0},
+              }
+              if suffix_length < 1 or floor <= 0 or not math.isfinite(boundary) or abs(boundary) < floor:
+                  return report
+              if any(not math.isfinite(float(value)) for value in followup_signed_residuals):
+                  report["reason"] = "nonfinite_followup_residual"
+                  return report
+
+              states = [boundary]
+              for residual in followup_signed_residuals:
+                  states.append(states[-1] + float(residual))
+
+              raw = [1.0]
+              recovery_index = None
+              best_abs = abs(boundary)
+              recovery_unsafe = False
+              for index, state in enumerate(states[1:], start=1):
+                  if recovery_index is not None:
+                      raw.append(0.0)
+                      continue
+                  if state * boundary <= 0 or abs(state) <= floor:
+                      recovery_index = index
+                      raw.append(0.0)
+                      continue
+                  state_abs = abs(state)
+                  if state_abs > best_abs + floor:
+                      recovery_unsafe = True
+                  best_abs = min(best_abs, state_abs)
+                  raw.append(max(0.0, min(1.0, state / boundary)))
+
+              monotonic = [raw[0]]
+              for value in raw[1:]:
+                  monotonic.append(min(monotonic[-1], value))
+              report.update(
+                  cumulative_signed_state=states,
+                  normalized_raw_envelope=raw,
+                  monotonic_envelope=monotonic,
+                  recovery_suffix_token=recovery_index,
+              )
+
+              if recovery_index is not None and not recovery_unsafe:
+                  weights = monotonic[: recovery_index + 1]
+                  active_tokens = min(
+                      suffix_length,
+                      max(
+                          (index + 1 for index, weight in enumerate(weights) if weight > 0.0),
+                          default=0,
+                      ),
+                  )
+                  report.update(
+                      accepted=True,
+                      mode="recovering",
+                      reason="observed_recovery",
+                      active_tokens=active_tokens,
+                      applied_envelope={
+                          "kind": "measured_monotonic",
+                          "weights": weights,
+                          "active_tokens": active_tokens,
+                          "terminal_zero_observed": True,
+                      },
+                  )
+                  return report
+
+              if len(followup_signed_residuals) < 2:
+                  report["reason"] = "insufficient_temporal_evidence"
+                  return report
+
+              if all(abs(state - boundary) <= floor for state in states[1:]):
+                  observed_tokens = min(suffix_length, len(followup_signed_residuals) + 1)
+                  report.update(
+                      accepted=True,
+                      mode="persistent",
+                      reason="persistent_state_within_estimator_floor_observed_window",
+                      active_tokens=observed_tokens,
+                      applied_envelope={
+                          "kind": "constant",
+                          "value": 1.0,
+                          "active_tokens": observed_tokens,
+                          "measured_followup_transitions": len(followup_signed_residuals),
+                          "extrapolated_beyond_observation": False,
+                      },
+                  )
+                  return report
+
+              same_direction = all(
+                  float(residual) * boundary >= 0 or abs(float(residual)) <= floor
+                  for residual in followup_signed_residuals
+              )
+              same_side = all(state * boundary > 0 and abs(state) > floor for state in states[1:])
+              if same_direction and same_side:
+                  observed_tokens = min(suffix_length, len(states))
+                  signed_states = states[:observed_tokens]
+                  report.update(
+                      accepted=True,
+                      mode="measured_drift",
+                      reason="observed_same_direction_cumulative_drift",
+                      active_tokens=observed_tokens,
+                      applied_envelope={
+                          "kind": "measured_cumulative",
+                          "signed_states": signed_states,
+                          "active_tokens": observed_tokens,
+                          "measured_followup_transitions": len(followup_signed_residuals),
+                          "extrapolated_beyond_observation": False,
+                      },
+                  )
+                  return report
+
+              if recovery_index is not None and recovery_unsafe:
+                  report["reason"] = "recovery_after_unresolved_excursion"
+              else:
+                  report["reason"] = "unresolved_temporal_drift"
+              return report
+          '''
+          text, count = re.subn(
+              r"def _temporal_axis_state\(.*?\n\ndef _temporal_profile\(",
+              temporal_axis + "\n\ndef _temporal_profile(",
+              text,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'failed to replace _temporal_axis_state: {count}')
+
+          transform_block = '''def _axis_weight(axis_report: dict, token_index: int) -> float:
+              if not axis_report.get("accepted"):
+                  return 0.0
+              policy = axis_report.get("applied_envelope", {})
+              if policy.get("kind") == "constant":
+                  if token_index < int(policy.get("active_tokens", 0)):
+                      return float(policy.get("value", 1.0))
+                  return 0.0
+              if policy.get("kind") == "measured_monotonic":
+                  weights = policy.get("weights", [])
+                  if token_index < len(weights):
+                      return float(weights[token_index])
+              return 0.0
+
+
+          def _axis_signed_component(
+              axis_report: dict,
+              token_index: int,
+              base_component: float,
+          ) -> float:
+              if not axis_report.get("accepted"):
+                  return 0.0
+              policy = axis_report.get("applied_envelope", {})
+              if policy.get("kind") == "measured_cumulative":
+                  states = policy.get("signed_states", [])
+                  if token_index < len(states):
+                      return float(states[token_index])
+                  return 0.0
+              return _axis_weight(axis_report, token_index) * float(base_component)
+
+
+          def _effective_transform(
+              base_transform: tuple[float, ...],
+              axis_reports: list[dict],
+              token_index: int,
+          ) -> tuple[float, float, float, float]:
+              base_signed = _signed_components(base_transform)
+              components = [
+                  _axis_signed_component(axis_reports[axis], token_index, base_signed[axis])
+                  for axis in range(4)
+              ]
+              return (
+                  math.exp(components[0]),
+                  math.exp(components[1]),
+                  components[2],
+                  components[3],
+              )
+          '''
+          text, count = re.subn(
+              r"def _axis_weight\(.*?\n\ndef _warp_suffix\(",
+              transform_block + "\n\ndef _warp_suffix(",
+              text,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'failed to replace transform block: {count}')
+
+          verify_block = '''    after = register_pair(
+              corrected[:, :, p - 1 : p],
+              corrected[:, :, p : p + 1],
+              comparison=expected,
+          )
+              before_signed = candidate.get("raw_signed_residual", _signed_components(base_transform))
+              after_signed = None
+              if after.get("aligned_error") is not None and expected is not None:
+                  after_signed = _signed_components(residual_transform(after["transform"], expected))
+
+              reductions = []
+              verification_ok = after_signed is not None
+              floors = candidate.get(
+                  "axis_estimator_floor",
+                  (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR),
+              )
+              for axis in range(4):
+                  if not authorized[axis]:
+                      reductions.append(None)
+                      continue
+                  if after_signed is None:
+                      verification_ok = False
+                      reductions.append(None)
+                      continue
+                  before_abs = abs(float(before_signed[axis]))
+                  after_abs = abs(float(after_signed[axis]))
+                  reductions.append(after_abs / max(before_abs, 1e-12))
+                  if not after_abs < before_abs:
+                      verification_ok = False
+                  if (
+                      float(after_signed[axis]) * float(before_signed[axis]) < 0
+                      and after_abs > float(floors[axis])
+                  ):
+                      verification_ok = False
+
+              transition_verification = []
+              active = int(warp["tokens_corrected"])
+              measured_drift_axes = [
+                  axis
+                  for axis in range(4)
+                  if authorized[axis] and profile["axis"][axis].get("mode") == "measured_drift"
+              ]
+              for offset in range(1, active):
+                  if not measured_drift_axes:
+                      break
+                  expected_transition = _predict_motion_transform(motion, offset)
+                  if expected_transition is None:
+                      verification_ok = False
+                      break
+                  before_item = profile["transitions"][offset - 1]
+                  before_transition_signed = before_item.get("motion_residual_signed")
+                  after_item = register_pair(
+                      corrected[:, :, p + offset - 1 : p + offset],
+                      corrected[:, :, p + offset : p + offset + 1],
+                      comparison=expected_transition,
+                  )
+                  after_transition_signed = None
+                  if after_item.get("aligned_error") is not None:
+                      after_transition_signed = _signed_components(
+                          residual_transform(after_item["transform"], expected_transition)
+                      )
+                  item_report = {
+                      "suffix_transition_offset": offset,
+                      "before_signed_residual": before_transition_signed,
+                      "after_signed_residual": after_transition_signed,
+                      "axis_reduction_ratio": [None] * 4,
+                      "verified": True,
+                  }
+                  if before_transition_signed is None or after_transition_signed is None:
+                      item_report["verified"] = False
+                      verification_ok = False
+                  else:
+                      for axis in measured_drift_axes:
+                          before_abs = abs(float(before_transition_signed[axis]))
+                          after_abs = abs(float(after_transition_signed[axis]))
+                          item_report["axis_reduction_ratio"][axis] = after_abs / max(before_abs, 1e-12)
+                          if before_abs > float(floors[axis]):
+                              if not after_abs < before_abs:
+                                  item_report["verified"] = False
+                                  verification_ok = False
+                          elif after_abs > float(floors[axis]):
+                              item_report["verified"] = False
+                              verification_ok = False
+                          if (
+                              float(after_transition_signed[axis]) * float(before_transition_signed[axis]) < 0
+                              and after_abs > float(floors[axis])
+                          ):
+                              item_report["verified"] = False
+                              verification_ok = False
+                  transition_verification.append(item_report)
+          '''
+          text, count = re.subn(
+              r"    after = register_pair\(\n        corrected\[:, :, p - 1 : p\],.*?\n    metrics\.update\(",
+              verify_block + "\n    metrics.update(",
+              text,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'failed to replace verification block: {count}')
+
+          needle = '        source_trajectory_residual_reduction_ratio=reductions,\n'
+          if needle not in text:
+              raise SystemExit('metrics insertion point not found')
+          text = text.replace(
+              needle,
+              needle + '        source_trajectory_post_transition_verification=transition_verification,\n',
+              1,
+          )
+          source_path.write_text(text)
+
+          tests_path = Path('tests/test_source_trajectory_bridge.py')
+          tests = tests_path.read_text()
+          tests = tests.replace(
+              '    _temporal_axis_state,\n    apply_source_trajectory_bridge,\n',
+              '    _effective_transform,\n    _temporal_axis_state,\n    apply_source_trajectory_bridge,\n',
+              1,
+          )
+          old_test = '''def test_diverging_source_state_is_rejected_even_after_provisional_measurement():
+              report = _temporal_axis_state(
+                  0.010161524669189069,
+                  [0.007677082358897666, 0.012664654887307421, 0.020149107614304457, 0.01762725812058288],
+                  estimator_floor=0.005,
+                  suffix_length=8,
+              )
+              assert report["accepted"] is False
+              assert report["reason"] == "temporal_state_diverged"
+          '''
+          new_test = '''def test_same_direction_source_drift_uses_measured_cumulative_state_only():
+              report = _temporal_axis_state(
+                  0.010161524669189069,
+                  [0.007677082358897666, 0.012664654887307421, 0.020149107614304457, 0.01762725812058288],
+                  estimator_floor=0.005,
+                  suffix_length=8,
+              )
+              assert report["accepted"] is True
+              assert report["mode"] == "measured_drift"
+              assert report["active_tokens"] == 5
+              envelope = report["applied_envelope"]
+              assert envelope["kind"] == "measured_cumulative"
+              assert envelope["measured_followup_transitions"] == 4
+              assert envelope["extrapolated_beyond_observation"] is False
+              assert envelope["signed_states"] == pytest.approx(report["cumulative_signed_state"])
+
+
+          def test_measured_cumulative_transform_uses_observed_state_not_scaled_boundary():
+              axis_reports = [
+                  {
+                      "accepted": True,
+                      "mode": "measured_drift",
+                      "applied_envelope": {
+                          "kind": "measured_cumulative",
+                          "signed_states": [0.01, 0.03, 0.06],
+                          "active_tokens": 3,
+                      },
+                  },
+                  {"accepted": False},
+                  {"accepted": False},
+                  {"accepted": False},
+              ]
+              transform = _effective_transform((1.01, 1.0, 0.0, 0.0), axis_reports, 2)
+              assert transform[0] == pytest.approx(torch.exp(torch.tensor(0.06)).item(), rel=1e-6)
+              assert transform[1:] == pytest.approx((1.0, 0.0, 0.0))
+          '''
+          if old_test not in tests:
+              raise SystemExit('old diverging-state test not found')
+          tests = tests.replace(old_test, new_test, 1)
+          tests_path.write_text(tests)
+          PY
+
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]' build
+          ruff format h3_flow_regenerate/source_trajectory_bridge.py tests/test_source_trajectory_bridge.py
+          ruff check h3_flow_regenerate/source_trajectory_bridge.py tests/test_source_trajectory_bridge.py
+          pytest -q tests/test_source_trajectory_bridge.py
+
+          rm -f .pr24-measured-drift-trigger .pr24-measured-drift-trigger-v2 \
+            .github/workflows/pr24-measured-source-drift.yml \
+            .github/workflows/pr24-measured-source-drift-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Repair directly measured cumulative source drift'
+          git push origin HEAD:mirror/pr24-measured-source-drift
