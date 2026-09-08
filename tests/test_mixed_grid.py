@@ -238,7 +238,6 @@ def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
     from test_handoff import FakeLearnedProvider
 
     import h3_flow_regenerate.runtime as runtime
-    from h3_flow_regenerate.geometry import unpack_streams
     from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
     from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
 
