@@ -202,6 +202,7 @@ Quality and speed still depend on prompt, references, geometry, sampler, Spectru
 
 - [docs/USAGE.md](docs/USAGE.md) — wiring and parameter details
 - [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract and diagnostics
+- [docs/geometric-seam-bridge.md](docs/geometric-seam-bridge.md) — experimental opt-in geometric seam diagnostics and decoded-media validation protocol
 - [docs/TARGET_SPARSE_CONTINUUM.md](docs/TARGET_SPARSE_CONTINUUM.md) — Target-Sparse research path
 - [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md) — decoder right-context helper
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — decoded-media validation ledger
@@ -218,5 +219,3 @@ MiniMax H3 Flow-Aligned Regenerate is licensed under the [Apache License 2.0](LI
 Copyright 2026 xmarre.
 
 Referenced papers and third-party repositories retain their own copyrights and licenses.
-
-Experimental geometric Continuum seam diagnostics and opt-in validation: [protocol](docs/geometric-seam-bridge.md).
