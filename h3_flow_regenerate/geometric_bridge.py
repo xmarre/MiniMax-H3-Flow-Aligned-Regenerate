@@ -665,7 +665,9 @@ def _temporal_axis_state(
     return report
 
 
-def _suffix_temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, candidate: dict, corroboration: dict) -> dict:
+def _suffix_temporal_profile(
+    video: torch.Tensor, prefix_t: int, motion: dict, candidate: dict, corroboration: dict
+) -> dict:
     """Measure genuine source suffix transitions and classify authorized axes."""
     authorized_axes = list(corroboration.get("axis_authorized", corroboration.get("axis_applied", [False] * 4)))
     report = {
@@ -684,7 +686,9 @@ def _suffix_temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, c
                 "cross_grid_authorized": bool(authorized_axes[axis]),
                 "mode": "inactive",
                 "accepted": False,
-                "reason": "axis_not_cross_grid_authorized" if not authorized_axes[axis] else "source_context_unavailable",
+                "reason": (
+                    "axis_not_cross_grid_authorized" if not authorized_axes[axis] else "source_context_unavailable"
+                ),
             }
             for axis in range(4)
         ]
@@ -699,7 +703,11 @@ def _suffix_temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, c
                 "cross_grid_authorized": bool(authorized_axes[axis]),
                 "mode": "ambiguous" if authorized_axes[axis] else "inactive",
                 "accepted": False,
-                "reason": "insufficient_suffix_temporal_evidence" if authorized_axes[axis] else "axis_not_cross_grid_authorized",
+                "reason": (
+                    "insufficient_suffix_temporal_evidence"
+                    if authorized_axes[axis]
+                    else "axis_not_cross_grid_authorized"
+                ),
             }
             for axis in range(4)
         ]
