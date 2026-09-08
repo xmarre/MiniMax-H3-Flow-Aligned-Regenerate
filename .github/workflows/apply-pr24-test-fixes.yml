@@ -1,0 +1,74 @@
+name: Apply PR24 source test fixes
+
+on:
+  push:
+    branches: [mirror/pr24-source-trajectory-pre-upscale]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr24-source-trajectory-pre-upscale
+          fetch-depth: 0
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"patch target mismatch in {path}: {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "tests/test_mixed_grid.py",
+              '    from h3_flow_regenerate.geometry import unpack_streams\n',
+              '',
+          )
+          replace_once(
+              "tests/test_mixed_grid.py",
+              '    marker = 123.0\n\n    def bridge(video, prefix_t, *, requested):\n',
+              '    marker = 123.0\n    bridge_input = {}\n\n    def bridge(video, prefix_t, *, requested):\n        bridge_input["value"] = video.clone()\n',
+          )
+          replace_once(
+              "tests/test_mixed_grid.py",
+              '    provider_input = provider.calls[0][0]\n    assert torch.count_nonzero(provider_input[:, :, 6] - marker) < provider_input[:, :, 6].numel()\n',
+              '    provider_input = provider.calls[0][0]\n    expected_provider_input = bridge_input["value"].clone()\n    expected_provider_input[:, :, 6] += marker\n    assert torch.equal(provider_input, expected_provider_input)\n',
+          )
+
+          replace_once(
+              "tests/test_source_trajectory_bridge.py",
+              '    b, _c, h, w = frame.shape\n',
+              '    b, _c, _h, _w = frame.shape\n',
+          )
+          replace_once(
+              "tests/test_source_trajectory_bridge.py",
+              '    return torch.stack(prefix + [first_suffix, frame.clone(), frame.clone()], dim=2)\n',
+              '    return torch.stack([*prefix, first_suffix, frame.clone(), frame.clone()], dim=2)\n',
+          )
+          replace_once(
+              "tests/test_source_trajectory_bridge.py",
+              '    assert _MIN_SOURCE_EVIDENCE == pytest.approx(2.5 / math.sqrt(2.0))\n',
+              '    assert pytest.approx(2.5 / math.sqrt(2.0)) == _MIN_SOURCE_EVIDENCE\n',
+          )
+          replace_once(
+              "tests/test_source_trajectory_bridge.py",
+              '    video = torch.stack(prefix + [shifted.clone() for _ in range(7)], dim=2)\n',
+              '    suffix = [shifted.clone() for _ in range(7)]\n    video = torch.stack([*prefix, *suffix], dim=2)\n',
+          )
+          PY
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/test_mixed_grid.py tests/test_source_trajectory_bridge.py
+          git commit -m "Fix source trajectory bridge tests"
+          git push origin HEAD:mirror/pr24-source-trajectory-pre-upscale
