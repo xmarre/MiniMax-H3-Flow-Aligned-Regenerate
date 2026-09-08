@@ -205,7 +205,6 @@ def test_final_mixed_grid_geometry_wrapper_preserves_audio_and_exact_prefix(monk
     packed, shapes, mask = _packed_exact_prefix(t=7, prefix=2)
     source_video, source_audio = unpack_streams(packed, shapes)
     binding = FlowBinding()
-    binding.metrics.event("mixed_grid_geometry", accepted=True, reason="geometry_applied")
     config = ProgressiveTargetInputConfig(
         source_latent_h=4,
         source_latent_w=6,
@@ -248,6 +247,7 @@ def test_final_mixed_grid_geometry_wrapper_preserves_audio_and_exact_prefix(monk
         sampler=sampler,
         latent_shapes=list(shapes),
     )
+    binding.metrics.event("mixed_grid_geometry", accepted=True, reason="geometry_applied")
 
     result = adapted()
     result_video, result_audio = unpack_streams(result, shapes)
@@ -263,3 +263,49 @@ def test_final_mixed_grid_geometry_wrapper_preserves_audio_and_exact_prefix(monk
     assert len(final_events) == 1
     assert final_events[0].fields["accepted"] is True
     assert final_events[0].fields["reason"] == "final_authorized_residual_closed"
+
+
+def test_final_mixed_grid_geometry_ignores_stale_prior_invocation_evidence(monkeypatch):
+    from test_handoff import FakeLearnedProvider
+
+    packed, shapes, mask = _packed_exact_prefix(t=7, prefix=2)
+    binding = FlowBinding()
+    binding.metrics.event("mixed_grid_geometry", accepted=True, reason="stale_previous_chunk")
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        transfer_mode="learned_3d",
+        learned_upscaler=FakeLearnedProvider(),
+        suffix_geometric_bridge=True,
+    )
+    guider = SimpleNamespace(model_options={"transformer_options": {FLOW_STAGE_KEY: "high"}})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return _with_one_roundoff_value(packed)
+
+    def must_not_close(*_args, **_kwargs):
+        raise AssertionError("stale mixed-grid geometry must not authorize final closure")
+
+    monkeypatch.setattr(comfy_compat, "close_final_mixed_grid_residual", must_not_close)
+    sampler = SimpleNamespace(sampler_function=lambda: None, extra_options={})
+    adapted = comfy_compat._ProgressiveExactMaskExecutor(
+        Executor(),
+        binding=binding,
+        progressive=config,
+        latent_image=packed,
+        denoise_mask=mask,
+        sampler=sampler,
+        latent_shapes=list(shapes),
+    )
+
+    result = adapted()
+
+    assert torch.equal(result, packed)
+    final_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_final_geometry"]
+    assert len(final_events) == 1
+    assert final_events[0].fields["accepted"] is False
+    assert final_events[0].fields["reason"] == "initial_geometry_metrics_unavailable"
