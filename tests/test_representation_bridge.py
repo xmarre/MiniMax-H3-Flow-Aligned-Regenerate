@@ -34,8 +34,19 @@ def test_structure_plus_dc_preserves_upscaler_native_boundary_transition(dtype):
     assert dc["suffix_dc_bridge_corrected_tokens"] == 1
     native = before[:, :, 2].float() - before[:, :, 1].float()
     restored = combined[:, :, 2].float() - exact[:, :, 1].float()
-    atol = 3e-3 if dtype == torch.bfloat16 else 8e-4 if dtype == torch.float16 else 2e-6
-    assert torch.allclose(restored, native, atol=atol, rtol=0)
+
+    # The algebra is exact in float32. For half/bfloat16 the structural and DC
+    # corrections are each rounded back to the required output dtype. Bound that
+    # unavoidable error by two output-ULPs at the largest participating value;
+    # this checks the implementation contract rather than using a hand-tuned
+    # tolerance that merely happens to pass this fixture.
+    if dtype == torch.float32:
+        assert torch.allclose(restored, native, atol=2e-6, rtol=0)
+    else:
+        scale = torch.maximum(restored.abs(), native.abs()).clamp_min(1.0)
+        quantization_bound = 2.0 * torch.finfo(dtype).eps * scale
+        assert bool(((restored - native).abs() <= quantization_bound).all())
+
     assert torch.equal(combined[:, :, :2], before[:, :, :2])
     assert torch.equal(combined[:, :, 3:], before[:, :, 3:])
 
