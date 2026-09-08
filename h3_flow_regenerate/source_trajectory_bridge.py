@@ -724,14 +724,19 @@ def apply_source_trajectory_bridge(
     if not torch.is_tensor(video) or video.ndim != 5 or not video.is_floating_point():
         raise TypeError("source trajectory bridge expects a floating BxCxTxHxW tensor")
     p = int(prefix_t)
-    if not 3 <= p < int(video.shape[2]) - 1:
-        raise ValueError("source trajectory bridge requires motion history plus generated suffix")
+    temporal = int(video.shape[2])
+    if not 1 <= p < temporal:
+        raise ValueError("source trajectory bridge requires a non-empty prefix and suffix")
     if not bool(torch.isfinite(video).all()):
         raise RuntimeError("source trajectory bridge input contains NaN or Inf")
     if not isinstance(requested, bool):
         raise TypeError("source trajectory bridge requested flag must be boolean")
     if not requested:
         return video, disabled_source_trajectory_bridge_metrics(prefix_t=p)
+    if p < 3 or p >= temporal - 1:
+        metrics = disabled_source_trajectory_bridge_metrics(prefix_t=p, requested=True)
+        metrics["source_trajectory_bridge_reason"] = "insufficient_source_motion_window"
+        return video, metrics
 
     started = time.perf_counter()
     motion = _motion_model(video, p)

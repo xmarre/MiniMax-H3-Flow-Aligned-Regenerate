@@ -34,6 +34,7 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+from .source_trajectory_bridge import apply_source_trajectory_bridge
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 from .tone_bridge import (
     apply_suffix_dc_bridge,
@@ -1534,6 +1535,22 @@ def _run_progressive(
             clean_video[:, :, : mixed_plan.prefix_t] = resize_spatial_5d(
                 mixed_plan.prefix.to(clean_video), source_h, source_w, mode="bicubic"
             )
+            source_bridge_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            clean_video, source_trajectory_metrics = apply_source_trajectory_bridge(
+                clean_video,
+                mixed_plan.prefix_t,
+                requested=source_bridge_requested,
+            )
+            binding.metrics.event(
+                "mixed_grid_source_trajectory_bridge",
+                legacy_option_name="suffix_geometric_bridge",
+                authoritative_source_prefix_modified=False,
+                later_suffix_extrapolated=False,
+                learned_upscaler_input_modified=bool(
+                    source_trajectory_metrics["source_trajectory_bridge_accepted"]
+                ),
+                **source_trajectory_metrics,
+            )
             source_x0 = pack_streams((clean_video, clean_audio))[0]
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
@@ -1565,7 +1582,11 @@ def _run_progressive(
                 sigma=sigma,
             )
             exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
-            representation_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            representation_option_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            source_trajectory_accepted = bool(
+                source_trajectory_metrics["source_trajectory_bridge_accepted"]
+            )
+            representation_requested = representation_option_requested and source_trajectory_accepted
             if representation_requested:
                 corrected_clean, representation_metrics = apply_suffix_representation_bridge(
                     learned_clean,
@@ -1576,8 +1597,12 @@ def _run_progressive(
                 corrected_clean = learned_clean
                 representation_metrics = disabled_suffix_representation_bridge_metrics(
                     prefix_t=mixed_plan.prefix_t,
-                    requested=False,
+                    requested=representation_option_requested,
                 )
+                if representation_option_requested and not source_trajectory_accepted:
+                    representation_metrics["suffix_representation_bridge_reason"] = (
+                        "source_trajectory_not_authorized"
+                    )
 
             dc_enabled = bool(getattr(config, "suffix_dc_bridge", False))
             if dc_enabled:
@@ -1637,6 +1662,24 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
+                source_trajectory_bridge_requested=source_trajectory_metrics[
+                    "source_trajectory_bridge_requested"
+                ],
+                source_trajectory_bridge_accepted=source_trajectory_metrics[
+                    "source_trajectory_bridge_accepted"
+                ],
+                source_trajectory_bridge_reason=source_trajectory_metrics[
+                    "source_trajectory_bridge_reason"
+                ],
+                source_trajectory_bridge_tokens_corrected=source_trajectory_metrics[
+                    "source_trajectory_bridge_tokens_corrected"
+                ],
+                source_trajectory_axis_authorized=source_trajectory_metrics.get(
+                    "source_trajectory_axis_authorized", [False] * 4
+                ),
+                source_trajectory_residual_reduction_ratio=source_trajectory_metrics.get(
+                    "source_trajectory_residual_reduction_ratio", [None] * 4
+                ),
                 **representation_metrics,
                 **bridge_metrics,
                 **splice_diagnostics,
