@@ -5,13 +5,14 @@ from types import ModuleType, SimpleNamespace
 
 import torch
 
+import h3_flow_regenerate.comfy_compat as comfy_compat
 from h3_flow_regenerate.comfy_compat import (
     _canonicalize_exact_masked_output,
     flow_outer_wrapper_with_exact_mask,
 )
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
-from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, PROGRESSIVE_KEY, FlowBinding
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, PROGRESSIVE_KEY, FlowBinding
 
 
 def _res_multistep_endpoint_roundoff(reference: torch.Tensor) -> torch.Tensor:
@@ -196,3 +197,115 @@ def test_target_input_fallback_canonicalizes_single_sampler_return():
     assert events[0].fields["source"] == "target_input_fallback_return"
     assert events[0].fields["canonicalized"] is True
     assert events[0].fields["changed_elements"] == 1
+
+
+def test_final_mixed_grid_geometry_wrapper_preserves_audio_and_exact_prefix(monkeypatch):
+    from test_handoff import FakeLearnedProvider
+
+    packed, shapes, mask = _packed_exact_prefix(t=7, prefix=2)
+    source_video, source_audio = unpack_streams(packed, shapes)
+    binding = FlowBinding()
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        transfer_mode="learned_3d",
+        learned_upscaler=FakeLearnedProvider(),
+        suffix_geometric_bridge=True,
+    )
+    guider = SimpleNamespace(model_options={"transformer_options": {FLOW_STAGE_KEY: "high"}})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return _with_one_roundoff_value(packed)
+
+    calls = []
+
+    def fake_close(video, prefix_t, initial_geometry):
+        calls.append((prefix_t, initial_geometry))
+        assert prefix_t == 2
+        assert torch.equal(video[:, :, :prefix_t], source_video[:, :, :prefix_t])
+        corrected = video.clone()
+        corrected[:, :, prefix_t] += 0.5
+        return corrected, {
+            "requested": True,
+            "accepted": True,
+            "reason": "final_authorized_residual_closed",
+            "policy": "final_target_residual_closure_from_initial_cross_grid_authorization",
+        }
+
+    monkeypatch.setattr(comfy_compat, "close_final_mixed_grid_residual", fake_close)
+    sampler = SimpleNamespace(sampler_function=lambda: None, extra_options={})
+    adapted = comfy_compat._ProgressiveExactMaskExecutor(
+        Executor(),
+        binding=binding,
+        progressive=config,
+        latent_image=packed,
+        denoise_mask=mask,
+        sampler=sampler,
+        latent_shapes=list(shapes),
+    )
+    binding.metrics.event("mixed_grid_geometry", accepted=True, reason="geometry_applied")
+
+    result = adapted()
+    result_video, result_audio = unpack_streams(result, shapes)
+
+    assert len(calls) == 1
+    assert torch.equal(result_video[:, :, :2], source_video[:, :, :2])
+    assert torch.equal(result_video[:, :, 2], source_video[:, :, 2] + 0.5)
+    assert torch.equal(result_video[:, :, 3:], source_video[:, :, 3:])
+    assert torch.equal(result_audio, source_audio)
+    exact_events = [event for event in binding.metrics.events if event.kind == "exact_mask_output"]
+    assert exact_events[-1].fields["canonicalized"] is True
+    final_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_final_geometry"]
+    assert len(final_events) == 1
+    assert final_events[0].fields["accepted"] is True
+    assert final_events[0].fields["reason"] == "final_authorized_residual_closed"
+
+
+def test_final_mixed_grid_geometry_ignores_stale_prior_invocation_evidence(monkeypatch):
+    from test_handoff import FakeLearnedProvider
+
+    packed, shapes, mask = _packed_exact_prefix(t=7, prefix=2)
+    binding = FlowBinding()
+    binding.metrics.event("mixed_grid_geometry", accepted=True, reason="stale_previous_chunk")
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        transfer_mode="learned_3d",
+        learned_upscaler=FakeLearnedProvider(),
+        suffix_geometric_bridge=True,
+    )
+    guider = SimpleNamespace(model_options={"transformer_options": {FLOW_STAGE_KEY: "high"}})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return _with_one_roundoff_value(packed)
+
+    def must_not_close(*_args, **_kwargs):
+        raise AssertionError("stale mixed-grid geometry must not authorize final closure")
+
+    monkeypatch.setattr(comfy_compat, "close_final_mixed_grid_residual", must_not_close)
+    sampler = SimpleNamespace(sampler_function=lambda: None, extra_options={})
+    adapted = comfy_compat._ProgressiveExactMaskExecutor(
+        Executor(),
+        binding=binding,
+        progressive=config,
+        latent_image=packed,
+        denoise_mask=mask,
+        sampler=sampler,
+        latent_shapes=list(shapes),
+    )
+
+    result = adapted()
+
+    assert torch.equal(result, packed)
+    final_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_final_geometry"]
+    assert len(final_events) == 1
+    assert final_events[0].fields["accepted"] is False
+    assert final_events[0].fields["reason"] == "initial_geometry_metrics_unavailable"
