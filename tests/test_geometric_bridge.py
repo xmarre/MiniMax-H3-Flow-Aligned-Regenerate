@@ -10,6 +10,8 @@ from h3_flow_regenerate.geometric_bridge import (
     IDENTITY,
     SOURCE_CLEAN_CONTEXT_ATTR,
     _corroborate_target_candidate,
+    _effective_transform,
+    _temporal_axis_state,
     compose_transform,
     geometric_seam_bridge,
     invert_transform,
@@ -114,13 +116,18 @@ def test_persistent_vertical_scale_is_corrected_only_after_cross_grid_corroborat
     result, _, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=True)
     assert report["accepted"], report
     assert report["motion_residual"]["axis_applied"] == [False, True, False, False]
-    assert report["suffix_persistence"]["accepted"]
-    assert report["suffix_persistence"]["axis_persistent"] == [False, True, False, False]
+    temporal = report["temporal_profile"]
+    assert temporal["accepted"]
+    assert temporal["axis_accepted"] == [False, True, False, False]
+    assert temporal["axis_mode"] == ["inactive", "persistent", "inactive", "inactive"]
     corroboration = report["cross_grid_corroboration"]
     assert corroboration["accepted"]
-    assert corroboration["axis_applied"] == [False, True, False, False]
+    assert corroboration["axis_authorized"] == [False, True, False, False]
     assert corroboration["transform"][1] == pytest.approx(0.98, abs=0.005)
     assert report["tokens_corrected"] == learned.shape[2] - exact.shape[2]
+    assert report["applied_transforms_compact"]
+    assert report["applied_transform_sequence_length"] == report["tokens_corrected"]
+    assert len(report["applied_transforms"]) == 1
     assert torch.equal(result[:, :, : exact.shape[2]], learned[:, :, : exact.shape[2]])
     assert not torch.equal(result[:, :, exact.shape[2] :], learned[:, :, exact.shape[2] :])
     assert torch.equal(learned, saved)
@@ -131,26 +138,55 @@ def test_actual_like_moderate_scale_evidence_combines_across_grids():
     target_sy = 0.9831404905194943
     source_score = abs(math.log(source_sy)) / 0.012961403605976161
     target_score = abs(math.log(target_sy)) / 0.009277968419866023
+    assert source_score == pytest.approx(1.953116954766111)
+    assert target_score == pytest.approx(1.8326478508402673)
     assert source_score < 2.5 and target_score < 2.5
-    assert math.hypot(source_score, target_score) > 2.5
+    assert math.hypot(source_score, target_score) == pytest.approx(2.6782949770673685)
     source = {
         "accepted": True,
         "axis_applied": [False, True, False, False],
         "transform": (1.0, source_sy, 0.0, 0.0),
         "axis_evidence_score": [0.0, source_score, 0.0, 0.0],
     }
+    # Reproduce the real target-side nuisance candidates: only shared source sy may authorize.
     target = {
         "accepted": True,
-        "axis_applied": [False, True, False, False],
-        "transform": (1.0, target_sy, 0.0, 0.0),
-        "axis_evidence_score": [0.0, target_score, 0.0, 0.0],
+        "axis_applied": [True, True, False, True],
+        "transform": (1.0219910714285716, target_sy, 0.0, 0.5153615701643671),
+        "axis_evidence_score": [2.4160113002839005, target_score, 0.0, 2.0614462806574685],
     }
-    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
-    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    report = _corroborate_target_candidate(source, target, (40, 54), (56, 76))
     assert report["accepted"], report
-    assert report["axis_applied"] == [False, True, False, False]
+    assert report["axis_authorized"] == [False, True, False, False]
     assert report["axis_reason"][1] == "combined_evidence_authorized"
-    assert report["combined_evidence_score"][1] > 2.5
+    assert report["combined_evidence_score"][1] == pytest.approx(2.6782949770673685)
+
+
+def test_actual_like_followups_produce_measured_recovering_envelope():
+    boundary = -0.02531513714039865
+    followups = [
+        -9.205752258865294e-05,
+        0.002374034972604866,
+        0.0221887658024116,
+        0.007306219962992207,
+    ]
+    report = _temporal_axis_state(boundary, followups, estimator_floor=0.005, suffix_length=50)
+    assert report["accepted"], report
+    assert report["mode"] == "recovering"
+    assert report["cumulative_signed_state"] == pytest.approx(
+        [
+            -0.02531513714039865,
+            -0.0254071946629873,
+            -0.023033159690382436,
+            -0.0008443938879708346,
+            0.006461826075021372,
+        ]
+    )
+    # Token 3 is below the 0.5% log-scale estimator floor and is explicitly snapped to zero.
+    assert report["normalized_raw_envelope"] == pytest.approx([1.0, 1.0, 0.9098571958208133, 0.0, 0.0])
+    assert report["monotonic_envelope"] == pytest.approx([1.0, 1.0, 0.9098571958208133, 0.0, 0.0])
+    assert report["recovery_suffix_token"] == 3
+    assert report["active_tokens"] == 3
 
 
 def test_combined_evidence_does_not_allow_one_domain_to_dominate():
@@ -166,13 +202,12 @@ def test_combined_evidence_does_not_allow_one_domain_to_dominate():
         "transform": (1.0, 0.98, 0.0, 0.0),
         "axis_evidence_score": [0.0, 3.5, 0.0, 0.0],
     }
-    persistence = {"accepted": True, "axis_persistent": [False, True, False, False]}
-    report = _corroborate_target_candidate(source, target, persistence, (40, 54), (56, 76))
+    report = _corroborate_target_candidate(source, target, (40, 54), (56, 76))
     assert not report["accepted"]
     assert report["reason"] == "domain_evidence_too_weak"
 
 
-def test_recovering_source_boundary_rejects_persistent_full_suffix_warp():
+def test_recovering_source_boundary_gets_transient_correction_only():
     natural = IDENTITY
     target_prefix = motion_sequence([natural] * 7, h=56, w=76, seed=101)
     source_prefix = motion_sequence([natural] * 7, h=40, w=54, seed=202)
@@ -180,18 +215,79 @@ def test_recovering_source_boundary_rejects_persistent_full_suffix_warp():
     source = append_recovering_suffix(source_prefix, natural, (1.0, 0.98, 0.0, 0.0), count=5)
     attach_source(learned, source)
     result, _, report = geometric_seam_bridge(learned, target_prefix, source_hw=(40, 54), requested=True)
-    assert report["motion_residual"]["accepted"]
-    assert not report["suffix_persistence"]["accepted"]
-    assert report["reason"] == "suffix_recovery_or_drift_detected"
-    assert result is learned
+    assert report["accepted"], report
+    assert report["cross_grid_corroboration"]["axis_authorized"] == [False, True, False, False]
+    assert report["temporal_profile"]["axis_mode"][1] == "recovering"
+    active = report["effective_active_temporal_length"]
+    assert active == 1
+    prefix_t = target_prefix.shape[2]
+    assert not torch.equal(result[:, :, prefix_t : prefix_t + active], learned[:, :, prefix_t : prefix_t + active])
+    # Once source recovery is observed, later learned suffix tokens are never resampled.
+    assert torch.equal(result[:, :, prefix_t + active :], learned[:, :, prefix_t + active :])
+
+
+def test_immediate_recovery_uses_only_boundary_suffix_token():
+    report = _temporal_axis_state(-0.02, [0.02], estimator_floor=0.005, suffix_length=50)
+    assert report["accepted"] and report["mode"] == "recovering"
+    assert report["monotonic_envelope"] == [1.0, 0.0]
+    assert report["active_tokens"] == 1
+
+
+def test_sign_crossing_terminates_envelope_without_restart():
+    report = _temporal_axis_state(-0.02, [0.025, -0.01], estimator_floor=0.005, suffix_length=50)
+    assert report["accepted"] and report["mode"] == "recovering"
+    assert report["monotonic_envelope"] == [1.0, 0.0, 0.0]
+    assert report["active_tokens"] == 1
+
+
+def test_small_estimator_noise_cannot_make_envelope_rise_again():
+    # States are -0.020 -> -0.016 -> -0.0168 -> -0.008 -> -0.003.
+    report = _temporal_axis_state(-0.02, [0.004, -0.0008, 0.0088, 0.005], estimator_floor=0.005, suffix_length=50)
+    assert report["accepted"] and report["mode"] == "recovering"
+    assert report["monotonic_envelope"] == pytest.approx([1.0, 0.8, 0.8, 0.4, 0.0])
+
+
+@pytest.mark.parametrize(
+    "followups,reason",
+    [
+        ([-0.006], "temporal_state_diverged"),
+        ([0.01, -0.008], "temporal_state_reversed_away_from_recovery"),
+        ([0.003, 0.003, 0.003, 0.003], "unresolved_temporal_drift"),
+    ],
+)
+def test_divergent_oscillatory_or_unresolved_state_rejects(followups, reason):
+    report = _temporal_axis_state(-0.02, followups, estimator_floor=0.005, suffix_length=50)
+    assert not report["accepted"]
+    assert report["reason"] == reason
+
+
+def test_persistent_temporal_state_keeps_full_suffix_weight():
+    report = _temporal_axis_state(-0.02, [0.0001, -0.0002, 0.00005], estimator_floor=0.005, suffix_length=50)
+    assert report["accepted"] and report["mode"] == "persistent"
+    assert report["applied_envelope"] == {"kind": "constant", "value": 1.0, "active_tokens": 50}
+
+
+def test_scale_is_interpolated_in_log_space_and_translation_linearly():
+    axes = [
+        {"accepted": True, "applied_envelope": {"kind": "measured_monotonic", "weights": [1.0, 0.5, 0.0]}},
+        {"accepted": True, "applied_envelope": {"kind": "measured_monotonic", "weights": [1.0, 0.5, 0.0]}},
+        {"accepted": True, "applied_envelope": {"kind": "measured_monotonic", "weights": [1.0, 0.5, 0.0]}},
+        {"accepted": False},
+    ]
+    base = (1.02, 0.98, 1.0, 2.0)
+    half = _effective_transform(base, axes, 1)
+    assert half[0] == pytest.approx(math.exp(0.5 * math.log(1.02)))
+    assert half[1] == pytest.approx(math.exp(0.5 * math.log(0.98)))
+    assert half[2] == pytest.approx(0.5)
+    assert half[3] == 0.0
 
 
 def test_source_residual_without_target_residual_is_noop():
     exact, learned, _ = matched_pair(source_correction=(1.0, 0.98, 0.0, 0.0), target_correction=IDENTITY)
     result, _, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=True)
     assert report["motion_residual"]["accepted"]
-    assert report["suffix_persistence"]["accepted"]
     assert not report["target_motion_residual"]["accepted"]
+    assert not report["cross_grid_corroboration"]["accepted"]
     assert not report["accepted"]
     assert report["reason"] == "target_boundary_not_provisional"
     assert result is learned
@@ -252,7 +348,7 @@ def test_translation_is_measured_on_source_but_applied_in_target_units():
     result, _, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=True)
     assert report["accepted"], report
     corroboration = report["cross_grid_corroboration"]
-    assert corroboration["axis_applied"] == [False, False, True, False]
+    assert corroboration["axis_authorized"] == [False, False, True, False]
     assert corroboration["projected_source_transform"][2] == pytest.approx(target_tx)
     assert corroboration["transform"][2] == pytest.approx(target_tx, abs=0.2)
     assert result is not learned
