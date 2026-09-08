@@ -140,13 +140,9 @@ That falsifies the exact-prefix splice as a sufficient root cause. The same vert
 
 Immediately before learned upscaling, Flow estimates recent natural prefix motion from up to six genuine source-grid transitions and measures the first generated transition against that prediction. Candidate axes retain the established estimator floors and safety bounds (`0.005` log scale, `0.25` latent px translation, `log(1.03)` scale safety, and `min(1.5 px, 2.5%)` translation safety) plus objective-gain gating.
 
-Because no independent target-domain observation exists before the upscaler, the source-only authorization threshold is the equal-contribution equivalent of the existing two-domain quadrature gate:
+Because no independent target-domain observation exists before the upscaler, the earlier two-domain quadrature threshold is not reused as a source-only scalar gate. A source axis must instead clear the existing estimator floor, objective-gain floor, and safety bound; then directly observed suffix evolution must authorize a safe recovering or persistent state; finally the applied warp must strictly reduce the measured boundary residual. `axis_evidence_score` is retained for diagnostics only. Existing cross-grid thresholds elsewhere are unchanged.
 
-```text
-no transplanted two-domain scalar threshold
-```
-
-Evidence alone cannot authorize a warp. Up to four genuine suffix transitions are measured to classify the residual as recovering or persistent. Recovering weights are derived from the measured cumulative state. Persistent correction is limited to token 0 plus the directly observed follow-up transitions; it is never extended over unmeasured later suffix tokens. There is no handcrafted fade.
+Up to four genuine suffix transitions are measured for temporal classification. Recovering weights are derived from the measured cumulative state. Persistent correction is limited to token 0 plus the directly observed follow-up transitions; it is never extended over unmeasured later suffix tokens. There is no handcrafted fade.
 
 After correction the source boundary is registered again. Every authorized axis must reduce in residual magnitude, and a sign crossing is allowed only within the estimator floor. Otherwise the exact original source tensor is returned. The protected source prefix and all suffix tokens outside the measured active window remain byte-identical.
 

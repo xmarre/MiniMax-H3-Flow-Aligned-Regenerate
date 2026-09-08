@@ -44,15 +44,11 @@ The first protected-prefix -> generated-suffix transition is measured against th
 - translation safety bound: `min(1.5 px, 2.5% of the corresponding source-grid axis)`;
 - the fitted axis must materially improve the registration objective.
 
-### Source-only evidence gate
+### Source-only authorization
 
-Before the learned upscaler there is intentionally no independent target-grid observation. The earlier two-domain gate required a quadrature evidence score of `2.5`. The source-only stage therefore uses the equal-contribution per-domain equivalent:
+Before the learned upscaler there is intentionally no independent target-grid observation. The earlier `2.5` quadrature gate combined independent source- and target-domain evidence, so it is not transplanted into this source-only stage. Doing so would add a second magnitude threshold on top of the estimator/objective gates without an independent domain to justify it.
 
-```text
-minimum_source_evidence = no transplanted two-domain scalar threshold
-```
-
-This does not change the existing cross-grid constants elsewhere. It is a separate pre-upscale authorization gate, and evidence alone is not enough to apply a correction.
+A source axis is provisionally eligible only after it clears the estimator floor, objective-gain floor, and geometric safety bound above. Authorization then requires a safe state in the directly observed suffix transitions, and the applied warp must subsequently pass post-warp residual-reduction verification. `axis_evidence_score` remains diagnostic telemetry; it is not a standalone authorization threshold. Existing cross-grid evidence constants elsewhere are unchanged.
 
 ### Measured temporal extent
 
