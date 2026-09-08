@@ -66,6 +66,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         handoff_transfer="bicubic",
         learned_upscaler=None,
         suffix_dc_bridge=True,
+        suffix_geometric_bridge=False,
     ):
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -75,6 +76,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -87,6 +89,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -118,8 +121,10 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "Real low-resolution Continuum suffix generation with original target-grid protected-prefix "
         "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
         "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
-        "The one-token suffix DC bridge is enabled by default because it removed the validated boundary "
-        "flash while preserving the authoritative prefix bit-exactly."
+        "The validated one-token DC bridge remains enabled by default. The optional legacy-named "
+        "suffix_geometric_bridge now enables an experimental exact-overlap representation bridge: it "
+        "transplants the measured non-DC learned-prefix replacement residual onto only the first suffix "
+        "token before refinement. It remains off by default pending decoded-media validation."
     )
 
     @classmethod
@@ -139,6 +144,21 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
                     "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
                     "default after matched multi-boundary decoded-media validation removed the handoff flash."
+                ),
+            },
+        )
+        inputs.setdefault("optional", {})["suffix_geometric_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Experimental Mixed-Grid exact-overlap representation bridge (legacy input name kept "
+                    "for workflow compatibility). It measures the discarded learned-upscaler prefix against "
+                    "the authoritative exact prefix on the same final overlap frame, transfers only that "
+                    "zero-mean structural residual to the first generated suffix token, and leaves the DC "
+                    "component to suffix_dc_bridge. With both enabled, the pre-refinement boundary exactly "
+                    "preserves the upscaler's native learned-prefix→suffix transition. No prefix warp, fade, "
+                    "extra H3 call, audio/noise/mask/conditioning change, or later-suffix extrapolation."
                 ),
             },
         )

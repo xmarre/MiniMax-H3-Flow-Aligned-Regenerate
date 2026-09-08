@@ -335,3 +335,17 @@ def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, n
     assert torch.equal(seen[0][0][25 : 25 + plan.prefix_rows], expected)
     expected_suffix = model.video_patch_proj(model_module.patchify_video(x[0][:, :, 2:]))
     assert torch.equal(seen[0][0][25 + plan.prefix_rows :], expected_suffix)
+
+
+def test_representation_bridge_ui_is_mixed_grid_only():
+    from h3_flow_regenerate.target_sparse_node import (
+        H3ProgressiveMixedGridHandoff,
+        H3ProgressiveTargetSparseHandoff,
+    )
+
+    sparse = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    assert all("suffix_geometric_bridge" not in group for group in sparse.values())
+    mixed = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
+    assert "suffix_geometric_bridge" in mixed.get("optional", {})
+    spec = mixed["optional"]["suffix_geometric_bridge"]
+    assert spec[1]["default"] is False
