@@ -20,7 +20,6 @@ import time
 import torch
 
 from .geometric_bridge import (
-    IDENTITY,
     _MIN_DOMAIN_EVIDENCE,
     _motion_residual_candidate,
     _signed_components,
