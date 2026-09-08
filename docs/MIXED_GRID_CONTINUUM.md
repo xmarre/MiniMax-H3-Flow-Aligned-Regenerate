@@ -19,9 +19,10 @@ Mixed-Grid instead keeps the exact target-grid prefix authoritative while genera
 5. Run all transformer blocks on the mixed sequence with matching per-row modulation metadata.
 6. Before native output projection, discard target-prefix transformer outputs and restore the normal low-carrier layout so native projection/unpatchification remains valid.
 7. Run the exact handoff probe through the same mixed topology in a separate sampler lifetime.
-8. Feed the complete clean low-grid sequence plus resized prefix context to the learned 3D upscaler.
-9. Discard the upscaler's prefix output, restore the authoritative target-grid prefix, rebuild the high-stage conditional state/noise, and start a fresh full-grid sampler lifetime.
-10. Require the first high-stage call to be an actual H3 evaluation. At the final Comfy sampler-return boundary, restore only exact `mask == 0` packed elements from the authoritative target input, then verify the returned protected prefix bitwise and measure the final seam.
+8. Reconstruct the clean source-grid probe sequence and restore the resized authoritative prefix only as private learned-upscaler context. If the experimental legacy-named `suffix_geometric_bridge` is enabled, measure recent source motion and correct only strongly evidenced, temporally observed source-suffix drift before the learned transfer.
+9. Feed that clean source-grid sequence to the learned 3D upscaler.
+10. Independently apply the optional exact-overlap target representation reconciliation, then the existing suffix DC bridge, discard the upscaler's prefix output, and restore the authoritative target-grid prefix.
+11. Rebuild the high-stage conditional state/noise and start a fresh full-grid sampler lifetime. Require its first call to be an actual H3 evaluation. At the final Comfy sampler-return boundary, restore only exact `mask == 0` packed elements from the authoritative target input, then verify the returned protected prefix bitwise and measure the final seam.
 
 The authoritative target-grid prefix is never spatially resized for H3 transformer conditioning.
 
@@ -125,21 +126,34 @@ The v0.3.1 exact-mask return fix is structurally regression-tested against `res_
 
 Quality/speed remain workflow dependent; the documented result is evidence for this implementation and tested stack, not a universal model guarantee.
 
-## Experimental exact-overlap representation bridge
+## Experimental source-trajectory + exact-overlap repair
 
-The decoded `metrics_00276` validation falsified the affine-framing hypothesis as a sufficient repair. The optional affine correction closed the measured `sy` residual from roughly `-0.01025` to `+0.00236`, yet the visible whole-frame shrink/top-edge reveal remained. The more diagnostic measurement was already present at the learned-transfer splice: replacing the learned 3D upscaler's internally coherent prefix with the authoritative exact prefix amplified the boundary by about 23% in raw RMS, 37% in spatial-low-pass RMS, and 40% in per-channel spatial-mean RMS before the existing DC bridge.
+The optional `suffix_geometric_bridge` input name is retained for workflow compatibility and remains **off by default**. It now enables two independent Mixed-Grid experimental stages.
 
-The experimental `suffix_geometric_bridge` input name is retained for workflow compatibility, but its implementation is now a representation-residual bridge rather than an affine warp. It uses the learned prefix only as private overlap calibration:
+### Why correction moved upstream
+
+The `metrics_00276` affine experiment reduced the independently authorized target `sy` residual to the estimator floor but did not remove the decoded whole-frame shrink/top-edge reveal. The next matched B, `metrics_00281`, then made the exact-prefix replacement splice essentially identical to the learned upscaler's native boundary before high refinement: the centered representation mismatch fell from about `0.400812` to `4.3e-08`, with corrected/native raw, low-pass and spatial-mean seam ratios all approximately `1.0`. The decoded framing defect still remained.
+
+That falsifies the exact-prefix splice as a sufficient root cause. The same vertical-scale signature is measurable earlier in the genuine source-grid continuation, before learned 3D transfer, so the current experiment acts there first.
+
+### Stage 1: measured source trajectory
+
+Immediately before learned upscaling, Flow estimates recent natural prefix motion from up to six genuine source-grid transitions and measures the first generated transition against that prediction. Candidate axes retain the established estimator floors and safety bounds (`0.005` log scale, `0.25` latent px translation, `log(1.03)` scale safety, and `min(1.5 px, 2.5%)` translation safety) plus objective-gain gating.
+
+Because no independent target-domain observation exists before the upscaler, the source-only authorization threshold is the equal-contribution equivalent of the existing two-domain quadrature gate:
 
 ```text
-L_p = learned upscaler last prefix token
-E_p = authoritative exact last prefix token
-L_s = learned first suffix token
-D   = E_p - L_p
+2.5 / sqrt(2) ~= 1.76777
 ```
 
-The representation bridge transfers `D - mean_spatial(D)` to `L_s`. The existing suffix DC bridge independently transfers `mean_spatial(D)`. With both enabled, the corrected boundary satisfies `L_s + D - E_p == L_s - L_p`: restoring the exact prefix preserves the upscaler's native boundary transition algebraically before re-noise and fresh target-grid refinement.
+Evidence alone cannot authorize a warp. Up to four genuine suffix transitions are measured to classify the residual as recovering or persistent. Recovering weights are derived from the measured cumulative state. Persistent correction is limited to token 0 plus the directly observed follow-up transitions; it is never extended over unmeasured later suffix tokens. There is no handcrafted fade.
 
-This is deliberately a one-boundary-token operation, not a fade. The overlap gives an exact same-frame residual only at the replacement boundary; applying it to later suffix tokens would be unsupported temporal extrapolation. The bridge therefore never modifies the authoritative prefix or suffix token 1+, and it adds no H3 NFE, VAE pass, optical-flow model, image/tensor crossfade, audio change, noise change, mask change, conditioning change, VDN API change, or Spectrum-history change.
+After correction the source boundary is registered again. Every authorized axis must reduce in residual magnitude, and a sign crossing is allowed only within the estimator floor. Otherwise the exact original source tensor is returned. The protected source prefix and all suffix tokens outside the measured active window remain byte-identical.
 
-`mixed_grid_representation_bridge` reports the measured full/DC/zero-mean residual, centered-transition error before/after transplantation, whether one suffix token was corrected, and the explicit no-op/accept reason. `mixed_grid_transfer` continues to report native, exact-restored and corrected seam metrics. With both experimental representation and validated DC bridges enabled, the decisive pre-high invariant is that corrected/native seam ratios should be approximately 1 across raw, low-pass and spatial-mean metrics. Decoded media remains the release gate; the experimental bridge stays off by default.
+### Stage 2: independent exact-overlap reconciliation
+
+After learned 3D transfer, the discarded learned prefix still provides exact same-frame overlap calibration against the authoritative target prefix. The representation stage transfers only the zero-spatial-mean part of that residual to the first target suffix token; `suffix_dc_bridge` independently owns the spatial-mean component. This second stage runs whenever the experimental option is requested, regardless of whether the source stage accepted a correction.
+
+The target stage still never modifies the authoritative prefix or target suffix token 1+, and the complete experimental path adds no H3 NFE, VAE pass, crossfade, decode-space fix, audio/noise/mask/conditioning change, VDN API change, or Spectrum-history change.
+
+`mixed_grid_source_trajectory_bridge` records source evidence, temporal classification, applied source transforms, corrected-token count, post-warp residual reduction, and whether learned-upscaler input was modified. `mixed_grid_representation_bridge` independently records target exact-overlap reconciliation. Decoded media remains the release gate; the experimental option stays off by default.

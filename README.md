@@ -50,7 +50,12 @@ real low-grid generated suffix
             |
        exact handoff probe
             |
+  optional measured source
+    trajectory repair
+            |
       learned 3D upscale
+            |
+ optional exact-overlap repair
             |
   restore exact target prefix
             |
@@ -194,6 +199,8 @@ The paths with the strongest real-media support are:
 
 The Mixed-Grid path has been exercised on a real RTX Pro 6000 workflow with VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact handoff probing and multiple Continuum boundaries. The previously observed boundary flashing is fixed by the suffix DC bridge in that tested workflow.
 
+A smaller whole-frame shrink/top-edge reveal remains under investigation. The optional legacy-named `suffix_geometric_bridge` is therefore still off by default: the current experiment first repairs only strongly evidenced, temporally measured source-grid trajectory drift before learned upscaling, then independently reconciles the target exact-prefix representation splice. The earlier exact-overlap-only matched B run restored the pre-high native seam numerically but did not remove the decoded framing jump, so structural seam metrics alone are not treated as success.
+
 Target-Sparse is deliberately not promoted because its no-latent-upscale design produced cascading decoded-media defects in testing.
 
 Quality and speed still depend on prompt, references, geometry, sampler, Spectrum policy, model residency and hardware. Use decoded media rather than structural metrics alone for new workflow variants.
@@ -202,7 +209,7 @@ Quality and speed still depend on prompt, references, geometry, sampler, Spectru
 
 - [docs/USAGE.md](docs/USAGE.md) — wiring and parameter details
 - [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract and diagnostics
-- [docs/representation-seam-bridge.md](docs/representation-seam-bridge.md) — experimental exact-overlap representation reconciliation for exact-prefix replacement
+- [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md) — experimental source-trajectory repair plus independent target exact-overlap reconciliation
 - [docs/TARGET_SPARSE_CONTINUUM.md](docs/TARGET_SPARSE_CONTINUUM.md) — Target-Sparse research path
 - [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md) — decoder right-context helper
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — decoded-media validation ledger
