@@ -1,263 +1,313 @@
 # Experimental geometric Continuum seam bridge
 
-A progressive Mixed-Grid Continuum run exposed a second boundary failure after the released one-token DC bridge had already removed the obvious flash: a slight whole-frame framing change at the chunk join, visible as a small shrink/zoom-out and top-edge reveal.
+A progressive Mixed-Grid Continuum run exposed a second boundary failure after the released one-token DC bridge had removed the obvious flash: a slight whole-frame framing change at the chunk join, visible as a small shrink/zoom-out and top-edge reveal.
 
 The DC bridge remains correct for its narrow purpose. It adjusts per-channel spatial means. It cannot correct global scale or translation.
 
-This geometric bridge remains **experimental and off by default**. No corrected decoded run has yet validated the current policy.
+The geometric bridge remains **experimental and off by default**. Latent diagnostics justify another decoded A/B test, but they do not establish that the visible seam is fixed.
 
-## Evidence from the instrumented runs
+## What the measurements show
 
-The real handoff uses source `40x54` and target `56x76` latent grids with `suffix_dc_bridge=true`.
+The instrumented handoff uses source `40x54` and target `56x76` latent grids with `suffix_dc_bridge=true`.
 
-The same-time protected-prefix / learned-prefix fit remains effectively identity:
+The same-time protected-prefix / learned-prefix fit is still effectively identity:
 
-- `sx=1.0125`, `sy=0.9950`, `tx=0`, `ty=0.25` latent px;
-- identity error `0.171124`;
-- aligned error `0.168418`;
-- improvement only `1.58%`.
+- `sx ~= 1.0125`, `sy ~= 0.9950`;
+- improvement only about `1.58%`.
 
-That argues against a systematic learned-upscaler prefix warp being the main cause.
+That argues against the learned 3D upscaler itself being the main source of the framing jump.
 
-The actual generated boundary repeatedly carries a vertical framing residual:
+The framing residual instead appears at the genuine low-grid protected-prefix -> generated-suffix boundary and remains independently measurable after learned upscaling on the target grid.
 
-- genuine source-grid boundary relative to recent source-grid motion: `sy≈0.9750`;
-- learned target-grid boundary relative to recent target-grid motion: `sy≈0.9831`;
-- final accepted latent boundary after high-grid refinement: `sy≈0.9800`.
+For the latest real vertical-scale (`sy`) case:
 
-The final boundary fit improves about `30%` over identity. The repeated roughly `2%` vertical scale signal matches the observed top-edge reveal/zoom-out and exists before the target-grid high stage.
+| domain | signed log-scale residual | residual scale | evidence |
+| --- | ---: | ---: | ---: |
+| source low grid | `-0.0253151371` | `0.9750026041` | `1.95311695` |
+| target learned grid | `-0.0170032489` | `0.9831404905` | `1.83264785` |
 
-The second instrumented run also exposed a flaw in the previous authorization gate. Source vertical-scale motion dispersion was about `0.01296` in log-scale and target dispersion about `0.00928`. The source residual contributes about `1.95` dispersion units and target about `1.83`. Neither domain independently clears the previous `2.5x` dispersion rule, although the same axis/sign appears in both domains and survives the high stage.
-
-Worse, `2.5 * 0.01296 ≈ 0.0324` exceeds the separate `log(1.03) ≈ 0.0296` maximum scale safety bound. For that real motion history, the old source rule made any scale correction mathematically impossible to authorize.
-
-The fix is **not** to weaken the safety bound or simply lower `2.5x` to another hand-tuned standalone threshold. The bridge now separates provisional evidence from final authorization.
-
-## Scope and invariants
-
-Only `MiniMax H3 Progressive Mixed-Grid Continuum` exposes `suffix_geometric_bridge`.
-
-- default: `false`;
-- generic Progressive Target Input: unchanged;
-- Target-Sparse: unchanged;
-- authoritative target-grid protected prefix: never warped or blended;
-- learned prefix output: never made authoritative;
-- audio, masks, conditioning, caller noise, VDN API 2, Spectrum histories and H3 NFE count: unchanged;
-- geometry is applied to the learned clean target-grid suffix before conditional re-noising;
-- DC calibration remains after geometry and uses the unmodified learned-prefix relation;
-- final exact-prefix restoration and the existing exactness checks remain mandatory;
-- disabled or rejected geometry returns to the released v0.3.2 DC-only arithmetic path.
-
-## The two clean sequences
-
-Immediately before learned 3D upsampling, the Mixed-Grid runtime has a source-grid clean handoff sequence:
+The engineering concordance score is
 
 ```text
-[ downsample(P_exact) | S_low ]
+hypot(1.95311695, 1.83264785) ~= 2.67829
 ```
 
-`P_exact` is the authoritative target-grid protected prefix. A bicubic source-grid copy is used only as transient 3D-upscaler context. `S_low` is the genuinely generated low-grid suffix from the exact handoff probe.
+which exceeds the configured combined threshold `2.5`. Both domains independently exceed the minimum contribution `1.25`, the signs agree, and the magnitudes are compatible.
 
-The learned provider returns the target-grid clean sequence:
+This score is an **engineering concordance score**. It is not a p-value and does not assume that source and target registrations are statistically independent.
+
+The source grid nominates only `sy` for this defect. Target-only `sx`, `tx`, or `ty` candidates therefore cannot become corrections merely because a target registration happens to fit them.
+
+## Why the old persistent-only policy was wrong
+
+The previous bridge required the source residual to remain a constant offset across the suffix before target corroboration was even evaluated. The latest run falsified that model.
+
+For source-grid `sy`, the boundary residual is:
 
 ```text
-[ U_prefix | U_suffix ]
+b = -0.0253151371
 ```
 
-`U_prefix` is discarded after calibration/diagnostics. `U_suffix` is the learned target-grid continuation that is conditionally re-noised and refined.
-
-The provider wrapper exposes its invocation-local source-grid input to the geometric diagnostic on the returned tensor. It retains no trajectory tensor between calls.
-
-## Registration model
-
-The estimator fits only `sx, sy, tx, ty`; there is no rotation or shear.
-
-Coordinates are output-to-input sampling coordinates about image centre:
+The subsequent genuine low-grid suffix transition residuals relative to expected natural motion are approximately:
 
 ```text
-input_x = sx * (output_x - (W-1)/2) + (W-1)/2 + tx
-input_y = sy * (output_y - (H-1)/2) + (H-1)/2 + ty
+r1 = -0.0000920575
+r2 = +0.0023740350
+r3 = +0.0221887658
+r4 = +0.0073062200
 ```
 
-Warping uses float32 bilinear `grid_sample`, `padding_mode="border"`, `align_corners=false`, then restores the original dtype/device.
-
-Registration uses all latent channels with:
-
-1. 5x5 spatial low-pass;
-2. area reduction capped at 48 pixels on the long axis;
-3. per-channel spatial centring and RMS normalization;
-4. a fixed three-pixel interior scoring margin;
-5. clipped squared residuals to limit local-detail outliers.
-
-The deterministic coarse-to-fine search runs without autograd.
-
-## Natural-motion model
-
-Both source and target domains model up to the last six protected-prefix transitions. Each transition receives a diagnostic `sx, sy, tx, ty` fit.
-
-At least three usable transitions spanning at least two transition indices are required. Each parameter is extrapolated with indexed Theil-Sen regression; scale is modelled in log space. Rejected intermediate transitions keep their original time indices so trend estimation is not compressed.
-
-The report includes measured transitions, expected next transform, trend and robust dispersion.
-
-## Provisional source and target residuals
-
-For each domain:
+The framing state affecting each suffix token is integrated as:
 
 ```text
-C = T_observed ∘ inverse(T_expected)
+s0 = b
+sk = b + sum(r1 .. rk)
 ```
 
-Natural pan/zoom already explained by recent motion is therefore preserved.
-
-A residual axis becomes **provisional** when all of the following hold:
-
-- fitted boundary is better than the predicted natural-motion transform;
-- aligned error is `<= 0.25`;
-- residual exceeds the estimator floor;
-- forcing that axis back to expected motion measurably worsens the objective;
-- residual stays inside the existing safety bound.
-
-Current estimator floors:
-
-- scale: `0.5%` in log-scale magnitude;
-- translation: `0.25` latent pixel.
-
-Current maximum residual:
-
-- scale: `3%` per axis;
-- translation: `min(1.5 latent px, 2.5% of that spatial axis)`.
-
-The previous `>=5%` whole-boundary improvement and `>=2.5x` motion-dispersion checks no longer stop the bridge before persistence/cross-grid evidence can be collected. Metrics still expose the old `2.5x` standalone threshold and whether each axis would have passed it.
-
-For each axis the domain evidence score is:
+which gives approximately:
 
 ```text
-E_domain = |residual| / max(estimator_floor, robust_motion_dispersion)
+token 0  -0.025315   relative 1.00
+token 1  -0.025407   relative 1.00
+token 2  -0.023033   relative 0.91
+token 3  -0.000844   below estimator floor
+token 4  +0.006462   sign crossed / recovered
 ```
 
-This is an engineering evidence unit, not a statistical sigma or p-value.
+The defect is therefore a **transient framing excursion around the handoff**, not a permanent whole-chunk framing bias. The old persistence rejection prevented an unsafe full-suffix warp, but its binary `persistent -> full suffix / otherwise -> no correction` decision was too coarse.
 
-## Persistent-offset evidence
+## Current policy
 
-A provisional source boundary residual does not justify warping the whole suffix. The bridge inspects up to the first four genuine low-grid suffix-to-suffix transitions.
+The redesigned pipeline separates spatial evidence from temporal shape:
 
-Persistence is evaluated **per provisional source axis**. Later transitions must return close to extrapolated natural motion and must not contain a strong opposite compensating residual.
+1. Fit recent protected-prefix motion on the source grid.
+2. Measure the source boundary residual and build provisional source axes.
+3. Independently fit recent protected-prefix motion on the target grid.
+4. Measure the target boundary residual and build provisional target axes.
+5. Cross-grid authorize only shared source/target axes with compatible sign, magnitude, and evidence.
+6. Only for cross-grid-authorized source axes, inspect genuine source suffix transitions.
+7. Integrate those transition residuals into a per-axis temporal framing state.
+8. Classify each axis independently as `persistent`, `recovering`, `ambiguous`, or `inactive`.
+9. Use the **target-grid residual magnitude** for the actual geometric transform.
+10. Use the **source-grid temporal state only for the temporal envelope**.
 
-This distinguishes:
+Cross-grid corroboration therefore runs before temporal classification. A recovering source trajectory no longer suppresses an otherwise valid target corroboration result.
 
-- one-time framing offset that persists in subsequent frames -> axis remains eligible;
-- immediate recovery or continuing drift -> that axis is rejected;
-- insufficient usable suffix evidence -> no authorization.
+## Evidence gates
 
-One failed provisional axis cannot veto another axis that is independently persistent.
+The existing conservative evidence/safety contract is retained:
 
-The old three-token `(1, 0.5, 0.25)` decay policy remains removed because a persistent framing offset followed by decay-to-identity can create a delayed second zoom/wobble.
+- scale estimator floor: `0.005` in signed log scale;
+- translation estimator floor: `0.25` source latent px;
+- maximum scale residual: `log(1.03)`;
+- maximum translation: `min(1.5 latent px, 2.5% of the spatial axis)`;
+- minimum evidence from each domain: `1.25`;
+- combined source/target evidence threshold: `2.5`;
+- source/target magnitude compatibility ratio: `0.35 .. 2.85`.
 
-## Cross-grid corroboration and combined authorization
+The transient redesign does not weaken these thresholds.
 
-A persistent source axis must also exist independently in the target-grid boundary.
+## Temporal state and envelope
 
-For translation, source projection uses the actual grid ratios:
+For an authorized axis with source boundary residual `b` and follow-up residuals `r_k`:
 
 ```text
-tx_target_projection = tx_source * target_W / source_W
-ty_target_projection = ty_source * target_H / source_H
+s0 = b
+sk = s(k-1) + rk
 ```
 
-Scale is dimensionless and is not rescaled.
-
-An axis can proceed only if:
-
-- source and target both nominate it provisionally;
-- source persistence supports it;
-- source and target residual signs agree;
-- target/source residual magnitude ratio is within `0.35x .. 2.85x`;
-- both source and target contribute at least `1.25` evidence units.
-
-The combined engineering concordance score is:
+While the state has the same sign as `b`, a raw correction weight is:
 
 ```text
-E_combined = hypot(E_source, E_target)
+raw_k = clamp(sk / b, 0, 1)
 ```
 
-and must be at least `2.5`.
+If the state crosses zero, correction terminates. If the absolute state falls at or below that axis's estimator floor, correction also terminates because the remaining state is below the estimator's meaningful resolution.
 
-The quadrature score is deliberately labelled an engineering concordance score. Source and target measurements are related and this formula is **not** a claim of statistical independence.
+The final envelope is the deterministic monotonic projection:
 
-The per-domain minimum prevents one very strong measurement from carrying an almost absent signal in the other domain.
+```text
+w0 = 1
+wk = min(w(k-1), raw_k)
+```
 
-The applied correction magnitude comes from the independently measured target-grid residual, not from the projected source transform. The source domain establishes origin and persistence; the target domain establishes what correction is actually present on `U_suffix`.
+This ensures:
 
-## Persistent suffix correction
+- the boundary suffix token receives full correction;
+- weights never overshoot `1`;
+- correction never becomes negative;
+- estimator noise cannot make a decayed correction grow again;
+- recovery/sign crossing is terminal and never reintroduces correction later;
+- no arbitrary handcrafted `(1, 0.5, 0.25)` fade is used.
 
-Only axes authorized by persistence plus combined cross-grid evidence are applied to the complete learned target-grid suffix.
+For the real `sy` trajectory, the `0.000844` state is below the `0.005` log-scale estimator floor, so the measured policy snaps that token and the remainder to zero. The expected envelope is therefore approximately:
 
-The suffix is flattened over batch/time and resampled in one batched `grid_sample` call. There is no tensor crossfade and the authoritative prefix is untouched.
+```text
+1.0, 1.0, 0.91, 0.0, 0.0
+```
 
-The full-suffix policy remains an empirical hypothesis pending decoded-media validation.
+The exact weights are derived from the measured trajectory at runtime; those values are not hard-coded.
 
-## Geometry -> DC -> re-noise ordering
+## Persistent, recovering, and unsafe cases
 
-When geometry is authorized:
+### Persistent
 
-1. measure same-time learned-prefix geometry diagnostically;
-2. build source and target recent-motion models;
-3. build provisional source/target residual axes;
-4. measure per-axis source suffix persistence;
-5. require same-axis/sign/magnitude cross-grid compatibility;
-6. authorize only axes meeting per-domain and combined evidence thresholds;
-7. warp only the learned target-grid suffix;
-8. calibrate the existing DC relation from the unmodified learned-prefix boundary;
-9. apply the existing one-token DC bridge;
-10. conditionally re-noise;
-11. restore the authoritative exact prefix;
-12. run the fresh target-grid high stage and verify prefix exactness.
+At least two usable follow-up transitions are required. If the cumulative state remains within one estimator floor of the original boundary state, the residual is classified as persistent and the accepted axis keeps weight `1` through the suffix.
 
-If geometry is disabled or rejected, the original learned tensor object is returned and the released inverse-recovery/DC/state-delta arithmetic is retained.
+### Recovering
 
-## Metrics
+Recovery must be **observed**, not extrapolated. If cumulative state reaches the estimator floor or crosses sign inside the measured suffix window, the axis is classified as recovering and receives only the measured monotonic transient envelope up to recovery.
 
-`mixed_grid_geometry` carries:
+Immediate observed recovery is valid: only the boundary suffix token is corrected.
 
-- `source_hw`, `target_hw`, grid scale and anisotropy;
-- same-time `prefix_registration` and `transfer_bias_candidate`;
-- source and target natural-motion models;
-- source and target boundary fits;
-- provisional source and target residual transforms;
-- per-axis estimator floors, motion dispersion, evidence units and evidence scores;
-- diagnostic standalone `2.5x` dispersion thresholds;
-- per-axis suffix-persistence evidence and `axis_persistent`;
-- projected source transform;
-- source/target sign agreement and magnitude ratios;
-- per-domain evidence-floor pass state;
-- per-axis `combined_evidence_score` and authorization reason;
-- final authorized axes and applied transform;
-- corrected-token count and out-of-bounds fraction;
-- DC information and exact-prefix state.
+### Ambiguous / unsafe
 
-`mixed_grid_transfer` continues to report the existing raw, low-pass and spatial-mean seam/DC measurements. `mixed_grid_complete` continues to report the final accepted-latent boundary after target-grid refinement.
+The axis is rejected rather than guessed when evidence is insufficient or the measured state:
 
-## Validation
+- grows beyond the boundary magnitude by more than estimator resolution;
+- reverses materially away from an already observed recovery trend;
+- remains in unresolved partial drift without observed recovery;
+- has non-contiguous/unusable transition evidence before classification.
 
-Keep PR #24 draft and keep `suffix_geometric_bridge=false` as the default.
+Uncertainty is never promoted to `persistent`.
 
-Use matched runs with the same workflow, seed, prompt, references, source scale, sampler, VDN, Spectrum and DC settings:
+## Target-grid transform semantics
 
-1. A: `suffix_geometric_bridge=false`, `suffix_dc_bridge=true`.
-2. B: `suffix_geometric_bridge=true`, `suffix_dc_bridge=true`.
+The source trajectory decides **when** an authorized correction is active. It does not supply the final target transform magnitude.
 
-Return both decoded videos, full logs, complete H3 Flow metrics JSON and Decode Context reports.
+For target residual scale `a` and weight `w_k`:
 
-For B, inspect:
+```text
+effective_scale_k = exp(w_k * log(a))
+```
 
-- source provisional `motion_residual.axis_applied` and `axis_evidence_score`;
-- `suffix_persistence.axis_persistent`;
-- target provisional `target_motion_residual.axis_applied` and `axis_evidence_score`;
-- `cross_grid_corroboration.sign_agreement` and `magnitude_ratio`;
-- `cross_grid_corroboration.combined_evidence_score`;
-- final `cross_grid_corroboration.axis_applied`;
-- `tokens_corrected` and `applied_transforms`;
-- final accepted-latent boundary registration;
-- decoded top-edge reveal, whole-frame zoom/shift, natural camera motion, edge stretching, delayed wobble, detail and audio continuity.
+Scale is therefore interpolated in log space.
 
-Do not loosen a rejected gate before identifying which evidence failed. Do not call the visible issue fixed, enable the option by default, or merge until the corrected decoded-media run demonstrates it.
+For target residual translation `d`:
+
+```text
+effective_translation_k = w_k * d
+```
+
+Translation is interpolated linearly in target-grid latent units.
+
+Source translation is projected into target units only for cross-grid magnitude comparison. It is not blindly reused as the correction.
+
+## Vectorized suffix warp
+
+The warp remains one batched `affine_grid` / `grid_sample` operation:
+
+1. find the last suffix token for which any accepted axis has non-zero weight;
+2. build one affine matrix per active temporal token;
+3. flatten `B x active_T`;
+4. perform one float32 resampling batch;
+5. write back only the active corrected suffix prefix;
+6. leave every later recovered suffix token untouched bit-for-bit.
+
+Persistent axes keep the full suffix active. Recovering axes stop at their measured recovery point. Identity tokens after recovery are not resampled merely for bookkeeping.
+
+The output is converted back to the original tensor dtype.
+
+## Exact-prefix and runtime contracts
+
+The authoritative target-grid protected prefix remains non-negotiable:
+
+- no geometric transform is applied to protected prefix tokens;
+- the learned prefix is diagnostic/calibration context only;
+- final prefix restoration remains exact;
+- canonical masking behavior is unchanged.
+
+The runtime ordering remains:
+
+```text
+clean learned transfer
+-> geometric correction
+-> one-token DC bridge
+-> conditional re-noise / high-stage state mapping
+```
+
+The geometric prefix diagnostic never replaces the authoritative prefix and does not change DC calibration semantics.
+
+The bridge also does **not** change:
+
+- audio;
+- caller noise;
+- masks;
+- conditioning;
+- VDN external-sequence API v2;
+- Spectrum history or NFE accounting;
+- generic Progressive or Target-Sparse node UI.
+
+No optical flow network, VAE pass, crossfade, decode-space fix, or additional H3 transformer evaluation is introduced.
+
+## No-op behavior
+
+If the option is disabled, source context is unavailable, source or target candidates fail, cross-grid corroboration fails, temporal classification is ambiguous/unsafe, or no axis survives, `geometric_seam_bridge()` returns the original learned tensor object.
+
+The released DC-only runtime arithmetic is then used unchanged. Diagnostic execution alone must not create numerical differences.
+
+## Diagnostics
+
+`mixed_grid_geometry` now separates the evidence stages instead of allowing temporal rejection to suppress cross-grid reporting.
+
+Relevant fields include:
+
+- `motion_residual`: source boundary residual, estimator floors, motion dispersion, evidence, provisional axes;
+- `target_motion_residual`: equivalent independent target-grid measurements;
+- `cross_grid_corroboration`: shared candidate axes, sign agreement, magnitude ratio, source/target evidence, combined score/threshold, per-axis authorization/reason;
+- `temporal_profile`: per-axis boundary residual, follow-up residuals, cumulative state, raw and monotonic envelope, estimator floor, recovery token, mode and rejection/acceptance reason;
+- `base_target_transform`: target-grid residual after both spatial and temporal axis selection;
+- `effective_active_temporal_length` and `tokens_corrected`;
+- `applied_transforms`, with a compact single-transform representation for a persistent constant policy plus `applied_transform_sequence_length`;
+- `boundary_after_geometry` and `out_of_bounds_fraction`;
+- `learned_prefix_unchanged` and runtime `final_prefix_exact`.
+
+`suffix_persistence` is retained as a compatibility alias for the richer `temporal_profile`; new consumers should use `temporal_profile`.
+
+## DC bridge remains separate
+
+The latest rejected-geometry run still showed the one-token DC bridge doing useful work:
+
+```text
+exact-restored seam spatial-mean RMS  0.246803
+after DC bridge                      0.174657
+```
+
+This is about a 29% reduction. Geometry and DC address different failure modes and remain separate operations.
+
+## Validation status
+
+Structural tests cover:
+
+- the actual `sy` evidence and follow-up numeric regression;
+- persistent and recovering synthetic seams;
+- immediate recovery and sign crossing;
+- monotonic projection under estimator noise;
+- divergent/oscillatory/unresolved rejection;
+- source-only, target-only, sign, magnitude, domain-floor, and combined-evidence failures;
+- source-axis independence from target-only nuisance fits;
+- natural pan/zoom motion;
+- log-space scale and linear translation interpolation;
+- source-to-target translation units;
+- exact protected prefix and exact recovered suffix tail;
+- float32/float16/bfloat16/float64 paths plus CUDA where available;
+- runtime geometry -> DC -> re-noise ordering;
+- unchanged caller noise, masks, audio, and exact-probe NFE;
+- Mixed-Grid-only UI exposure with `suffix_geometric_bridge=false` by default.
+
+These tests establish structural/runtime correctness only. They do not prove decoded perceptual improvement.
+
+## Next decoded-media check
+
+After CI is green on the exact final PR SHA, run one matched B case with:
+
+```text
+suffix_dc_bridge = true
+suffix_geometric_bridge = true
+```
+
+Keep seed, prompt, references, source/target grids, sampler, scheduler, step counts, VDN, Spectrum, DiffAid, Untwist RoPE, learned latent upscaler, VAE/decode setup, and Continuum configuration unchanged.
+
+The previous run where geometry was requested but rejected (`tokens_corrected=0`, `applied_transforms=[]`) is already an effective DC-only control if its decoded media is retained.
+
+For the observed `sy` case, the new B metrics should show cross-grid authorization around the existing `2.68` combined score and a recovering temporal envelope affecting only early suffix tokens. The decisive release criterion is still the decoded seam: it must improve without introducing a delayed compensating zoom/wobble.
