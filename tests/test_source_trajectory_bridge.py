@@ -70,3 +70,20 @@ def test_insufficient_motion_window_fails_safe(prefix_t):
 
 def test_source_evidence_threshold_is_derived_from_existing_combined_gate():
     assert _MIN_SOURCE_EVIDENCE == pytest.approx(2.5 / math.sqrt(2.0))
+
+
+def test_persistent_source_state_is_limited_to_measured_window():
+    frame = _texture()
+    prefix = [frame.clone() for _ in range(6)]
+    shifted = _warp(frame, sy=1.0 / 0.975)
+    video = torch.stack(prefix + [shifted.clone() for _ in range(7)], dim=2)
+    before = video.clone()
+    corrected, report = apply_source_trajectory_bridge(video, 6, requested=True)
+    assert report["source_trajectory_bridge_accepted"] is True
+    assert report["source_trajectory_temporal_profile"]["axis_mode"][1] == "persistent"
+    envelope = report["source_trajectory_temporal_profile"]["axis"][1]["applied_envelope"]
+    assert envelope["measured_followup_transitions"] == 4
+    assert envelope["extrapolated_beyond_observation"] is False
+    assert report["source_trajectory_bridge_tokens_corrected"] == 5
+    assert not torch.equal(corrected[:, :, 6:11], before[:, :, 6:11])
+    assert torch.equal(corrected[:, :, 11:], before[:, :, 11:])

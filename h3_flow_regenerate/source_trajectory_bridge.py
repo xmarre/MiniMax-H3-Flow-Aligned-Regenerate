@@ -468,15 +468,21 @@ def _temporal_axis_state(
         return report
 
     if all(abs(state - boundary) <= floor for state in states[1:]):
+        # Persistence is proven only through the contiguous follow-up transitions
+        # we actually measured. Never project a constant correction beyond that
+        # observed temporal window.
+        observed_tokens = min(suffix_length, len(followup_signed_residuals) + 1)
         report.update(
             accepted=True,
             mode="persistent",
-            reason="persistent_state_within_estimator_floor",
-            active_tokens=suffix_length,
+            reason="persistent_state_within_estimator_floor_observed_window",
+            active_tokens=observed_tokens,
             applied_envelope={
                 "kind": "constant",
                 "value": 1.0,
-                "active_tokens": suffix_length,
+                "active_tokens": observed_tokens,
+                "measured_followup_transitions": len(followup_signed_residuals),
+                "extrapolated_beyond_observation": False,
             },
         )
         return report

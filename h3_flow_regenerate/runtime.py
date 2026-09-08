@@ -1582,11 +1582,7 @@ def _run_progressive(
                 sigma=sigma,
             )
             exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
-            representation_option_requested = bool(getattr(config, "suffix_geometric_bridge", False))
-            source_trajectory_accepted = bool(
-                source_trajectory_metrics["source_trajectory_bridge_accepted"]
-            )
-            representation_requested = representation_option_requested and source_trajectory_accepted
+            representation_requested = bool(getattr(config, "suffix_geometric_bridge", False))
             if representation_requested:
                 corrected_clean, representation_metrics = apply_suffix_representation_bridge(
                     learned_clean,
@@ -1597,12 +1593,8 @@ def _run_progressive(
                 corrected_clean = learned_clean
                 representation_metrics = disabled_suffix_representation_bridge_metrics(
                     prefix_t=mixed_plan.prefix_t,
-                    requested=representation_option_requested,
+                    requested=False,
                 )
-                if representation_option_requested and not source_trajectory_accepted:
-                    representation_metrics["suffix_representation_bridge_reason"] = (
-                        "source_trajectory_not_authorized"
-                    )
 
             dc_enabled = bool(getattr(config, "suffix_dc_bridge", False))
             if dc_enabled:
