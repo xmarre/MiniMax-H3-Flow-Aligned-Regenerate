@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+import torch
+from test_geometric_bridge import IDENTITY, append_biased_suffix, append_recovering_suffix, motion_sequence
+from test_handoff import FakeLearnedProvider
+
+from h3_flow_regenerate.geometric_bridge import geometric_seam_bridge
+from h3_flow_regenerate.geometric_provider import with_source_trajectory_context
+from h3_flow_regenerate.geometry import pack_streams, resize_spatial_5d, unpack_streams
+from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig, deterministic_video_noise
+from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
+from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
+from h3_flow_regenerate.seam_diagnostics import recover_conditional_clean_for_diagnostics
+from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff, H3ProgressiveTargetSparseHandoff
+from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
+
+
+@pytest.mark.parametrize(
+    "enabled,seam_mode",
+    [(False, "persistent"), (True, "none"), (True, "persistent"), (True, "recovering")],
+)
+@pytest.mark.parametrize("dc", [False, True])
+def test_runtime_pre_renoise_order_and_released_fallback(monkeypatch, enabled, seam_mode, dc):
+    fake = ModuleType("comfy")
+    fake.samplers = ModuleType("comfy.samplers")
+    fake.samplers.KSAMPLER = lambda function, **kw: SimpleNamespace(sampler_function=function, extra_options={})
+    monkeypatch.setitem(sys.modules, "comfy", fake)
+    monkeypatch.setitem(sys.modules, "comfy.samplers", fake.samplers)
+
+    natural = IDENTITY
+    learned_prefix = motion_sequence([natural] * 4).repeat(1, 3, 1, 1, 1)
+    prefix_t = learned_prefix.shape[2]
+    residual = (1.0, 0.98, 0.0, 0.0) if seam_mode != "none" else IDENTITY
+    learned = append_biased_suffix(learned_prefix, natural, residual, count=4)
+    exact = learned_prefix + 2
+    source_prefix = resize_spatial_5d(exact, 40, 54, mode="bicubic")
+    source_builder = append_recovering_suffix if seam_mode == "recovering" else append_biased_suffix
+    source_clean = source_builder(source_prefix, natural, residual, count=4)
+
+    video = learned.clone()
+    video[:, :, :prefix_t] = exact
+    audio = torch.randn(1, 32, 2, 11)
+    packed, shapes = pack_streams((video, audio))
+    source_probe, source_shapes = pack_streams((source_clean, audio.clone()))
+    assert source_shapes[0][-2:] == (40, 54)
+
+    vm = torch.ones_like(video)
+    vm[:, :, :prefix_t] = 0
+    mask = pack_streams((vm, torch.ones_like(audio)))[0]
+    caller_noise = torch.randn_like(packed)
+    saved_noise, saved_mask, saved_learned = caller_noise.clone(), mask.clone(), learned.clone()
+    base = SimpleNamespace(process_latent_in=lambda x: x, diffusion_model=SimpleNamespace(blocks=[]))
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}}, model_patcher=SimpleNamespace(model=base), conds={"positive": []}
+    )
+    binding = FlowBinding()
+    base_provider = FakeLearnedProvider(learned)
+    provider = with_source_trajectory_context(base_provider)
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=40,
+        source_latent_w=54,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        suffix_dc_bridge=dc,
+        suffix_geometric_bridge=enabled,
+    )
+    captured = []
+
+    def execute(noise, latent, sampler, sigmas, call_mask, *args, latent_shapes):
+        stage = guider.model_options["transformer_options"]["h3_flow_stage"]
+        if stage == "high":
+            assert torch.equal(call_mask, mask)
+            captured.append((noise.clone(), float(sigmas[0])))
+            binding.metrics.event("model_call", actual=True)
+            return packed.clone()
+        if stage == "probe":
+            assert latent_shapes[0][-2:] == (40, 54)
+            return source_probe.clone()
+        return latent / (1 - sigmas[-1])
+
+    # Reuse binding and guider to exercise invocation-local state and chunk lifetimes.
+    for _ in range(2):
+        result = _run_progressive(
+            execute,
+            guider,
+            binding,
+            config,
+            caller_noise,
+            packed,
+            SimpleNamespace(sampler_function=lambda: None, extra_options={}),
+            torch.tensor([1.0, 0.9, 0.7, 0.4, 0.0]),
+            mask,
+            None,
+            True,
+            7,
+            list(shapes),
+        )
+        assert torch.equal(result, packed)
+    assert torch.equal(captured[0][0], captured[1][0])
+    high_noise, sigma = captured[0]
+    handoff_noise = deterministic_video_noise(
+        tuple(learned.shape), seed=7 + config.seed_offset, device=learned.device, dtype=learned.dtype
+    )
+    geometric, aligned, report = geometric_seam_bridge(learned, exact, source_hw=(40, 54), requested=enabled)
+    if report["accepted"]:
+        if dc:
+            calibrated = geometric.clone()
+            calibrated[:, :, prefix_t - 1] = aligned
+            geometric, _ = apply_suffix_dc_bridge(calibrated, exact)
+        state = (1 - sigma) * geometric + sigma * handoff_noise
+    else:
+        # Exact released v0.3.2 calculation, including inverse recovery rounding.
+        state = (1 - sigma) * learned + sigma * handoff_noise
+        if dc:
+            recovered = recover_conditional_clean_for_diagnostics(state, handoff_noise, sigma=sigma)
+            corrected, _ = apply_suffix_dc_bridge(recovered, exact)
+            state = map_clean_bridge_to_conditional_state(
+                state,
+                recovered,
+                corrected,
+                sigma=sigma,
+                prefix_t=prefix_t,
+                corrected_tokens=1,
+            )
+    expected = (state - (1 - sigma) * video) / sigma
+    got_video, got_audio = unpack_streams(high_noise, shapes)
+    assert torch.equal(got_video[:, :, prefix_t:], expected[:, :, prefix_t:])
+    expected_audio = (audio - (1 - sigma) * audio) / sigma
+    assert torch.allclose(got_audio, expected_audio, atol=1e-6, rtol=1e-6)
+    original_video_noise, _ = unpack_streams(caller_noise, shapes)
+    assert torch.equal(got_video[:, :, :prefix_t], original_video_noise[:, :, :prefix_t])
+    assert torch.equal(caller_noise, saved_noise) and torch.equal(mask, saved_mask)
+    assert torch.equal(learned, saved_learned)
+    assert len(base_provider.calls) == 2
+    geometry = [event.fields for event in binding.metrics.events if event.kind == "mixed_grid_geometry"]
+    assert len(geometry) == 2 and all(event["final_prefix_exact"] for event in geometry)
+    expected_accept = enabled and seam_mode != "none"
+    assert all(event["accepted"] == expected_accept for event in geometry)
+    assert all(event["policy"] == "cross_grid_authorized_per_axis_temporal_residual_envelope" for event in geometry)
+    if enabled and seam_mode == "recovering":
+        assert all(event["transient_bias_candidate"] for event in geometry)
+        assert all(event["effective_active_temporal_length"] < learned.shape[2] - prefix_t for event in geometry)
+    assert all(event["low_grid_trajectory"]["available"] for event in geometry)
+    assert "h3_flow_mixed_grid_v1" not in guider.model_options["transformer_options"]
+    assert binding.metrics.counters["handoff_exact_probe_nfe"] == 2
+
+
+def test_node_scope_and_old_workflow_default():
+    for node in (H3ProgressiveTargetInputHandoff, H3ProgressiveTargetSparseHandoff):
+        inputs = node.INPUT_TYPES()
+        assert all("suffix_geometric_bridge" not in fields for fields in inputs.values())
+    assert H3ProgressiveMixedGridHandoff.INPUT_TYPES()["optional"]["suffix_geometric_bridge"][1]["default"] is False
+    assert ProgressiveTargetInputConfig(source_scale=0.7).suffix_geometric_bridge is False
+    with pytest.raises(ValueError, match="mixed-grid"):
+        ProgressiveTargetInputConfig(source_scale=0.7, suffix_geometric_bridge=True)
+    with pytest.raises(TypeError, match="boolean"):
+        ProgressiveTargetInputConfig(source_scale=0.7, suffix_geometric_bridge="false")
