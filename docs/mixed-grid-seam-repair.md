@@ -11,6 +11,8 @@ Two downstream hypotheses have now been tested against matched real media:
 
 The second result is decisive: the exact-prefix replacement splice is a real measurable seam amplifier, but it is not sufficient to explain the visible framing defect. The same vertical-scale signature was already measurable in the genuine source-grid continuation before learned 3D transfer. The experimental repair therefore moves geometric correction to that earlier state instead of trying to compensate after upscaling or refinement.
 
+`metrics_00294` then controlled the reference-image sizing confound by scaling all references to the same 1.1 MP budget. The preview framing shift remained. That run also used the current threshold-free source authorization policy and measured provisional source-scale residuals on both `sx` and `sy`, but the source repair was still a no-op because the temporal classifier treated directly observed same-direction cumulative drift as an unsafe divergence. The measured scale state actually moved farther from the natural-motion prediction over four consecutive source suffix transitions. That evidence changes the source repair from an offset-only recovering/persistent model to one that can also correct directly observed cumulative drift before learned upscaling.
+
 ## Source-trajectory repair
 
 The legacy workflow input name `suffix_geometric_bridge` is retained for compatibility. On Mixed-Grid only, enabling it now activates two independent experimental stages. The first stage operates on the clean source-grid sequence immediately before the learned 3D upscaler.
@@ -54,16 +56,17 @@ A source axis is provisionally eligible only after it clears the estimator floor
 
 Up to four genuine source suffix transitions are then measured. The correction is accepted only when the observed temporal state is safe:
 
-- **recovering** — the measured residual monotonically approaches the estimator floor or crosses zero; the correction envelope is derived directly from that measured cumulative state;
-- **persistent** — the measured residual remains within one estimator floor of the initial boundary state for at least two follow-up transitions.
+- **recovering** — the measured residual approaches the estimator floor or crosses zero without first making an unresolved excursion; the correction envelope is derived directly from that measured cumulative state;
+- **persistent** — the measured cumulative residual remains within one estimator floor of the initial boundary state for at least two follow-up transitions;
+- **measured drift** — every directly observed follow-up residual stays on the same side/direction as the boundary residual, so each observed suffix token receives the corresponding measured cumulative signed correction instead of a scaled copy of the boundary correction.
 
-Persistent state is deliberately bounded to the directly observed window. With four measured follow-up transitions, at most suffix token 0 plus those four observed tokens can be corrected. The implementation never projects a constant correction over unmeasured later suffix tokens.
+Persistent and measured-drift states are deliberately bounded to the directly observed window. With four measured follow-up transitions, at most suffix token 0 plus those four observed tokens can be corrected. No correction is projected onto unmeasured later suffix tokens.
 
-There is no handcrafted `(1, 0.5, 0.25)`-style fade. Recovering weights come from measured residual evolution; persistent weights are constant only over the observed persistent window.
+There is no handcrafted `(1, 0.5, 0.25)`-style fade. Recovering weights come from measured residual evolution; persistent weights are constant only over the observed persistent window; measured-drift transforms come directly from the observed cumulative signed states.
 
 ### Post-warp verification
 
-After applying the source-grid correction, the boundary is registered again. Every authorized axis must reduce its residual magnitude. A sign crossing is accepted only within the estimator floor. If verification fails, the exact original source tensor is returned instead.
+After applying the source-grid correction, the boundary is registered again. Every authorized axis must reduce its residual magnitude. For measured-drift axes, every corrected directly observed follow-up transition is also re-registered and must reduce the corresponding residual (or remain inside the estimator floor). A sign crossing is accepted only within the estimator floor. If any required verification fails, the exact original source tensor is returned instead.
 
 The implementation also asserts that:
 
@@ -114,7 +117,7 @@ The experimental repair:
 - temporal classification and measured envelope;
 - authorized axes;
 - applied source transforms and corrected-token count;
-- post-warp residual reduction ratios;
+- post-warp boundary and directly observed transition residual-reduction ratios;
 - explicit accept/reject reason;
 - whether the learned-upscaler input was modified.
 
