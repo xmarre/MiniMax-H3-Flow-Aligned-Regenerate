@@ -1,0 +1,29 @@
+name: Apply PR24 format
+
+on:
+  push:
+    branches: [mirror/pr24-source-trajectory-pre-upscale]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr24-source-trajectory-pre-upscale
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install 'ruff>=0.11'
+          ruff format h3_flow_regenerate/runtime.py h3_flow_regenerate/source_trajectory_bridge.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/apply-pr24-format.yml
+          git add h3_flow_regenerate/runtime.py h3_flow_regenerate/source_trajectory_bridge.py
+          git commit -m "Format source trajectory bridge implementation"
+          git push origin HEAD:mirror/pr24-source-trajectory-pre-upscale
