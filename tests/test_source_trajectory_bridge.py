@@ -104,6 +104,25 @@ def test_same_direction_source_drift_uses_measured_cumulative_state_only():
     assert envelope["signed_states"] == pytest.approx(report["cumulative_signed_state"])
 
 
+def test_measured_drift_truncates_at_existing_axis_safety_bound():
+    report = _temporal_axis_state(
+        0.026772269063550715,
+        [0.022834929080955513, 0.038891567782737106, 0.04992944577483918, 0.0459608545226586],
+        estimator_floor=0.005,
+        suffix_length=8,
+        safety_limit=float(torch.log(torch.tensor(1.03))),
+    )
+    assert report["accepted"] is True
+    assert report["mode"] == "measured_drift"
+    assert report["reason"] == "observed_same_direction_cumulative_drift_safety_limited"
+    assert report["active_tokens"] == 1
+    envelope = report["applied_envelope"]
+    assert envelope["signed_states"] == pytest.approx([0.026772269063550715])
+    assert envelope["measured_tokens_available"] == 5
+    assert envelope["safety_limited"] is True
+    assert envelope["extrapolated_beyond_observation"] is False
+
+
 def test_measured_cumulative_transform_uses_observed_state_not_scaled_boundary():
     axis_reports = [
         {

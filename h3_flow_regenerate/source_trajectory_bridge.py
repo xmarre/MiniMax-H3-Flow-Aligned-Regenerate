@@ -355,6 +355,7 @@ def _motion_residual_candidate(boundary: dict, motion: dict, hw) -> dict:
         axis_applied=axis_applied,
         axis_magnitude=magnitudes,
         axis_estimator_floor=floors,
+        axis_safety_bound=safety,
         axis_motion_dispersion=dispersions,
         axis_evidence_unit=evidence_units,
         axis_evidence_score=evidence_scores,
@@ -378,6 +379,7 @@ def _temporal_axis_state(
     *,
     estimator_floor: float,
     suffix_length: int,
+    safety_limit: float | None = None,
 ) -> dict:
     boundary = float(boundary_signed_residual)
     floor = float(estimator_floor)
@@ -483,17 +485,41 @@ def _temporal_axis_state(
     same_side = all(state * boundary > 0 and abs(state) > floor for state in states[1:])
     if same_direction and same_side:
         observed_tokens = min(suffix_length, len(states))
-        signed_states = states[:observed_tokens]
+        measured_states = states[:observed_tokens]
+        safe_tokens = observed_tokens
+        if safety_limit is not None:
+            limit = float(safety_limit)
+            if not math.isfinite(limit) or limit <= 0:
+                report["reason"] = "invalid_axis_safety_limit"
+                return report
+            safe_tokens = 0
+            for state in measured_states:
+                if abs(float(state)) > limit + 1e-8:
+                    break
+                safe_tokens += 1
+            if safe_tokens <= 0:
+                report["reason"] = "measured_drift_exceeds_safety_at_boundary"
+                return report
+        else:
+            limit = None
+        signed_states = measured_states[:safe_tokens]
         report.update(
             accepted=True,
             mode="measured_drift",
-            reason="observed_same_direction_cumulative_drift",
-            active_tokens=observed_tokens,
+            reason=(
+                "observed_same_direction_cumulative_drift_safety_limited"
+                if safe_tokens < observed_tokens
+                else "observed_same_direction_cumulative_drift"
+            ),
+            active_tokens=safe_tokens,
             applied_envelope={
                 "kind": "measured_cumulative",
                 "signed_states": signed_states,
-                "active_tokens": observed_tokens,
+                "active_tokens": safe_tokens,
+                "measured_tokens_available": observed_tokens,
                 "measured_followup_transitions": len(followup_signed_residuals),
+                "safety_limit": limit,
+                "safety_limited": safe_tokens < observed_tokens,
                 "extrapolated_beyond_observation": False,
             },
         )
@@ -554,6 +580,7 @@ def _temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, candidat
         transitions.append(item)
 
     floors = candidate["axis_estimator_floor"]
+    safety = candidate.get("axis_safety_bound")
     boundary_signed = candidate["raw_signed_residual"]
     scores = candidate["axis_evidence_score"]
     suffix_length = int(video.shape[2]) - prefix_t
@@ -590,6 +617,7 @@ def _temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, candidat
             values,
             estimator_floor=float(floors[axis]),
             suffix_length=suffix_length,
+            safety_limit=float(safety[axis]) if safety is not None else None,
         )
         axis_report.update(
             selected=True,
