@@ -1546,9 +1546,7 @@ def _run_progressive(
                 legacy_option_name="suffix_geometric_bridge",
                 authoritative_source_prefix_modified=False,
                 later_suffix_extrapolated=False,
-                learned_upscaler_input_modified=bool(
-                    source_trajectory_metrics["source_trajectory_bridge_accepted"]
-                ),
+                learned_upscaler_input_modified=bool(source_trajectory_metrics["source_trajectory_bridge_accepted"]),
                 **source_trajectory_metrics,
             )
             source_x0 = pack_streams((clean_video, clean_audio))[0]
@@ -1654,15 +1652,9 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
-                source_trajectory_bridge_requested=source_trajectory_metrics[
-                    "source_trajectory_bridge_requested"
-                ],
-                source_trajectory_bridge_accepted=source_trajectory_metrics[
-                    "source_trajectory_bridge_accepted"
-                ],
-                source_trajectory_bridge_reason=source_trajectory_metrics[
-                    "source_trajectory_bridge_reason"
-                ],
+                source_trajectory_bridge_requested=source_trajectory_metrics["source_trajectory_bridge_requested"],
+                source_trajectory_bridge_accepted=source_trajectory_metrics["source_trajectory_bridge_accepted"],
+                source_trajectory_bridge_reason=source_trajectory_metrics["source_trajectory_bridge_reason"],
                 source_trajectory_bridge_tokens_corrected=source_trajectory_metrics[
                     "source_trajectory_bridge_tokens_corrected"
                 ],

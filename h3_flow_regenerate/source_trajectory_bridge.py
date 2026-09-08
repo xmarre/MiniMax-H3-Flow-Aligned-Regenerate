@@ -823,13 +823,9 @@ def apply_source_trajectory_bridge(
         source_trajectory_post_signed_residual=after_signed,
         source_trajectory_residual_reduction_ratio=reductions,
         source_trajectory_bridge_tokens_corrected=int(warp["tokens_corrected"]),
-        source_trajectory_bridge_effective_active_temporal_length=int(
-            warp["effective_active_temporal_length"]
-        ),
+        source_trajectory_bridge_effective_active_temporal_length=int(warp["effective_active_temporal_length"]),
         source_trajectory_bridge_applied_transforms=warp["applied_transforms"],
-        source_trajectory_bridge_applied_transform_sequence_length=int(
-            warp["applied_transform_sequence_length"]
-        ),
+        source_trajectory_bridge_applied_transform_sequence_length=int(warp["applied_transform_sequence_length"]),
         source_trajectory_bridge_applied_transforms_compact=bool(warp["applied_transforms_compact"]),
         source_trajectory_bridge_out_of_bounds_fraction=float(warp["out_of_bounds_fraction"]),
         source_trajectory_bridge_elapsed_ms=(time.perf_counter() - started) * 1000.0,
