@@ -49,7 +49,7 @@ The first protected-prefix -> generated-suffix transition is measured against th
 Before the learned upscaler there is intentionally no independent target-grid observation. The earlier two-domain gate required a quadrature evidence score of `2.5`. The source-only stage therefore uses the equal-contribution per-domain equivalent:
 
 ```text
-minimum_source_evidence = 2.5 / sqrt(2) ~= 1.76777
+minimum_source_evidence = no transplanted two-domain scalar threshold
 ```
 
 This does not change the existing cross-grid constants elsewhere. It is a separate pre-upscale authorization gate, and evidence alone is not enough to apply a correction.

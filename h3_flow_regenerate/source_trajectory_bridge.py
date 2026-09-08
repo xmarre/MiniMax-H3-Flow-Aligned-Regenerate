@@ -26,13 +26,13 @@ PERSISTENCE_TRANSITIONS = 4
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 _MAX_SCALE = math.log(1.03)
-_COMBINED_EVIDENCE_THRESHOLD = 2.5
-# The previous two-domain gate used a quadrature threshold of 2.5. Before the
-# learned upscaler there is intentionally no independent target-domain sample,
-# so require the equal-contribution per-domain equivalent instead of inventing
-# a new tuned threshold. Safe temporal-state evidence and post-warp reduction
-# remain mandatory as separate gates.
-_MIN_SOURCE_EVIDENCE = _COMBINED_EVIDENCE_THRESHOLD / math.sqrt(2.0)
+# Source authorization is deliberately multi-gate rather than a transplanted
+# scalar threshold. _motion_residual_candidate already requires the measured
+# residual to clear its estimator floor, improve the registration objective,
+# and stay inside the geometric safety bound. _temporal_profile then requires
+# directly observed safe temporal support, and apply_source_trajectory_bridge
+# finally verifies that the applied warp strictly reduces the measured residual.
+# axis_evidence_score is retained as a diagnostic only.
 
 
 def invert_transform(transform: tuple[float, ...]) -> tuple[float, float, float, float]:
@@ -548,16 +548,21 @@ def _temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, candidat
     for axis in range(4):
         provisional = bool(candidate["axis_applied"][axis])
         evidence = float(scores[axis])
-        selected = provisional and evidence >= _MIN_SOURCE_EVIDENCE
+        # Do not gate a source-only measurement with the old two-domain
+        # quadrature threshold. Reaching this point already means the axis
+        # cleared the estimator floor, objective-gain floor, and safety bound.
+        # The measured temporal state below is the independent authorization
+        # evidence for whether that provisional residual is safe to correct.
+        selected = provisional
         if not selected:
             axis_reports.append(
                 {
                     "selected": False,
                     "accepted": False,
                     "mode": "inactive",
-                    "reason": "source_evidence_below_authorization" if provisional else "axis_not_provisional",
+                    "reason": "axis_not_provisional",
                     "source_evidence_score": evidence,
-                    "minimum_source_evidence": _MIN_SOURCE_EVIDENCE,
+                    "source_evidence_gate": "diagnostic_only",
                 }
             )
             axis_accepted.append(False)
@@ -574,7 +579,7 @@ def _temporal_profile(video: torch.Tensor, prefix_t: int, motion: dict, candidat
         axis_report.update(
             selected=True,
             source_evidence_score=evidence,
-            minimum_source_evidence=_MIN_SOURCE_EVIDENCE,
+            source_evidence_gate="diagnostic_only",
         )
         if len(contiguous) < len(transitions) and not axis_report.get("accepted"):
             axis_report["reason"] = "noncontiguous_temporal_evidence"
@@ -715,7 +720,10 @@ def disabled_source_trajectory_bridge_metrics(*, prefix_t: int, requested: bool 
         "source_trajectory_bridge_applied_transform_sequence_length": 0,
         "source_trajectory_bridge_applied_transforms_compact": False,
         "source_trajectory_bridge_out_of_bounds_fraction": 0.0,
-        "source_trajectory_bridge_minimum_evidence": _MIN_SOURCE_EVIDENCE,
+        "source_trajectory_bridge_minimum_evidence": None,
+        "source_trajectory_bridge_evidence_policy": (
+            "estimator_floor+objective_gain+safety+observed_temporal_state+post_warp_reduction"
+        ),
     }
 
 

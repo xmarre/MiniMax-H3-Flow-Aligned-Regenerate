@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import math
-
 import pytest
 import torch
 from torch.nn import functional as F
 
 from h3_flow_regenerate.source_trajectory_bridge import (
-    _MIN_SOURCE_EVIDENCE,
+    _temporal_axis_state,
     apply_source_trajectory_bridge,
 )
 
@@ -42,7 +40,7 @@ def test_recovering_source_sy_is_closed_before_upscale_and_tail_is_exact():
     assert report["source_trajectory_bridge_reason"] == "source_trajectory_residual_closed_before_upscale"
     assert report["source_trajectory_axis_authorized"] == [False, True, False, False]
     assert report["source_trajectory_temporal_profile"]["axis_mode"][1] == "recovering"
-    assert report["source_trajectory_motion_residual"]["axis_evidence_score"][1] > _MIN_SOURCE_EVIDENCE
+    assert report["source_trajectory_temporal_profile"]["axis"][1]["source_evidence_gate"] == "diagnostic_only"
     assert report["source_trajectory_bridge_tokens_corrected"] == 1
     assert report["source_trajectory_residual_reduction_ratio"][1] < 1.0
     assert torch.equal(corrected[:, :, :6], before[:, :, :6])
@@ -68,8 +66,28 @@ def test_insufficient_motion_window_fails_safe(prefix_t):
     assert report["source_trajectory_bridge_reason"] == "insufficient_source_motion_window"
 
 
-def test_source_evidence_threshold_is_derived_from_existing_combined_gate():
-    assert pytest.approx(2.5 / math.sqrt(2.0)) == _MIN_SOURCE_EVIDENCE
+def test_estimator_floor_residual_can_be_temporally_authorized_without_cross_domain_gate():
+    report = _temporal_axis_state(
+        0.25,
+        [0.0, 0.0, -0.125, 0.125],
+        estimator_floor=0.25,
+        suffix_length=8,
+    )
+    assert report["accepted"] is True
+    assert report["mode"] == "persistent"
+    assert report["active_tokens"] == 5
+    assert report["applied_envelope"]["extrapolated_beyond_observation"] is False
+
+
+def test_diverging_source_state_is_rejected_even_after_provisional_measurement():
+    report = _temporal_axis_state(
+        0.010161524669189069,
+        [0.007677082358897666, 0.012664654887307421, 0.020149107614304457, 0.01762725812058288],
+        estimator_floor=0.005,
+        suffix_length=8,
+    )
+    assert report["accepted"] is False
+    assert report["reason"] == "temporal_state_diverged"
 
 
 def test_persistent_source_state_is_limited_to_measured_window():

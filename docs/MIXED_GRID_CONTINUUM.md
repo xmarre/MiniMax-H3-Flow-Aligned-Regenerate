@@ -143,7 +143,7 @@ Immediately before learned upscaling, Flow estimates recent natural prefix motio
 Because no independent target-domain observation exists before the upscaler, the source-only authorization threshold is the equal-contribution equivalent of the existing two-domain quadrature gate:
 
 ```text
-2.5 / sqrt(2) ~= 1.76777
+no transplanted two-domain scalar threshold
 ```
 
 Evidence alone cannot authorize a warp. Up to four genuine suffix transitions are measured to classify the residual as recovering or persistent. Recovering weights are derived from the measured cumulative state. Persistent correction is limited to token 0 plus the directly observed follow-up transitions; it is never extended over unmeasured later suffix tokens. There is no handcrafted fade.
