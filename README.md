@@ -48,9 +48,15 @@ real low-grid generated suffix
             |
        mixed H3 sequence
             |
+  optional attention-measure
+ normalization in compatible
+     attention backend
+            |
        exact handoff probe
             |
       learned 3D upscale
+            |
+ optional exact-overlap repair
             |
   restore exact target prefix
             |
@@ -60,6 +66,8 @@ real low-grid generated suffix
 The protected prefix is never spatially resized for transformer conditioning. The low-grid suffix is real low-resolution H3 sampling, not a sparse subset of target-grid hidden rows.
 
 When VDN is enabled, this path uses VDN external-sequence API 2 (`mixed_grid_low_suffix`) during the mixed low stage and returns to normal VDN execution for the fresh target-grid stage.
+
+The optional legacy-named `suffix_geometric_bridge` remains off by default. Its former source-space warp is retired after matched testing showed that every finite verified horizon simply moved the discontinuity to the corrected-to-untouched transition. The active experiment instead publishes an upstream K/V attention-measure contract and independently retains the target exact-overlap representation repair. A compatible ComfyUI-Sol-H3 revision is required to consume the K/V measure contract.
 
 ### Suffix DC bridge
 
@@ -80,7 +88,7 @@ The bridge fixed the brief Continuum boundary flash in matched real-media testin
 
 **MiniMax H3 Continuum Decode Context** can be placed immediately before the normal Video VAE Decode. It supplies real future latent context to the native H3 temporal decoder at exact chunk joins while leaving accepted sampling latents, continuation state, masks, audio and the assembly plan unchanged.
 
-This solves a separate decoder-window boundary problem. It is not the mechanism that fixed the mixed-grid DC flash above.
+This solves a separate decoder-window boundary problem. It is not the mechanism that fixed the mixed-grid DC flash above and is not the current attention-measure experiment.
 
 See [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md).
 
@@ -179,7 +187,8 @@ DiffAid, Untwisting RoPE, Spectrum and VDN are optional integrations.
 Important contracts:
 
 - **Spectrum:** actual/forecast provenance and sampler-history boundaries are preserved. Fresh target-grid stages start with an actual H3 evaluation where required.
-- **VDN-H3:** Mixed-Grid uses API 2 only during the external mixed sequence and resumes ordinary VDN behavior at full target resolution.
+- **VDN-H3:** Mixed-Grid uses API 2 only during the external mixed sequence and resumes ordinary VDN behavior at full target resolution. The optional attention-measure experiment does not change API 2 or VDN's learned gate ownership.
+- **Sol-H3:** a compatible revision can consume the independent Mixed-Grid attention-measure contract by keeping all Q rows while normalizing only the denser protected-prefix K/V sampling density.
 - **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; separate sampler lifetimes are used where geometry/history boundaries require them.
 - **Audio:** progressive spatial transfer affects video only. Audio is never spatially resized.
 - **Learned upscaler:** Mixed-Grid requires `learned_3d`; the generic Target Input node can use either `bicubic` or `learned_3d`.
@@ -192,7 +201,11 @@ The paths with the strongest real-media support are:
 - generic Progressive Handoff for unprotected calls;
 - **Mixed-Grid Continuum with learned 3D transfer and the suffix DC bridge** for exact-prefix continuation.
 
-The Mixed-Grid path has been exercised on a real RTX Pro 6000 workflow with VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact handoff probing and multiple Continuum boundaries. The previously observed boundary flashing is fixed by the suffix DC bridge in that tested workflow.
+The Mixed-Grid path has been exercised on a real RTX Pro 6000 workflow with VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact handoff probing and multiple Continuum boundaries. The previously observed brief boundary flashing is fixed by the suffix DC bridge in that tested workflow.
+
+A smaller whole-frame shrink/top-edge reveal remains under investigation. The source-space affine/trajectory correction family is now retired: `00318` exhausted every directly authorized finite horizon and every accepted boundary correction failed at a corrected-to-untouched transition, so the runtime deliberately returns the original source tensor instead of inventing a fade or extrapolation.
+
+The current off-by-default experiment moves farther upstream. For a representative matched geometry, protected prefix frames carry `1064` K/V rows while genuine source-grid suffix frames carry `540` (`~1.97x` spatial row density). Flow now publishes an independent attention-measure contract so a compatible Sol-H3 backend can keep every Q row while deterministically reducing only protected-prefix K/V to source-grid spatial density. The target exact-overlap representation reconciliation remains a second independent stage. Code-side contracts are green; decoded media is still required before this is treated as a fix.
 
 Target-Sparse is deliberately not promoted because its no-latent-upscale design produced cascading decoded-media defects in testing.
 
@@ -201,7 +214,8 @@ Quality and speed still depend on prompt, references, geometry, sampler, Spectru
 ## Documentation
 
 - [docs/USAGE.md](docs/USAGE.md) — wiring and parameter details
-- [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract and diagnostics
+- [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract, VDN/Sol ownership and diagnostics
+- [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md) — framing-defect evidence chain, retired source warp and upstream attention-measure experiment
 - [docs/TARGET_SPARSE_CONTINUUM.md](docs/TARGET_SPARSE_CONTINUUM.md) — Target-Sparse research path
 - [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md) — decoder right-context helper
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — decoded-media validation ledger

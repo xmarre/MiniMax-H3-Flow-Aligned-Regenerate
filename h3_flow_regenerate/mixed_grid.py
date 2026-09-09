@@ -3,6 +3,13 @@
 The sampler and native output projection use a regular low-grid carrier. Only
 the transformer sees the larger exact prefix. No generated hidden rows are
 interpolated: suffix rows enter and leave unchanged in native source order.
+
+When the experimental attention-measure repair is enabled, Flow also publishes
+an independent backend contract describing how the denser protected-prefix K/V
+rows can be stratified down to the source-grid density. Q rows remain untouched,
+so the authoritative target-grid prefix representation and all generated suffix
+rows keep their original hidden-state topology. The existing VDN external
+sequence API-2 contract is deliberately unchanged.
 """
 
 from __future__ import annotations
@@ -16,6 +23,8 @@ from .geometry import unpack_streams
 
 MIXED_GRID_KEY = "h3_flow_mixed_grid_v1"
 MIXED_WRAPPER_KEY = "h3_flow_regenerate.mixed_grid.v1"
+MIXED_GRID_MEASURE_KEY = "h3_flow_mixed_grid_attention_measure_v1"
+MIXED_GRID_MEASURE_MODE = "prefix_kv_stratified_subsample"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +34,7 @@ class MixedGridPlan:
     source_h: int
     source_w: int
     prefix_noise: torch.Tensor | None = None
+    attention_measure: bool = False
 
     @property
     def prefix_t(self):
@@ -33,6 +43,14 @@ class MixedGridPlan:
     @property
     def target_hw(self):
         return tuple(map(int, self.prefix.shape[-2:]))
+
+    @property
+    def source_grid(self):
+        return self.source_h // 2, self.source_w // 2
+
+    @property
+    def target_grid(self):
+        return self.target_hw[0] // 2, self.target_hw[1] // 2
 
     @property
     def source_rows(self):
@@ -51,7 +69,16 @@ class MixedGridPlan:
         return self.prefix_rows + (self.temporal - self.prefix_t) * self.source_rows
 
 
-def build_mixed_grid_plan(mask, shapes, internal_latent, sampler_noise, *, source_h, source_w):
+def build_mixed_grid_plan(
+    mask,
+    shapes,
+    internal_latent,
+    sampler_noise,
+    *,
+    source_h,
+    source_w,
+    attention_measure=False,
+):
     video_mask, _ = unpack_streams(mask, shapes)
     video, _ = unpack_streams(internal_latent, shapes)
     video_noise, _ = unpack_streams(sampler_noise, shapes)
@@ -82,7 +109,47 @@ def build_mixed_grid_plan(mask, shapes, internal_latent, sampler_noise, *, sourc
         source_h,
         source_w,
         video_noise[:, :, :prefix_t].detach().clone(),
+        bool(attention_measure),
     )
+
+
+def mixed_attention_measure_contract(plan: MixedGridPlan, *, video_start: int, sequence_rows: int):
+    """Describe an optional uniform-measure K/V domain without changing VDN API 2.
+
+    The mixed hidden stream has target-grid prefix frames and source-grid suffix
+    frames. Equal softmax weight per row therefore gives every protected prefix
+    frame ``target_rows/source_rows`` times as much spatial measure as a suffix
+    frame. A compatible attention backend can remove that representation-density
+    artifact by retaining all Q rows while selecting one target-prefix K/V row
+    nearest each source-grid spatial coordinate. The suffix K/V domain is already
+    at source density and is copied unchanged.
+    """
+    if not plan.attention_measure:
+        return None
+    if type(video_start) is not int or type(sequence_rows) is not int:
+        raise TypeError("mixed-grid attention-measure row counts must be integers")
+    if video_start <= 0 or sequence_rows != video_start + plan.mixed_rows:
+        raise ValueError("mixed-grid attention-measure rows do not match the mixed sequence")
+    source_grid_h, source_grid_w = plan.source_grid
+    prefix_grid_h, prefix_grid_w = plan.target_grid
+    expected_kv_rows = video_start + plan.temporal * plan.source_rows
+    return {
+        "api": 1,
+        "mode": MIXED_GRID_MEASURE_MODE,
+        "video_start": video_start,
+        "sequence_rows": sequence_rows,
+        "temporal": plan.temporal,
+        "prefix_t": plan.prefix_t,
+        "source_grid_h": source_grid_h,
+        "source_grid_w": source_grid_w,
+        "prefix_grid_h": prefix_grid_h,
+        "prefix_grid_w": prefix_grid_w,
+        "source_rows_per_frame": plan.source_rows,
+        "prefix_rows_per_frame": plan.target_rows,
+        "expected_kv_rows": expected_kv_rows,
+        "exact_prefix_queries_preserved": True,
+        "suffix_kv_unchanged": True,
+    }
 
 
 def carrier_layout(native, plan, text_len, audio_t, payload):
@@ -166,6 +233,11 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
     keep = layout.img_pos < va
     mixed_layout.img_pos = torch.cat((layout.img_pos[keep], torch.arange(va, mixed_layout.seq_len)))
     mixed_layout.img_update = torch.cat((layout.img_update[keep], torch.ones(plan.mixed_rows, dtype=torch.bool)))
+    measure_contract = mixed_attention_measure_contract(
+        plan,
+        video_start=va,
+        sequence_rows=mixed_layout.seq_len,
+    )
     local = dict(options)
     patches = dict(local.get("patches_replace") or {})
     blocks = dict(patches.get("dit") or {})
@@ -199,6 +271,15 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                     mixed_sequence_rows=mixed_layout.seq_len,
                     vdn_external_sequence_mode="dense_gate_no_linear",
                     vdn_external_sequence_api=2,
+                    attention_measure_requested=bool(plan.attention_measure),
+                    attention_measure_mode=(MIXED_GRID_MEASURE_MODE if measure_contract is not None else "disabled"),
+                    attention_measure_prefix_kv_rows_before=plan.prefix_rows,
+                    attention_measure_prefix_kv_rows_after=plan.prefix_t * plan.source_rows,
+                    attention_measure_kv_rows_before=mixed_layout.seq_len,
+                    attention_measure_kv_rows_after=(
+                        layout.seq_len if measure_contract is not None else mixed_layout.seq_len
+                    ),
+                    attention_measure_prefix_density_ratio=plan.target_rows / plan.source_rows,
                     prefix_exact_latent_resized=False,
                     prefix_native_inpaint_augmentation=True,
                     prefix_visual_cond_timestep=aug,
@@ -230,6 +311,10 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                 "source_rows_per_frame": plan.source_rows,
                 "prefix_rows_per_frame": plan.target_rows,
             }
+            if measure_contract is not None:
+                if MIXED_GRID_MEASURE_KEY in block_options:
+                    raise RuntimeError("mixed-grid found an already-owned attention-measure contract")
+                block_options[MIXED_GRID_MEASURE_KEY] = measure_contract
             forwarded["transformer_options"] = block_options
             output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
             result = output["img"]

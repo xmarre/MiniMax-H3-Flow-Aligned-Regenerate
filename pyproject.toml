@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "comfyui-minimax-h3-flow-aligned-regenerate"
-version = "0.3.2"
+version = "0.3.3"
 description = "H3-native flow-aligned and progressive-resolution regeneration for ComfyUI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ authors = [{ name = "xmarre" }]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 keywords = ["comfyui", "minimax-h3", "rectified-flow", "video", "audio"]
-dependencies = []
+dependencies = ["numpy>=1.25"]
 
 [project.urls]
 Repository = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate"
