@@ -261,3 +261,32 @@ def test_target_input_source_rejects_mixed_expand_shrink_geometry():
 def test_default_scale_maps_motivating_grid_without_odd_padding():
     config = ProgressiveHandoffConfig(target_scale=1.2)
     assert config.resolve_target(40, 54) == (48, 64)
+
+
+def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
+    provider = FakeLearnedProvider()
+    with pytest.raises(ValueError, match="requires mixed-grid Continuum"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            exact_prefix_mode="target_sparse_lifter",
+            suffix_geometric_bridge=True,
+        )
+    mixed = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        exact_prefix_mode="mixed_grid_low_suffix",
+        suffix_geometric_bridge=True,
+    )
+    assert mixed.suffix_geometric_bridge is True
+    with pytest.raises(TypeError, match="must be boolean"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            transfer_mode="learned_3d",
+            learned_upscaler=provider,
+            exact_prefix_mode="mixed_grid_low_suffix",
+            suffix_geometric_bridge=1,
+        )

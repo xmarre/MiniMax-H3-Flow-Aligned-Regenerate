@@ -24,12 +24,17 @@ from .handoff import (
 )
 from .metrics import H3FlowMetrics
 from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
+from .representation_bridge import (
+    apply_suffix_representation_bridge,
+    disabled_suffix_representation_bridge_metrics,
+)
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
     measure_video_boundary,
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+from .source_trajectory_bridge import disabled_source_trajectory_bridge_metrics
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 from .tone_bridge import (
     apply_suffix_dc_bridge,
@@ -1359,6 +1364,7 @@ def _run_progressive(
                 noise,
                 source_h=source_h,
                 source_w=source_w,
+                attention_measure=bool(getattr(config, "suffix_geometric_bridge", False)),
             )
             binding.metrics.event(
                 "mixed_grid_plan",
@@ -1378,6 +1384,10 @@ def _run_progressive(
                 suffix_source_grid_rope=True,
                 continuous_temporal_rope=True,
                 low_suffix_real_latent=True,
+                attention_measure_requested=bool(mixed_plan.attention_measure),
+                attention_measure_contract=(
+                    "h3_flow_mixed_grid_attention_measure_v1" if mixed_plan.attention_measure else None
+                ),
             )
         source_shapes = list(target_shapes)
         source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
@@ -1530,6 +1540,27 @@ def _run_progressive(
             clean_video[:, :, : mixed_plan.prefix_t] = resize_spatial_5d(
                 mixed_plan.prefix.to(clean_video), source_h, source_w, mode="bicubic"
             )
+            source_bridge_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            # 00318 exhausted every finite verified source-warp horizon. Shortening
+            # a non-zero warp only moved the compensating corrected->untouched
+            # transition earlier, so this repair family is retired rather than
+            # weakened with a fade or unmeasured extrapolation. The experimental
+            # option now owns only the upstream attention-measure and target-side
+            # exact-overlap reconciliation paths.
+            source_trajectory_metrics = disabled_source_trajectory_bridge_metrics(
+                prefix_t=mixed_plan.prefix_t,
+                requested=source_bridge_requested,
+            )
+            if source_bridge_requested:
+                source_trajectory_metrics["source_trajectory_bridge_reason"] = "retired_source_warp_family"
+            binding.metrics.event(
+                "mixed_grid_source_trajectory_bridge",
+                legacy_option_name="suffix_geometric_bridge",
+                authoritative_source_prefix_modified=False,
+                later_suffix_extrapolated=False,
+                learned_upscaler_input_modified=False,
+                **source_trajectory_metrics,
+            )
             source_x0 = pack_streams((clean_video, clean_audio))[0]
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
@@ -1561,24 +1592,43 @@ def _run_progressive(
                 sigma=sigma,
             )
             exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
-            bridge_enabled = bool(getattr(config, "suffix_dc_bridge", False))
-            if bridge_enabled:
-                corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
+            representation_requested = bool(getattr(config, "suffix_geometric_bridge", False))
+            if representation_requested:
+                corrected_clean, representation_metrics = apply_suffix_representation_bridge(
                     learned_clean,
+                    exact_prefix,
+                    requested=True,
+                )
+            else:
+                corrected_clean = learned_clean
+                representation_metrics = disabled_suffix_representation_bridge_metrics(
+                    prefix_t=mixed_plan.prefix_t,
+                    requested=False,
+                )
+
+            dc_enabled = bool(getattr(config, "suffix_dc_bridge", False))
+            if dc_enabled:
+                corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
+                    corrected_clean,
                     exact_prefix,
                     weights=(1.0,),
                 )
+            else:
+                bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t)
+
+            corrected_tokens = max(
+                int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
+                int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
+            )
+            if corrected_tokens:
                 target_video = map_clean_bridge_to_conditional_state(
                     target_video,
                     learned_clean,
                     corrected_clean,
                     sigma=sigma,
                     prefix_t=mixed_plan.prefix_t,
-                    corrected_tokens=int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
+                    corrected_tokens=corrected_tokens,
                 )
-            else:
-                corrected_clean = learned_clean
-                bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=mixed_plan.prefix_t)
             splice_diagnostics = measure_exact_prefix_splice(
                 learned_clean,
                 exact_prefix,
@@ -1587,12 +1637,23 @@ def _run_progressive(
             splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
             splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
             splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
-                "affine_equivalent_pre_renoise" if bridge_enabled else "disabled"
+                "affine_equivalent_pre_renoise" if dc_enabled else "disabled"
+            )
+            splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
+                "affine_equivalent_pre_renoise"
+                if representation_metrics["suffix_representation_bridge_accepted"]
+                else "disabled_or_noop"
             )
             binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
-            del diagnostic_noise, learned_clean, corrected_clean
+            binding.metrics.event(
+                "mixed_grid_representation_bridge",
+                legacy_option_name="suffix_geometric_bridge",
+                authoritative_prefix_modified=False,
+                later_suffix_extrapolated=False,
+                **representation_metrics,
+            )
 
-            if not bridge_enabled:
+            if not corrected_tokens:
                 target_video = target_video.clone()
             target_video[:, :, : mixed_plan.prefix_t] = mixed_plan.prefix.to(target_video)
             target_raw = pack_streams((target_video, target_audio))[0]
@@ -1603,9 +1664,23 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
+                source_trajectory_bridge_requested=source_trajectory_metrics["source_trajectory_bridge_requested"],
+                source_trajectory_bridge_accepted=source_trajectory_metrics["source_trajectory_bridge_accepted"],
+                source_trajectory_bridge_reason=source_trajectory_metrics["source_trajectory_bridge_reason"],
+                source_trajectory_bridge_tokens_corrected=source_trajectory_metrics[
+                    "source_trajectory_bridge_tokens_corrected"
+                ],
+                source_trajectory_axis_authorized=source_trajectory_metrics.get(
+                    "source_trajectory_axis_authorized", [False] * 4
+                ),
+                source_trajectory_residual_reduction_ratio=source_trajectory_metrics.get(
+                    "source_trajectory_residual_reduction_ratio", [None] * 4
+                ),
+                **representation_metrics,
                 **bridge_metrics,
                 **splice_diagnostics,
             )
+            del diagnostic_noise, learned_clean, corrected_clean
         if config.transfer_mode == "learned_3d":
             binding.metrics.event(
                 "handoff_learned_upscale_wall",
