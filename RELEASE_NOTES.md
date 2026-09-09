@@ -1,3 +1,56 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.3
+
+v0.3.3 fixes the decode boundary exposed by the standalone Continuum learned-upscale/refine path and corrects the current performance documentation to keep native generation, Flow progressive sampling, and the separate two-sampler upscale/refine workflow distinct.
+
+## Native joint AV decode compatibility
+
+`MiniMax H3 Latent Upscaler + Refine (3D)` correctly reconstructs native H3 joint `NestedTensor([video, audio])` state before sampler 2 and returns that native AV state after refinement. `MiniMax H3 Continuum Decode Context` historically accepted only Continuum's earlier split plain-video LATENT representation, so a fully completed standalone refine pass could fail immediately before Video VAE Decode with:
+
+```text
+decode group 1 requires native [1,24,T,H,W] video
+```
+
+Decode Context now accepts both representations:
+
+- split Continuum video `samples: [1,24,T,H,W]`;
+- native joint H3 `NestedTensor([video, audio])` sampler output.
+
+For joint AV input it validates both members, extracts the existing 24-channel video tensor into a minimal decode-only LATENT view, and never mutates the source AV wrapper, source audio, masks, or assembly plan. Terminal/unextended joint-AV video extraction is zero-copy. Existing split-video identity behavior remains unchanged.
+
+The temporal right-context logic is otherwise unchanged: only exact physical overlaps receive the five real future latent tokens required by the native H3 temporal VAE window, and the original assembly plan still trims the 17 decode-only output frames.
+
+Regression coverage exercises valid joint AV input, zero-copy terminal extraction, source/audio/mask/plan immutability, malformed AV member counts and malformed audio shape, while retaining the existing split-video and native temporal-decoder oracles.
+
+## Corrected three-run performance evidence
+
+The September 9 controlled hot comparison contains three different workflows:
+
+1. **Native direct target-grid control** — 1184×896 target, `H3ContinuumSamplerV34 = 290.41 s`, complete prompt `338.50 s`, topology `16 logical / 11 actual / 5 forecast`.
+2. **Flow progressive Mixed-Grid learned handoff** — private first-chunk grid 832×640 to the same 1184×896 target, `H3ContinuumSamplerV34 = 247.63 s`, complete prompt `298.59 s`, topology `18 logical / 14 actual / 4 forecast` including two exact handoff probes.
+3. **Standalone learned upscale + refine** — 992×736 base sampling followed by the separate `MinimaxH3LatentUpscaler3DRefineHandoff` to 1216×896, `188.57 s` base sampler + `152.79 s` refine = `341.36 s`; sampling completed but Decode Context then failed, so this run has no completed end-to-end wall or decoded-quality result.
+
+The current Flow run is therefore **faster than native**, not slower:
+
+- sampler wall: `247.63 s` vs `290.41 s` = **42.78 s / 14.73% less**;
+- completed prompt wall: `298.59 s` vs `338.50 s` = **39.91 s / 11.79% less**.
+
+The separate standalone two-pass path is the one that is slower in this configuration:
+
+- `341.36 s` sampler/refine wall vs native `290.41 s` = **+50.95 s / +17.54%**;
+- `341.36 s` vs Flow `247.63 s` = **+93.73 s / +37.85%**.
+
+Its base pass was substantially cheaper than native, but its additional four-step high-resolution refinement sampler cost more than that saving. That result belongs to the standalone two-sampler architecture only.
+
+Flow progressive learned handoff does **not** execute the complete standalone refiner. It uses the learned 3D model once as the clean-latent spatial transfer inside the progressive handoff, adds no H3 NFE for the transfer itself, performs the required exact probe, and continues only the remaining high-grid trajectory. The separate standalone refiner is a different control/workflow.
+
+No completed end-to-end timing or decoded-quality claim is made for the standalone September 9 run because it stopped at the decode-contract bug fixed by this release.
+
+## Distribution
+
+The package version is bumped to `0.3.3`. Existing CI, GitHub release, checksum and Comfy Registry workflows remain unchanged; publication occurs only after the exact `main` commit passes CI.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.2
 
 v0.3.2 fixes the `KeyError: 'layout'` reported in issue #22 on MiniMax H3 block-patch callers that predate ComfyUI #15975, and adds complete executable workflow examples instead of leaving only topology overlays under `workflows/`.
