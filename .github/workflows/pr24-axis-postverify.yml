@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply 00311 per-axis verification redesign
-        run: python .github/scripts/pr24_axis_postverify.py
+        run: |
+          sed -i 's/## Current source repair/## Source-trajectory repair/' .github/scripts/pr24_axis_postverify.py
+          python .github/scripts/pr24_axis_postverify.py
       - name: Validate focused repair
         run: |
           python -m pip install -e '.[test]' build
