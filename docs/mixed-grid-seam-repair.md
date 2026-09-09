@@ -35,6 +35,18 @@ Post verification is now genuinely per-axis. An axis that would create a boundar
 
 No estimator floor, objective-gain floor, geometric safety bound, sign-crossing rule, or temporal evidence rule was weakened.
 
+## `metrics_00314`: every boundary axis passed, but finite-horizon termination rejected all four
+
+The matched `00314` run again returned the original source tensor: all four axes were temporally authorized, and all four passed the boundary residual check, but later directly affected transitions caused every axis to fail post verification. The final telemetry was therefore `source_trajectory_bridge_accepted=false` and `learned_upscaler_input_modified=false`.
+
+The failure pattern is horizon-dependent rather than a boundary failure. `sx` and `sy` were already safety-limited to one token and failed the trailing token-0 -> token-1 transition, so those one-token corrections cannot be shortened and must be pruned. `tx` was authorized for four measured tokens and first failed at its trailing corrected->untouched transition; `ty` was authorized for five measured tokens and likewise failed at the first untouched transition. Rolling those longer axes back completely discards shorter directly measured horizons that may still satisfy the same verification contract.
+
+Post verification therefore now performs **monotonic temporal-horizon backoff per axis**. A boundary failure prunes the axis immediately because shortening cannot change token 0. A later transition failure on an axis with more than one active token shortens that axis by exactly one directly observed token, rebuilds the warp from the untouched source tensor, and re-runs the full boundary plus affected-transition verification. No weights, thresholds, safety limits, or sign-crossing rules change. Backoff stops at the first fully verified combined correction or at zero surviving axes.
+
+This is not a fade and does not extrapolate: it only removes already-authorized tail tokens. With the current four-axis/four-follow-up measurement window the search is finite and bounded by the sum of the initially authorized active-token counts.
+
+Rejected attempts now also report zero `source_trajectory_bridge_tokens_corrected`, because the returned tensor is byte-identical to the input; attempted warp diagnostics are retained separately under `source_trajectory_bridge_attempted_*`.
+
 ## Source-trajectory repair
 
 The legacy workflow input name `suffix_geometric_bridge` is retained for compatibility. On Mixed-Grid only, enabling it now activates two independent experimental stages. The first stage operates on the clean source-grid sequence immediately before the learned 3D upscaler.

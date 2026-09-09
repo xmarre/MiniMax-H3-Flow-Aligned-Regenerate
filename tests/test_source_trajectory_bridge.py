@@ -322,3 +322,167 @@ def test_failed_axis_is_pruned_and_surviving_axis_is_retried(monkeypatch):
     assert len(report["source_trajectory_post_verification_rounds"]) == 2
     assert not torch.equal(corrected[:, :, prefix_t : prefix_t + 1], video[:, :, prefix_t : prefix_t + 1])
     assert torch.equal(corrected[:, :, prefix_t + 1 :], video[:, :, prefix_t + 1 :])
+
+
+def test_failed_trailing_transition_backs_off_axis_horizon_before_pruning(monkeypatch):
+    video = torch.zeros(1, 24, 8, 8, 8)
+    prefix_t = 3
+    motion = {
+        "accepted": True,
+        "reason": "robust_recent_motion",
+        "expected_transform": (1.0, 1.0, 0.0, 0.0),
+    }
+    boundary = {"aligned_error": 0.1, "transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "accepted": True,
+        "reason": "provisional_motion_residual",
+        "axis_applied": [False, False, True, False],
+        "raw_signed_residual": (0.0, 0.0, 0.5, 0.0),
+        "transform": (1.0, 1.0, 0.5, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "accepted": True,
+        "reason": "source_evidence_and_temporal_state_authorized",
+        "axis_accepted": [False, False, True, False],
+        "axis_mode": ["inactive", "inactive", "measured_drift", "inactive"],
+        "axis": [
+            {"accepted": False, "mode": "inactive"},
+            {"accepted": False, "mode": "inactive"},
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 4,
+                "applied_envelope": {
+                    "kind": "measured_cumulative",
+                    "signed_states": [0.5, 0.6, 0.7, 0.8],
+                    "active_tokens": 4,
+                },
+            },
+            {"accepted": False, "mode": "inactive"},
+        ],
+        "transitions": [],
+    }
+    monkeypatch.setattr(source_bridge, "_motion_model", lambda *args, **kwargs: motion)
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: boundary)
+    monkeypatch.setattr(source_bridge, "_motion_residual_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(source_bridge, "_temporal_profile", lambda *args, **kwargs: profile)
+
+    seen_limits = []
+
+    def fake_warp(source, p, base_transform, attempt_profile):
+        active = int(attempt_profile["axis"][2]["active_tokens"])
+        seen_limits.append(active)
+        corrected = source.clone()
+        corrected[:, :, p : p + active] += 0.001
+        return corrected, {
+            "tokens_corrected": active,
+            "effective_active_temporal_length": active,
+            "applied_transforms": [base_transform] * active,
+            "applied_transform_sequence_length": active,
+            "applied_transforms_compact": active > 1,
+            "out_of_bounds_fraction": 0.0,
+        }
+
+    def fake_verify(source, corrected, p, motion_arg, candidate_arg, attempt_profile, axis_mask, warp):
+        active = int(attempt_profile["axis"][2]["active_tokens"])
+        ok = active <= 2
+        return {
+            "ok": ok,
+            "axis_verified": [False, False, ok, False],
+            "boundary_axis_verified": [None, None, True, None],
+            "boundary_after": boundary,
+            "post_signed_residual": (0.0, 0.0, 0.1, 0.0),
+            "residual_reduction_ratio": [None, None, 0.2, None],
+            "transition_verification": [],
+        }
+
+    monkeypatch.setattr(source_bridge, "_warp_suffix", fake_warp)
+    monkeypatch.setattr(source_bridge, "_verify_source_warp", fake_verify)
+
+    corrected, report = source_bridge.apply_source_trajectory_bridge(video, prefix_t, requested=True)
+    assert seen_limits == [4, 3, 2]
+    assert report["source_trajectory_bridge_accepted"] is True
+    assert report["source_trajectory_axis_active_tokens_authorized"] == [0, 0, 4, 0]
+    assert report["source_trajectory_axis_active_tokens_post_verified"] == [0, 0, 2, 0]
+    assert report["source_trajectory_axis_post_verified"] == [False, False, True, False]
+    assert [item["axis_active_tokens"] for item in report["source_trajectory_post_verification_rounds"]] == [
+        [0, 0, 4, 0],
+        [0, 0, 3, 0],
+        [0, 0, 2, 0],
+    ]
+    assert torch.equal(corrected[:, :, :prefix_t], video[:, :, :prefix_t])
+    assert not torch.equal(corrected[:, :, prefix_t : prefix_t + 2], video[:, :, prefix_t : prefix_t + 2])
+    assert torch.equal(corrected[:, :, prefix_t + 2 :], video[:, :, prefix_t + 2 :])
+
+
+def test_rejected_source_attempt_reports_zero_applied_tokens(monkeypatch):
+    video = torch.zeros(1, 24, 6, 8, 8)
+    prefix_t = 3
+    motion = {"accepted": True, "reason": "robust_recent_motion", "expected_transform": (1.0, 1.0, 0.0, 0.0)}
+    boundary = {"aligned_error": 0.1, "transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "accepted": True,
+        "reason": "provisional_motion_residual",
+        "axis_applied": [True, False, False, False],
+        "raw_signed_residual": (0.02, 0.0, 0.0, 0.0),
+        "transform": (float(torch.exp(torch.tensor(0.02))), 1.0, 0.0, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "accepted": True,
+        "reason": "source_evidence_and_temporal_state_authorized",
+        "axis_accepted": [True, False, False, False],
+        "axis_mode": ["measured_drift", "inactive", "inactive", "inactive"],
+        "axis": [
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {"kind": "measured_cumulative", "signed_states": [0.02], "active_tokens": 1},
+            },
+            {"accepted": False},
+            {"accepted": False},
+            {"accepted": False},
+        ],
+        "transitions": [],
+    }
+    monkeypatch.setattr(source_bridge, "_motion_model", lambda *args, **kwargs: motion)
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: boundary)
+    monkeypatch.setattr(source_bridge, "_motion_residual_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(source_bridge, "_temporal_profile", lambda *args, **kwargs: profile)
+
+    def fake_warp(source, p, base_transform, attempt_profile):
+        corrected = source.clone()
+        corrected[:, :, p : p + 1] += 0.001
+        return corrected, {
+            "tokens_corrected": 1,
+            "effective_active_temporal_length": 1,
+            "applied_transforms": [base_transform],
+            "applied_transform_sequence_length": 1,
+            "applied_transforms_compact": False,
+            "out_of_bounds_fraction": 0.01,
+        }
+
+    monkeypatch.setattr(source_bridge, "_warp_suffix", fake_warp)
+    monkeypatch.setattr(
+        source_bridge,
+        "_verify_source_warp",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "axis_verified": [False, False, False, False],
+            "boundary_axis_verified": [False, None, None, None],
+            "boundary_after": boundary,
+            "post_signed_residual": (0.03, 0.0, 0.0, 0.0),
+            "residual_reduction_ratio": [1.5, None, None, None],
+            "transition_verification": [],
+        },
+    )
+
+    corrected, report = source_bridge.apply_source_trajectory_bridge(video, prefix_t, requested=True)
+    assert corrected is video
+    assert report["source_trajectory_bridge_accepted"] is False
+    assert report["source_trajectory_bridge_attempted_tokens_corrected"] == 1
+    assert report["source_trajectory_bridge_tokens_corrected"] == 0
+    assert report["source_trajectory_bridge_applied_transforms"] == []
+    assert report["source_trajectory_bridge_out_of_bounds_fraction"] == 0.0

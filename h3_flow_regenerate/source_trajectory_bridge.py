@@ -780,14 +780,41 @@ def _warp_suffix(
     return corrected, metadata
 
 
-def _profile_with_axis_mask(profile: dict, axis_mask: list[bool]) -> dict:
-    """Return an internal profile view containing only the selected axes."""
+def _profile_with_axis_limits(
+    profile: dict,
+    axis_mask: list[bool],
+    active_limits: list[int],
+) -> dict:
+    """Return a profile view with only selected axes and verified temporal horizons."""
     masked = copy.deepcopy(profile)
     selected = [bool(value) for value in axis_mask]
-    masked["axis_accepted"] = selected
+    limits = [max(0, int(value)) for value in active_limits]
     for axis, keep in enumerate(selected):
-        if axis < len(masked.get("axis", [])) and not keep:
-            masked["axis"][axis]["accepted"] = False
+        if axis >= len(masked.get("axis", [])):
+            selected[axis] = False
+            continue
+        axis_report = masked["axis"][axis]
+        if not keep:
+            axis_report["accepted"] = False
+            continue
+        original_active = int(axis_report.get("active_tokens", 0))
+        limit = min(original_active, limits[axis])
+        if limit <= 0:
+            axis_report["accepted"] = False
+            selected[axis] = False
+            continue
+        axis_report["active_tokens"] = limit
+        envelope = axis_report.get("applied_envelope")
+        if isinstance(envelope, dict):
+            envelope["active_tokens"] = limit
+            if envelope.get("kind") == "measured_cumulative":
+                envelope["signed_states"] = list(envelope.get("signed_states", []))[:limit]
+            elif envelope.get("kind") == "measured_monotonic":
+                envelope["weights"] = list(envelope.get("weights", []))[:limit]
+        if limit < original_active:
+            axis_report["verification_horizon_limited"] = True
+            axis_report["verification_horizon_original_tokens"] = original_active
+    masked["axis_accepted"] = selected
     return masked
 
 
@@ -1022,7 +1049,11 @@ def apply_source_trajectory_bridge(
         metrics["source_trajectory_bridge_reason"] = profile["reason"]
         return video, metrics
 
-    attempted_axis_mask = [bool(value) for value in authorized]
+    initial_axis_limits = [
+        int(profile["axis"][axis].get("active_tokens", 0)) if bool(authorized[axis]) else 0 for axis in range(4)
+    ]
+    attempted_axis_limits = list(initial_axis_limits)
+    attempted_axis_mask = [bool(authorized[axis]) and attempted_axis_limits[axis] > 0 for axis in range(4)]
     verification_rounds = []
     final_verification = None
     final_profile = None
@@ -1036,10 +1067,17 @@ def apply_source_trajectory_bridge(
         "out_of_bounds_fraction": 0.0,
     }
     accepted = False
-    for round_index in range(4):
+    # Every failed finite-horizon axis gets a chance to retreat by one directly
+    # observed token and is then re-warped/re-verified from the untouched source.
+    # Boundary failures cannot be repaired by shortening and are pruned immediately.
+    max_rounds = 1 + sum(initial_axis_limits)
+    for round_index in range(max_rounds):
         if not any(attempted_axis_mask):
             break
-        attempt_profile = _profile_with_axis_mask(profile, attempted_axis_mask)
+        attempt_profile = _profile_with_axis_limits(profile, attempted_axis_mask, attempted_axis_limits)
+        attempted_axis_mask = [bool(value) for value in attempt_profile.get("axis_accepted", attempted_axis_mask)]
+        if not any(attempted_axis_mask):
+            break
         base_transform = (
             candidate_transform[0] if attempted_axis_mask[0] else 1.0,
             candidate_transform[1] if attempted_axis_mask[1] else 1.0,
@@ -1064,6 +1102,7 @@ def apply_source_trajectory_bridge(
             {
                 "round": round_index + 1,
                 "axis_attempted": list(attempted_axis_mask),
+                "axis_active_tokens": list(attempted_axis_limits),
                 "axis_verified": list(verification["axis_verified"]),
                 "tokens_corrected": int(warp["tokens_corrected"]),
                 "residual_reduction_ratio": verification["residual_reduction_ratio"],
@@ -1075,17 +1114,34 @@ def apply_source_trajectory_bridge(
         if verification["ok"]:
             accepted = True
             break
-        survivors = [attempted_axis_mask[axis] and bool(verification["axis_verified"][axis]) for axis in range(4)]
-        if not any(survivors) or survivors == attempted_axis_mask:
-            attempted_axis_mask = survivors
+
+        next_mask = list(attempted_axis_mask)
+        next_limits = list(attempted_axis_limits)
+        changed = False
+        boundary_verified = verification.get("boundary_axis_verified", [None] * 4)
+        for axis in range(4):
+            if not attempted_axis_mask[axis] or bool(verification["axis_verified"][axis]):
+                continue
+            if boundary_verified[axis] is True and next_limits[axis] > 1:
+                next_limits[axis] -= 1
+                changed = True
+            else:
+                next_mask[axis] = False
+                next_limits[axis] = 0
+                changed = True
+        if not changed:
             break
-        attempted_axis_mask = survivors
+        attempted_axis_mask = next_mask
+        attempted_axis_limits = next_limits
 
     final_axis_mask = list(attempted_axis_mask) if accepted else [False] * 4
+    final_axis_limits = list(attempted_axis_limits) if accepted else [0] * 4
     pruned_axes = [bool(authorized[axis]) and not final_axis_mask[axis] for axis in range(4)]
     metrics.update(
         source_trajectory_axis_post_verified=final_axis_mask,
         source_trajectory_axis_pruned_post_verification=pruned_axes,
+        source_trajectory_axis_active_tokens_authorized=initial_axis_limits,
+        source_trajectory_axis_active_tokens_post_verified=final_axis_limits,
         source_trajectory_post_verification_rounds=verification_rounds,
         source_trajectory_base_transform=base_transform,
     )
@@ -1105,6 +1161,18 @@ def apply_source_trajectory_bridge(
             source_trajectory_bridge_elapsed_ms=(time.perf_counter() - started) * 1000.0,
         )
     if not accepted or final_profile is None or corrected is video:
+        if final_verification is not None:
+            metrics.update(
+                source_trajectory_bridge_attempted_tokens_corrected=int(warp["tokens_corrected"]),
+                source_trajectory_bridge_attempted_transforms=warp["applied_transforms"],
+                source_trajectory_bridge_attempted_out_of_bounds_fraction=float(warp["out_of_bounds_fraction"]),
+                source_trajectory_bridge_tokens_corrected=0,
+                source_trajectory_bridge_effective_active_temporal_length=0,
+                source_trajectory_bridge_applied_transforms=[],
+                source_trajectory_bridge_applied_transform_sequence_length=0,
+                source_trajectory_bridge_applied_transforms_compact=False,
+                source_trajectory_bridge_out_of_bounds_fraction=0.0,
+            )
         metrics["source_trajectory_bridge_reason"] = (
             "post_warp_residual_verification_failed"
             if final_verification is not None
