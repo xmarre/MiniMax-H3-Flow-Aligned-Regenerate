@@ -1,3 +1,57 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.3
+
+v0.3.3 fixes the smaller whole-frame shrink/top-edge reveal that remained at some Mixed-Grid Continuum exact-prefix joins after the v0.3.0 one-token DC bridge had already removed the separate tone/flash boundary.
+
+## Mixed-Grid attention-measure normalization
+
+The root cause was upstream of latent transfer. Mixed-Grid correctly keeps the authoritative protected prefix on the target spatial grid while the generated suffix remains on the lower source grid, but ordinary attention treated every packed K/V row as equal measure. In the validated production geometry a protected-prefix frame contributed `28 x 38 = 1064` K/V rows while a source-grid suffix frame contributed `20 x 27 = 540`, about `1.97037x` the discrete spatial sampling density.
+
+When the existing off-by-default `suffix_geometric_bridge` experiment is enabled, Flow now publishes an independent `h3_flow_mixed_grid_attention_measure_v1` contract. A compatible Sol-H3 backend keeps every query row and all non-video/source-suffix K/V rows, while deterministically stratifying only protected-prefix K/V to the source-grid spatial measure using native MiniMax-H3 `_frame_grid` coordinates.
+
+Validated production accounting:
+
+```text
+Q:   56029 -> 56029
+K/V: 56029 -> 49741
+removed protected-prefix K/V rows: 6288 per attention call
+```
+
+The existing VDN external-sequence API 2 contract and learned gate ownership are unchanged.
+
+## Decoded-media result
+
+The original whole-frame framing jump is no longer visible in the matched real-SM120 runs. The previously problematic join remains approximately unit-scale in both the `dense_evaluations=0` validation run and the follow-up `dense_evaluations=1` quality run; neither shows the old shrink/top-edge reveal or a new delayed framing pulse at that boundary.
+
+Run `00324` also closes the technical acceptance gate with the ordinary Spectrum schedule restored after the companion Sol-H3 receipt fix:
+
+```text
+18 logical calls
+13 actual transformer NFE
+5 Spectrum forecasts
+
+low:   7 actual / 3 forecast
+high:  4 actual / 2 forecast
+probe: 2 actual
+```
+
+The real measure path executed 192 times with no compatibility fallback or numerical-backend transition, and final exact-prefix canonicalization remained bitwise exact.
+
+## Retired source-warp experiment
+
+The earlier source affine/trajectory repair family is permanently retired. Matched testing showed that every finite verified correction horizon simply moved the discontinuity to the corrected-to-untouched transition. The runtime therefore leaves the clean source trajectory unchanged instead of inventing a temporal fade or extrapolating unmeasured geometry.
+
+The independent target exact-overlap representation reconciliation and the released one-token DC bridge remain intact and separate from the attention-measure correction.
+
+## Companion release
+
+This feature requires the coordinated ComfyUI-Sol-H3 attention-measure support released alongside v0.3.3. The Flow option remains off by default and does not affect generic Progressive or Target-Sparse nodes.
+
+## Distribution
+
+The package version is bumped to `0.3.3`. Existing CI, GitHub release, checksum and Comfy Registry workflows remain unchanged; publication occurs only after the exact `main` commit passes CI.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.2
 
 v0.3.2 fixes the `KeyError: 'layout'` reported in issue #22 on MiniMax H3 block-patch callers that predate ComfyUI #15975, and adds complete executable workflow examples instead of leaving only topology overlays under `workflows/`.
@@ -126,7 +180,7 @@ This addresses the native temporal-decoder window boundary and is independent fr
 - The fresh target-grid stage receives no external mixed-sequence contract and resumes ordinary VDN behavior.
 - API 1 target-sparse compatibility remains available.
 
-The coordinated VDN release is `xmarre/ComfyUI-VDN-H3` v1.5.0.
+The coordinated release is `xmarre/ComfyUI-VDN-H3` v1.5.0.
 
 ## Validation
 
