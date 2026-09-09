@@ -1,0 +1,476 @@
+from pathlib import Path
+
+path = Path('h3_flow_regenerate/source_trajectory_bridge.py')
+text = path.read_text()
+if 'import copy\nimport math\nimport time\n' not in text:
+    anchor = 'import math\nimport time\n'
+    if anchor not in text:
+        raise SystemExit('import anchor missing')
+    text = text.replace(anchor, 'import copy\nimport math\nimport time\n', 1)
+
+helper_marker = '\n\ndef disabled_source_trajectory_bridge_metrics(*, prefix_t: int, requested: bool = False) -> dict:\n'
+if helper_marker not in text:
+    raise SystemExit('helper insertion marker missing')
+helpers = r'''
+
+
+def _profile_with_axis_mask(profile: dict, axis_mask: list[bool]) -> dict:
+    """Return an internal profile view containing only the selected axes."""
+    masked = copy.deepcopy(profile)
+    selected = [bool(value) for value in axis_mask]
+    masked["axis_accepted"] = selected
+    for axis, keep in enumerate(selected):
+        if axis < len(masked.get("axis", [])) and not keep:
+            masked["axis"][axis]["accepted"] = False
+    return masked
+
+
+def _verify_source_warp(
+    video: torch.Tensor,
+    corrected: torch.Tensor,
+    prefix_t: int,
+    motion: dict,
+    candidate: dict,
+    profile: dict,
+    axis_mask: list[bool],
+    warp: dict,
+) -> dict:
+    """Verify each selected axis independently at the boundary and affected transitions."""
+    selected = [bool(value) for value in axis_mask]
+    expected = motion.get("expected_transform") if motion.get("accepted") else None
+    after = register_pair(
+        corrected[:, :, prefix_t - 1 : prefix_t],
+        corrected[:, :, prefix_t : prefix_t + 1],
+        comparison=expected,
+    )
+    before_signed = candidate.get("raw_signed_residual", _signed_components(candidate.get("transform", IDENTITY)))
+    after_signed = None
+    if after.get("aligned_error") is not None and expected is not None:
+        after_signed = _signed_components(residual_transform(after["transform"], expected))
+
+    floors = candidate.get(
+        "axis_estimator_floor",
+        (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR),
+    )
+    axis_verified = [False] * 4
+    boundary_axis_verified = [None] * 4
+    reductions = [None] * 4
+    for axis in range(4):
+        if not selected[axis]:
+            continue
+        if after_signed is None:
+            boundary_axis_verified[axis] = False
+            continue
+        before_value = float(before_signed[axis])
+        after_value = float(after_signed[axis])
+        before_abs = abs(before_value)
+        after_abs = abs(after_value)
+        reductions[axis] = after_abs / max(before_abs, 1e-12)
+        ok = after_abs < before_abs
+        if after_value * before_value < 0 and after_abs > float(floors[axis]):
+            ok = False
+        boundary_axis_verified[axis] = ok
+        axis_verified[axis] = ok
+
+    transition_verification = []
+    active = int(warp.get("tokens_corrected", 0))
+    suffix_length = int(video.shape[2]) - int(prefix_t)
+    max_transition_offset = min(active, max(0, suffix_length - 1))
+    base_signed = _signed_components(candidate.get("transform", IDENTITY))
+    for offset in range(1, max_transition_offset + 1):
+        affected_axes = []
+        for axis in range(4):
+            if not selected[axis]:
+                continue
+            axis_report = profile["axis"][axis]
+            previous_component = _axis_signed_component(axis_report, offset - 1, base_signed[axis])
+            current_component = _axis_signed_component(axis_report, offset, base_signed[axis])
+            if abs(previous_component) > 1e-12 or abs(current_component) > 1e-12:
+                affected_axes.append(axis)
+        if not affected_axes:
+            continue
+
+        expected_transition = _predict_motion_transform(motion, offset)
+        item_report = {
+            "suffix_transition_offset": offset,
+            "before_signed_residual": None,
+            "after_signed_residual": None,
+            "axis_reduction_ratio": [None] * 4,
+            "axis_verified": [None] * 4,
+            "verified": True,
+        }
+        if expected_transition is None:
+            for axis in affected_axes:
+                axis_verified[axis] = False
+                item_report["axis_verified"][axis] = False
+            item_report["verified"] = False
+            transition_verification.append(item_report)
+            continue
+
+        before_transition_signed = None
+        stored = profile.get("transitions", [])
+        if offset - 1 < len(stored):
+            before_transition_signed = stored[offset - 1].get("motion_residual_signed")
+        if before_transition_signed is None:
+            before_item = register_pair(
+                video[:, :, prefix_t + offset - 1 : prefix_t + offset],
+                video[:, :, prefix_t + offset : prefix_t + offset + 1],
+                comparison=expected_transition,
+            )
+            if before_item.get("aligned_error") is not None:
+                before_transition_signed = _signed_components(
+                    residual_transform(before_item["transform"], expected_transition)
+                )
+
+        after_item = register_pair(
+            corrected[:, :, prefix_t + offset - 1 : prefix_t + offset],
+            corrected[:, :, prefix_t + offset : prefix_t + offset + 1],
+            comparison=expected_transition,
+        )
+        after_transition_signed = None
+        if after_item.get("aligned_error") is not None:
+            after_transition_signed = _signed_components(
+                residual_transform(after_item["transform"], expected_transition)
+            )
+        item_report["before_signed_residual"] = before_transition_signed
+        item_report["after_signed_residual"] = after_transition_signed
+
+        if before_transition_signed is None or after_transition_signed is None:
+            for axis in affected_axes:
+                axis_verified[axis] = False
+                item_report["axis_verified"][axis] = False
+            item_report["verified"] = False
+            transition_verification.append(item_report)
+            continue
+
+        for axis in affected_axes:
+            before_value = float(before_transition_signed[axis])
+            after_value = float(after_transition_signed[axis])
+            before_abs = abs(before_value)
+            after_abs = abs(after_value)
+            item_report["axis_reduction_ratio"][axis] = after_abs / max(before_abs, 1e-12)
+            if before_abs > float(floors[axis]):
+                ok = after_abs < before_abs
+            else:
+                ok = after_abs <= float(floors[axis])
+            if after_value * before_value < 0 and after_abs > float(floors[axis]):
+                ok = False
+            item_report["axis_verified"][axis] = ok
+            if not ok:
+                axis_verified[axis] = False
+                item_report["verified"] = False
+        transition_verification.append(item_report)
+
+    ok = any(selected) and all(axis_verified[axis] for axis in range(4) if selected[axis])
+    return {
+        "ok": ok,
+        "axis_verified": axis_verified,
+        "boundary_axis_verified": boundary_axis_verified,
+        "boundary_after": after,
+        "post_signed_residual": after_signed,
+        "residual_reduction_ratio": reductions,
+        "transition_verification": transition_verification,
+    }
+'''
+text = text.replace(helper_marker, helpers + helper_marker, 1)
+
+start_anchor = '    corrected, warp = _warp_suffix(video, p, base_transform, profile)\n'
+start = text.find(start_anchor)
+if start < 0:
+    raise SystemExit('apply-tail start anchor missing')
+end_anchor = '    return corrected, metrics\n'
+end = text.find(end_anchor, start)
+if end < 0:
+    raise SystemExit('apply-tail end anchor missing')
+end += len(end_anchor)
+new_tail = r'''    attempted_axis_mask = [bool(value) for value in authorized]
+    verification_rounds = []
+    final_verification = None
+    final_profile = None
+    corrected = video
+    warp = {
+        "tokens_corrected": 0,
+        "effective_active_temporal_length": 0,
+        "applied_transforms": [],
+        "applied_transform_sequence_length": 0,
+        "applied_transforms_compact": False,
+        "out_of_bounds_fraction": 0.0,
+    }
+    accepted = False
+    for round_index in range(4):
+        if not any(attempted_axis_mask):
+            break
+        attempt_profile = _profile_with_axis_mask(profile, attempted_axis_mask)
+        base_transform = (
+            candidate_transform[0] if attempted_axis_mask[0] else 1.0,
+            candidate_transform[1] if attempted_axis_mask[1] else 1.0,
+            candidate_transform[2] if attempted_axis_mask[2] else 0.0,
+            candidate_transform[3] if attempted_axis_mask[3] else 0.0,
+        )
+        corrected, warp = _warp_suffix(video, p, base_transform, attempt_profile)
+        if corrected is video:
+            final_profile = attempt_profile
+            break
+        verification = _verify_source_warp(
+            video,
+            corrected,
+            p,
+            motion,
+            candidate,
+            attempt_profile,
+            attempted_axis_mask,
+            warp,
+        )
+        verification_rounds.append(
+            {
+                "round": round_index + 1,
+                "axis_attempted": list(attempted_axis_mask),
+                "axis_verified": list(verification["axis_verified"]),
+                "tokens_corrected": int(warp["tokens_corrected"]),
+                "residual_reduction_ratio": verification["residual_reduction_ratio"],
+                "transition_count": len(verification["transition_verification"]),
+            }
+        )
+        final_verification = verification
+        final_profile = attempt_profile
+        if verification["ok"]:
+            accepted = True
+            break
+        survivors = [
+            attempted_axis_mask[axis] and bool(verification["axis_verified"][axis])
+            for axis in range(4)
+        ]
+        if not any(survivors) or survivors == attempted_axis_mask:
+            attempted_axis_mask = survivors
+            break
+        attempted_axis_mask = survivors
+
+    final_axis_mask = list(attempted_axis_mask) if accepted else [False] * 4
+    pruned_axes = [bool(authorized[axis]) and not final_axis_mask[axis] for axis in range(4)]
+    metrics.update(
+        source_trajectory_axis_post_verified=final_axis_mask,
+        source_trajectory_axis_pruned_post_verification=pruned_axes,
+        source_trajectory_post_verification_rounds=verification_rounds,
+        source_trajectory_base_transform=base_transform,
+    )
+    if final_verification is not None:
+        metrics.update(
+            source_trajectory_boundary_after=final_verification["boundary_after"],
+            source_trajectory_post_signed_residual=final_verification["post_signed_residual"],
+            source_trajectory_residual_reduction_ratio=final_verification["residual_reduction_ratio"],
+            source_trajectory_post_transition_verification=final_verification["transition_verification"],
+            source_trajectory_boundary_axis_verified=final_verification["boundary_axis_verified"],
+            source_trajectory_bridge_tokens_corrected=int(warp["tokens_corrected"]),
+            source_trajectory_bridge_effective_active_temporal_length=int(warp["effective_active_temporal_length"]),
+            source_trajectory_bridge_applied_transforms=warp["applied_transforms"],
+            source_trajectory_bridge_applied_transform_sequence_length=int(warp["applied_transform_sequence_length"]),
+            source_trajectory_bridge_applied_transforms_compact=bool(warp["applied_transforms_compact"]),
+            source_trajectory_bridge_out_of_bounds_fraction=float(warp["out_of_bounds_fraction"]),
+            source_trajectory_bridge_elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+    if not accepted or final_profile is None or corrected is video:
+        metrics["source_trajectory_bridge_reason"] = (
+            "post_warp_residual_verification_failed"
+            if final_verification is not None
+            else "no_nonidentity_source_transform"
+        )
+        return video, metrics
+
+    if not torch.equal(corrected[:, :, :p], video[:, :, :p]):
+        raise RuntimeError("source trajectory bridge modified protected source prefix")
+    active = int(warp["tokens_corrected"])
+    if not torch.equal(corrected[:, :, p + active :], video[:, :, p + active :]):
+        raise RuntimeError("source trajectory bridge modified recovered later suffix")
+
+    metrics.update(
+        source_trajectory_bridge_enabled=True,
+        source_trajectory_bridge_accepted=True,
+        source_trajectory_bridge_reason="source_trajectory_residual_closed_before_upscale",
+    )
+    return corrected, metrics
+'''
+text = text[:start] + new_tail + text[end:]
+path.write_text(text)
+
+test = Path('tests/test_source_trajectory_bridge.py')
+t = test.read_text()
+module_anchor = 'import pytest\nimport torch\n'
+if 'import h3_flow_regenerate.source_trajectory_bridge as source_bridge\n' not in t:
+    if module_anchor not in t:
+        raise SystemExit('test import anchor missing')
+    t = t.replace(
+        module_anchor,
+        module_anchor + '\nimport h3_flow_regenerate.source_trajectory_bridge as source_bridge\n',
+        1,
+    )
+append = r'''
+
+
+def test_one_token_axis_is_verified_at_its_trailing_transition(monkeypatch):
+    video = torch.zeros(1, 24, 6, 8, 8)
+    corrected = video.clone()
+    motion = {"accepted": True, "expected_transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "raw_signed_residual": (0.02, 0.0, 0.0, 0.0),
+        "transform": (float(torch.exp(torch.tensor(0.02))), 1.0, 0.0, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "axis": [
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {
+                    "kind": "measured_cumulative",
+                    "signed_states": [0.02],
+                    "active_tokens": 1,
+                },
+            },
+            {"accepted": False},
+            {"accepted": False},
+            {"accepted": False},
+        ],
+        "transitions": [{"motion_residual_signed": (0.01, 0.0, 0.0, 0.0)}],
+    }
+    results = iter(
+        [
+            {"aligned_error": 0.1, "transform": (float(torch.exp(torch.tensor(0.01))), 1.0, 0.0, 0.0)},
+            {"aligned_error": 0.1, "transform": (float(torch.exp(torch.tensor(0.02))), 1.0, 0.0, 0.0)},
+        ]
+    )
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(source_bridge, "_predict_motion_transform", lambda *args, **kwargs: (1.0, 1.0, 0.0, 0.0))
+
+    report = source_bridge._verify_source_warp(
+        video,
+        corrected,
+        3,
+        motion,
+        candidate,
+        profile,
+        [True, False, False, False],
+        {"tokens_corrected": 1},
+    )
+    assert report["ok"] is False
+    assert report["axis_verified"] == [False, False, False, False]
+    assert len(report["transition_verification"]) == 1
+    transition = report["transition_verification"][0]
+    assert transition["suffix_transition_offset"] == 1
+    assert transition["axis_reduction_ratio"][0] == pytest.approx(2.0, rel=1e-4)
+    assert transition["axis_verified"][0] is False
+
+
+def test_failed_axis_is_pruned_and_surviving_axis_is_retried(monkeypatch):
+    video = torch.zeros(1, 24, 7, 8, 8)
+    prefix_t = 3
+    motion = {
+        "accepted": True,
+        "reason": "robust_recent_motion",
+        "expected_transform": (1.0, 1.0, 0.0, 0.0),
+    }
+    boundary = {"aligned_error": 0.1, "transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "accepted": True,
+        "reason": "provisional_motion_residual",
+        "axis_applied": [True, True, False, False],
+        "raw_signed_residual": (0.02, -0.02, 0.0, 0.0),
+        "transform": (float(torch.exp(torch.tensor(0.02))), float(torch.exp(torch.tensor(-0.02))), 0.0, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "accepted": True,
+        "reason": "source_evidence_and_temporal_state_authorized",
+        "axis_accepted": [True, True, False, False],
+        "axis_mode": ["measured_drift", "measured_drift", "inactive", "inactive"],
+        "axis": [
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {"kind": "measured_cumulative", "signed_states": [0.02], "active_tokens": 1},
+            },
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {"kind": "measured_cumulative", "signed_states": [-0.02], "active_tokens": 1},
+            },
+            {"accepted": False, "mode": "inactive"},
+            {"accepted": False, "mode": "inactive"},
+        ],
+        "transitions": [],
+    }
+    monkeypatch.setattr(source_bridge, "_motion_model", lambda *args, **kwargs: motion)
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: boundary)
+    monkeypatch.setattr(source_bridge, "_motion_residual_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(source_bridge, "_temporal_profile", lambda *args, **kwargs: profile)
+
+    def fake_warp(source, p, base_transform, attempt_profile):
+        corrected = source.clone()
+        corrected[:, :, p : p + 1] += 0.001
+        return corrected, {
+            "tokens_corrected": 1,
+            "effective_active_temporal_length": 1,
+            "applied_transforms": [base_transform],
+            "applied_transform_sequence_length": 1,
+            "applied_transforms_compact": False,
+            "out_of_bounds_fraction": 0.0,
+        }
+
+    verification_masks = []
+
+    def fake_verify(source, corrected, p, motion_arg, candidate_arg, attempt_profile, axis_mask, warp):
+        verification_masks.append(list(axis_mask))
+        if axis_mask[0]:
+            verified = [False, True, False, False]
+            ok = False
+        else:
+            verified = [False, True, False, False]
+            ok = True
+        return {
+            "ok": ok,
+            "axis_verified": verified,
+            "boundary_axis_verified": [False, True, None, None],
+            "boundary_after": boundary,
+            "post_signed_residual": (0.02, 0.001, 0.0, 0.0),
+            "residual_reduction_ratio": [None, 0.05, None, None],
+            "transition_verification": [],
+        }
+
+    monkeypatch.setattr(source_bridge, "_warp_suffix", fake_warp)
+    monkeypatch.setattr(source_bridge, "_verify_source_warp", fake_verify)
+
+    corrected, report = source_bridge.apply_source_trajectory_bridge(video, prefix_t, requested=True)
+    assert verification_masks == [[True, True, False, False], [False, True, False, False]]
+    assert report["source_trajectory_bridge_accepted"] is True
+    assert report["source_trajectory_axis_authorized"] == [True, True, False, False]
+    assert report["source_trajectory_axis_post_verified"] == [False, True, False, False]
+    assert report["source_trajectory_axis_pruned_post_verification"] == [True, False, False, False]
+    assert len(report["source_trajectory_post_verification_rounds"]) == 2
+    assert not torch.equal(corrected[:, :, prefix_t : prefix_t + 1], video[:, :, prefix_t : prefix_t + 1])
+    assert torch.equal(corrected[:, :, prefix_t + 1 :], video[:, :, prefix_t + 1 :])
+'''
+if 'def test_failed_axis_is_pruned_and_surviving_axis_is_retried' not in t:
+    t += append
+test.write_text(t)
+
+doc = Path('docs/mixed-grid-seam-repair.md')
+d = doc.read_text()
+marker = '## Current source repair\n'
+note = r'''## `metrics_00311`: all-or-nothing post verification discarded three passing axes with one failing axis
+
+The matched `00311` run still shifts and, critically, the source repair still did not reach the learned upscaler: `source_trajectory_bridge_accepted=false` and `learned_upscaler_input_modified=false`.
+
+The safety-limited temporal classifier authorized all four affine axes. The boundary warp itself reduced every authorized residual (`sx` about `0.171x`, `sy` about `0.000205x`, `tx` about `0.298x`, `ty` to the estimator floor). At the first suffix transition, however, only `sx` failed: its residual grew to about `2.049x`, while `sy` improved to about `0.398x` and `tx` to about `0.156x`. The implementation nevertheless rolled back the entire source tensor because post verification was global rather than per-axis.
+
+Post verification is now genuinely per-axis. An axis that would create a boundary or directly affected follow-up transition regression is removed, while independently passing axes are retried together from the original source tensor and fully re-verified. The retry is monotonic (axes can only be removed), has at most four rounds, performs no model/VAE/optical-flow evaluation, and preserves the exact-prefix/tail guarantees. One-token repairs also verify the trailing token-0 -> token-1 transition, preventing a boundary fix from merely moving the pulse one token later.
+
+No estimator floor, objective-gain floor, geometric safety bound, sign-crossing rule, or temporal evidence rule was weakened.
+
+'''
+if marker not in d:
+    raise SystemExit('doc current source marker missing')
+if '`metrics_00311`' not in d:
+    d = d.replace(marker, note + marker, 1)
+doc.write_text(d)
