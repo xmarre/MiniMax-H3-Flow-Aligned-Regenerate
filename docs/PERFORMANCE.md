@@ -1,8 +1,63 @@
-# Performance evidence: progressive learned handoff vs two-pass upscale + refine
+# Performance evidence: native, two-pass, and progressive H3 paths
 
 ## Evidence status
 
-This document records the current **observed workflow-level timing reference** around a ~1 MP final target. It is not a formal same-seed microbenchmark and it is not a universal speed claim.
+This document records observed workflow-level timing references around a ~1 MP final target. They are not universal speed claims. Comparisons are only treated as controlled when their seed, prompt, references, sampling settings, workflow structure, and resolved geometry are known; decoded media remains the quality gate when step budgets change.
+
+## Short-native control vs additive Flow upscale/refine
+
+A newer controlled hot comparison exposed an important topology limit of the **two-pass Flow-aligned upscale/refine** path. The native control already uses a short 8-logical-step-per-chunk schedule. Running the same complete 8-step trajectory at lower resolution and then adding a 4-step high-resolution refine is slower than simply running that short schedule natively at the target grid.
+
+Measured stage timing across two physical chunks:
+
+| Stage | Native ~1.1 MP | Flow ~0.73 MP -> ~1.09 MP | Delta |
+|---|---:|---:|---:|
+| First/native low pass | 116.84 s | 74.90 s | -41.93 s (-35.9%) |
+| Later/native low pass | 165.27 s | 107.97 s | -57.30 s (-34.7%) |
+| Low/native subtotal | 282.11 s | 182.88 s | -99.23 s (-35.2%) |
+| High-resolution refine, first | — | 67.75 s | +67.75 s |
+| High-resolution refine, later | — | 82.59 s | +82.59 s |
+| Spectrum-stage total | 282.11 s | 333.22 s | +51.11 s (+18.1%) |
+| Sampler/refine node total | 290.41 s | 341.36 s | +50.95 s (+17.5%) |
+
+The low-resolution substitution itself is effective: it removes about **99.23 s / 35.2%** from the first-pass H3 work. The added high-resolution refine costs about **150.34 s**, which is roughly **51.11 s more than the entire low-resolution saving** at the Spectrum-stage boundary.
+
+The model-call topology explains the result:
+
+| Path | Logical calls | Actual H3 NFEs | Spectrum forecasts |
+|---|---:|---:|---:|
+| Native ~1.1 MP | 16 | 11 | 5 |
+| Flow low-resolution passes | 16 | 11 | 5 |
+| Flow high-resolution refine | +8 | +6 | +2 |
+| **Flow total** | **24** | **17** | **7** |
+
+This two-pass workflow therefore does **not** replace part of the native 8-step trajectory. It completes the same logical schedule on the cheaper low grid, then launches an additional sampler lifetime at the high grid. The refine stage would need to fit inside the ~99 s first-pass saving merely to break even; the measured refine costs ~150 s.
+
+Resolved geometry slightly biases the comparison against Flow but does not change the conclusion:
+
+```text
+native control: 74 x 56 latent -> 1184 x 896 = 1.060864 MP
+Flow low pass:  62 x 46 latent ->  992 x 736 = 0.730112 MP
+Flow refine:    76 x 56 latent -> 1216 x 896 = 1.089536 MP
+```
+
+The Flow final grid contains about **2.7% more pixels** than the native control. That can explain only a small part of an ~18% sampler-stage penalty.
+
+### What this does and does not imply
+
+This is not evidence that low-resolution H3 work is ineffective; the measured low pass is ~35% cheaper. It is evidence that a **complete short native trajectory plus an additive refine cannot be turned into a speed path merely by moving the first trajectory to a lower grid**.
+
+There is no output-neutral implementation fix that can erase those additional high-grid H3 evaluations after the fact. A speed-oriented configuration must instead do one of the following:
+
+- use the sampler-internal progressive handoff so early low-grid work **replaces** target-grid intervals inside one trajectory;
+- reduce the first-pass and/or refine schedule deliberately, then revalidate decoded quality against the native control;
+- accept two-pass Flow as a trajectory-reuse/refinement path rather than a speedup over an already-short native schedule.
+
+Do not silently change the public two-pass defaults to a 2- or 3-step refine to manufacture a speed claim. Earlier 3-step experiments were under-refined relative to the established quality target. A lower budget is a new empirical configuration and must pass matched decoded-media testing before promotion.
+
+The failed run also exposed a separate packaging bug after sampling completed: the integrated learned refiner returns native joint H3 AV samples, while the Continuum Decode Context historically required a split plain video tensor. That decode boundary is independent of these timings; v0.3.3 normalizes valid native joint AV output to a video-only decode view without changing sampling or audio state.
+
+## Historical proper two-pass baseline
 
 The useful legacy baseline is the established proper learned upscale + H3 refine workflow:
 
@@ -14,9 +69,7 @@ The useful legacy baseline is the established proper learned upscale + H3 refine
 
 Old 3-step high-ratio refine experiments are excluded from performance claims because three refine steps were a legacy under-refined setting and are not a quality-equivalent comparison.
 
-## Compared runs
-
-### Historical proper two-pass baseline
+### Historical proper two-pass timing
 
 At the higher nominal 0.7 MP setting, the recorded workflow resolved approximately:
 
@@ -27,9 +80,9 @@ sampling:    7 base + 6 learned-refine outer steps
 workflow:    ~777 s end-to-end (~12:57)
 ```
 
-This is the proper 6-step-refine baseline used for the timing comparison. The historical 7+7 workflow remains the fuller refine budget, but an equally clean ~1 MP raw timing for that exact case has not been recovered, so no exact 7+7 speedup is claimed.
+This is the proper 6-step-refine baseline used for the timing comparison below. The historical 7+7 workflow remains the fuller refine budget, but an equally clean ~1 MP raw timing for that exact case has not been recovered, so no exact 7+7 speedup is claimed.
 
-### Progressive learned-handoff final gate
+## Progressive learned-handoff final gate
 
 The final learned-transfer gate resolved:
 
@@ -60,7 +113,7 @@ Exact H3/Spectrum telemetry across the two physical chunks:
 
 The run also recorded 6 progressive sampler invocations, 4 history boundaries, copied audio, rebuilt high-grid conditioning, and an actual first high-grid H3 call in both chunks.
 
-## Observed wall-time comparison
+## Observed historical wall-time comparison
 
 | Path | Base/private grid | Final grid | Sampling structure | Full workflow |
 |---|---:|---:|---|---:|
@@ -114,16 +167,19 @@ Likewise, the repeated ~0.6 MP -> ~0.79 MP two-pass runs around 544-546 s are us
 
 ## Interpretation and limits
 
-The defensible statement is:
+Two distinct conclusions are defensible from the current evidence:
 
-> In the observed ~1 MP workflow, the 10-step progressive learned-handoff path completed in 621.63 s versus about 777 s for the proper historical 7+6 two-pass upscale/refine workflow, an observed ~20% end-to-end wall-time reduction while producing ~3.7% more final pixels.
+> Against the newer short native ~1.06 MP control, the tested additive 8-step-low + 4-step-refine Flow workflow is slower: ~333.22 s versus ~282.11 s at the Spectrum-stage boundary (+18.1%), despite making the low-resolution pass itself ~35% cheaper.
 
-Do **not** turn this into:
+> In the earlier ~1 MP workflow, the 10-step progressive learned-handoff path completed in 621.63 s versus about 777 s for the proper historical 7+6 two-pass upscale/refine workflow, an observed ~20% end-to-end wall-time reduction while producing ~3.7% more final pixels.
 
-- a universal 20% speedup claim;
+Do **not** turn either result into:
+
+- a universal speedup or slowdown claim;
 - a claim that progressive output is universally higher quality;
 - a matched-A/B quality percentage;
 - an exact speedup over the historical 7+7 workflow without a comparable raw timing;
-- evidence that acceleration guidance is better.
+- evidence that acceleration guidance is better;
+- evidence that a reduced two-pass refine budget preserves quality without a decoded-media test.
 
 Runtime depends on target geometry, private/source geometry, reference-conditioning load, model residency/loading, VAE/decode cost, sampler/Spectrum policy, chunk lengths, and hardware state. Decoded media remains the quality gate.

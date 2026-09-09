@@ -1,3 +1,47 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.3
+
+v0.3.3 fixes the decode boundary exposed by the coordinated Continuum learned-upscale/refine path and records the measured performance limit of additive two-pass refinement against an already-short native H3 schedule.
+
+## Native joint AV decode compatibility
+
+`MiniMax H3 Latent Upscaler + Refine (3D)` correctly reconstructs native H3 joint `NestedTensor([video, audio])` state before sampler 2 and returns that native AV state after refinement. `MiniMax H3 Continuum Decode Context` historically accepted only Continuum's earlier split plain-video LATENT representation, so a fully completed refine run could fail immediately before Video VAE Decode with:
+
+```text
+decode group 1 requires native [1,24,T,H,W] video
+```
+
+Decode Context now accepts both representations:
+
+- split Continuum video `samples: [1,24,T,H,W]`;
+- native joint H3 `NestedTensor([video, audio])` sampler output.
+
+For joint AV input it validates both members, extracts the existing 24-channel video tensor into a minimal decode-only LATENT view, and never mutates the source AV wrapper, source audio, masks, or assembly plan. Terminal/unextended joint-AV video extraction is zero-copy. Existing split-video identity behavior remains unchanged.
+
+The temporal right-context logic is otherwise unchanged: only exact physical overlaps receive the five real future latent tokens required by the native H3 temporal VAE window, and the original assembly plan still trims the 17 decode-only output frames.
+
+Regression coverage exercises valid joint AV input, zero-copy terminal extraction, source/audio/mask/plan immutability, malformed AV member counts and malformed audio shape, while retaining the existing split-video and native temporal-decoder oracles.
+
+## Two-pass performance contract
+
+A controlled hot comparison around a ~1.1 MP target showed that the complete low-resolution H3 pass remains materially cheaper, but the additive high-resolution refine can exceed that saving when the native control already uses a short schedule:
+
+- native Spectrum-stage total: `282.11 s`;
+- Flow low-resolution subtotal: `182.88 s`, saving `99.23 s / 35.2%`;
+- added high-resolution refine: `150.34 s`;
+- Flow Spectrum-stage total: `333.22 s`, `+51.11 s / +18.1%` versus native;
+- native call topology: `16 logical / 11 actual / 5 forecast`;
+- additive Flow topology: `24 logical / 17 actual / 7 forecast`.
+
+The Flow final grid was about 2.7% larger than the native control, which biases the comparison slightly but cannot explain the full penalty. The result is documented as a topology/property of the two-pass path, not as a failure of the low-resolution stage: completing the same short logical trajectory at low resolution and then launching a second high-resolution sampler lifetime does not replace native intervals.
+
+No public defaults are silently reduced to manufacture a speed claim. Reduced first-pass/refine budgets require matched decoded-media validation. For speed-oriented execution, use a sampler-internal progressive handoff where low-grid work replaces target-grid intervals inside one trajectory.
+
+## Distribution
+
+The package version is bumped to `0.3.3`. Existing CI, GitHub release, checksum and Comfy Registry workflows remain unchanged; publication occurs only after the exact `main` commit passes CI.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.2
 
 v0.3.2 fixes the `KeyError: 'layout'` reported in issue #22 on MiniMax H3 block-patch callers that predate ComfyUI #15975, and adds complete executable workflow examples instead of leaving only topology overlays under `workflows/`.
