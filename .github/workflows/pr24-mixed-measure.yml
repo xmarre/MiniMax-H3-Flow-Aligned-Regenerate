@@ -38,6 +38,7 @@ jobs:
           python -m pip install -e '.[test]' build
       - name: Focused validation
         run: |
+          ruff format h3_flow_regenerate/mixed_grid.py h3_flow_regenerate/runtime.py tests/test_mixed_grid.py
           ruff check h3_flow_regenerate/mixed_grid.py h3_flow_regenerate/runtime.py tests/test_mixed_grid.py
           ruff format --check h3_flow_regenerate/mixed_grid.py h3_flow_regenerate/runtime.py tests/test_mixed_grid.py
           pytest -q tests/test_mixed_grid.py tests/test_handoff.py tests/test_representation_bridge.py
