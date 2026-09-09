@@ -14,6 +14,7 @@ from h3_flow_regenerate.mixed_grid import (
     MixedGridPlan,
     build_mixed_grid_plan,
     carrier_layout,
+    mixed_attention_measure_contract,
     mixed_mod_segments,
     mixed_positions,
 )
@@ -231,13 +232,13 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
     assert MIXED_GRID_KEY not in guider.model_options["transformer_options"]
 
 
-def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
+def test_retired_source_warp_does_not_modify_learned_upscaler_input(monkeypatch):
     import sys
     from types import ModuleType, SimpleNamespace
 
     from test_handoff import FakeLearnedProvider
 
-    import h3_flow_regenerate.runtime as runtime
+    from h3_flow_regenerate.geometry import resize_spatial_5d, unpack_streams
     from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
     from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
 
@@ -264,36 +265,13 @@ def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
         learned_upscaler=provider,
         suffix_geometric_bridge=True,
     )
-    marker = 123.0
-    bridge_input = {}
-
-    def bridge(video, prefix_t, *, requested):
-        bridge_input["value"] = video.clone()
-        assert requested is True
-        assert prefix_t == 6
-        corrected = video.clone()
-        corrected[:, :, prefix_t] += marker
-        return corrected, {
-            "source_trajectory_bridge_requested": True,
-            "source_trajectory_bridge_enabled": True,
-            "source_trajectory_bridge_accepted": True,
-            "source_trajectory_bridge_reason": "test",
-            "source_trajectory_bridge_prefix_t": prefix_t,
-            "source_trajectory_bridge_tokens_corrected": 1,
-            "source_trajectory_bridge_effective_active_temporal_length": 1,
-            "source_trajectory_bridge_applied_transforms": [],
-            "source_trajectory_bridge_applied_transform_sequence_length": 1,
-            "source_trajectory_bridge_applied_transforms_compact": False,
-            "source_trajectory_bridge_out_of_bounds_fraction": 0.0,
-            "source_trajectory_bridge_minimum_evidence": 0.0,
-            "source_trajectory_axis_authorized": [False, True, False, False],
-            "source_trajectory_residual_reduction_ratio": [None, 0.0, None, None],
-        }
-
-    monkeypatch.setattr(runtime, "apply_source_trajectory_bridge", bridge)
 
     def execute(noise, latent, sampler, sigmas, call_mask, *args, latent_shapes):
         stage = guider.model_options["transformer_options"]["h3_flow_stage"]
+        contract = guider.model_options["transformer_options"].get("h3_flow_mixed_grid_v1")
+        if stage != "high":
+            assert contract is not None
+            assert contract["plan"].attention_measure is True
         if stage == "high":
             binding.metrics.event("model_call", actual=True)
             return packed.clone()
@@ -318,12 +296,40 @@ def test_source_trajectory_bridge_runs_before_learned_upscaler(monkeypatch):
         list(shapes),
     )
     provider_input = provider.calls[0][0]
-    expected_provider_input = bridge_input["value"].clone()
-    expected_provider_input[:, :, 6] += marker
-    assert torch.equal(provider_input, expected_provider_input)
+    original_video, _ = unpack_streams(packed, shapes)
+    expected_video = resize_spatial_5d(original_video, 4, 6, mode="bicubic")
+    assert torch.equal(provider_input, expected_video)
     source_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_source_trajectory_bridge"]
     assert len(source_events) == 1
-    assert source_events[0].fields["learned_upscaler_input_modified"] is True
+    assert source_events[0].fields["source_trajectory_bridge_reason"] == "retired_source_warp_family"
+    assert source_events[0].fields["source_trajectory_bridge_tokens_corrected"] == 0
+    assert source_events[0].fields["learned_upscaler_input_modified"] is False
+
+
+def test_mixed_attention_measure_contract_00318_geometry():
+    plan = MixedGridPlan(
+        torch.randn(1, 24, 12, 56, 76),
+        62,
+        40,
+        54,
+        attention_measure=True,
+    )
+    contract = mixed_attention_measure_contract(plan, video_start=16261, sequence_rows=56029)
+    assert contract is not None
+    assert plan.target_grid == (28, 38)
+    assert plan.source_grid == (20, 27)
+    assert plan.target_rows == 1064
+    assert plan.source_rows == 540
+    assert contract["sequence_rows"] == 56029
+    assert contract["expected_kv_rows"] == 49741
+    assert contract["prefix_rows_per_frame"] / contract["source_rows_per_frame"] == pytest.approx(1064 / 540)
+    assert contract["exact_prefix_queries_preserved"] is True
+    assert contract["suffix_kv_unchanged"] is True
+
+
+def test_mixed_attention_measure_is_off_by_default():
+    plan = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6)
+    assert mixed_attention_measure_contract(plan, video_start=5, sequence_rows=83) is None
 
 
 def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, native):

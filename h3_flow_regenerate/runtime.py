@@ -34,7 +34,7 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
-from .source_trajectory_bridge import apply_source_trajectory_bridge
+from .source_trajectory_bridge import disabled_source_trajectory_bridge_metrics
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 from .tone_bridge import (
     apply_suffix_dc_bridge,
@@ -1364,6 +1364,7 @@ def _run_progressive(
                 noise,
                 source_h=source_h,
                 source_w=source_w,
+                attention_measure=bool(getattr(config, "suffix_geometric_bridge", False)),
             )
             binding.metrics.event(
                 "mixed_grid_plan",
@@ -1383,6 +1384,10 @@ def _run_progressive(
                 suffix_source_grid_rope=True,
                 continuous_temporal_rope=True,
                 low_suffix_real_latent=True,
+                attention_measure_requested=bool(mixed_plan.attention_measure),
+                attention_measure_contract=(
+                    "h3_flow_mixed_grid_attention_measure_v1" if mixed_plan.attention_measure else None
+                ),
             )
         source_shapes = list(target_shapes)
         source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
@@ -1536,17 +1541,24 @@ def _run_progressive(
                 mixed_plan.prefix.to(clean_video), source_h, source_w, mode="bicubic"
             )
             source_bridge_requested = bool(getattr(config, "suffix_geometric_bridge", False))
-            clean_video, source_trajectory_metrics = apply_source_trajectory_bridge(
-                clean_video,
-                mixed_plan.prefix_t,
+            # 00318 exhausted every finite verified source-warp horizon. Shortening
+            # a non-zero warp only moved the compensating corrected->untouched
+            # transition earlier, so this repair family is retired rather than
+            # weakened with a fade or unmeasured extrapolation. The experimental
+            # option now owns only the upstream attention-measure and target-side
+            # exact-overlap reconciliation paths.
+            source_trajectory_metrics = disabled_source_trajectory_bridge_metrics(
+                prefix_t=mixed_plan.prefix_t,
                 requested=source_bridge_requested,
             )
+            if source_bridge_requested:
+                source_trajectory_metrics["source_trajectory_bridge_reason"] = "retired_source_warp_family"
             binding.metrics.event(
                 "mixed_grid_source_trajectory_bridge",
                 legacy_option_name="suffix_geometric_bridge",
                 authoritative_source_prefix_modified=False,
                 later_suffix_extrapolated=False,
-                learned_upscaler_input_modified=bool(source_trajectory_metrics["source_trajectory_bridge_accepted"]),
+                learned_upscaler_input_modified=False,
                 **source_trajectory_metrics,
             )
             source_x0 = pack_streams((clean_video, clean_audio))[0]

@@ -276,7 +276,9 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                     attention_measure_prefix_kv_rows_before=plan.prefix_rows,
                     attention_measure_prefix_kv_rows_after=plan.prefix_t * plan.source_rows,
                     attention_measure_kv_rows_before=mixed_layout.seq_len,
-                    attention_measure_kv_rows_after=(layout.seq_len if measure_contract is not None else mixed_layout.seq_len),
+                    attention_measure_kv_rows_after=(
+                        layout.seq_len if measure_contract is not None else mixed_layout.seq_len
+                    ),
                     attention_measure_prefix_density_ratio=plan.target_rows / plan.source_rows,
                     prefix_exact_latent_resized=False,
                     prefix_native_inpaint_augmentation=True,
