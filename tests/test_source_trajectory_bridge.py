@@ -4,6 +4,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 
+import h3_flow_regenerate.source_trajectory_bridge as source_bridge
 from h3_flow_regenerate.source_trajectory_bridge import (
     _effective_transform,
     _temporal_axis_state,
@@ -143,7 +144,7 @@ def test_measured_cumulative_transform_uses_observed_state_not_scaled_boundary()
     assert transform[1:] == pytest.approx((1.0, 0.0, 0.0))
 
 
-def test_persistent_source_state_is_limited_to_measured_window():
+def test_persistent_source_state_without_observed_recovery_fails_safe():
     frame = _texture()
     prefix = [frame.clone() for _ in range(6)]
     shifted = _warp(frame, sy=1.0 / 0.975)
@@ -151,11 +152,173 @@ def test_persistent_source_state_is_limited_to_measured_window():
     video = torch.stack([*prefix, *suffix], dim=2)
     before = video.clone()
     corrected, report = apply_source_trajectory_bridge(video, 6, requested=True)
+    assert report["source_trajectory_bridge_accepted"] is False
+    assert report["source_trajectory_temporal_profile"]["axis_mode"][1] == "persistent"
+    axis = report["source_trajectory_temporal_profile"]["axis"][1]
+    assert axis["reason"] == "persistent_state_without_observed_recovery"
+    assert axis["applied_envelope"]["measured_followup_transitions"] == 4
+    assert axis["applied_envelope"]["extrapolated_beyond_observation"] is False
+    assert corrected is video
+    assert torch.equal(corrected, before)
+
+
+def test_persistent_source_state_observed_through_suffix_end_can_apply():
+    frame = _texture()
+    prefix = [frame.clone() for _ in range(6)]
+    shifted = _warp(frame, sy=1.0 / 0.975)
+    suffix = [shifted.clone() for _ in range(5)]
+    video = torch.stack([*prefix, *suffix], dim=2)
+    before = video.clone()
+    corrected, report = apply_source_trajectory_bridge(video, 6, requested=True)
     assert report["source_trajectory_bridge_accepted"] is True
     assert report["source_trajectory_temporal_profile"]["axis_mode"][1] == "persistent"
-    envelope = report["source_trajectory_temporal_profile"]["axis"][1]["applied_envelope"]
-    assert envelope["measured_followup_transitions"] == 4
-    assert envelope["extrapolated_beyond_observation"] is False
+    axis = report["source_trajectory_temporal_profile"]["axis"][1]
+    assert axis["reason"] == "persistent_state_observed_through_suffix_end"
     assert report["source_trajectory_bridge_tokens_corrected"] == 5
-    assert not torch.equal(corrected[:, :, 6:11], before[:, :, 6:11])
-    assert torch.equal(corrected[:, :, 11:], before[:, :, 11:])
+    assert not torch.equal(corrected[:, :, 6:], before[:, :, 6:])
+
+
+def test_one_token_axis_is_verified_at_its_trailing_transition(monkeypatch):
+    video = torch.zeros(1, 24, 6, 8, 8)
+    corrected = video.clone()
+    motion = {"accepted": True, "expected_transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "raw_signed_residual": (0.02, 0.0, 0.0, 0.0),
+        "transform": (float(torch.exp(torch.tensor(0.02))), 1.0, 0.0, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "axis": [
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {
+                    "kind": "measured_cumulative",
+                    "signed_states": [0.02],
+                    "active_tokens": 1,
+                },
+            },
+            {"accepted": False},
+            {"accepted": False},
+            {"accepted": False},
+        ],
+        "transitions": [{"motion_residual_signed": (0.01, 0.0, 0.0, 0.0)}],
+    }
+    results = iter(
+        [
+            {"aligned_error": 0.1, "transform": (float(torch.exp(torch.tensor(0.01))), 1.0, 0.0, 0.0)},
+            {"aligned_error": 0.1, "transform": (float(torch.exp(torch.tensor(0.02))), 1.0, 0.0, 0.0)},
+        ]
+    )
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(source_bridge, "_predict_motion_transform", lambda *args, **kwargs: (1.0, 1.0, 0.0, 0.0))
+
+    report = source_bridge._verify_source_warp(
+        video,
+        corrected,
+        3,
+        motion,
+        candidate,
+        profile,
+        [True, False, False, False],
+        {"tokens_corrected": 1},
+    )
+    assert report["ok"] is False
+    assert report["axis_verified"] == [False, False, False, False]
+    assert len(report["transition_verification"]) == 1
+    transition = report["transition_verification"][0]
+    assert transition["suffix_transition_offset"] == 1
+    assert transition["axis_reduction_ratio"][0] == pytest.approx(2.0, rel=1e-4)
+    assert transition["axis_verified"][0] is False
+
+
+def test_failed_axis_is_pruned_and_surviving_axis_is_retried(monkeypatch):
+    video = torch.zeros(1, 24, 7, 8, 8)
+    prefix_t = 3
+    motion = {
+        "accepted": True,
+        "reason": "robust_recent_motion",
+        "expected_transform": (1.0, 1.0, 0.0, 0.0),
+    }
+    boundary = {"aligned_error": 0.1, "transform": (1.0, 1.0, 0.0, 0.0)}
+    candidate = {
+        "accepted": True,
+        "reason": "provisional_motion_residual",
+        "axis_applied": [True, True, False, False],
+        "raw_signed_residual": (0.02, -0.02, 0.0, 0.0),
+        "transform": (float(torch.exp(torch.tensor(0.02))), float(torch.exp(torch.tensor(-0.02))), 0.0, 0.0),
+        "axis_estimator_floor": (0.005, 0.005, 0.25, 0.25),
+    }
+    profile = {
+        "accepted": True,
+        "reason": "source_evidence_and_temporal_state_authorized",
+        "axis_accepted": [True, True, False, False],
+        "axis_mode": ["measured_drift", "measured_drift", "inactive", "inactive"],
+        "axis": [
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {"kind": "measured_cumulative", "signed_states": [0.02], "active_tokens": 1},
+            },
+            {
+                "accepted": True,
+                "mode": "measured_drift",
+                "active_tokens": 1,
+                "applied_envelope": {"kind": "measured_cumulative", "signed_states": [-0.02], "active_tokens": 1},
+            },
+            {"accepted": False, "mode": "inactive"},
+            {"accepted": False, "mode": "inactive"},
+        ],
+        "transitions": [],
+    }
+    monkeypatch.setattr(source_bridge, "_motion_model", lambda *args, **kwargs: motion)
+    monkeypatch.setattr(source_bridge, "register_pair", lambda *args, **kwargs: boundary)
+    monkeypatch.setattr(source_bridge, "_motion_residual_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(source_bridge, "_temporal_profile", lambda *args, **kwargs: profile)
+
+    def fake_warp(source, p, base_transform, attempt_profile):
+        corrected = source.clone()
+        corrected[:, :, p : p + 1] += 0.001
+        return corrected, {
+            "tokens_corrected": 1,
+            "effective_active_temporal_length": 1,
+            "applied_transforms": [base_transform],
+            "applied_transform_sequence_length": 1,
+            "applied_transforms_compact": False,
+            "out_of_bounds_fraction": 0.0,
+        }
+
+    verification_masks = []
+
+    def fake_verify(source, corrected, p, motion_arg, candidate_arg, attempt_profile, axis_mask, warp):
+        verification_masks.append(list(axis_mask))
+        if axis_mask[0]:
+            verified = [False, True, False, False]
+            ok = False
+        else:
+            verified = [False, True, False, False]
+            ok = True
+        return {
+            "ok": ok,
+            "axis_verified": verified,
+            "boundary_axis_verified": [False, True, None, None],
+            "boundary_after": boundary,
+            "post_signed_residual": (0.02, 0.001, 0.0, 0.0),
+            "residual_reduction_ratio": [None, 0.05, None, None],
+            "transition_verification": [],
+        }
+
+    monkeypatch.setattr(source_bridge, "_warp_suffix", fake_warp)
+    monkeypatch.setattr(source_bridge, "_verify_source_warp", fake_verify)
+
+    corrected, report = source_bridge.apply_source_trajectory_bridge(video, prefix_t, requested=True)
+    assert verification_masks == [[True, True, False, False], [False, True, False, False]]
+    assert report["source_trajectory_bridge_accepted"] is True
+    assert report["source_trajectory_axis_authorized"] == [True, True, False, False]
+    assert report["source_trajectory_axis_post_verified"] == [False, True, False, False]
+    assert report["source_trajectory_axis_pruned_post_verification"] == [True, False, False, False]
+    assert len(report["source_trajectory_post_verification_rounds"]) == 2
+    assert not torch.equal(corrected[:, :, prefix_t : prefix_t + 1], video[:, :, prefix_t : prefix_t + 1])
+    assert torch.equal(corrected[:, :, prefix_t + 1 :], video[:, :, prefix_t + 1 :])

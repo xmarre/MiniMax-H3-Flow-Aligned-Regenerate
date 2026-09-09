@@ -25,6 +25,16 @@ The boundary correction itself actually passed the post-warp test: the authorize
 
 The cumulative mode now inherits the candidate's existing per-axis safety bound for every directly applied token and keeps only the longest contiguous measured prefix that remains inside that bound. This is not a new tuned threshold or a handcrafted fade: it reuses the same safety bound already required for initial authorization. In the `00303` geometry, both measured scale axes leave the `log(1.03)` safety envelope immediately after suffix token 0, so only token 0 is eligible for the source correction; later source suffix tokens remain byte-identical. The existing boundary residual-reduction and sign-crossing checks still have to pass before that correction can reach the learned upscaler.
 
+## `metrics_00311`: all-or-nothing post verification discarded three passing axes with one failing axis
+
+The matched `00311` run still shifts and, critically, the source repair still did not reach the learned upscaler: `source_trajectory_bridge_accepted=false` and `learned_upscaler_input_modified=false`.
+
+The safety-limited temporal classifier authorized all four affine axes. The boundary warp itself reduced every authorized residual (`sx` about `0.171x`, `sy` about `0.000205x`, `tx` about `0.298x`, `ty` to the estimator floor). At the first suffix transition, however, only `sx` failed: its residual grew to about `2.049x`, while `sy` improved to about `0.398x` and `tx` to about `0.156x`. The implementation nevertheless rolled back the entire source tensor because post verification was global rather than per-axis.
+
+Post verification is now genuinely per-axis. An axis that would create a boundary or directly affected follow-up transition regression is removed, while independently passing axes are retried together from the original source tensor and fully re-verified. The retry is monotonic (axes can only be removed), has at most four rounds, performs no model/VAE/optical-flow evaluation, and preserves the exact-prefix/tail guarantees. One-token repairs also verify the trailing token-0 -> token-1 transition, preventing a boundary fix from merely moving the pulse one token later.
+
+No estimator floor, objective-gain floor, geometric safety bound, sign-crossing rule, or temporal evidence rule was weakened.
+
 ## Source-trajectory repair
 
 The legacy workflow input name `suffix_geometric_bridge` is retained for compatibility. On Mixed-Grid only, enabling it now activates two independent experimental stages. The first stage operates on the clean source-grid sequence immediately before the learned 3D upscaler.
@@ -69,10 +79,10 @@ A source axis is provisionally eligible only after it clears the estimator floor
 Up to four genuine source suffix transitions are then measured. The correction is accepted only when the observed temporal state is safe:
 
 - **recovering** — the measured residual approaches the estimator floor or crosses zero without first making an unresolved excursion; the correction envelope is derived directly from that measured cumulative state;
-- **persistent** — the measured cumulative residual remains within one estimator floor of the initial boundary state for at least two follow-up transitions;
+- **persistent** — the measured cumulative residual remains within one estimator floor of the initial boundary state; a persistent correction is applied only when that state is directly observed through the end of the suffix, because truncating an unrecovered persistent correction would merely create a delayed seam at the first uncorrected token;
 - **measured drift** — every directly observed follow-up residual stays on the same side/direction as the boundary residual, so each observed suffix token receives the corresponding measured cumulative signed correction instead of a scaled copy of the boundary correction.
 
-Persistent and measured-drift states are deliberately bounded to the directly observed window. Measured-drift additionally reuses the original per-axis geometric safety bound on every cumulative token state and stops at the first token that would leave it. With four measured follow-up transitions, at most suffix token 0 plus those four observed tokens can be corrected, and often fewer. No correction is projected onto unmeasured or safety-rejected later suffix tokens.
+Persistent and measured-drift states never extrapolate onto unmeasured tokens. A persistent state that extends beyond the measured window without an observed recovery now fails safe instead of ending a constant correction abruptly and moving the seam to the window boundary; it can be applied only when the directly observed persistent window reaches the suffix end. Measured-drift additionally reuses the original per-axis geometric safety bound on every cumulative token state and stops at the first token that would leave it. With four measured follow-up transitions, at most suffix token 0 plus those four observed tokens can be corrected, and often fewer. No correction is projected onto unmeasured or safety-rejected later suffix tokens.
 
 There is no handcrafted `(1, 0.5, 0.25)`-style fade. Recovering weights come from measured residual evolution; persistent weights are constant only over the observed persistent window; measured-drift transforms come directly from the observed cumulative signed states that remain inside the pre-existing safety envelope.
 
