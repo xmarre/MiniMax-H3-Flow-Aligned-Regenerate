@@ -466,9 +466,12 @@ class H3RefineTargetGeometry:
                 "scale": float(scale),
                 "align": int(align),
                 "keep_proportion": bool(keep_proportion),
-                "target_width": target_width,
-                "target_height": target_height,
-                "semantics": "upscale-only target geometry helper; does not run H3 or alter latents",
+                "target_width": int(target_width),
+                "target_height": int(target_height),
+                "semantics": (
+                    "LBH refine scale-by-multiplier geometry only; target metadata for the "
+                    "downstream refine sigma map, never a Continuum resize"
+                ),
             },
         )
 
@@ -479,13 +482,67 @@ class H3ResolutionAwareSigmas:
         return {
             "required": {
                 "sigmas": ("SIGMAS",),
-                "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192, "step": 32}),
-                "target_height": ("INT", {"default": 768, "min": 32, "max": 8192, "step": 32}),
-                "source_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32}),
-                "source_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32}),
-                "mode": (["off", "resolution_aware", "calibrated"], {"default": "off"}),
-                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "calibrated_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 4.0, "step": 0.01}),
+                "mode": (
+                    ["off", "resolution_aware", "calibrated"],
+                    {
+                        "default": "off",
+                        "tooltip": (
+                            "off is exact SIGMAS parity. resolution_aware applies the SD3-derived "
+                            "relative area map on H3's shared AV coordinate. calibrated is research-only."
+                        ),
+                    },
+                ),
+                "source_width": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 8192,
+                        "tooltip": (
+                            "0 together with source_height=0 derives the H3-native reference canvas "
+                            "automatically from target aspect ratio (768px short edge, 768*1344 area cap, "
+                            "32px alignment). Positive values select an explicit research reference."
+                        ),
+                    },
+                ),
+                "source_height": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 8192,
+                        "tooltip": (
+                            "0 together with source_width=0 derives the H3-native reference canvas "
+                            "automatically from target aspect ratio. Positive values select an explicit "
+                            "research reference."
+                        ),
+                    },
+                ),
+                "target_width": ("INT", {"default": 1024, "min": 32, "max": 8192}),
+                "target_height": ("INT", {"default": 768, "min": 32, "max": 8192}),
+                "strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.01,
+                        "tooltip": (
+                            "0 = no relative resolution shift; 1 = analytic sqrt(target_area/reference_area). "
+                            "Do not tune before a matched off/1.0 media pair."
+                        ),
+                    },
+                ),
+                "calibrated_factor": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.01,
+                        "max": 8.0,
+                        "step": 0.01,
+                        "tooltip": "Direct relative shift factor for controlled research only.",
+                    },
+                ),
             },
             "optional": {"metrics": ("H3_FLOW_METRICS",)},
         }
@@ -498,38 +555,28 @@ class H3ResolutionAwareSigmas:
     def map(
         self,
         sigmas,
-        target_width,
-        target_height,
+        mode,
         source_width,
         source_height,
-        mode,
+        target_width,
+        target_height,
         strength,
         calibrated_factor,
         metrics=None,
     ):
-        target_width = int(target_width)
-        target_height = int(target_height)
         source_width = int(source_width)
         source_height = int(source_height)
-        if target_width <= 0 or target_height <= 0:
-            raise ValueError("target dimensions must be positive")
+        target_width = int(target_width)
+        target_height = int(target_height)
         if source_width == 0 and source_height == 0:
             source_width, source_height = h3_native_reference_canvas(target_width, target_height)
             reference_mode = "h3_native_auto"
         elif source_width <= 0 or source_height <= 0:
-            raise ValueError("source width/height must both be 0 for auto or both be positive")
+            raise ValueError("source_width/source_height must both be 0 for auto or both be positive")
         else:
-            reference_mode = "explicit"
-
+            reference_mode = "manual"
         source_area = source_width * source_height
         target_area = target_width * target_height
-        if mode == "off":
-            factor = 1.0
-        elif mode == "resolution_aware":
-            factor = resolution_shift_factor(source_area, target_area, strength)
-        else:
-            factor = float(calibrated_factor)
-
         mapped = resolution_aware_sigmas(
             sigmas,
             source_area=source_area,
@@ -538,6 +585,12 @@ class H3ResolutionAwareSigmas:
             strength=strength,
             calibrated_factor=calibrated_factor,
         )
+        if mode == "off":
+            effective_factor = 1.0
+        elif mode == "calibrated":
+            effective_factor = float(calibrated_factor)
+        else:
+            effective_factor = resolution_shift_factor(source_area, target_area, strength)
         diagnostics = {
             "mode": mode,
             "reference_mode": reference_mode,
@@ -548,13 +601,49 @@ class H3ResolutionAwareSigmas:
             "source_area": source_area,
             "target_area": target_area,
             "area_ratio": target_area / source_area,
-            "factor": factor,
+            "extra_shift_factor": effective_factor,
             "base_video_shift": H3_VIDEO_SHIFT,
-            "effective_video_shift": H3_VIDEO_SHIFT * factor,
+            "effective_video_shift": H3_VIDEO_SHIFT * effective_factor,
+            "reference_semantics": (
+                "0/0 source dimensions resolve automatically to ComfyUI's H3-native canvas for "
+                "the target aspect ratio; positive source dimensions select an explicit research "
+                "reference. Neither mode implies a low-resolution sampling pass."
+            ),
+            "shared_av_coordinate": True,
         }
         if metrics is not None:
-            metrics.event("resolution_sigma_map", **diagnostics)
+            mapped_cpu = mapped.detach().to(device="cpu", dtype=torch.float64)
+            input_cpu = sigmas.detach().to(device="cpu", dtype=torch.float64)
+            delta = (mapped_cpu - input_cpu).abs()
+            metrics.event(
+                "resolution_sigma_map",
+                mode=mode,
+                reference_mode=reference_mode,
+                source_width=int(source_width),
+                source_height=int(source_height),
+                target_width=int(target_width),
+                target_height=int(target_height),
+                strength=float(strength),
+                calibrated_factor=float(calibrated_factor),
+                source_area=int(source_area),
+                target_area=int(target_area),
+                area_ratio=float(diagnostics["area_ratio"]),
+                extra_shift_factor=float(effective_factor),
+                base_video_shift=float(H3_VIDEO_SHIFT),
+                effective_video_shift=float(H3_VIDEO_SHIFT * effective_factor),
+                shared_av_coordinate=True,
+                sigma_points=int(sigmas.numel()),
+                max_abs_sigma_delta=float(delta.max().item()) if delta.numel() else 0.0,
+                exact_identity=bool(torch.equal(mapped, sigmas)),
+            )
         return mapped, diagnostics
+
+    DESCRIPTION = (
+        "Experimental H3 shared-AV SIGMAS remap. Leave source width/height at 0/0 to derive the "
+        "H3-native reference canvas automatically from the connected target dimensions. Positive source "
+        "dimensions remain available for explicit research references. No low-resolution pass is run. "
+        "The relative SD3 Eq.23 factor is composed with H3's native video shift rather than replacing it."
+    )
 
 
 class H3ReferenceBudget:
