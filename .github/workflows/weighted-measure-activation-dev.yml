@@ -32,8 +32,8 @@ jobs:
 
           measure = Path("h3_flow_regenerate/attention_measure.py")
           text = measure.read_text(encoding="utf-8")
-          old = "from typing import Any, Mapping, Sequence\n"
-          new = "from collections.abc import Mapping, Sequence\nfrom typing import Any\n"
+          old = "from math import gcd\nfrom typing import Any, Mapping, Sequence\n"
+          new = "from collections.abc import Mapping, Sequence\nfrom math import gcd\nfrom typing import Any\n"
           if text.count(old) != 1:
               raise SystemExit("attention_measure import anchor changed")
           text = text.replace(old, new, 1)
