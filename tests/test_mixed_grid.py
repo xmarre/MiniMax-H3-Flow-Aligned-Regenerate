@@ -449,4 +449,4 @@ def test_representation_bridge_ui_is_mixed_grid_only():
     mixed = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_geometric_bridge" in mixed.get("optional", {})
     spec = mixed["optional"]["suffix_geometric_bridge"]
-    assert spec[1]["default"] is False
+    assert spec[1]["default"] is True

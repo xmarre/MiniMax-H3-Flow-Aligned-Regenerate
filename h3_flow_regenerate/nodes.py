@@ -326,28 +326,28 @@ class H3ProgressiveTargetInputHandoff:
             "required": {
                 "model": ("MODEL",),
                 "trajectory": ("H3_FLOW_TRAJECTORY",),
-                "source_mode": (["pixels", "scale"], {"default": "pixels"}),
-                "source_scale": ("FLOAT", {"default": 0.84, "min": 0.1, "max": 0.99, "step": 0.01}),
+                "source_mode": (["pixels", "scale"], {"default": "scale"}),
+                "source_scale": ("FLOAT", {"default": 0.70, "min": 0.1, "max": 0.99, "step": 0.01}),
                 "source_width": ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32}),
                 "source_height": ("INT", {"default": 640, "min": 32, "max": 8192, "step": 32}),
                 "handoff_coordinate": ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01}),
                 "handoff_selection": (["fixed", "auto_compute"], {"default": "fixed"}),
                 "guidance_mode": (
                     ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
-                    {"default": "direction"},
+                    {"default": "direction+temporal"},
                 ),
                 "direction_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "acceleration_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "consistency_weight": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "acceleration_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "consistency_weight": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "low_frequency_cutoff": ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01}),
                 "temporal_weight": ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "handoff_transfer": (
                     ["bicubic", "learned_3d"],
                     {
-                        "default": "bicubic",
+                        "default": "learned_3d",
                         "tooltip": (
-                            "bicubic preserves the released handoff. learned_3d applies one connected "
-                            "H3 latent-upscaler provider to the exact-probe clean video state."
+                            "learned_3d is the intended default and requires a connected H3 latent-upscaler "
+                            "provider. bicubic remains available as a dependency-free compatibility/control path."
                         ),
                     },
                 ),
@@ -380,7 +380,7 @@ class H3ProgressiveTargetInputHandoff:
         low_frequency_cutoff,
         metrics=None,
         temporal_weight=0.20,
-        handoff_transfer="bicubic",
+        handoff_transfer="learned_3d",
         learned_upscaler=None,
     ):
         if source_mode == "scale":
