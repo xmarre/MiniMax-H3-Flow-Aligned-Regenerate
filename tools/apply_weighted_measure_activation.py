@@ -1,3 +1,4 @@
+# Temporary development patcher; removed after the validated candidate is published.
 from pathlib import Path
 
 
@@ -40,7 +41,6 @@ replace_once(
     '''            if measure_contract is not None:\n                measure_key = _mixed_attention_measure_key(plan)\n                if ATTENTION_MEASURE_KEY in block_options or MIXED_GRID_MEASURE_KEY in block_options:\n                    raise RuntimeError("mixed-grid found an already-owned attention-measure contract")\n                block_options[measure_key] = measure_contract\n''',
 )
 
-# Add focused tests without changing released legacy defaults.
 test_path = Path("tests/test_mixed_grid.py")
 test_text = test_path.read_text(encoding="utf-8")
 anchor = '''def test_mixed_attention_measure_is_off_by_default():\n    plan = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6)\n    assert mixed_attention_measure_contract(plan, video_start=5, sequence_rows=83) is None\n\n\n'''
