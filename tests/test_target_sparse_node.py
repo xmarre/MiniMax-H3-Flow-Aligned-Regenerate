@@ -105,11 +105,32 @@ def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semant
     assert progressive.source_latent_w is not None
 
 
-def test_target_sparse_retains_bicubic_compatibility_default():
+def test_target_sparse_inherits_learned_transfer_default():
     required = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()["required"]
 
     assert required["handoff_transfer"][0] == ["bicubic", "learned_3d"]
-    assert required["handoff_transfer"][1]["default"] == "bicubic"
+    assert required["handoff_transfer"][1]["default"] == "learned_3d"
+
+
+def test_target_sparse_direct_call_uses_inherited_learned_transfer_default(monkeypatch):
+    captured = {}
+
+    def fake_patch_flow_model(model, **kwargs):
+        captured.update(kwargs)
+        return model, object()
+
+    monkeypatch.setattr("h3_flow_regenerate.target_sparse_node.patch_flow_model", fake_patch_flow_model)
+    kwargs = _patch_kwargs()
+    kwargs.pop("handoff_transfer")
+    kwargs["learned_upscaler"] = _LearnedProvider()
+
+    H3ProgressiveTargetSparseHandoff().patch(**kwargs)
+
+    progressive = captured["progressive"]
+    assert progressive.exact_prefix_mode == "target_sparse_lifter"
+    assert progressive.transfer_mode == "learned_3d"
+    assert progressive.learned_upscaler is kwargs["learned_upscaler"]
+    assert progressive.suffix_geometric_bridge is False
 
 
 def test_mixed_grid_ui_defaults_match_canonical_workflow():
