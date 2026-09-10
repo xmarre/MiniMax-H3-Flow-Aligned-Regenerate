@@ -108,7 +108,7 @@ def test_progressive_target_input_api_example_is_complete():
         if node["class_type"] == "MinimaxH3LatentUpscaler3DProvider"
     )
     assert patch_id != provider_id
-    assert patch["inputs"] | {} >= {
+    expected_inputs = {
         "source_mode": "scale",
         "source_scale": 0.7,
         "source_width": 864,
@@ -123,6 +123,8 @@ def test_progressive_target_input_api_example_is_complete():
         "temporal_weight": 0.2,
         "handoff_transfer": "learned_3d",
     }
+    for key, value in expected_inputs.items():
+        assert patch["inputs"][key] == value
     assert patch["inputs"]["learned_upscaler"] == [provider_id, 0]
     assert provider["inputs"] == {
         "model_name": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
