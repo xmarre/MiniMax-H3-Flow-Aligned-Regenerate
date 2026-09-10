@@ -63,11 +63,19 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         low_frequency_cutoff,
         metrics=None,
         temporal_weight=0.20,
-        handoff_transfer="bicubic",
+        handoff_transfer=None,
         learned_upscaler=None,
         suffix_dc_bridge=True,
-        suffix_geometric_bridge=False,
+        suffix_geometric_bridge=None,
     ):
+        # Keep direct Python calls consistent with each node's ComfyUI defaults.
+        # Target-Sparse retains its compatibility defaults; Mixed-Grid requires
+        # learned transfer and ships the validated seam-repair path enabled.
+        if handoff_transfer is None:
+            handoff_transfer = "learned_3d" if self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix" else "bicubic"
+        if suffix_geometric_bridge is None:
+            suffix_geometric_bridge = self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
+
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
                 source_scale=source_scale,
@@ -118,14 +126,11 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
 class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     EXACT_PREFIX_MODE = "mixed_grid_low_suffix"
     DESCRIPTION = (
-        "Real low-resolution Continuum suffix generation with original target-grid protected-prefix "
-        "conditioning, learned 3D handoff, exact prefix restoration, and fresh target-grid refinement. "
-        "Requires an H3 latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. "
-        "The validated one-token DC bridge remains enabled by default. The optional legacy-named "
-        "suffix_geometric_bridge now enables an experimental two-stage seam repair: it first attempts to "
-        "close an independently strong, temporally safe geometric residual on the genuine source-grid clean "
-        "trajectory before learned upscaling, and independently reconciles the exact-prefix representation "
-        "splice on the first target-grid suffix token. It remains off by default pending decoded-media validation."
+        "Recommended accelerated exact-prefix Continuum path. It keeps the authoritative target-grid "
+        "protected-prefix conditioning, generates a genuine low-grid suffix, performs learned 3D latent "
+        "transfer, restores the exact prefix, and starts fresh target-grid refinement. Requires an H3 "
+        "latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. The validated "
+        "one-token DC bridge and Mixed-Grid seam-repair path are enabled by default."
     )
 
     @classmethod
@@ -133,11 +138,34 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         import copy
 
         inputs = copy.deepcopy(super().INPUT_TYPES())
-        # The inherited patch signature is retained for workflow compatibility.
-        for group in ("required", "optional"):
-            if "handoff_transfer" in inputs.get(group, {}):
-                inputs[group]["handoff_transfer"] = (["learned_3d"], {"default": "learned_3d"})
-        inputs["required"]["suffix_dc_bridge"] = (
+        required = inputs["required"]
+
+        # Canonical production defaults. Keep every visible value aligned with
+        # the shipped workflows so a newly added node and an opened example do
+        # not silently exercise different handoff policies.
+        required["source_mode"] = (["pixels", "scale"], {"default": "scale"})
+        required["source_scale"] = ("FLOAT", {"default": 0.70, "min": 0.1, "max": 0.99, "step": 0.01})
+        required["source_width"] = ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32})
+        required["source_height"] = ("INT", {"default": 640, "min": 32, "max": 8192, "step": 32})
+        required["handoff_coordinate"] = ("FLOAT", {"default": 0.35, "min": 0.01, "max": 0.99, "step": 0.01})
+        required["handoff_selection"] = (["fixed", "auto_compute"], {"default": "fixed"})
+        required["guidance_mode"] = (
+            ["off", "direction", "direction+acceleration", "direction+temporal", "downsample_consistency"],
+            {"default": "direction+temporal"},
+        )
+        required["direction_weight"] = ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01})
+        required["acceleration_weight"] = ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01})
+        required["consistency_weight"] = ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01})
+        required["low_frequency_cutoff"] = ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01})
+        required["temporal_weight"] = ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01})
+        required["handoff_transfer"] = (
+            ["learned_3d"],
+            {
+                "default": "learned_3d",
+                "tooltip": "Mixed-Grid requires a connected H3 latent-upscaler provider for learned 3D transfer.",
+            },
+        )
+        required["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
                 "default": True,
@@ -151,16 +179,12 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         inputs.setdefault("optional", {})["suffix_geometric_bridge"] = (
             "BOOLEAN",
             {
-                "default": False,
+                "default": True,
                 "tooltip": (
-                    "Experimental Mixed-Grid source-trajectory + exact-overlap repair (legacy input name "
-                    "kept for workflow compatibility). Before the learned 3D upscaler it measures the genuine "
-                    "source-grid clean continuation against robust recent prefix motion, requires strong "
-                    "source evidence plus a measured recovering/persistent temporal state, and corrects only "
-                    "the authorized, directly observed early suffix tokens. Independently, the target exact-overlap "
-                    "bridge preserves the upscaler's native prefix→suffix transition while suffix_dc_bridge owns "
-                    "the DC component. No protected-prefix warp, handcrafted fade, extra H3 call, "
-                    "audio/noise/mask/conditioning change, or unmeasured later-suffix correction."
+                    "Enable the validated Mixed-Grid seam-repair path. It publishes the protected-prefix K/V "
+                    "measure contract for compatible Sol-H3 backends and applies the independent target "
+                    "exact-overlap representation reconciliation after learned transfer. The authoritative "
+                    "prefix, generated suffix ownership, audio, masks, conditioning and H3 NFE count are preserved."
                 ),
             },
         )
