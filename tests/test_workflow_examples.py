@@ -99,10 +99,37 @@ def test_progressive_target_input_api_example_is_complete():
     workflow = _load("progressive-target-input.api.json")
     _assert_common_api_chain(workflow, "H3ProgressiveTargetInputHandoff")
 
-    patch = next(node for node in workflow.values() if node["class_type"] == "H3ProgressiveTargetInputHandoff")
-    assert patch["inputs"]["source_mode"] == "scale"
-    assert patch["inputs"]["source_scale"] == 0.7
-    assert patch["inputs"]["handoff_transfer"] == "bicubic"
+    patch_id, patch = next(
+        (node_id, node) for node_id, node in workflow.items() if node["class_type"] == "H3ProgressiveTargetInputHandoff"
+    )
+    provider_id, provider = next(
+        (node_id, node)
+        for node_id, node in workflow.items()
+        if node["class_type"] == "MinimaxH3LatentUpscaler3DProvider"
+    )
+    assert patch_id != provider_id
+    assert patch["inputs"] | {} >= {
+        "source_mode": "scale",
+        "source_scale": 0.7,
+        "source_width": 864,
+        "source_height": 640,
+        "handoff_coordinate": 0.35,
+        "handoff_selection": "fixed",
+        "guidance_mode": "direction+temporal",
+        "direction_weight": 0.25,
+        "acceleration_weight": 0.25,
+        "consistency_weight": 0.25,
+        "low_frequency_cutoff": 0.25,
+        "temporal_weight": 0.2,
+        "handoff_transfer": "learned_3d",
+    }
+    assert patch["inputs"]["learned_upscaler"] == [provider_id, 0]
+    assert provider["inputs"] == {
+        "model_name": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+        "device": "cuda",
+        "precision": "bf16",
+        "offload_after_upscale": False,
+    }
 
 
 def test_progressive_source_input_api_example_is_complete():
@@ -117,9 +144,34 @@ def test_progressive_source_input_api_example_is_complete():
 def test_progressive_target_input_canvas_workflow_is_loadable_shape():
     workflow = _load("progressive-target-input.workflow.json")
     _assert_canvas_links_resolve(workflow, "H3ProgressiveTargetInputHandoff")
-    patch = next(node for node in workflow["nodes"] if node["type"] == "H3ProgressiveTargetInputHandoff")
-    assert patch["widgets_values"][0:2] == ["scale", 0.7]
-    assert patch["widgets_values"][-1] == "bicubic"
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    patch = next(node for node in nodes.values() if node["type"] == "H3ProgressiveTargetInputHandoff")
+    provider = next(node for node in nodes.values() if node["type"] == "MinimaxH3LatentUpscaler3DProvider")
+
+    assert patch["widgets_values"] == [
+        "scale",
+        0.7,
+        864,
+        640,
+        0.35,
+        "fixed",
+        "direction+temporal",
+        0.25,
+        0.25,
+        0.25,
+        0.25,
+        0.2,
+        "learned_3d",
+    ]
+    learned_input = next(input_ for input_ in patch["inputs"] if input_["name"] == "learned_upscaler")
+    learned_link = next(link for link in workflow["links"] if link[0] == learned_input["link"])
+    assert learned_link[1:3] == [provider["id"], 0]
+    assert provider["widgets_values"] == [
+        "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+        "cuda",
+        "bf16",
+        False,
+    ]
 
 
 def test_progressive_source_input_canvas_workflow_is_loadable_shape():
