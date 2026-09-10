@@ -1,3 +1,62 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.4
+
+v0.3.4 aligns the shipped progressive defaults and example workflows with the current learned-transfer path. The target-input example had remained on the older dependency-free bicubic handoff even though decoded-media testing had already promoted `learned_3d` for aggressive source-to-target transitions.
+
+## Canonical Mixed-Grid defaults
+
+**MiniMax H3 Progressive Mixed-Grid Continuum** now opens with:
+
+```text
+source_mode             = scale
+source_scale            = 0.70
+source_width            = 864
+source_height           = 640
+handoff_coordinate      = 0.35
+handoff_selection       = fixed
+guidance_mode           = direction+temporal
+direction_weight        = 0.25
+acceleration_weight     = 0.25
+consistency_weight      = 0.25
+low_frequency_cutoff    = 0.25
+temporal_weight         = 0.20
+handoff_transfer        = learned_3d
+suffix_dc_bridge        = true
+suffix_geometric_bridge = true
+```
+
+`acceleration_weight` and `consistency_weight` are staged values under this configuration. With `guidance_mode=direction+temporal`, the runtime uses direction and temporal guidance; acceleration is active only in `direction+acceleration`, and consistency is active only in `downsample_consistency`.
+
+Direct Python calls to the Mixed-Grid node now resolve the same transfer/seam defaults instead of inheriting the Target-Sparse method fallbacks. Target-Sparse retains its previous bicubic / geometric-bridge-off direct-call behavior.
+
+## Learned 3D example workflow
+
+`workflows/examples/progressive-target-input.workflow.json` and its API-format equivalent now use `learned_3d` and wire **MiniMax H3 Latent Upscaler Provider (3D)** explicitly. The shipped provider settings are:
+
+```text
+model_name            = minimax_h3_latent_upscaler_3d_bf16.safetensors
+device                = cuda
+precision             = bf16
+offload_after_upscale = false
+```
+
+The provider is supplied by `xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus`. Bicubic remains available on the generic Target Input node as a compatibility/control path; Mixed-Grid continues to require learned 3D transfer.
+
+## Mixed-Grid seam repair default
+
+`suffix_geometric_bridge` now defaults on. The legacy name is preserved for workflow compatibility, but the retired source-warp family remains a no-op. The active path is the v0.3.3-validated protected-prefix K/V attention-measure normalization plus the independent target exact-overlap representation reconciliation. `suffix_dc_bridge` remains enabled independently.
+
+Historical benchmark documents retain the settings that were actually measured; current defaults are recorded separately rather than rewriting prior evidence.
+
+## Regression coverage
+
+Workflow tests now verify the learned-upscaler provider node, exact provider wiring, all shipped target-input values, and API/LiteGraph link integrity. Mixed-Grid node tests verify the complete canonical UI default set and the direct-call learned-transfer/seam defaults.
+
+## Distribution
+
+The package version is bumped to `0.3.4`. Existing CI, GitHub release, checksum and Comfy Registry workflows remain unchanged; publication occurs only after the exact `main` commit passes CI.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.3
 
 v0.3.3 fixes the smaller whole-frame shrink/top-edge reveal that remained at some Mixed-Grid Continuum exact-prefix joins after the v0.3.0 one-token DC bridge had already removed the separate tone/flash boundary.
