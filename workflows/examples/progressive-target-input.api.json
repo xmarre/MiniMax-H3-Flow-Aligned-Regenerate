@@ -50,16 +50,17 @@
       "source_mode": "scale",
       "source_scale": 0.7,
       "source_width": 864,
-      "source_height": 480,
+      "source_height": 640,
       "handoff_coordinate": 0.35,
       "handoff_selection": "fixed",
-      "guidance_mode": "direction",
+      "guidance_mode": "direction+temporal",
       "direction_weight": 0.25,
-      "acceleration_weight": 0.0,
-      "consistency_weight": 0.0,
+      "acceleration_weight": 0.25,
+      "consistency_weight": 0.25,
       "low_frequency_cutoff": 0.25,
       "temporal_weight": 0.2,
-      "handoff_transfer": "bicubic"
+      "handoff_transfer": "learned_3d",
+      "learned_upscaler": ["17", 0]
     },
     "class_type": "H3ProgressiveTargetInputHandoff",
     "_meta": {"title": "Progressive Handoff (Target Input)"}
@@ -133,5 +134,15 @@
     },
     "class_type": "SaveVideo",
     "_meta": {"title": "Save video"}
+  },
+  "17": {
+    "inputs": {
+      "model_name": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+      "device": "cuda",
+      "precision": "bf16",
+      "offload_after_upscale": false
+    },
+    "class_type": "MinimaxH3LatentUpscaler3DProvider",
+    "_meta": {"title": "MiniMax H3 Latent Upscaler Provider (3D)"}
   }
 }
