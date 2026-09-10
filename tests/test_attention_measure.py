@@ -31,13 +31,16 @@ def test_schema_is_complete_normalized_and_deterministic():
 
     # Segment spelling is not numerical identity. Equivalent adjacent segments
     # canonicalize before hashing so receipt/history identity stays stable.
-    subdivided = {**r, "segments": [
-        {"start": 0, "stop": 2, "mass_num": 7, "mass_den": 7},
-        {"start": 2, "stop": 6, "mass_num": 1, "mass_den": 1},
-        {"start": 6, "stop": 12, "mass_num": 2, "mass_den": 4},
-        {"start": 12, "stop": 18, "mass_num": 1, "mass_den": 2},
-        {"start": 18, "stop": 30, "mass_num": 1, "mass_den": 1},
-    ]}
+    subdivided = {
+        **r,
+        "segments": [
+            {"start": 0, "stop": 2, "mass_num": 7, "mass_den": 7},
+            {"start": 2, "stop": 6, "mass_num": 1, "mass_den": 1},
+            {"start": 6, "stop": 12, "mass_num": 2, "mass_den": 4},
+            {"start": 12, "stop": 18, "mass_num": 1, "mass_den": 2},
+            {"start": 18, "stop": 30, "mass_num": 1, "mass_den": 1},
+        ],
+    }
     assert m.validate_attention_measure_request(subdivided)["segments"] == r["segments"]
     assert m.attention_measure_semantic_digest(subdivided) == m.attention_measure_semantic_digest(r)
 
@@ -54,8 +57,8 @@ def test_measure_equalizes_per_frame_spatial_mass_and_preserves_unit_regions():
 
 def test_equal_grid_is_unit_measure_and_native_identity():
     r = m.build_attention_measure_request(
-        q_rows=30,
-        kv_rows=30,
+        q_rows=18,
+        kv_rows=18,
         video_start=6,
         temporal=2,
         prefix_t=1,
@@ -63,10 +66,10 @@ def test_equal_grid_is_unit_measure_and_native_identity():
         prefix_grid=(2, 3),
     )
     assert r["segments"] == [
-        {"start": 0, "stop": 30, "mass_num": 1, "mass_den": 1},
+        {"start": 0, "stop": 18, "mass_num": 1, "mass_den": 1},
     ]
     assert m.nonunit_exact_key_ranges(r) == ()
-    assert torch.equal(m.materialize_key_log_measure(r), torch.zeros(30, dtype=torch.float64))
+    assert torch.equal(m.materialize_key_log_measure(r), torch.zeros(18, dtype=torch.float64))
 
 
 def test_subdivision_invariance_and_post_scale_bias():
@@ -77,9 +80,7 @@ def test_subdivision_invariance_and_post_scale_bias():
     bias = m.materialize_key_log_measure(request())
     dense = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, scale=0.37)
     for chunk in (1, 2, 7, 16, 29, 64):
-        streamed = m.dense_weighted_attention_reference(
-            q, k, v, key_log_measure=bias, scale=0.37, key_chunk_size=chunk
-        )
+        streamed = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, scale=0.37, key_chunk_size=chunk)
         torch.testing.assert_close(streamed, dense, rtol=1e-12, atol=1e-12)
 
     q0 = torch.zeros(1, 1, 1, 2, dtype=torch.float64)
@@ -133,18 +134,14 @@ def test_masks_and_all_masked_rows_are_stable_and_chunk_invariant():
     mask[..., 1, :] = False
     mask[..., 2, 9:] = False
     dense = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=mask)
-    streamed = m.dense_weighted_attention_reference(
-        q, k, v, key_log_measure=bias, mask=mask, key_chunk_size=7
-    )
+    streamed = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=mask, key_chunk_size=7)
     torch.testing.assert_close(streamed, dense, rtol=1e-12, atol=1e-12)
     assert torch.count_nonzero(dense[..., 1, :]) == 0
 
     additive = torch.zeros(1, 1, 4, 30, dtype=torch.float64)
     additive[..., 3, 10:] = float("-inf")
     dense = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=additive)
-    streamed = m.dense_weighted_attention_reference(
-        q, k, v, key_log_measure=bias, mask=additive, key_chunk_size=11
-    )
+    streamed = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=additive, key_chunk_size=11)
     torch.testing.assert_close(streamed, dense, rtol=1e-12, atol=1e-12)
 
     bad_additive = additive.clone()

@@ -332,6 +332,79 @@ def test_mixed_attention_measure_is_off_by_default():
     assert mixed_attention_measure_contract(plan, video_start=5, sequence_rows=83) is None
 
 
+def test_weighted_measure_profile_publishes_generic_all_row_contract():
+    from h3_flow_regenerate.attention_measure import ATTENTION_MEASURE_KEY
+    from h3_flow_regenerate.mixed_grid import (
+        MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
+        _mixed_attention_measure_key,
+    )
+
+    plan = MixedGridPlan(
+        torch.randn(1, 24, 12, 56, 76),
+        62,
+        40,
+        54,
+        measure_profile=MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
+    )
+    contract = mixed_attention_measure_contract(plan, video_start=16261, sequence_rows=56029)
+    assert contract == {
+        "api": 1,
+        "operator": "key_log_measure",
+        "normalization": "h3_native_source_carrier_v1",
+        "topology": "mixed_grid_low_suffix",
+        "q_rows": 56029,
+        "kv_rows": 56029,
+        "video_start": 16261,
+        "temporal": 62,
+        "prefix_t": 12,
+        "source_grid": [20, 27],
+        "prefix_grid": [28, 38],
+        "segments": [
+            {"start": 0, "stop": 16261, "mass_num": 1, "mass_den": 1},
+            {"start": 16261, "stop": 29029, "mass_num": 135, "mass_den": 266},
+            {"start": 29029, "stop": 56029, "mass_num": 1, "mass_den": 1},
+        ],
+        "coordinate_policy": "minimax_h3_native_frame_grid_v1",
+    }
+    assert _mixed_attention_measure_key(plan) == ATTENTION_MEASURE_KEY
+
+
+def test_released_attention_measure_flag_remains_legacy_representative_profile():
+    from h3_flow_regenerate.mixed_grid import (
+        MIXED_GRID_MEASURE_KEY,
+        MIXED_GRID_MEASURE_PROFILE_LEGACY,
+        _mixed_attention_measure_key,
+        mixed_attention_measure_profile,
+    )
+
+    plan = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6, attention_measure=True)
+    contract = mixed_attention_measure_contract(plan, video_start=5, sequence_rows=83)
+    assert mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_LEGACY
+    assert contract["mode"] == "prefix_kv_stratified_subsample"
+    assert contract["expected_kv_rows"] == 47
+    assert _mixed_attention_measure_key(plan) == MIXED_GRID_MEASURE_KEY
+
+
+def test_invalid_or_ambiguous_measure_profile_fails_closed():
+    from h3_flow_regenerate.mixed_grid import (
+        MIXED_GRID_MEASURE_PROFILE_LEGACY,
+        mixed_attention_measure_profile,
+    )
+
+    bad = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6, measure_profile="unknown")
+    with pytest.raises(ValueError, match="unsupported Mixed-Grid measure profile"):
+        mixed_attention_measure_profile(bad)
+    ambiguous = MixedGridPlan(
+        torch.randn(1, 24, 2, 8, 12),
+        7,
+        4,
+        6,
+        measure_profile=MIXED_GRID_MEASURE_PROFILE_LEGACY,
+    )
+    with pytest.raises(ValueError, match="requires the released attention_measure control"):
+        mixed_attention_measure_profile(ambiguous)
+
+
 def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, native):
 
     from h3_flow_regenerate.metrics import H3FlowMetrics

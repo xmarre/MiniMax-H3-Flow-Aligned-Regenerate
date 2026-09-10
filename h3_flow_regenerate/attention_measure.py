@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from math import gcd
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import torch
 
@@ -57,15 +58,11 @@ def _canonical_segments(raw_segments: Sequence[Mapping[str, Any]], *, kv_rows: i
         stop = _require_int(f"segments[{index}].stop", raw.get("stop"), minimum=0)
         if start != cursor or stop <= start or stop > kv_rows:
             raise ValueError("attention_measure_v1 segments must be sorted, contiguous, nonempty, and in range")
-        mass_num, mass_den = _normalize_ratio(
-            raw.get("mass_num"), raw.get("mass_den"), name=f"segments[{index}]"
-        )
+        mass_num, mass_den = _normalize_ratio(raw.get("mass_num"), raw.get("mass_den"), name=f"segments[{index}]")
         if segments and (segments[-1]["mass_num"], segments[-1]["mass_den"]) == (mass_num, mass_den):
             segments[-1]["stop"] = stop
         else:
-            segments.append(
-                {"start": start, "stop": stop, "mass_num": mass_num, "mass_den": mass_den}
-            )
+            segments.append({"start": start, "stop": stop, "mass_num": mass_num, "mass_den": mass_den})
         cursor = stop
     if cursor != kv_rows:
         raise ValueError("attention_measure_v1 segments must cover every key row exactly once")
@@ -181,9 +178,10 @@ def validate_attention_measure_request(request: Mapping[str, Any]) -> dict[str, 
             raise ValueError("every protected-prefix key row must use source_rows/prefix_rows spatial measure")
         if not overlap and ratio != (1, 1):
             raise ValueError("non-prefix conditioning and generated-suffix key rows must retain unit measure")
-        if segment["start"] < weighted_start < segment["stop"] or segment["start"] < weighted_stop < segment["stop"]:
-            if expected_ratio != (1, 1):
-                raise ValueError("measure segment boundaries must align with the protected-prefix key interval")
+        if (
+            segment["start"] < weighted_start < segment["stop"] or segment["start"] < weighted_stop < segment["stop"]
+        ) and expected_ratio != (1, 1):
+            raise ValueError("measure segment boundaries must align with the protected-prefix key interval")
 
     return {
         "api": ATTENTION_MEASURE_API,
