@@ -199,6 +199,13 @@ def mixed_mod_segments(segments, plan, va, vb):
     return result
 
 
+def _mixed_transformer_options(options, mixed_layout):
+    """Publish the block's actual mixed layout without mutating carrier options."""
+    block_options = dict(options)
+    block_options["minimax_h3_layout"] = mixed_layout
+    return block_options
+
+
 def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=None, minimax_payload=None, **kwargs):
     options = transformer_options or {}
     contract = options.get(MIXED_GRID_KEY)
@@ -296,7 +303,7 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                 rope_freqs=cached["rope"],
                 mod_segments=mixed_mod_segments(args["mod_segments"], plan, va, vb),
             )
-            block_options = dict(args["transformer_options"])
+            block_options = _mixed_transformer_options(args["transformer_options"], mixed_layout)
             if "vdn_h3_external_sequence_v1" in block_options:
                 raise RuntimeError("mixed-grid found an already-owned VDN external sequence")
             block_options["vdn_h3_external_sequence_v1"] = {
