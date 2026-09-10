@@ -39,6 +39,25 @@ def _patch_kwargs():
     }
 
 
+def test_generic_target_input_ui_defaults_match_shipped_workflow():
+    required = H3ProgressiveTargetInputHandoff.INPUT_TYPES()["required"]
+
+    assert required["source_mode"][1]["default"] == "scale"
+    assert required["source_scale"][1]["default"] == 0.70
+    assert required["source_width"][1]["default"] == 864
+    assert required["source_height"][1]["default"] == 640
+    assert required["handoff_coordinate"][1]["default"] == 0.35
+    assert required["handoff_selection"][1]["default"] == "fixed"
+    assert required["guidance_mode"][1]["default"] == "direction+temporal"
+    assert required["direction_weight"][1]["default"] == 0.25
+    assert required["acceleration_weight"][1]["default"] == 0.25
+    assert required["consistency_weight"][1]["default"] == 0.25
+    assert required["low_frequency_cutoff"][1]["default"] == 0.25
+    assert required["temporal_weight"][1]["default"] == 0.20
+    assert required["handoff_transfer"][0] == ["bicubic", "learned_3d"]
+    assert required["handoff_transfer"][1]["default"] == "learned_3d"
+
+
 def test_target_sparse_node_sets_opt_in_exact_prefix_mode(monkeypatch):
     captured = {}
 
@@ -84,6 +103,13 @@ def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semant
     assert progressive.source_scale is None
     assert progressive.source_latent_h is not None
     assert progressive.source_latent_w is not None
+
+
+def test_target_sparse_retains_bicubic_compatibility_default():
+    required = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()["required"]
+
+    assert required["handoff_transfer"][0] == ["bicubic", "learned_3d"]
+    assert required["handoff_transfer"][1]["default"] == "bicubic"
 
 
 def test_mixed_grid_ui_defaults_match_canonical_workflow():
