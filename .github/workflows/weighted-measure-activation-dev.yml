@@ -25,7 +25,32 @@ jobs:
           cache: pip
 
       - name: Apply candidate
-        run: python tools/apply_weighted_measure_activation.py
+        run: |
+          python tools/apply_weighted_measure_activation.py
+          python - <<'PY'
+          from pathlib import Path
+
+          measure = Path("h3_flow_regenerate/attention_measure.py")
+          text = measure.read_text(encoding="utf-8")
+          old = "from typing import Any, Mapping, Sequence\n"
+          new = "from collections.abc import Mapping, Sequence\nfrom typing import Any\n"
+          if text.count(old) != 1:
+              raise SystemExit("attention_measure import anchor changed")
+          text = text.replace(old, new, 1)
+          old = '''        if segment["start"] < weighted_start < segment["stop"] or segment["start"] < weighted_stop < segment["stop"]:\n            if expected_ratio != (1, 1):\n                raise ValueError("measure segment boundaries must align with the protected-prefix key interval")\n'''
+          new = '''        if (\n            segment["start"] < weighted_start < segment["stop"]\n            or segment["start"] < weighted_stop < segment["stop"]\n        ) and expected_ratio != (1, 1):\n            raise ValueError("measure segment boundaries must align with the protected-prefix key interval")\n'''
+          if text.count(old) != 1:
+              raise SystemExit("attention_measure boundary anchor changed")
+          measure.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          mixed = Path("h3_flow_regenerate/mixed_grid.py")
+          text = mixed.read_text(encoding="utf-8")
+          old = '''                    attention_measure_prefix_kv_rows_after=(\n                        plan.prefix_rows\n                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_WEIGHTED\n                        else plan.prefix_t * plan.source_rows\n                    ),\n                    attention_measure_kv_rows_before=mixed_layout.seq_len,\n                    attention_measure_kv_rows_after=(\n                        mixed_layout.seq_len\n                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_WEIGHTED\n                        else (layout.seq_len if measure_contract is not None else mixed_layout.seq_len)\n                    ),\n'''
+          new = '''                    attention_measure_prefix_kv_rows_after=(\n                        plan.prefix_t * plan.source_rows\n                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_LEGACY\n                        else plan.prefix_rows\n                    ),\n                    attention_measure_kv_rows_before=mixed_layout.seq_len,\n                    attention_measure_kv_rows_after=(\n                        layout.seq_len\n                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_LEGACY\n                        else mixed_layout.seq_len\n                    ),\n'''
+          if text.count(old) != 1:
+              raise SystemExit("mixed-grid measure metrics anchor changed")
+          mixed.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Install test dependencies
         run: |
@@ -34,7 +59,7 @@ jobs:
 
       - name: Format and validate candidate
         run: |
-          ruff format h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
+          ruff format h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
           ruff check h3_flow_regenerate/mixed_grid.py h3_flow_regenerate/attention_measure.py tests/test_mixed_grid.py tests/test_attention_measure.py
           python -m compileall -q h3_flow_regenerate tests/test_mixed_grid.py tests/test_attention_measure.py
           pytest -q tests/test_attention_measure.py tests/test_mixed_grid.py
@@ -43,6 +68,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
+          git add h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
           git commit -m "Activate explicit all-row Mixed-Grid measure profile"
           git push origin HEAD:mirror/mixed-grid-measure-implementation-20260910
