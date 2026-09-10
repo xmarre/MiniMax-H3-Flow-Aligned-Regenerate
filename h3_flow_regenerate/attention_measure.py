@@ -37,7 +37,39 @@ def _normalize_ratio(num: Any, den: Any, *, name: str) -> tuple[int, int]:
     num = _require_int(f"{name}.mass_num", num, minimum=1)
     den = _require_int(f"{name}.mass_den", den, minimum=1)
     common = gcd(num, den)
-    return num // common, den // common
+    num //= common
+    den //= common
+    log_mass = math.log(num) - math.log(den)
+    if not math.isfinite(log_mass):
+        raise ValueError(f"{name} derives a non-finite key-log-measure")
+    return num, den
+
+
+def _canonical_segments(raw_segments: Sequence[Mapping[str, Any]], *, kv_rows: int) -> list[dict[str, int]]:
+    if not raw_segments:
+        raise TypeError("attention_measure_v1 segments must be a nonempty list")
+    segments: list[dict[str, int]] = []
+    cursor = 0
+    for index, raw in enumerate(raw_segments):
+        if not isinstance(raw, Mapping):
+            raise TypeError(f"segments[{index}] must be a mapping")
+        start = _require_int(f"segments[{index}].start", raw.get("start"), minimum=0)
+        stop = _require_int(f"segments[{index}].stop", raw.get("stop"), minimum=0)
+        if start != cursor or stop <= start or stop > kv_rows:
+            raise ValueError("attention_measure_v1 segments must be sorted, contiguous, nonempty, and in range")
+        mass_num, mass_den = _normalize_ratio(
+            raw.get("mass_num"), raw.get("mass_den"), name=f"segments[{index}]"
+        )
+        if segments and (segments[-1]["mass_num"], segments[-1]["mass_den"]) == (mass_num, mass_den):
+            segments[-1]["stop"] = stop
+        else:
+            segments.append(
+                {"start": start, "stop": stop, "mass_num": mass_num, "mass_den": mass_den}
+            )
+        cursor = stop
+    if cursor != kv_rows:
+        raise ValueError("attention_measure_v1 segments must cover every key row exactly once")
+    return segments
 
 
 def build_attention_measure_request(
@@ -63,6 +95,19 @@ def build_attention_measure_request(
     source_rows = source_h * source_w
     prefix_rows = prefix_h * prefix_w
     prefix_stop = video_start + prefix_t * prefix_rows
+    raw_segments = []
+    if video_start:
+        raw_segments.append({"start": 0, "stop": video_start, "mass_num": 1, "mass_den": 1})
+    raw_segments.append(
+        {
+            "start": video_start,
+            "stop": prefix_stop,
+            "mass_num": source_rows,
+            "mass_den": prefix_rows,
+        }
+    )
+    if prefix_stop < kv_rows:
+        raw_segments.append({"start": prefix_stop, "stop": kv_rows, "mass_num": 1, "mass_den": 1})
     return validate_attention_measure_request(
         {
             "api": ATTENTION_MEASURE_API,
@@ -76,16 +121,7 @@ def build_attention_measure_request(
             "prefix_t": prefix_t,
             "source_grid": [source_h, source_w],
             "prefix_grid": [prefix_h, prefix_w],
-            "segments": [
-                {"start": 0, "stop": video_start, "mass_num": 1, "mass_den": 1},
-                {
-                    "start": video_start,
-                    "stop": prefix_stop,
-                    "mass_num": source_rows,
-                    "mass_den": prefix_rows,
-                },
-                {"start": prefix_stop, "stop": kv_rows, "mass_num": 1, "mass_den": 1},
-            ],
+            "segments": raw_segments,
             "coordinate_policy": ATTENTION_MEASURE_COORDINATE_POLICY,
         }
     )
@@ -122,8 +158,8 @@ def validate_attention_measure_request(request: Mapping[str, Any]) -> dict[str, 
     prefix_grid = _require_grid("prefix_grid", request.get("prefix_grid"))
     source_rows = math.prod(source_grid)
     prefix_rows = math.prod(prefix_grid)
-    if source_rows >= prefix_rows:
-        raise ValueError("Mixed-Grid measure requires a strictly denser protected-prefix spatial grid")
+    if source_rows > prefix_rows:
+        raise ValueError("Mixed-Grid source spatial measure cannot exceed the protected-prefix grid")
     expected_rows = video_start + prefix_t * prefix_rows + (temporal - prefix_t) * source_rows
     if q_rows != expected_rows:
         raise ValueError(
@@ -131,22 +167,9 @@ def validate_attention_measure_request(request: Mapping[str, Any]) -> dict[str, 
         )
 
     raw_segments = request.get("segments")
-    if not isinstance(raw_segments, (list, tuple)) or not raw_segments:
+    if not isinstance(raw_segments, (list, tuple)):
         raise TypeError("attention_measure_v1 segments must be a nonempty list")
-    segments: list[dict[str, int]] = []
-    cursor = 0
-    for index, raw in enumerate(raw_segments):
-        if not isinstance(raw, Mapping):
-            raise TypeError(f"segments[{index}] must be a mapping")
-        start = _require_int(f"segments[{index}].start", raw.get("start"), minimum=0)
-        stop = _require_int(f"segments[{index}].stop", raw.get("stop"), minimum=0)
-        if start != cursor or stop <= start or stop > kv_rows:
-            raise ValueError("attention_measure_v1 segments must be sorted, contiguous, nonempty, and in range")
-        mass_num, mass_den = _normalize_ratio(raw.get("mass_num"), raw.get("mass_den"), name=f"segments[{index}]")
-        segments.append({"start": start, "stop": stop, "mass_num": mass_num, "mass_den": mass_den})
-        cursor = stop
-    if cursor != kv_rows:
-        raise ValueError("attention_measure_v1 segments must cover every key row exactly once")
+    segments = _canonical_segments(raw_segments, kv_rows=kv_rows)
 
     weighted_start = video_start
     weighted_stop = video_start + prefix_t * prefix_rows
@@ -159,7 +182,8 @@ def validate_attention_measure_request(request: Mapping[str, Any]) -> dict[str, 
         if not overlap and ratio != (1, 1):
             raise ValueError("non-prefix conditioning and generated-suffix key rows must retain unit measure")
         if segment["start"] < weighted_start < segment["stop"] or segment["start"] < weighted_stop < segment["stop"]:
-            raise ValueError("measure segment boundaries must align with the protected-prefix key interval")
+            if expected_ratio != (1, 1):
+                raise ValueError("measure segment boundaries must align with the protected-prefix key interval")
 
     return {
         "api": ATTENTION_MEASURE_API,
@@ -193,11 +217,11 @@ def materialize_key_log_measure(
     """Materialize the O(T) natural-log key measure described by the request."""
 
     canonical = validate_attention_measure_request(request)
-    if not (dtype.is_floating_point or dtype.is_complex):
+    if not dtype.is_floating_point:
         raise TypeError("key log measure requires a floating-point dtype")
     bias = torch.empty(canonical["kv_rows"], device=device, dtype=dtype)
     for segment in canonical["segments"]:
-        value = math.log(segment["mass_num"] / segment["mass_den"])
+        value = math.log(segment["mass_num"]) - math.log(segment["mass_den"])
         bias[segment["start"] : segment["stop"]] = value
     return bias
 
@@ -235,6 +259,10 @@ def _apply_mask(scores: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor
         raise ValueError("attention mask and scores must be on the same device")
     if mask.dtype == torch.bool:
         return scores.masked_fill(~mask, float("-inf"))
+    if not mask.dtype.is_floating_point:
+        raise TypeError("attention mask must be boolean or floating point")
+    if torch.isnan(mask).any() or torch.isposinf(mask).any():
+        raise ValueError("additive attention mask cannot contain NaN or +inf")
     return scores + mask.to(dtype=scores.dtype)
 
 
@@ -265,8 +293,8 @@ def dense_weighted_attention_reference(
         raise ValueError("incompatible q/k/v attention dimensions")
     if key_log_measure.device != q.device or key_log_measure.ndim != 1 or key_log_measure.shape[0] != k.shape[-2]:
         raise ValueError("key_log_measure must be a device-matched vector with one entry per K/V row")
-    if not torch.isfinite(key_log_measure).all():
-        raise ValueError("key_log_measure must be finite")
+    if not key_log_measure.dtype.is_floating_point or not torch.isfinite(key_log_measure).all():
+        raise ValueError("key_log_measure must be finite floating point")
     if scale is None:
         scale = q.shape[-1] ** -0.5
     scale = float(scale)
