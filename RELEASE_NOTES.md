@@ -26,7 +26,7 @@ suffix_geometric_bridge = true
 
 `acceleration_weight` and `consistency_weight` are staged values under this configuration. With `guidance_mode=direction+temporal`, the runtime uses direction and temporal guidance; acceleration is active only in `direction+acceleration`, and consistency is active only in `downsample_consistency`.
 
-Direct Python calls to the Mixed-Grid node now resolve the same transfer/seam defaults instead of inheriting the Target-Sparse method fallbacks. Target-Sparse retains its previous bicubic / geometric-bridge-off direct-call behavior.
+Target-Sparse continues to inherit the generic Target Input handoff schema and learned-transfer default; its exact-prefix path remains distinct and does not expose the Mixed-Grid-only geometric bridge. Direct Mixed-Grid calls additionally resolve `suffix_geometric_bridge=true`, matching the node UI.
 
 ## Learned 3D example workflow
 
@@ -49,7 +49,7 @@ Historical benchmark documents retain the settings that were actually measured; 
 
 ## Regression coverage
 
-Workflow tests now verify the learned-upscaler provider node, exact provider wiring, all shipped target-input values, and API/LiteGraph link integrity. Mixed-Grid node tests verify the complete canonical UI default set and the direct-call learned-transfer/seam defaults.
+Workflow tests now verify the learned-upscaler provider node, exact provider wiring, all shipped target-input values, and API/LiteGraph link integrity. Progressive node tests verify the inherited Target Input/Target-Sparse learned-transfer default, the complete Mixed-Grid UI default set, and direct-call transfer/seam semantics.
 
 ## Distribution
 
