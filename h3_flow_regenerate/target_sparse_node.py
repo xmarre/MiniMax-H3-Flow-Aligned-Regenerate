@@ -33,16 +33,6 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         import copy
 
         inputs = copy.deepcopy(super().INPUT_TYPES())
-        inputs["required"]["handoff_transfer"] = (
-            ["bicubic", "learned_3d"],
-            {
-                "default": "bicubic",
-                "tooltip": (
-                    "Target-Sparse retains its dependency-free compatibility default. learned_3d is available "
-                    "for controlled comparisons, while Mixed-Grid requires learned_3d."
-                ),
-            },
-        )
         inputs["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
@@ -78,11 +68,11 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         suffix_dc_bridge=True,
         suffix_geometric_bridge=None,
     ):
-        # Keep direct Python calls consistent with each node's ComfyUI defaults.
-        # Target-Sparse retains its compatibility defaults; Mixed-Grid requires
-        # learned transfer and ships the validated seam-repair path enabled.
+        # Keep direct Python calls consistent with the inherited Target Input
+        # handoff default. Mixed-Grid additionally enables its validated seam
+        # repair by default; Target-Sparse does not expose that control.
         if handoff_transfer is None:
-            handoff_transfer = "learned_3d" if self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix" else "bicubic"
+            handoff_transfer = "learned_3d"
         if suffix_geometric_bridge is None:
             suffix_geometric_bridge = self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
 
