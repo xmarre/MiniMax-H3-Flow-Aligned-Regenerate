@@ -29,6 +29,18 @@ def test_schema_is_complete_normalized_and_deterministic():
         dict(reversed(list(r.items())))
     )
 
+    # Segment spelling is not numerical identity. Equivalent adjacent segments
+    # canonicalize before hashing so receipt/history identity stays stable.
+    subdivided = {**r, "segments": [
+        {"start": 0, "stop": 2, "mass_num": 7, "mass_den": 7},
+        {"start": 2, "stop": 6, "mass_num": 1, "mass_den": 1},
+        {"start": 6, "stop": 12, "mass_num": 2, "mass_den": 4},
+        {"start": 12, "stop": 18, "mass_num": 1, "mass_den": 2},
+        {"start": 18, "stop": 30, "mass_num": 1, "mass_den": 1},
+    ]}
+    assert m.validate_attention_measure_request(subdivided)["segments"] == r["segments"]
+    assert m.attention_measure_semantic_digest(subdivided) == m.attention_measure_semantic_digest(r)
+
 
 def test_measure_equalizes_per_frame_spatial_mass_and_preserves_unit_regions():
     b = m.materialize_key_log_measure(request())
@@ -38,6 +50,23 @@ def test_measure_equalizes_per_frame_spatial_mass_and_preserves_unit_regions():
     assert float(w[6:18].sum()) == pytest.approx(6.0)
     assert float(w[18:24].sum()) == pytest.approx(6.0)
     assert float(w[24:30].sum()) == pytest.approx(6.0)
+
+
+def test_equal_grid_is_unit_measure_and_native_identity():
+    r = m.build_attention_measure_request(
+        q_rows=30,
+        kv_rows=30,
+        video_start=6,
+        temporal=2,
+        prefix_t=1,
+        source_grid=(2, 3),
+        prefix_grid=(2, 3),
+    )
+    assert r["segments"] == [
+        {"start": 0, "stop": 30, "mass_num": 1, "mass_den": 1},
+    ]
+    assert m.nonunit_exact_key_ranges(r) == ()
+    assert torch.equal(m.materialize_key_log_measure(r), torch.zeros(30, dtype=torch.float64))
 
 
 def test_subdivision_invariance_and_post_scale_bias():
@@ -83,6 +112,8 @@ def test_boolean_integer_and_nonfinite_inputs_rejected():
     bad["segments"][1]["mass_num"] = False
     with pytest.raises(TypeError):
         m.validate_attention_measure_request(bad)
+    with pytest.raises(TypeError):
+        m.materialize_key_log_measure(r, dtype=torch.int64)
     bias = m.materialize_key_log_measure(r)
     bias[0] = float("nan")
     q = torch.zeros(1, 1, 1, 2)
@@ -107,6 +138,19 @@ def test_masks_and_all_masked_rows_are_stable_and_chunk_invariant():
     )
     torch.testing.assert_close(streamed, dense, rtol=1e-12, atol=1e-12)
     assert torch.count_nonzero(dense[..., 1, :]) == 0
+
+    additive = torch.zeros(1, 1, 4, 30, dtype=torch.float64)
+    additive[..., 3, 10:] = float("-inf")
+    dense = m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=additive)
+    streamed = m.dense_weighted_attention_reference(
+        q, k, v, key_log_measure=bias, mask=additive, key_chunk_size=11
+    )
+    torch.testing.assert_close(streamed, dense, rtol=1e-12, atol=1e-12)
+
+    bad_additive = additive.clone()
+    bad_additive[..., 0, 0] = float("nan")
+    with pytest.raises(ValueError):
+        m.dense_weighted_attention_reference(q, k, v, key_log_measure=bias, mask=bad_additive)
 
 
 def test_equal_unit_measure_matches_unweighted_softmax():
