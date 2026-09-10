@@ -113,7 +113,6 @@ def test_native_spatial_temporal_and_nonvideo_contract(native, prefix_t):
     assert torch.equal(positions[va : va + plan.prefix_rows], target.position_ids[va : va + plan.prefix_rows])
     assert torch.equal(positions[va + plan.prefix_rows :], low.position_ids[va + prefix_t * plan.source_rows :])
     assert len(positions) == va + plan.mixed_rows
-    # Actual low-grid rows round-trip, independently of target prefix density.
     suffix = torch.randn(1, 24, 15 - prefix_t, 4, 6)
     prefix_rows = native.patchify_video(plan.prefix)
     mixed = torch.cat((prefix_rows, native.patchify_video(suffix)))
@@ -199,7 +198,7 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
         if stage == "probe":
             clean = latent.clone()
             clean_video, _ = unpack_streams(clean, latent_shapes)
-            clean_video[:, :, :2] = -999  # Must be replaced by original context before learned transfer.
+            clean_video[:, :, :2] = -999
             return clean
         return latent / (1 - sigmas[-1])
 
@@ -226,7 +225,6 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
         assert torch.equal(_run_progressive(*args), packed)
         assert calls == ["low", "probe", "high"]
         original_video, _ = unpack_streams(packed, shapes)
-        # Provider records its real input; authoritative context replaces the poisoned probe carrier.
         context = resize_spatial_5d(original_video[:, :, :2], 4, 6, mode="bicubic")
         assert torch.equal(provider.calls[0][0][:, :, :2], context)
     assert MIXED_GRID_KEY not in guider.model_options["transformer_options"]
@@ -333,13 +331,11 @@ def test_mixed_attention_measure_is_off_by_default():
 
 
 def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, native):
-
     from h3_flow_regenerate.metrics import H3FlowMetrics
     from h3_flow_regenerate.mixed_grid import MIXED_GRID_KEY, mixed_diffusion_wrapper
 
     root = Path(os.environ.get("COMFYUI_ROOT", Path(__file__).resolve().parents[2] / "comfy"))
     monkeypatch.syspath_prepend(str(root))
-    # Load the real native forward path with CPU operations, not a copied model.
     import comfy.cli_args
 
     comfy.cli_args.args.cpu = True
@@ -371,7 +367,6 @@ def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, n
     class MixingBlock(torch.nn.Module):
         def forward(self, h, t_emb, segments, rope, transformer_options):
             seen.append((h.clone(), segments, rope.shape[1]))
-            # Deliberate global dependence proves which prefix conditions the suffix.
             return h + h.mean(0)
 
     model.blocks = torch.nn.ModuleList([MixingBlock(), MixingBlock()])
@@ -395,7 +390,6 @@ def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, n
         class_obj = model
 
         def __call__(self, x, timestep, context, options, **kwargs):
-            # Simulate Spectrum's actual last-block observation outside Flow.
             existing = options["patches_replace"]["dit"][("double_block", 1)]
 
             def observe(args, extra):
@@ -449,4 +443,4 @@ def test_representation_bridge_ui_is_mixed_grid_only():
     mixed = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_geometric_bridge" in mixed.get("optional", {})
     spec = mixed["optional"]["suffix_geometric_bridge"]
-    assert spec[1]["default"] is False
+    assert spec[1]["default"] is True
