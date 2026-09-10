@@ -50,6 +50,14 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit("mixed-grid measure metrics anchor changed")
           mixed.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          tests = Path("tests/test_attention_measure.py")
+          text = tests.read_text(encoding="utf-8")
+          old = '''def test_equal_grid_is_unit_measure_and_native_identity():\n    r = m.build_attention_measure_request(\n        q_rows=30,\n        kv_rows=30,\n        video_start=6,\n        temporal=2,\n        prefix_t=1,\n        source_grid=(2, 3),\n        prefix_grid=(2, 3),\n    )\n    assert r["segments"] == [\n        {"start": 0, "stop": 30, "mass_num": 1, "mass_den": 1},\n    ]\n    assert m.nonunit_exact_key_ranges(r) == ()\n    assert torch.equal(m.materialize_key_log_measure(r), torch.zeros(30, dtype=torch.float64))\n'''
+          new = '''def test_equal_grid_is_unit_measure_and_native_identity():\n    r = m.build_attention_measure_request(\n        q_rows=18,\n        kv_rows=18,\n        video_start=6,\n        temporal=2,\n        prefix_t=1,\n        source_grid=(2, 3),\n        prefix_grid=(2, 3),\n    )\n    assert r["segments"] == [\n        {"start": 0, "stop": 18, "mass_num": 1, "mass_den": 1},\n    ]\n    assert m.nonunit_exact_key_ranges(r) == ()\n    assert torch.equal(m.materialize_key_log_measure(r), torch.zeros(18, dtype=torch.float64))\n'''
+          if text.count(old) != 1:
+              raise SystemExit("equal-grid unit-measure fixture anchor changed")
+          tests.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
 
       - name: Install test dependencies
@@ -59,7 +67,7 @@ jobs:
 
       - name: Format and validate candidate
         run: |
-          ruff format h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
+          ruff format h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py tests/test_attention_measure.py
           ruff check h3_flow_regenerate/mixed_grid.py h3_flow_regenerate/attention_measure.py tests/test_mixed_grid.py tests/test_attention_measure.py
           python -m compileall -q h3_flow_regenerate tests/test_mixed_grid.py tests/test_attention_measure.py
           pytest -q tests/test_attention_measure.py tests/test_mixed_grid.py
@@ -68,6 +76,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py
+          git add h3_flow_regenerate/attention_measure.py h3_flow_regenerate/mixed_grid.py tests/test_mixed_grid.py tests/test_attention_measure.py
           git commit -m "Activate explicit all-row Mixed-Grid measure profile"
           git push origin HEAD:mirror/mixed-grid-measure-implementation-20260910
