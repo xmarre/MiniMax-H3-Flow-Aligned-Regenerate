@@ -33,6 +33,16 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         import copy
 
         inputs = copy.deepcopy(super().INPUT_TYPES())
+        inputs["required"]["handoff_transfer"] = (
+            ["bicubic", "learned_3d"],
+            {
+                "default": "bicubic",
+                "tooltip": (
+                    "Target-Sparse retains its dependency-free compatibility default. learned_3d is available "
+                    "for controlled comparisons, while Mixed-Grid requires learned_3d."
+                ),
+            },
+        )
         inputs["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
