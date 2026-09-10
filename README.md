@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For Continuum exact-prefix continuation, the recommended accelerated path is now **Progressive Mixed-Grid Continuum**: it keeps the authoritative target-grid prefix for H3 conditioning, generates the continuation suffix on a real lower-resolution grid, performs the learned 3D latent upscale, then starts a fresh full-grid refinement stage.
+For Continuum exact-prefix continuation, the recommended accelerated path is **Progressive Mixed-Grid Continuum**: it keeps the authoritative target-grid prefix for H3 conditioning, generates the continuation suffix on a real lower-resolution grid, performs the learned 3D latent upscale, then starts a fresh full-grid refinement stage.
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -22,22 +22,22 @@ git clone https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate.git
 
 Restart ComfyUI.
 
-The core package has no mandatory sibling-node dependency. The learned transfer paths require the companion [MiniMax H3 Latent Upscaler](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler).
+The core package has no mandatory sibling-node dependency. The intended learned-transfer workflows require the companion [MiniMax H3 Latent Upscaler-Plus](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus).
 
 ## Example workflows
 
-Basic dependency-minimal examples are under [`workflows/examples/`](workflows/examples/):
+Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — loadable target-input progressive workflow using `source_scale=0.70` and bicubic handoff;
-- [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — loadable source-input progressive workflow using a `1.20x` target handoff.
+- [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — target-input progressive workflow using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer through a connected 3D latent-upscaler provider;
+- [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
-Matching `.api.json` prompt graphs are included for API execution. These examples use stock MiniMax H3 loading/conditioning/decoding, `res_multistep`, and no Turbo LoRA or optional companion integrations. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
+The target-input example configures the provider with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. Both examples use stock MiniMax H3 loading/conditioning/decoding, `res_multistep`, and no Turbo LoRA. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
 
 ## Recommended Continuum path
 
 ### Progressive Mixed-Grid Continuum
 
-Use **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** for exact-prefix continuation when you want progressive speedup without giving up the learned latent upscale.
+Use **MiniMax H3 Progressive Mixed-Grid Continuum** for exact-prefix continuation when you want progressive speedup without giving up the learned latent upscale.
 
 The execution contract is:
 
@@ -48,15 +48,14 @@ real low-grid generated suffix
             |
        mixed H3 sequence
             |
-  optional attention-measure
- normalization in compatible
-     attention backend
+ attention-measure normalization
+ in a compatible attention backend
             |
        exact handoff probe
             |
       learned 3D upscale
             |
- optional exact-overlap repair
+ exact-overlap representation repair
             |
   restore exact target prefix
             |
@@ -67,7 +66,29 @@ The protected prefix is never spatially resized for transformer conditioning. Th
 
 When VDN is enabled, this path uses VDN external-sequence API 2 (`mixed_grid_low_suffix`) during the mixed low stage and returns to normal VDN execution for the fresh target-grid stage.
 
-The optional legacy-named `suffix_geometric_bridge` remains off by default. Its former source-space warp is retired after matched testing showed that every finite verified horizon simply moved the discontinuity to the corrected-to-untouched transition. The active experiment instead publishes an upstream K/V attention-measure contract and independently retains the target exact-overlap representation repair. A compatible ComfyUI-Sol-H3 revision is required to consume the K/V measure contract.
+The canonical Mixed-Grid defaults are:
+
+```text
+source_mode             = scale
+source_scale            = 0.70
+source_width            = 864
+source_height           = 640
+handoff_coordinate      = 0.35
+handoff_selection       = fixed
+guidance_mode           = direction+temporal
+direction_weight        = 0.25
+acceleration_weight     = 0.25
+consistency_weight      = 0.25
+low_frequency_cutoff    = 0.25
+temporal_weight         = 0.20
+handoff_transfer        = learned_3d
+suffix_dc_bridge        = true
+suffix_geometric_bridge = true
+```
+
+`acceleration_weight` and `consistency_weight` are staged values with these defaults: the current guidance implementation does not use them while `guidance_mode=direction+temporal`. Acceleration is active only in `direction+acceleration`; consistency is active only in `downsample_consistency`.
+
+The legacy-named `suffix_geometric_bridge` now defaults on after matched decoded-media validation of the v0.3.3 Mixed-Grid attention-measure framing repair. Its former source-space warp remains retired. The active path publishes the protected-prefix K/V attention-measure contract and applies the independent target exact-overlap representation reconciliation. A compatible ComfyUI-Sol-H3 revision is required to consume the K/V measure contract; without such a consumer, publishing the metadata does not itself alter attention.
 
 ### Suffix DC bridge
 
@@ -88,7 +109,7 @@ The bridge fixed the brief Continuum boundary flash in matched real-media testin
 
 **MiniMax H3 Continuum Decode Context** can be placed immediately before the normal Video VAE Decode. It supplies real future latent context to the native H3 temporal decoder at exact chunk joins while leaving accepted sampling latents, continuation state, masks, audio and the assembly plan unchanged.
 
-This solves a separate decoder-window boundary problem. It is not the mechanism that fixed the mixed-grid DC flash above and is not the current attention-measure experiment.
+This solves a separate decoder-window boundary problem. It is not the mechanism that fixed the mixed-grid DC flash or framing repair.
 
 See [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md).
 
@@ -106,7 +127,8 @@ That negative result is the reason the release recommendation is Mixed-Grid rath
 
 - Unprotected calls can run early H3 work privately at lower resolution before handing off to the target grid.
 - Exact protected video prefixes conservatively fall back to one ordinary target-grid sampler lifetime.
-- It supports `bicubic` and optional `learned_3d` clean-video transfer on the normal handoff path.
+- It supports `bicubic` and `learned_3d` clean-video transfer on the normal handoff path.
+- The bundled target-input workflow uses `learned_3d` with the companion provider; `bicubic` remains available as a compatibility/control path.
 - It does **not** expose or apply the Continuum `suffix_dc_bridge`.
 
 ## Flow-aligned two-pass guidance
@@ -136,7 +158,7 @@ Use:
 
 For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 
-`direction` remains the conservative guidance recommendation. `direction+acceleration`, `direction+temporal`, `downsample_consistency`, resolution-aware sigma remapping and the Attention Lab remain research controls.
+`direction` remains the conservative guidance recommendation for the explicit two-pass path. The progressive Mixed-Grid node has its own canonical defaults above. `direction+acceleration`, `direction+temporal`, `downsample_consistency`, resolution-aware sigma remapping and the Attention Lab remain available as research controls outside that default configuration.
 
 ## Nodes
 
@@ -150,7 +172,7 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum `refine_state` version of flow-aligned guidance. |
 | **MiniMax H3 Progressive Handoff** | Generic source-sized progressive resolution handoff. |
 | **MiniMax H3 Progressive Handoff (Target Input)** | Generic target-input progressive handoff; exact protected prefixes fall back to the target grid. |
-| **MiniMax H3 Progressive Mixed-Grid Continuum [Experimental]** | Recommended accelerated exact-prefix Continuum path: real low-grid suffix, target-grid prefix conditioning, learned 3D transfer, DC bridge and fresh target-grid refine. |
+| **MiniMax H3 Progressive Mixed-Grid Continuum** | Recommended accelerated exact-prefix Continuum path: real low-grid suffix, target-grid prefix conditioning, learned 3D transfer, both seam repairs and fresh target-grid refine. |
 | **MiniMax H3 Continuum Decode Context** | Supplies right context to the native temporal VAE at exact Continuum joins. |
 
 ### Research/control nodes
@@ -187,8 +209,8 @@ DiffAid, Untwisting RoPE, Spectrum and VDN are optional integrations.
 Important contracts:
 
 - **Spectrum:** actual/forecast provenance and sampler-history boundaries are preserved. Fresh target-grid stages start with an actual H3 evaluation where required.
-- **VDN-H3:** Mixed-Grid uses API 2 only during the external mixed sequence and resumes ordinary VDN behavior at full target resolution. The optional attention-measure experiment does not change API 2 or VDN's learned gate ownership.
-- **Sol-H3:** a compatible revision can consume the independent Mixed-Grid attention-measure contract by keeping all Q rows while normalizing only the denser protected-prefix K/V sampling density.
+- **VDN-H3:** Mixed-Grid uses API 2 only during the external mixed sequence and resumes ordinary VDN behavior at full target resolution. The attention-measure repair does not change API 2 or VDN's learned gate ownership.
+- **Sol-H3:** a compatible revision consumes the independent Mixed-Grid attention-measure contract by keeping all Q rows while normalizing only the denser protected-prefix K/V sampling density.
 - **SA-Solver/PECE, SEEDS, ER-SDE, Euler/RES:** sampler objects are preserved; separate sampler lifetimes are used where geometry/history boundaries require them.
 - **Audio:** progressive spatial transfer affects video only. Audio is never spatially resized.
 - **Learned upscaler:** Mixed-Grid requires `learned_3d`; the generic Target Input node can use either `bicubic` or `learned_3d`.
@@ -199,13 +221,11 @@ The paths with the strongest real-media support are:
 
 - two-pass flow-aligned guidance with the learned upscale/refine workflow;
 - generic Progressive Handoff for unprotected calls;
-- **Mixed-Grid Continuum with learned 3D transfer and the suffix DC bridge** for exact-prefix continuation.
+- **Mixed-Grid Continuum with learned 3D transfer, suffix DC correction, and attention-measure/exact-overlap seam repair** for exact-prefix continuation.
 
-The Mixed-Grid path has been exercised on a real RTX Pro 6000 workflow with VDN API 2, Spectrum + SA-PECE, DiffAid, Untwisting RoPE, learned 3D transfer, exact handoff probing and multiple Continuum boundaries. The previously observed brief boundary flashing is fixed by the suffix DC bridge in that tested workflow.
+The previously observed brief tone/flash boundary is fixed by the suffix DC bridge. The later smaller whole-frame shrink/top-edge reveal was traced to unequal Mixed-Grid protected-prefix versus suffix K/V sampling density and was removed in the matched v0.3.3 validation with the companion Sol-H3 attention-measure consumer. The source-space affine/trajectory correction family remains retired because finite corrections only moved the discontinuity to the corrected-to-untouched transition.
 
-A smaller whole-frame shrink/top-edge reveal remains under investigation. The source-space affine/trajectory correction family is now retired: `00318` exhausted every directly authorized finite horizon and every accepted boundary correction failed at a corrected-to-untouched transition, so the runtime deliberately returns the original source tensor instead of inventing a fade or extrapolation.
-
-The current off-by-default experiment moves farther upstream. For a representative matched geometry, protected prefix frames carry `1064` K/V rows while genuine source-grid suffix frames carry `540` (`~1.97x` spatial row density). Flow now publishes an independent attention-measure contract so a compatible Sol-H3 backend can keep every Q row while deterministically reducing only protected-prefix K/V to source-grid spatial density. The target exact-overlap representation reconciliation remains a second independent stage. Code-side contracts are green; decoded media is still required before this is treated as a fix.
+For the validated representative geometry, protected prefix frames carried `1064` K/V rows while genuine source-grid suffix frames carried `540` (`~1.97x` spatial row density). The repair preserves every Q row and normalizes only protected-prefix K/V to the source-grid spatial measure; the target exact-overlap representation reconciliation remains a separate stage.
 
 Target-Sparse is deliberately not promoted because its no-latent-upscale design produced cascading decoded-media defects in testing.
 
@@ -215,7 +235,7 @@ Quality and speed still depend on prompt, references, geometry, sampler, Spectru
 
 - [docs/USAGE.md](docs/USAGE.md) — wiring and parameter details
 - [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) — Mixed-Grid contract, VDN/Sol ownership and diagnostics
-- [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md) — framing-defect evidence chain, retired source warp and upstream attention-measure experiment
+- [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md) — framing-defect evidence chain, retired source warp and attention-measure repair
 - [docs/TARGET_SPARSE_CONTINUUM.md](docs/TARGET_SPARSE_CONTINUUM.md) — Target-Sparse research path
 - [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md) — decoder right-context helper
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — decoded-media validation ledger

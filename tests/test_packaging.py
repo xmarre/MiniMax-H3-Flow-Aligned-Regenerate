@@ -72,14 +72,14 @@ def test_progressive_nodes_expose_all_selectable_guidance_controls():
         assert names.index("temporal_weight") > names.index("low_frequency_cutoff")
 
 
-def test_target_input_progressive_exposes_optional_learned_handoff_without_changing_default():
+def test_target_input_progressive_defaults_to_learned_handoff_with_bicubic_control():
     from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
     from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
     for node in (H3ProgressiveTargetInputHandoff, H3ProgressiveTargetSparseHandoff):
         target_schema = node.INPUT_TYPES()
         assert target_schema["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
-        assert target_schema["required"]["handoff_transfer"][1]["default"] == "bicubic"
+        assert target_schema["required"]["handoff_transfer"][1]["default"] == "learned_3d"
         assert target_schema["optional"]["learned_upscaler"] == ("H3_LATENT_UPSCALER",)
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
 
