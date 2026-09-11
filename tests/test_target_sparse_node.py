@@ -153,6 +153,9 @@ def test_mixed_grid_ui_defaults_match_canonical_workflow():
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
     assert required["suffix_dc_bridge"][1]["default"] is True
     assert inputs["optional"]["suffix_geometric_bridge"][1]["default"] is True
+    profile = inputs["optional"]["attention_measure_profile"]
+    assert profile[0] == ["weighted_measure_v1", "legacy_representative_v1", "off"]
+    assert profile[1]["default"] == "weighted_measure_v1"
 
 
 def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_seam_repair(monkeypatch):
@@ -179,7 +182,32 @@ def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_seam_repair(mon
     assert progressive.transfer_mode == "learned_3d"
     assert progressive.suffix_dc_bridge is True
     assert progressive.suffix_geometric_bridge is True
+    # Direct calls that omit the new field intentionally retain serialized legacy semantics.
+    assert progressive.attention_measure_profile is None
     assert progressive.learned_upscaler is kwargs["learned_upscaler"]
+
+
+def test_mixed_grid_explicit_weighted_profile_reaches_runtime_config(monkeypatch):
+    captured = {}
+
+    def fake_patch_flow_model(model, **kwargs):
+        captured.update(kwargs)
+        return model, object()
+
+    monkeypatch.setattr("h3_flow_regenerate.target_sparse_node.patch_flow_model", fake_patch_flow_model)
+    kwargs = _patch_kwargs()
+    kwargs.update(
+        handoff_transfer="learned_3d",
+        learned_upscaler=_LearnedProvider(),
+        attention_measure_profile="weighted_measure_v1",
+    )
+
+    H3ProgressiveMixedGridHandoff().patch(**kwargs)
+
+    progressive = captured["progressive"]
+    assert progressive.exact_prefix_mode == "mixed_grid_low_suffix"
+    assert progressive.attention_measure_profile == "weighted_measure_v1"
+    assert progressive.suffix_geometric_bridge is True
 
 
 def test_suffix_dc_bridge_is_exposed_only_on_continuum_specific_progressive_nodes():
@@ -187,6 +215,9 @@ def test_suffix_dc_bridge_is_exposed_only_on_continuum_specific_progressive_node
     sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_inputs["required"]
+    assert "attention_measure_profile" not in target_inputs.get("optional", {})
+    assert "attention_measure_profile" not in sparse_inputs.get("optional", {})
+    assert "attention_measure_profile" in mixed_inputs["optional"]
     for inputs in (sparse_inputs, mixed_inputs):
         bridge = inputs["required"]["suffix_dc_bridge"]
         assert bridge[0] == "BOOLEAN"
