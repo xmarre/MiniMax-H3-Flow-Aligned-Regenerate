@@ -22,6 +22,7 @@ from .handoff import (
     build_handoff_state,
     deterministic_video_noise,
     select_handoff_index,
+    upscale_learned_clean_video,
 )
 from .metrics import H3FlowMetrics
 from .mixed_grid import (
@@ -44,6 +45,12 @@ from .seam_diagnostics import (
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
 from .source_trajectory_bridge import disabled_source_trajectory_bridge_metrics
+from .state_transport import (
+    HANDOFF_STATE_POLICY_LEGACY,
+    HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+    resolve_handoff_state_policy,
+    transport_velocity_bicubic_v1,
+)
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 from .tone_bridge import (
     apply_suffix_dc_bridge,
@@ -1278,6 +1285,10 @@ def _run_progressive(
         and _has_exact_video_protection(denoise_mask, input_shapes)
     )
     mixed_plan = None
+    requested_state_policy = HANDOFF_STATE_POLICY_LEGACY
+    if isinstance(config, ProgressiveTargetInputConfig) and config.exact_prefix_mode == "mixed_grid_low_suffix":
+        requested_state_policy = resolve_handoff_state_policy(getattr(config, "handoff_state_policy", None))
+    effective_state_policy = requested_state_policy if mixed else HANDOFF_STATE_POLICY_LEGACY
     if (
         not mixed
         and isinstance(config, ProgressiveTargetInputConfig)
@@ -1395,6 +1406,8 @@ def _run_progressive(
                 suffix_source_grid_rope=True,
                 continuous_temporal_rope=True,
                 low_suffix_real_latent=True,
+                handoff_state_policy_requested=requested_state_policy,
+                handoff_state_policy=effective_state_policy,
                 attention_measure_requested=measure_profile != MIXED_GRID_MEASURE_PROFILE_OFF,
                 attention_measure_profile=measure_profile,
                 attention_measure_contract=(
@@ -1452,6 +1465,8 @@ def _run_progressive(
         input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
         source_shape=source_shapes[0],
         target_hw=(target_h, target_w),
+        handoff_state_policy_requested=(requested_state_policy if target_input else None),
+        handoff_state_policy=(effective_state_policy if target_input else None),
     )
 
     sampler_invocation_count = 0
@@ -1546,6 +1561,11 @@ def _run_progressive(
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        accepted_source_x0 = (
+            source_x0.detach().clone()
+            if mixed_plan is not None and effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1
+            else None
+        )
         if mixed_plan is not None:
             # Use all prefix frames as transient upscaler context. Its 3D attention
             # has no proven finite temporal receptive field permitting truncation.
@@ -1579,32 +1599,54 @@ def _run_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         splice_diagnostics: dict[str, Any] = {}
-        target_raw, target_shapes = build_handoff_state(
-            source_packed_state=source_raw,
-            source_x0_packed=source_x0,
-            source_shapes=source_shapes,
-            sigma=sigma,
-            target_h=target_h,
-            target_w=target_w,
-            seed=int(seed or 0) + config.seed_offset,
-            transfer_mode=config.transfer_mode,
-            learned_upscaler=getattr(config, "learned_upscaler", None),
-            transfer_metrics=transfer_metrics,
-        )
-        if mixed_plan is not None:
-            target_video, target_audio = unpack_streams(target_raw, target_shapes)
-            diagnostic_started = time.perf_counter()
-            diagnostic_noise = deterministic_video_noise(
-                tuple(target_video.shape),
-                seed=int(seed or 0) + config.seed_offset,
-                device=target_video.device,
-                dtype=target_video.dtype,
+        state_transport_metrics: dict[str, Any] = {
+            "handoff_state_policy": effective_state_policy,
+            "state_transport_applied": False,
+        }
+        diagnostic_noise = None
+
+        if mixed_plan is not None and effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+            if accepted_source_x0 is None:
+                raise RuntimeError("velocity state transport lost the immutable accepted probe clean")
+            provider_video, _provider_audio = unpack_streams(source_x0, source_shapes)
+            learned_clean, transfer_metrics = upscale_learned_clean_video(
+                provider_video,
+                target_h=target_h,
+                target_w=target_w,
+                learned_upscaler=getattr(config, "learned_upscaler", None),
             )
-            learned_clean = recover_conditional_clean_for_diagnostics(
-                target_video,
-                diagnostic_noise,
+            source_state_video, source_audio = unpack_streams(source_raw, source_shapes)
+            accepted_clean_video, _accepted_clean_audio = unpack_streams(accepted_source_x0, source_shapes)
+            target_audio = source_audio.clone()
+        else:
+            target_raw, target_shapes = build_handoff_state(
+                source_packed_state=source_raw,
+                source_x0_packed=source_x0,
+                source_shapes=source_shapes,
                 sigma=sigma,
+                target_h=target_h,
+                target_w=target_w,
+                seed=int(seed or 0) + config.seed_offset,
+                transfer_mode=config.transfer_mode,
+                learned_upscaler=getattr(config, "learned_upscaler", None),
+                transfer_metrics=transfer_metrics,
             )
+            if mixed_plan is not None:
+                target_video, target_audio = unpack_streams(target_raw, target_shapes)
+                diagnostic_noise = deterministic_video_noise(
+                    tuple(target_video.shape),
+                    seed=int(seed or 0) + config.seed_offset,
+                    device=target_video.device,
+                    dtype=target_video.dtype,
+                )
+                learned_clean = recover_conditional_clean_for_diagnostics(
+                    target_video,
+                    diagnostic_noise,
+                    sigma=sigma,
+                )
+
+        if mixed_plan is not None:
+            diagnostic_started = time.perf_counter()
             exact_prefix = mixed_plan.prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
             representation_requested = bool(getattr(config, "suffix_geometric_bridge", False))
             if representation_requested:
@@ -1634,30 +1676,32 @@ def _run_progressive(
                 int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
                 int(bridge_metrics["suffix_dc_bridge_corrected_tokens"]),
             )
-            if corrected_tokens:
-                target_video = map_clean_bridge_to_conditional_state(
-                    target_video,
-                    learned_clean,
-                    corrected_clean,
-                    sigma=sigma,
-                    prefix_t=mixed_plan.prefix_t,
-                    corrected_tokens=corrected_tokens,
-                )
             splice_diagnostics = measure_exact_prefix_splice(
                 learned_clean,
                 exact_prefix,
                 corrected_clean_video=corrected_clean,
             )
             splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
-            splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
-            splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
-                "affine_equivalent_pre_renoise" if dc_enabled else "disabled"
-            )
-            splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
-                "affine_equivalent_pre_renoise"
-                if representation_metrics["suffix_representation_bridge_accepted"]
-                else "disabled_or_noop"
-            )
+            if effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+                splice_diagnostics["splice_recovery"] = "retained_learned_clean"
+                splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
+                    "clean_reanchor_velocity_bicubic_v1" if dc_enabled else "disabled"
+                )
+                splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
+                    "clean_reanchor_velocity_bicubic_v1"
+                    if representation_metrics["suffix_representation_bridge_accepted"]
+                    else "disabled_or_noop"
+                )
+            else:
+                splice_diagnostics["splice_recovery"] = "inverse_conditional_renoise"
+                splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
+                    "affine_equivalent_pre_renoise" if dc_enabled else "disabled"
+                )
+                splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
+                    "affine_equivalent_pre_renoise"
+                    if representation_metrics["suffix_representation_bridge_accepted"]
+                    else "disabled_or_noop"
+                )
             binding.metrics.increment("mixed_grid_splice_diagnostic_runs")
             binding.metrics.event(
                 "mixed_grid_representation_bridge",
@@ -1667,10 +1711,30 @@ def _run_progressive(
                 **representation_metrics,
             )
 
-            if not corrected_tokens:
-                target_video = target_video.clone()
+            if effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+                target_video, state_transport_metrics = transport_velocity_bicubic_v1(
+                    source_state_video,
+                    accepted_clean_video,
+                    corrected_clean,
+                    prefix_t=mixed_plan.prefix_t,
+                )
+                binding.metrics.increment("mixed_grid_state_transport_runs")
+                binding.metrics.event("mixed_grid_state_transport", **state_transport_metrics)
+            else:
+                if corrected_tokens:
+                    target_video = map_clean_bridge_to_conditional_state(
+                        target_video,
+                        learned_clean,
+                        corrected_clean,
+                        sigma=sigma,
+                        prefix_t=mixed_plan.prefix_t,
+                        corrected_tokens=corrected_tokens,
+                    )
+                else:
+                    target_video = target_video.clone()
+
             target_video[:, :, : mixed_plan.prefix_t] = mixed_plan.prefix.to(target_video)
-            target_raw = pack_streams((target_video, target_audio))[0]
+            target_raw, target_shapes = pack_streams((target_video, target_audio))
             binding.metrics.event(
                 "mixed_grid_transfer",
                 learned_transfer_performed=True,
@@ -1678,6 +1742,7 @@ def _run_progressive(
                 upscaler_prefix_output_discarded=True,
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
+                handoff_state_policy_requested=requested_state_policy,
                 source_trajectory_bridge_requested=source_trajectory_metrics["source_trajectory_bridge_requested"],
                 source_trajectory_bridge_accepted=source_trajectory_metrics["source_trajectory_bridge_accepted"],
                 source_trajectory_bridge_reason=source_trajectory_metrics["source_trajectory_bridge_reason"],
@@ -1690,11 +1755,16 @@ def _run_progressive(
                 source_trajectory_residual_reduction_ratio=source_trajectory_metrics.get(
                     "source_trajectory_residual_reduction_ratio", [None] * 4
                 ),
+                **state_transport_metrics,
                 **representation_metrics,
                 **bridge_metrics,
                 **splice_diagnostics,
             )
-            del diagnostic_noise, learned_clean, corrected_clean
+            if diagnostic_noise is not None:
+                del diagnostic_noise
+            del learned_clean, corrected_clean
+        if accepted_source_x0 is not None:
+            del accepted_source_x0
         if config.transfer_mode == "learned_3d":
             binding.metrics.event(
                 "handoff_learned_upscale_wall",
@@ -1793,6 +1863,7 @@ def _run_progressive(
                 "mixed_grid_complete",
                 final_prefix_exact=True,
                 high_stage_first_call_actual=first_high_actual,
+                handoff_state_policy=effective_state_policy,
                 total_chunk_sampler_elapsed_ms=(time.perf_counter() - chunk_started) * 1000.0,
                 final_seam_lowpass_kernel=final_boundary["lowpass_kernel"],
                 final_seam_rms=final_boundary["seam_rms"],
@@ -1826,6 +1897,8 @@ def _run_progressive(
             conditioning_rebuilt_for_high_grid=True,
             transfer_mode=config.transfer_mode,
             input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
+            handoff_state_policy_requested=(requested_state_policy if target_input else None),
+            handoff_state_policy=(effective_state_policy if target_input else None),
         )
         return result
 
