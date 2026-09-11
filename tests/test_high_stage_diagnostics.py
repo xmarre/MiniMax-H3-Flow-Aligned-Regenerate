@@ -151,7 +151,7 @@ class _Executor:
 
 
 def _run_predict(monkeypatch, *, diagnostics: bool, actual: bool):
-    video, _audio, packed, shapes = _packed_fixture()
+    _video, _audio, packed, shapes = _packed_fixture()
     binding = FlowBinding(guidance=GuidanceConfig(mode="direction"))
     binding.active_guidance_run = object()
     guider = SimpleNamespace(
@@ -169,7 +169,9 @@ def _run_predict(monkeypatch, *, diagnostics: bool, actual: bool):
         transformer[HIGH_STAGE_DIAGNOSTIC_KEY] = _contract(shapes)
 
     def fake_guidance(video_x0, **_kwargs):
-        return video_x0 + 0.125
+        guided = video_x0.clone()
+        guided[:, :, 1:] += 0.125
+        return guided
 
     monkeypatch.setattr("h3_flow_regenerate.runtime.apply_guidance", fake_guidance)
     x = packed.clone()
@@ -182,16 +184,16 @@ def _run_predict(monkeypatch, *, diagnostics: bool, actual: bool):
         123,
     )
     assert torch.equal(x, x_before)
-    return result, binding.metrics, video, packed
+    return result, binding.metrics
 
 
 def test_predict_diagnostics_do_not_change_guidance_result_or_nfe_counters(monkeypatch):
-    diagnostic_result, diagnostic_metrics, _video, _packed = _run_predict(
+    diagnostic_result, diagnostic_metrics = _run_predict(
         monkeypatch,
         diagnostics=True,
         actual=True,
     )
-    baseline_result, baseline_metrics, _video, _packed = _run_predict(
+    baseline_result, baseline_metrics = _run_predict(
         monkeypatch,
         diagnostics=False,
         actual=True,
@@ -217,7 +219,7 @@ def test_predict_diagnostics_do_not_change_guidance_result_or_nfe_counters(monke
 
 
 def test_predict_diagnostics_record_forecast_without_changing_nfe_accounting(monkeypatch):
-    _result, metrics, _video, _packed = _run_predict(
+    _result, metrics = _run_predict(
         monkeypatch,
         diagnostics=True,
         actual=False,
