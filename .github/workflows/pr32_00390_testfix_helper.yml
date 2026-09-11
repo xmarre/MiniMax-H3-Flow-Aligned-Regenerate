@@ -1,0 +1,35 @@
+name: PR32 00390 test fix helper
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr32-00390-persistent-rebase-20260912
+          fetch-depth: 0
+      - name: Fix dtype-aware assertion and remove helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tests/test_representation_bridge.py")
+          text = path.read_text()
+          old = '''    expected = before[:, :, 4:].float() + bias\n    torch.testing.assert_close(corrected[:, :, 4:].float(), expected, rtol=0, atol=3e-3)'''
+          new = '''    expected = (before[:, :, 4:].float() + bias).to(dtype).float()\n    torch.testing.assert_close(corrected[:, :, 4:].float(), expected, rtol=0, atol=1e-6)'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one dtype assertion anchor, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          PY
+          git rm .github/workflows/pr32_00390_testfix_helper.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/test_representation_bridge.py
+          git commit -m "Match persistent rebase test to output dtype"
+          git push origin HEAD:mirror/pr32-00390-persistent-rebase-20260912
