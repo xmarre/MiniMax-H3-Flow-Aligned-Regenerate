@@ -4,7 +4,6 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import torch
-
 from test_handoff import FakeLearnedProvider
 from test_mixed_grid import inputs
 

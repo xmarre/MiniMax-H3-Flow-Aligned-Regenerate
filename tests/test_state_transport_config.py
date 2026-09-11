@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-
 from test_handoff import FakeLearnedProvider
 
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig

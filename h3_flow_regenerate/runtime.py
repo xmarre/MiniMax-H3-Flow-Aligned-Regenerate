@@ -1743,7 +1743,6 @@ def _run_progressive(
                 final_original_prefix_restored=True,
                 transfer_mode="learned_3d_suffix",
                 handoff_state_policy_requested=requested_state_policy,
-                handoff_state_policy=effective_state_policy,
                 source_trajectory_bridge_requested=source_trajectory_metrics["source_trajectory_bridge_requested"],
                 source_trajectory_bridge_accepted=source_trajectory_metrics["source_trajectory_bridge_accepted"],
                 source_trajectory_bridge_reason=source_trajectory_metrics["source_trajectory_bridge_reason"],
