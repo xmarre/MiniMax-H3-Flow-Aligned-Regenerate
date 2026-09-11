@@ -88,19 +88,29 @@ def test_call_provenance_uses_solver_metadata_and_fallbacks():
     assert forecast["solver_outer_step"] == 7
     assert contract["call_index"] == 2
     assert contract["last_call"] == forecast
+    assert contract["call_history"] == [actual, forecast]
 
 
 def test_boundary_recorders_are_read_only_and_callback_semantics_are_explicit():
     video, _audio, packed, shapes = _packed_fixture()
     contract = _contract(shapes)
-    fields = next_call_fields(
+    previous = next_call_fields(
         contract,
         sigma=0.5,
         coordinate=0.375,
         actual=True,
         solver_phase="single",
         solver_outer_step=0,
-        spectrum_step_id=None,
+        spectrum_step_id=11,
+    )
+    fields = next_call_fields(
+        contract,
+        sigma=0.25,
+        coordinate=0.2,
+        actual=False,
+        solver_phase="single",
+        solver_outer_step=1,
+        spectrum_step_id=12,
     )
     metrics = H3FlowMetrics()
     packed_before = packed.clone()
@@ -125,11 +135,18 @@ def test_boundary_recorders_are_read_only_and_callback_semantics_are_explicit():
         "mixed_grid_high_step_boundary",
     ]
     callback = metrics.events[-1].fields
-    assert callback["state_semantics"] == "pre_current_solver_update_post_previous_solver_update"
+    assert callback["event_call_fields_semantics"] == "current_callback_x0_prediction"
+    assert callback["state_semantics"] == "pre_current_solver_update_post_previous_outer_update"
     assert callback["state_after_previous_solver_step"] is True
     assert callback["completed_solver_step"] == 0
-    assert callback["x0_semantics"] == "sampler_callback_denoised"
-    assert callback["provenance"] == "actual"
+    assert callback["state_source_semantics"] == "last_model_call_of_previous_solver_outer"
+    assert callback["x0_semantics"] == "sampler_callback_denoised_after_model_wrappers"
+    assert callback["provenance"] == "forecast"
+    assert callback["x0_call_provenance"] == "forecast"
+    assert callback["x0_call_spectrum_step_id"] == 12
+    assert callback["state_source_call_provenance"] == "actual"
+    assert callback["state_source_call_logical_step"] == previous["logical_step"]
+    assert callback["state_source_call_spectrum_step_id"] == 11
     for name in (
         "state_seam_rms",
         "state_seam_lowpass_rms",
@@ -139,6 +156,104 @@ def test_boundary_recorders_are_read_only_and_callback_semantics_are_explicit():
         "x0_seam_spatial_mean_rms",
     ):
         assert torch.isfinite(torch.tensor(callback[name]))
+
+
+def test_callback_state_source_uses_last_call_of_previous_pece_outer():
+    _video, _audio, packed, shapes = _packed_fixture()
+    contract = make_high_stage_diagnostic_contract(
+        prefix_t=1,
+        shapes=shapes,
+        phases=((0, "predicted"), (1, "predicted"), (1, "corrected"), (2, "predicted")),
+        sampler="sample_sa_solver_pece",
+    )
+    next_call_fields(
+        contract,
+        sigma=0.8,
+        coordinate=0.7,
+        actual=True,
+        solver_phase="predicted",
+        solver_outer_step=0,
+        spectrum_step_id=20,
+    )
+    next_call_fields(
+        contract,
+        sigma=0.6,
+        coordinate=0.5,
+        actual=False,
+        solver_phase="predicted",
+        solver_outer_step=1,
+        spectrum_step_id=21,
+    )
+    corrected = next_call_fields(
+        contract,
+        sigma=0.6,
+        coordinate=0.5,
+        actual=True,
+        solver_phase="corrected",
+        solver_outer_step=1,
+        spectrum_step_id=22,
+    )
+    current = next_call_fields(
+        contract,
+        sigma=0.4,
+        coordinate=0.3,
+        actual=False,
+        solver_phase="predicted",
+        solver_outer_step=2,
+        spectrum_step_id=23,
+    )
+    metrics = H3FlowMetrics()
+
+    record_callback_boundary(
+        metrics,
+        step=2,
+        global_step=14,
+        x0=packed,
+        x=packed,
+        contract=contract,
+    )
+
+    callback = metrics.events[-1].fields
+    assert callback["provenance"] == current["provenance"]
+    assert callback["x0_call_solver_phase"] == "predicted"
+    assert callback["x0_call_spectrum_step_id"] == 23
+    assert callback["completed_solver_step"] == 1
+    assert callback["state_source_call_logical_step"] == corrected["logical_step"]
+    assert callback["state_source_call_solver_phase"] == "corrected"
+    assert callback["state_source_call_provenance"] == "actual"
+    assert callback["state_source_call_spectrum_step_id"] == 22
+
+
+def test_first_callback_state_has_no_previous_outer_source():
+    _video, _audio, packed, shapes = _packed_fixture()
+    contract = _contract(shapes)
+    next_call_fields(
+        contract,
+        sigma=0.5,
+        coordinate=0.375,
+        actual=True,
+        solver_phase="single",
+        solver_outer_step=0,
+        spectrum_step_id=None,
+    )
+    metrics = H3FlowMetrics()
+
+    record_callback_boundary(
+        metrics,
+        step=0,
+        global_step=11,
+        x0=packed,
+        x=packed,
+        contract=contract,
+    )
+
+    callback = metrics.events[-1].fields
+    assert callback["state_semantics"] == "high_stage_input_before_first_solver_update"
+    assert callback["state_after_previous_solver_step"] is False
+    assert callback["completed_solver_step"] is None
+    assert callback["state_source_semantics"] == "no_previous_solver_outer"
+    assert callback["state_source_call_logical_step"] is None
+    assert callback["x0_call_logical_step"] == 0
 
 
 class _Executor:
