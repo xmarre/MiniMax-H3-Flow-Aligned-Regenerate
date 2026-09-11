@@ -1676,7 +1676,7 @@ def _run_progressive(
 
         if mixed_plan is not None and effective_state_policy != HANDOFF_STATE_POLICY_LEGACY:
             if accepted_source_x0 is None:
-                raise RuntimeError("velocity state transport lost the immutable accepted probe clean")
+                raise RuntimeError("state transport lost the immutable accepted probe clean")
             provider_video, _provider_audio = unpack_streams(source_x0, source_shapes)
             learned_clean, transfer_metrics = upscale_learned_clean_video(
                 provider_video,
