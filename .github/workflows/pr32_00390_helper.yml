@@ -1,7 +1,7 @@
 name: PR32 00390 helper
 
 on:
-  workflow_dispatch:
+  push:
 
 permissions:
   contents: write
