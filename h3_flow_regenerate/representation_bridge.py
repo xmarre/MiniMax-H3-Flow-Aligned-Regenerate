@@ -1,25 +1,21 @@
 """Persistent target-grid suffix rebase for Mixed-Grid Continuum seams.
 
-Run 00390 separated the remaining boundary defect into two domains that must not
-be conflated:
+Runs 00390/00391 separated two independent handoff defects:
 
-* the learned 3D upscaler already has a prefix->suffix temporal seam; and
-* replacing its learned prefix with the caller-owned exact prefix adds a large
-  representation/DC mismatch even when same-time overlap geometry is aligned.
+* a persistent latent tone/DC domain offset between the authoritative exact
+  prefix and learned-upscaler suffix; and
+* a persistent spatial frame-coordinate jump that remains after the tone/DC
+  offset is removed.
 
-This diagnostic bridge therefore does not transplant the raw exact-minus-learned
-residual and does not apply a finite temporal repair. It may authorize two
-bounded, persistent suffix-wide rebases from directly observed overlap:
+The tone fix from v4 is retained unchanged. Geometry v5 no longer asks the
+learned/discarded upscaler prefix to define expected motion. Instead it learns a
+robust recent motion law from the caller-owned exact target-grid prefix, holds
+out the latest exact-prefix transition to validate that law, then measures the
+exact-prefix -> tone-corrected suffix boundary against the validated next-motion
+prediction. A bounded residual transform may be applied to the complete suffix.
 
-1. a per-channel constant latent bias, fitted on earlier same-time overlap and
-   validated on the latest held-out overlap token; and
-2. a single small affine coordinate-frame correction, inferred from the
-   learned representation's own recent temporal motion and validated at the
-   prefix->suffix boundary plus early suffix transitions.
-
-Any accepted correction is applied to the complete generated suffix. The exact
-prefix remains bit-identical. There is no fade/envelope, raw structural residual
-copy, RNG, model call, VAE call, or finite-horizon correction boundary.
+The bridge never modifies the protected prefix, transplants a raw structural
+residual, adds RNG/model/VAE work, or introduces a finite correction horizon.
 """
 
 from __future__ import annotations
@@ -32,9 +28,10 @@ import torch.nn.functional as F
 
 from .source_trajectory_bridge import register_pair
 
-_VERSION = 4
-_MODE = "persistent_suffix_rebase_v1"
+_VERSION = 5
+_MODE = "persistent_suffix_rebase_v2_authoritative_motion"
 _OVERLAP_FRAMES = 4
+_MOTION_FRAMES = 8
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 _MAX_LOG_SCALE = math.log(1.03)
@@ -109,6 +106,11 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
         "suffix_representation_bridge_tone_validation_dc_improvement": 0.0,
         "suffix_representation_bridge_geometry_accepted": False,
         "suffix_representation_bridge_geometry_reason": "disabled" if not requested else "not_applied",
+        "suffix_representation_bridge_geometry_training_transitions": 0,
+        "suffix_representation_bridge_geometry_holdout_identity_error": None,
+        "suffix_representation_bridge_geometry_holdout_aligned_error": None,
+        "suffix_representation_bridge_geometry_holdout_prediction_error": None,
+        "suffix_representation_bridge_geometry_holdout_prediction_gain": 0.0,
         "suffix_representation_bridge_geometry_expected_transform": (1.0, 1.0, 0.0, 0.0),
         "suffix_representation_bridge_geometry_observed_transform": (1.0, 1.0, 0.0, 0.0),
         "suffix_representation_bridge_geometry_residual_transform": (1.0, 1.0, 0.0, 0.0),
@@ -191,6 +193,29 @@ def _registration_transform(item: dict) -> tuple[float, float, float, float] | N
         return None
 
 
+def _theil_sen_predict(samples: list[tuple[int, float]], target_index: int) -> float:
+    if len(samples) < 2:
+        raise ValueError("motion predictor requires at least two samples")
+    slopes = [
+        (samples[j][1] - samples[i][1]) / (samples[j][0] - samples[i][0])
+        for i in range(len(samples))
+        for j in range(i + 1, len(samples))
+        if samples[j][0] != samples[i][0]
+    ]
+    slope = float(median(slopes)) if slopes else 0.0
+    intercept = float(median([value - slope * index for index, value in samples]))
+    return intercept + slope * int(target_index)
+
+
+def _predict_transform(samples: list[tuple[int, tuple[float, float, float, float]]], target_index: int):
+    signed = [(_index, _signed_transform(transform)) for _index, transform in samples]
+    values = tuple(
+        _theil_sen_predict([(index, vector[axis]) for index, vector in signed], target_index)
+        for axis in range(4)
+    )
+    return _from_signed(values)
+
+
 def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tensor) -> tuple[torch.Tensor | None, dict]:
     overlap = min(_OVERLAP_FRAMES, int(exact_prefix.shape[2]))
     report = {
@@ -209,9 +234,7 @@ def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tens
 
     learned = learned_prefix[:, :, -overlap:].float()
     exact = exact_prefix[:, :, -overlap:].float()
-    # Fit only a spatially constant per-channel translation. The earlier
-    # zero-mean residual transplant is intentionally not reconstructed here.
-    frame_bias = (exact - learned).mean(dim=(-2, -1))  # [B,C,T]
+    frame_bias = (exact - learned).mean(dim=(-2, -1))
     train = frame_bias[:, :, :-1]
     bias = train.median(dim=2).values[:, :, None, None, None]
     held_learned = learned[:, :, -1:]
@@ -245,14 +268,85 @@ def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tens
     return bias, report
 
 
+def _authoritative_motion_prediction(exact_prefix: torch.Tensor) -> tuple[tuple[float, float, float, float] | None, dict]:
+    identity = (1.0, 1.0, 0.0, 0.0)
+    prefix_t = int(exact_prefix.shape[2])
+    report = {
+        "accepted": False,
+        "reason": "insufficient_authoritative_motion_history",
+        "training_transitions": 0,
+        "holdout_identity_error": None,
+        "holdout_aligned_error": None,
+        "holdout_prediction_error": None,
+        "holdout_prediction_gain": 0.0,
+        "expected_transform": identity,
+    }
+    if prefix_t < 5:
+        return None, report
+
+    start = max(1, prefix_t - _MOTION_FRAMES + 1)
+    holdout_index = prefix_t - 1
+    samples: list[tuple[int, tuple[float, float, float, float]]] = []
+    for index in range(start, holdout_index):
+        item = register_pair(
+            exact_prefix[:, :, index - 1 : index],
+            exact_prefix[:, :, index : index + 1],
+        )
+        transform = _registration_transform(item)
+        identity_error = item.get("identity_error")
+        if transform is None or identity_error is None or not math.isfinite(float(identity_error)):
+            continue
+        samples.append((index, transform))
+
+    report["training_transitions"] = len(samples)
+    if len(samples) < 3 or samples[-1][0] - samples[0][0] < 2:
+        return None, report
+
+    holdout_prediction = _predict_transform(samples, holdout_index)
+    holdout = register_pair(
+        exact_prefix[:, :, holdout_index - 1 : holdout_index],
+        exact_prefix[:, :, holdout_index : holdout_index + 1],
+        comparison=holdout_prediction,
+    )
+    identity_error = holdout.get("identity_error")
+    aligned_error = holdout.get("aligned_error")
+    prediction_error = holdout.get("comparison_error")
+    if any(value is None or not math.isfinite(float(value)) for value in (identity_error, aligned_error, prediction_error)):
+        report["reason"] = "authoritative_motion_holdout_unavailable"
+        return None, report
+
+    identity_error = float(identity_error)
+    aligned_error = float(aligned_error)
+    prediction_error = float(prediction_error)
+    prediction_gain = (identity_error - prediction_error) / max(identity_error, 1e-12)
+    report.update(
+        holdout_identity_error=identity_error,
+        holdout_aligned_error=aligned_error,
+        holdout_prediction_error=prediction_error,
+        holdout_prediction_gain=prediction_gain,
+    )
+    if prediction_error > identity_error + 1e-8:
+        report["reason"] = "authoritative_motion_holdout_regression"
+        return None, report
+
+    expected = _predict_transform(samples + [(holdout_index, _registration_transform(holdout) or identity)], prefix_t)
+    report.update(accepted=True, reason="authoritative_motion_holdout_validated", expected_transform=expected)
+    return expected, report
+
+
 def _persistent_geometry_rebase(
-    learned_video: torch.Tensor,
-    prefix_t: int,
+    exact_prefix: torch.Tensor,
+    suffix: torch.Tensor,
 ) -> tuple[tuple[float, float, float, float] | None, dict]:
     identity = (1.0, 1.0, 0.0, 0.0)
     report = {
         "accepted": False,
-        "reason": "insufficient_motion_history",
+        "reason": "insufficient_authoritative_motion_history",
+        "training_transitions": 0,
+        "holdout_identity_error": None,
+        "holdout_aligned_error": None,
+        "holdout_prediction_error": None,
+        "holdout_prediction_gain": 0.0,
         "expected_transform": identity,
         "observed_transform": identity,
         "residual_transform": identity,
@@ -264,64 +358,59 @@ def _persistent_geometry_rebase(
         "median_transition_improvement": 0.0,
         "worst_internal_regression": 0.0,
     }
-    if prefix_t < 4 or int(learned_video.shape[2]) - prefix_t < 2 or min(learned_video.shape[-2:]) < 16:
+    if int(suffix.shape[2]) < 2 or min(suffix.shape[-2:]) < 16:
         return None, report
 
-    start = prefix_t - 4
-    recent = []
-    for index in range(start + 1, prefix_t):
-        item = register_pair(
-            learned_video[:, :, index - 1 : index],
-            learned_video[:, :, index : index + 1],
-        )
-        transform = _registration_transform(item)
-        if transform is None or float(item["aligned_error"]) > 0.30:
-            continue
-        recent.append(_signed_transform(transform))
-    if len(recent) < 3:
-        report["reason"] = "insufficient_usable_motion_history"
+    expected, motion = _authoritative_motion_prediction(exact_prefix)
+    report.update(
+        reason=motion["reason"],
+        training_transitions=int(motion["training_transitions"]),
+        holdout_identity_error=motion["holdout_identity_error"],
+        holdout_aligned_error=motion["holdout_aligned_error"],
+        holdout_prediction_error=motion["holdout_prediction_error"],
+        holdout_prediction_gain=float(motion["holdout_prediction_gain"]),
+        expected_transform=motion["expected_transform"],
+    )
+    if expected is None:
         return None, report
 
-    expected_signed = tuple(float(median(values)) for values in zip(*recent, strict=True))
-    expected = _from_signed(expected_signed)
     observed_item = register_pair(
-        learned_video[:, :, prefix_t - 1 : prefix_t],
-        learned_video[:, :, prefix_t : prefix_t + 1],
+        exact_prefix[:, :, -1:],
+        suffix[:, :, :1],
         comparison=expected,
     )
     observed = _registration_transform(observed_item)
     comparison_error = observed_item.get("comparison_error")
     if observed is None or comparison_error is None or not math.isfinite(float(comparison_error)):
-        report["reason"] = "boundary_registration_unavailable"
+        report["reason"] = "authoritative_boundary_registration_unavailable"
         return None, report
 
     residual = _residual_transform(observed, expected)
     signed = _signed_transform(residual)
-    h, w = map(int, learned_video.shape[-2:])
+    h, w = map(int, suffix.shape[-2:])
     floors = (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR)
     safety = (_MAX_LOG_SCALE, _MAX_LOG_SCALE, min(1.5, 0.025 * w), min(1.5, 0.025 * h))
     active = [abs(signed[axis]) >= floors[axis] for axis in range(4)]
-    report.update(expected_transform=expected, observed_transform=observed, residual_transform=residual)
+    report.update(observed_transform=observed, residual_transform=residual)
     if not any(active):
-        report["reason"] = "boundary_geometry_already_motion_consistent"
+        report["reason"] = "authoritative_boundary_motion_consistent"
         return None, report
     if any(active[axis] and abs(signed[axis]) > safety[axis] + 1e-8 for axis in range(4)):
-        report["reason"] = "boundary_geometry_exceeds_safety_bound"
+        report["reason"] = "authoritative_boundary_residual_exceeds_safety_bound"
         return None, report
 
     filtered = tuple(signed[axis] if active[axis] else 0.0 for axis in range(4))
     correction = _from_signed(filtered)
-    suffix = learned_video[:, :, prefix_t:]
     warped_suffix, _ = _warp_video_constant(suffix, correction)
     after_item = register_pair(
-        learned_video[:, :, prefix_t - 1 : prefix_t],
+        exact_prefix[:, :, -1:],
         warped_suffix[:, :, :1],
         comparison=expected,
     )
     before_error = float(comparison_error)
     after_error_value = after_item.get("comparison_error")
     if after_error_value is None or not math.isfinite(float(after_error_value)):
-        report["reason"] = "corrected_boundary_registration_unavailable"
+        report["reason"] = "corrected_authoritative_boundary_registration_unavailable"
         return None, report
     after_error = float(after_error_value)
     improvement = (before_error - after_error) / max(before_error, 1e-12)
@@ -332,7 +421,7 @@ def _persistent_geometry_rebase(
         improvement=max(0.0, improvement),
     )
     if improvement < _MIN_GEOMETRY_IMPROVEMENT:
-        report["reason"] = "boundary_geometry_gain_too_small"
+        report["reason"] = "authoritative_boundary_geometry_gain_too_small"
         return None, report
 
     transition_improvements: list[float] = []
@@ -365,7 +454,7 @@ def _persistent_geometry_rebase(
         report["reason"] = "persistent_geometry_internal_regression"
         return None, report
 
-    report.update(accepted=True, reason="persistent_motion_frame_rebase_authorized")
+    report.update(accepted=True, reason="authoritative_motion_suffix_rebase_authorized")
     return correction, report
 
 
@@ -406,15 +495,16 @@ def apply_suffix_representation_bridge(
     )
 
     tone_bias, tone = _persistent_tone_bias(learned_prefix, exact)
-    geometry_transform, geometry = _persistent_geometry_rebase(learned_clean_video, prefix_t)
-
     suffix = learned_clean_video[:, :, prefix_t:]
-    corrected_suffix = suffix
+    tone_corrected_suffix = suffix
+    if tone_bias is not None:
+        tone_corrected_suffix = suffix.float().add(tone_bias).to(learned_clean_video.dtype)
+
+    geometry_transform, geometry = _persistent_geometry_rebase(exact, tone_corrected_suffix)
+    corrected_suffix = tone_corrected_suffix
     out_of_bounds = 0.0
     if geometry_transform is not None:
         corrected_suffix, out_of_bounds = _warp_video_constant(corrected_suffix, geometry_transform)
-    if tone_bias is not None:
-        corrected_suffix = corrected_suffix.float().add(tone_bias).to(learned_clean_video.dtype)
 
     tone_accepted = bool(tone["accepted"])
     geometry_accepted = bool(geometry["accepted"])
@@ -430,11 +520,11 @@ def apply_suffix_representation_bridge(
         corrected = learned_clean_video
 
     if tone_accepted and geometry_accepted:
-        reason = "persistent_tone_and_geometry_rebase_authorized"
+        reason = "persistent_tone_and_authoritative_geometry_rebase_authorized"
     elif tone_accepted:
         reason = "persistent_tone_rebase_authorized"
     elif geometry_accepted:
-        reason = "persistent_geometry_rebase_authorized"
+        reason = "authoritative_geometry_rebase_authorized"
     else:
         reason = f"tone={tone['reason']};geometry={geometry['reason']}"
 
@@ -468,6 +558,11 @@ def apply_suffix_representation_bridge(
         suffix_representation_bridge_tone_validation_dc_improvement=float(tone["validation_dc_improvement"]),
         suffix_representation_bridge_geometry_accepted=geometry_accepted,
         suffix_representation_bridge_geometry_reason=geometry["reason"],
+        suffix_representation_bridge_geometry_training_transitions=int(geometry["training_transitions"]),
+        suffix_representation_bridge_geometry_holdout_identity_error=geometry["holdout_identity_error"],
+        suffix_representation_bridge_geometry_holdout_aligned_error=geometry["holdout_aligned_error"],
+        suffix_representation_bridge_geometry_holdout_prediction_error=geometry["holdout_prediction_error"],
+        suffix_representation_bridge_geometry_holdout_prediction_gain=float(geometry["holdout_prediction_gain"]),
         suffix_representation_bridge_geometry_expected_transform=geometry["expected_transform"],
         suffix_representation_bridge_geometry_observed_transform=geometry["observed_transform"],
         suffix_representation_bridge_geometry_residual_transform=geometry["residual_transform"],
