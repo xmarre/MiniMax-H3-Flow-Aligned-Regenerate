@@ -68,7 +68,7 @@ jobs:
       - name: Fetch pinned integration sources
         run: |
           git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyUI
-          git -C .contracts/ComfyUI checkout 1af040bf022569d7a890241c8dd79b296cda483f
+          git -C .contracts/ComfyUI checkout 1d48d9cf7bcecb6022a87b3cb13e0fb435bf9b8a
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
           git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
