@@ -11,12 +11,12 @@ import torch
 
 from h3_flow_regenerate.geometry import pack_streams
 from h3_flow_regenerate.mixed_grid import (
-    MixedGridPlan,
-    build_mixed_grid_plan,
-    carrier_layout,
     MIXED_GRID_MEASURE_PROFILE_LEGACY,
     MIXED_GRID_MEASURE_PROFILE_OFF,
     MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
+    MixedGridPlan,
+    build_mixed_grid_plan,
+    carrier_layout,
     mixed_attention_measure_contract,
     mixed_attention_measure_profile,
     mixed_mod_segments,

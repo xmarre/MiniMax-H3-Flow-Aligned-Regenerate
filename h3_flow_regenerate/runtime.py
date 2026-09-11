@@ -12,6 +12,7 @@ from typing import Any
 
 import torch
 
+from .attention_measure import ATTENTION_MEASURE_KEY
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import GuidanceConfig, GuidanceState, apply_guidance
@@ -23,7 +24,6 @@ from .handoff import (
     select_handoff_index,
 )
 from .metrics import H3FlowMetrics
-from .attention_measure import ATTENTION_MEASURE_KEY
 from .mixed_grid import (
     MIXED_GRID_KEY,
     MIXED_GRID_MEASURE_KEY,
@@ -1400,11 +1400,7 @@ def _run_progressive(
                 attention_measure_contract=(
                     ATTENTION_MEASURE_KEY
                     if measure_profile == MIXED_GRID_MEASURE_PROFILE_WEIGHTED
-                    else (
-                        MIXED_GRID_MEASURE_KEY
-                        if measure_profile == MIXED_GRID_MEASURE_PROFILE_LEGACY
-                        else None
-                    )
+                    else (MIXED_GRID_MEASURE_KEY if measure_profile == MIXED_GRID_MEASURE_PROFILE_LEGACY else None)
                 ),
             )
         source_shapes = list(target_shapes)

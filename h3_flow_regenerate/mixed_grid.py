@@ -125,11 +125,7 @@ def mixed_attention_measure_profile(plan: MixedGridPlan) -> str:
     if plan.measure_profile is None:
         # ``attention_measure`` is the pre-profile control. Preserve its released
         # representative semantics only when the new field is genuinely absent.
-        return (
-            MIXED_GRID_MEASURE_PROFILE_LEGACY
-            if plan.attention_measure
-            else MIXED_GRID_MEASURE_PROFILE_OFF
-        )
+        return MIXED_GRID_MEASURE_PROFILE_LEGACY if plan.attention_measure else MIXED_GRID_MEASURE_PROFILE_OFF
     profile = str(plan.measure_profile)
     if profile not in {
         MIXED_GRID_MEASURE_PROFILE_OFF,
