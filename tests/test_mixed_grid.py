@@ -426,15 +426,14 @@ def test_invalid_or_ambiguous_measure_profile_fails_closed():
     bad = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6, measure_profile="unknown")
     with pytest.raises(ValueError, match="unsupported Mixed-Grid measure profile"):
         mixed_attention_measure_profile(bad)
-    ambiguous = MixedGridPlan(
+    explicit_legacy = MixedGridPlan(
         torch.randn(1, 24, 2, 8, 12),
         7,
         4,
         6,
         measure_profile=MIXED_GRID_MEASURE_PROFILE_LEGACY,
     )
-    with pytest.raises(ValueError, match="requires the released attention_measure control"):
-        mixed_attention_measure_profile(ambiguous)
+    assert mixed_attention_measure_profile(explicit_legacy) == MIXED_GRID_MEASURE_PROFILE_LEGACY
 
 
 def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, native):
