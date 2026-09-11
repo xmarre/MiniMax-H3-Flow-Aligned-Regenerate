@@ -61,8 +61,8 @@ def test_stable_overlap_tone_bias_rebases_entire_suffix_without_structural_trans
     assert report["suffix_representation_bridge_corrected_tokens"] == 3
     assert report["suffix_representation_bridge_tone_validation_dc_improvement"] > 0.99
     assert torch.equal(corrected[:, :, :4], before[:, :, :4])
-    expected = before[:, :, 4:].float() + bias
-    torch.testing.assert_close(corrected[:, :, 4:].float(), expected, rtol=0, atol=3e-3)
+    expected = (before[:, :, 4:].float() + bias).to(dtype).float()
+    torch.testing.assert_close(corrected[:, :, 4:].float(), expected, rtol=0, atol=1e-6)
 
 
 def test_unstable_overlap_tone_bias_is_rejected(monkeypatch):
