@@ -6,7 +6,6 @@ import torch
 from h3_flow_regenerate.geometry import resize_spatial_5d
 from h3_flow_regenerate.state_transport import (
     HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
-    HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
     measure_state_transport_comparison_v1,
     resolve_handoff_state_policy,
     transport_endpoint_residual_bicubic_v1,
