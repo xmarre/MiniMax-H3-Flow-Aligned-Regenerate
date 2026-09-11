@@ -86,9 +86,10 @@ def test_call_provenance_uses_solver_metadata_and_fallbacks():
     assert forecast["provenance"] == "forecast"
     assert forecast["solver_phase"] == "forecast_phase"
     assert forecast["solver_outer_step"] == 7
-    assert contract["call_index"] == 2
-    assert contract["last_call"] == forecast
-    assert contract["call_history"] == [actual, forecast]
+    holder = contract["holder"]
+    assert holder.call_index == 2
+    assert holder.last_call == forecast
+    assert holder.call_history == [actual, forecast]
 
 
 def test_boundary_recorders_are_read_only_and_callback_semantics_are_explicit():
@@ -322,12 +323,17 @@ def test_predict_diagnostics_do_not_change_guidance_result_or_nfe_counters(monke
     diagnostic_kinds = [event.kind for event in diagnostic_metrics.events]
     assert diagnostic_kinds == [
         "model_call",
+        "mixed_grid_high_model_input_boundary",
         "mixed_grid_high_prediction_boundary",
         "mixed_grid_high_guided_boundary",
         "guidance",
     ]
-    prediction = diagnostic_metrics.events[1].fields
-    guided = diagnostic_metrics.events[2].fields
+    model_input = diagnostic_metrics.events[1].fields
+    prediction = diagnostic_metrics.events[2].fields
+    guided = diagnostic_metrics.events[3].fields
+    assert model_input["model_input_semantics"] == "post_native_inpaint_pre_prediction_executor"
+    assert model_input["captured_before_executor"] is True
+    assert model_input["provenance"] == "actual"
     assert prediction["provenance"] == "actual"
     assert guided["provenance"] == "actual"
     assert guided["seam_rms"] != prediction["seam_rms"]

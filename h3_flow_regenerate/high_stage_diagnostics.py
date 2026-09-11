@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -23,6 +24,23 @@ _CALL_PROVENANCE_FIELDS = (
 )
 
 
+@dataclass(slots=True)
+class HighStageDiagnosticHolder:
+    """Invocation-local provenance shared through Comfy model-options cloning."""
+
+    active: bool = False
+    call_index: int = 0
+    last_call: dict[str, Any] | None = None
+    call_history: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _holder(contract: dict[str, Any]) -> HighStageDiagnosticHolder:
+    holder = contract.get("holder")
+    if not isinstance(holder, HighStageDiagnosticHolder):
+        raise RuntimeError("high-stage diagnostic contract lost its shared provenance holder")
+    return holder
+
+
 def make_high_stage_diagnostic_contract(
     *,
     prefix_t: int,
@@ -35,14 +53,12 @@ def make_high_stage_diagnostic_contract(
     if len(shapes) != 2:
         raise ValueError("high-stage boundary diagnostics require packed video/audio shapes")
     return {
-        "api": 1,
+        "api": 2,
         "prefix_t": int(prefix_t),
         "shapes": tuple(tuple(int(value) for value in shape) for shape in shapes),
         "phases": tuple((int(outer), str(phase)) for outer, phase in phases),
         "sampler": str(sampler),
-        "call_index": 0,
-        "last_call": None,
-        "call_history": [],
+        "holder": HighStageDiagnosticHolder(),
     }
 
 
@@ -56,11 +72,16 @@ def high_stage_diagnostic_context(guider: Any, contract: dict[str, Any]):
         raise RuntimeError("high-stage boundary diagnostics require mutable transformer options")
     if HIGH_STAGE_DIAGNOSTIC_KEY in transformer:
         raise RuntimeError("nested high-stage boundary diagnostics are unsupported")
+    holder = _holder(contract)
+    if holder.active:
+        raise RuntimeError("high-stage diagnostic holder is already owned by another invocation")
+    holder.active = True
     transformer[HIGH_STAGE_DIAGNOSTIC_KEY] = contract
     try:
         yield contract
     finally:
         transformer.pop(HIGH_STAGE_DIAGNOSTIC_KEY, None)
+        holder.active = False
 
 
 def next_call_fields(
@@ -73,7 +94,8 @@ def next_call_fields(
     solver_outer_step: int | None,
     spectrum_step_id: int | None,
 ) -> dict[str, Any]:
-    call_index = int(contract.get("call_index", 0))
+    holder = _holder(contract)
+    call_index = int(holder.call_index)
     phases = tuple(contract.get("phases") or ())
     if call_index < len(phases):
         fallback_outer, fallback_phase = phases[call_index]
@@ -93,13 +115,10 @@ def next_call_fields(
         "prefix_t": int(contract["prefix_t"]),
         "sampler": str(contract["sampler"]),
     }
-    contract["call_index"] = call_index + 1
+    holder.call_index = call_index + 1
     stored = fields.copy()
-    contract["last_call"] = stored
-    history = contract.setdefault("call_history", [])
-    if not isinstance(history, list):
-        raise RuntimeError("high-stage diagnostic call history is not mutable")
-    history.append(stored)
+    holder.last_call = stored
+    holder.call_history.append(stored)
     return fields
 
 
@@ -113,25 +132,33 @@ def _boundary_fields(video: torch.Tensor, prefix_t: int, *, prefix: str = "") ->
     }
 
 
+def packed_boundary_fields(
+    packed: torch.Tensor,
+    contract: dict[str, Any],
+    *,
+    field_prefix: str = "",
+) -> dict[str, Any]:
+    shapes = [tuple(shape) for shape in contract["shapes"]]
+    video, _audio = unpack_streams(packed, shapes)
+    return _boundary_fields(video, int(contract["prefix_t"]), prefix=field_prefix)
+
+
 def _prefixed_call_fields(call: dict[str, Any] | None, *, prefix: str) -> dict[str, Any]:
     if not isinstance(call, dict):
         return {f"{prefix}{name}": None for name in _CALL_PROVENANCE_FIELDS}
     return {f"{prefix}{name}": call.get(name) for name in _CALL_PROVENANCE_FIELDS}
 
 
-def _state_source_call(contract: dict[str, Any], current_call: dict[str, Any] | None) -> dict[str, Any] | None:
+def _state_source_call(holder: HighStageDiagnosticHolder, current_call: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(current_call, dict):
         return None
     current_outer = current_call.get("solver_outer_step")
     if current_outer is None:
         return None
     current_outer = int(current_outer)
-    history = contract.get("call_history")
-    if not isinstance(history, list) or len(history) < 2:
+    if len(holder.call_history) < 2:
         return None
-    for candidate in reversed(history[:-1]):
-        if not isinstance(candidate, dict):
-            continue
+    for candidate in reversed(holder.call_history[:-1]):
         candidate_outer = candidate.get("solver_outer_step")
         if candidate_outer is not None and int(candidate_outer) < current_outer:
             return candidate
@@ -147,13 +174,7 @@ def record_packed_boundary(
     *,
     field_prefix: str = "",
 ) -> None:
-    shapes = [tuple(shape) for shape in contract["shapes"]]
-    video, _audio = unpack_streams(packed, shapes)
-    metrics.event(
-        kind,
-        **fields,
-        **_boundary_fields(video, int(contract["prefix_t"]), prefix=field_prefix),
-    )
+    metrics.event(kind, **fields, **packed_boundary_fields(packed, contract, field_prefix=field_prefix))
 
 
 def record_video_boundary(
@@ -181,9 +202,10 @@ def record_callback_boundary(
     x: torch.Tensor,
     contract: dict[str, Any],
 ) -> None:
-    current_call = contract.get("last_call")
+    holder = _holder(contract)
+    current_call = holder.last_call
     fields = dict(current_call) if isinstance(current_call, dict) else {}
-    state_source = _state_source_call(contract, current_call)
+    state_source = _state_source_call(holder, current_call)
     state_after_previous_outer = state_source is not None
     completed_outer = None if state_source is None else int(state_source["solver_outer_step"])
     fields.update(
