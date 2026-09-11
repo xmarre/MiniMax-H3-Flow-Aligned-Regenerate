@@ -1,0 +1,39 @@
+name: Format state transport
+
+on:
+  push:
+    branches:
+      - mirror/mixed-grid-state-transport-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/mixed-grid-state-transport-20260911
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install ruff==0.16.7
+      - name: Format touched Python files
+        run: |
+          ruff check --fix h3_flow_regenerate/handoff.py h3_flow_regenerate/runtime.py h3_flow_regenerate/state_transport.py h3_flow_regenerate/target_sparse_node.py tests/test_state_transport.py tests/test_state_transport_config.py tests/test_state_transport_native.py tests/test_state_transport_runtime.py tools/check_state_transport_contracts.py
+          ruff format h3_flow_regenerate/handoff.py h3_flow_regenerate/runtime.py h3_flow_regenerate/state_transport.py h3_flow_regenerate/target_sparse_node.py tests/test_state_transport.py tests/test_state_transport_config.py tests/test_state_transport_native.py tests/test_state_transport_runtime.py tools/check_state_transport_contracts.py
+          git diff --check
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            echo 'already formatted'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add h3_flow_regenerate/handoff.py h3_flow_regenerate/runtime.py h3_flow_regenerate/state_transport.py h3_flow_regenerate/target_sparse_node.py tests/test_state_transport.py tests/test_state_transport_config.py tests/test_state_transport_native.py tests/test_state_transport_runtime.py tools/check_state_transport_contracts.py
+          git commit -m 'Format state transport implementation'
+          git push origin HEAD:mirror/mixed-grid-state-transport-20260911
