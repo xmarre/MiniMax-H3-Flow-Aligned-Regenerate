@@ -68,6 +68,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         suffix_dc_bridge=True,
         suffix_geometric_bridge=None,
         attention_measure_profile=None,
+        handoff_state_policy=None,
     ):
         # Keep direct Python calls consistent with the inherited Target Input
         # handoff default. Mixed-Grid additionally enables its validated seam
@@ -87,6 +88,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 suffix_dc_bridge=bool(suffix_dc_bridge),
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
+                handoff_state_policy=handoff_state_policy,
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -101,6 +103,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 suffix_dc_bridge=bool(suffix_dc_bridge),
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
+                handoff_state_policy=handoff_state_policy,
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -129,11 +132,11 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
 class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     EXACT_PREFIX_MODE = "mixed_grid_low_suffix"
     DESCRIPTION = (
-        "Recommended accelerated exact-prefix Continuum path. It keeps the authoritative target-grid "
-        "protected-prefix conditioning, generates a genuine low-grid suffix, performs learned 3D latent "
-        "transfer, restores the exact prefix, and starts fresh target-grid refinement. Requires an H3 "
-        "latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. The validated "
-        "one-token DC bridge and Mixed-Grid seam-repair path are enabled by default."
+        "Accelerated exact-prefix Continuum path. It keeps the authoritative target-grid protected-prefix "
+        "conditioning, generates a genuine low-grid suffix, performs learned 3D clean-latent transfer, "
+        "restores the exact prefix, and starts fresh target-grid refinement. Requires an H3 latent-upscaler "
+        "provider and VDN external-sequence API v2 when VDN is enabled. State transport is an explicit "
+        "experimental policy and remains legacy re-noise by default until matched media acceptance."
     )
 
     @classmethod
@@ -174,8 +177,7 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                 "default": True,
                 "tooltip": (
                     "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
-                    "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
-                    "default after matched multi-boundary decoded-media validation removed the handoff flash."
+                    "calibration while keeping the authoritative Continuum prefix bit-exact."
                 ),
             },
         )
@@ -200,6 +202,18 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "Mixed-Grid attention measure. weighted_measure_v1 is the canonical all-Q/K/V operator and "
                     "publishes attention_measure_v1 independently of seam controls. legacy_representative_v1 "
                     "keeps the released reduced-K/V comparator; off is an explicit unweighted diagnostic control."
+                ),
+            },
+        )
+        optional["handoff_state_policy"] = (
+            ["legacy_renoise", "velocity_bicubic_v1"],
+            {
+                "default": "legacy_renoise",
+                "tooltip": (
+                    "Mixed-Grid handoff state policy. legacy_renoise preserves released behavior. "
+                    "velocity_bicubic_v1 re-anchors the learned corrected clean suffix while transporting "
+                    "the source sampler displacement X-C with a fixed framewise bicubic lift. This is an "
+                    "experimental controlled candidate until matched CUDA/media validation is accepted."
                 ),
             },
         )
