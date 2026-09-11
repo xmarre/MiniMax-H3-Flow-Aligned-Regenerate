@@ -38,6 +38,7 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
         dtype=torch.float32,
     ).reshape_as(source_clean_video)
     source_state_video = source_clean_video + source_displacement
+    realized_source_displacement = source_state_video - source_clean_video
     source_audio_state = torch.linspace(
         -0.4,
         0.5,
@@ -110,7 +111,7 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
 
             initial_state = sigma * noise + (1.0 - sigma) * latent
             initial_video, initial_audio = unpack_streams(initial_state, target_shapes)
-            lifted_displacement = resize_spatial_5d(source_displacement, 8, 12, mode="bicubic")
+            lifted_displacement = resize_spatial_5d(realized_source_displacement, 8, 12, mode="bicubic")
             expected_suffix = target_clean_video[:, :, 2:] + lifted_displacement[:, :, 2:]
             torch.testing.assert_close(initial_video[:, :, 2:], expected_suffix, rtol=2e-5, atol=2e-5)
             torch.testing.assert_close(initial_audio, source_audio_state, rtol=2e-5, atol=2e-5)
