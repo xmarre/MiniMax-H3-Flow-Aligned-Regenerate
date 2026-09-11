@@ -1,0 +1,78 @@
+name: Reconcile PR 32 diagnostic overlay
+
+on:
+  push:
+    branches:
+      - mirror/pr32-reconcile-20260911
+    paths:
+      - .github/workflows/reconcile-pr32.yml
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: ${{ !contains(github.event.head_commit.message, '[pr32-reconcile-result]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reapply diagnostic-only delta to current PR 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          old_diag=f0f0b1e5a54de6ff31a31a795a298ab9b1961dc7
+          git show "$old_diag:h3_flow_regenerate/high_stage_diagnostics.py" > h3_flow_regenerate/high_stage_diagnostics.py
+          git show "$old_diag:tests/test_high_stage_diagnostics.py" > tests/test_high_stage_diagnostics.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('h3_flow_regenerate/runtime.py')
+          source = path.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one runtime anchor, found {count}: {old[:100]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              '''from .handoff import (\n    ProgressiveHandoffConfig,\n    ProgressiveTargetInputConfig,\n    build_handoff_state,\n    deterministic_video_noise,\n    select_handoff_index,\n    upscale_learned_clean_video,\n)\nfrom .metrics import H3FlowMetrics\n''',
+              '''from .handoff import (\n    ProgressiveHandoffConfig,\n    ProgressiveTargetInputConfig,\n    build_handoff_state,\n    deterministic_video_noise,\n    select_handoff_index,\n    upscale_learned_clean_video,\n)\nfrom .high_stage_diagnostics import (\n    HIGH_STAGE_DIAGNOSTIC_KEY,\n    high_stage_diagnostic_context,\n    make_high_stage_diagnostic_contract,\n    next_call_fields,\n    record_callback_boundary,\n    record_packed_boundary,\n    record_video_boundary,\n)\nfrom .metrics import H3FlowMetrics\n''',
+          )
+
+          replace_once(
+              '''        active.call_index += 1\n\n    exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)\n''',
+              '''        active.call_index += 1\n\n    high_diag_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)\n    high_diag_fields = None\n    if stage == "high" and isinstance(high_diag_contract, dict):\n        if spectrum_active_step is not None:\n            _, diagnostic_phase, diagnostic_outer = spectrum_active_step\n            spectrum_step_id = getattr(spectrum_runtime, "active_step_id", None)\n        else:\n            diagnostic_phase = transformer.get(SPECTRUM_PHASE_KEY)\n            diagnostic_outer = transformer.get(SPECTRUM_OUTER_STEP_KEY)\n            spectrum_step_id = (\n                getattr(spectrum_runtime, "last_completed_step_id", None)\n                if spectrum_completed_here and spectrum_runtime is not None\n                else None\n            )\n        high_diag_fields = next_call_fields(\n            high_diag_contract,\n            sigma=sigma,\n            coordinate=coordinate,\n            actual=actual,\n            solver_phase=diagnostic_phase,\n            solver_outer_step=diagnostic_outer,\n            spectrum_step_id=spectrum_step_id,\n        )\n        record_packed_boundary(\n            binding.metrics,\n            "mixed_grid_high_prediction_boundary",\n            result,\n            high_diag_contract,\n            high_diag_fields,\n        )\n\n    exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)\n''',
+          )
+
+          replace_once(
+              '''        guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0\n        result, _ = pack_streams((guided_video, audio_x0))\n''',
+              '''        guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0\n        if high_diag_fields is not None and isinstance(high_diag_contract, dict):\n            record_video_boundary(\n                binding.metrics,\n                "mixed_grid_high_guided_boundary",\n                guided_video,\n                high_diag_contract,\n                high_diag_fields,\n            )\n        result, _ = pack_streams((guided_video, audio_x0))\n''',
+          )
+
+          replace_once(
+              '''        def high_callback(step, x0, x, _total):\n            if callback is not None:\n                return callback(index + step, x0, x, len(sigmas) - 1)\n            return None\n\n        high_started = time.perf_counter()\n''',
+              '''        def high_callback(step, x0, x, _total):\n            diagnostic_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)\n            if mixed_plan is not None and isinstance(diagnostic_contract, dict):\n                record_callback_boundary(\n                    binding.metrics,\n                    step=step,\n                    global_step=index + step,\n                    x0=x0,\n                    x=x,\n                    contract=diagnostic_contract,\n                )\n            if callback is not None:\n                return callback(index + step, x0, x, len(sigmas) - 1)\n            return None\n\n        high_diagnostic_context = contextlib.nullcontext(None)\n        if mixed_plan is not None:\n            high_diagnostic_context = high_stage_diagnostic_context(\n                guider,\n                make_high_stage_diagnostic_contract(\n                    prefix_t=mixed_plan.prefix_t,\n                    shapes=target_shapes,\n                    phases=_sampler_phases(sampler, high_sigmas),\n                    sampler=sampler_name(sampler),\n                ),\n            )\n\n        high_started = time.perf_counter()\n''',
+          )
+
+          replace_once(
+              '''        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):\n''',
+              '''        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), high_diagnostic_context:\n''',
+          )
+
+          path.write_text(source)
+          PY
+          python -m compileall -q h3_flow_regenerate/runtime.py h3_flow_regenerate/high_stage_diagnostics.py tests/test_high_stage_diagnostics.py
+          git diff --check
+          rm .github/workflows/reconcile-pr32.yml
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add -A
+          git commit -m 'Reconcile PR #32 diagnostics with current PR #30 [pr32-reconcile-result]'
+          git push origin HEAD:mirror/pr32-reconcile-20260911
