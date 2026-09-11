@@ -210,8 +210,7 @@ def _theil_sen_predict(samples: list[tuple[int, float]], target_index: int) -> f
 def _predict_transform(samples: list[tuple[int, tuple[float, float, float, float]]], target_index: int):
     signed = [(_index, _signed_transform(transform)) for _index, transform in samples]
     values = tuple(
-        _theil_sen_predict([(index, vector[axis]) for index, vector in signed], target_index)
-        for axis in range(4)
+        _theil_sen_predict([(index, vector[axis]) for index, vector in signed], target_index) for axis in range(4)
     )
     return _from_signed(values)
 
