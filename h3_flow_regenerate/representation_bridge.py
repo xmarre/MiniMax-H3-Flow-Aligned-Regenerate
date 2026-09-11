@@ -248,9 +248,7 @@ def _candidate_transform(
     if frame_improvements:
         ordered = sorted(frame_improvements)
         mid = len(ordered) // 2
-        median_improvement = (
-            ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
-        )
+        median_improvement = ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
         worst_regression = max(0.0, -min(frame_improvements))
         report["median_frame_improvement"] = float(median_improvement)
         report["worst_frame_regression"] = float(worst_regression)
