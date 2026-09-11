@@ -8,7 +8,12 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
-from h3_flow_regenerate.runtime import _exact_probe_function, _merge_preserved_noise, _noise_argument, _raw_sampler_state
+from h3_flow_regenerate.runtime import (
+    _exact_probe_function,
+    _merge_preserved_noise,
+    _noise_argument,
+    _raw_sampler_state,
+)
 
 
 @pytest.fixture(scope="module")
@@ -22,11 +27,7 @@ def native_sampling():
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     wanted = {"reshape_sigma", "CONST"}
-    nodes = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted
-    ]
+    nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted]
     found = {node.name for node in nodes}
     if found != wanted:
         raise AssertionError(f"pinned ComfyUI sampling oracle changed: found {sorted(found)}")

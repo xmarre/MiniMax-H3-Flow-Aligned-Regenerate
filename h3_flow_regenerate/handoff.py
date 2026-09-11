@@ -109,9 +109,7 @@ def upscale_learned_clean_video(
         "inference_device": provider["inference_device"],
         "learned_upscale_elapsed_ms": learned_elapsed_ms,
         "offload_after_upscale": provider["offload_after_upscale"],
-        "offloaded_after_upscale": bool(
-            provider["offload_after_upscale"] and provider["inference_device"] == "cuda"
-        ),
+        "offloaded_after_upscale": bool(provider["offload_after_upscale"] and provider["inference_device"] == "cuda"),
         "output_dtype": str(learned_x0.dtype),
         "output_device": str(learned_x0.device),
     }

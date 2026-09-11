@@ -87,13 +87,17 @@ def test_velocity_transport_preserves_fp64_oracle_and_one_axis_growth():
     prefix_t = 1
     source_clean = _video((1, 24, 3, 4, 6), dtype=torch.float64, seed=3)
     source_state = source_clean + _video(source_clean.shape, dtype=torch.float64, seed=4) * 0.1
-    target_clean = torch.nn.functional.interpolate(
-        source_clean.permute(0, 2, 1, 3, 4).reshape(3, 24, 4, 6),
-        size=(4, 10),
-        mode="bicubic",
-        align_corners=False,
-        antialias=False,
-    ).reshape(1, 3, 24, 4, 10).permute(0, 2, 1, 3, 4)
+    target_clean = (
+        torch.nn.functional.interpolate(
+            source_clean.permute(0, 2, 1, 3, 4).reshape(3, 24, 4, 6),
+            size=(4, 10),
+            mode="bicubic",
+            align_corners=False,
+            antialias=False,
+        )
+        .reshape(1, 3, 24, 4, 10)
+        .permute(0, 2, 1, 3, 4)
+    )
 
     transported, metrics = transport_velocity_bicubic_v1(
         source_state,
@@ -104,15 +108,17 @@ def test_velocity_transport_preserves_fp64_oracle_and_one_axis_growth():
 
     assert transported.dtype == torch.float64
     assert metrics["state_transport_compute_dtype"] == "torch.float64"
-    expected_displacement = torch.nn.functional.interpolate(
-        (source_state[:, :, prefix_t:] - source_clean[:, :, prefix_t:])
+    expected_displacement = (
+        torch.nn.functional.interpolate(
+            (source_state[:, :, prefix_t:] - source_clean[:, :, prefix_t:]).permute(0, 2, 1, 3, 4).reshape(2, 24, 4, 6),
+            size=(4, 10),
+            mode="bicubic",
+            align_corners=False,
+            antialias=False,
+        )
+        .reshape(1, 2, 24, 4, 10)
         .permute(0, 2, 1, 3, 4)
-        .reshape(2, 24, 4, 6),
-        size=(4, 10),
-        mode="bicubic",
-        align_corners=False,
-        antialias=False,
-    ).reshape(1, 2, 24, 4, 10).permute(0, 2, 1, 3, 4)
+    )
     torch.testing.assert_close(
         transported[:, :, prefix_t:] - target_clean[:, :, prefix_t:],
         expected_displacement,
