@@ -119,9 +119,7 @@ def _warp_video_constant(
             padding_mode="border",
             align_corners=False,
         ).to(video.dtype)
-        outside = float(
-            ((grid[..., 0].abs() > 1.0) | (grid[..., 1].abs() > 1.0)).float().mean().item()
-        )
+        outside = float(((grid[..., 0].abs() > 1.0) | (grid[..., 1].abs() > 1.0)).float().mean().item())
     return warped.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4), outside
 
 
@@ -193,10 +191,7 @@ def _candidate_transform(
         if not active[axis]:
             continue
         sign = 1.0 if median[axis] > 0 else -1.0
-        support = sum(
-            abs(float(row[axis])) >= floors[axis] and float(row[axis]) * sign > 0.0
-            for row in signed_rows
-        )
+        support = sum(abs(float(row[axis])) >= floors[axis] and float(row[axis]) * sign > 0.0 for row in signed_rows)
         if support < required:
             report["reason"] = "overlap_geometry_direction_not_consistent"
             return None, report
