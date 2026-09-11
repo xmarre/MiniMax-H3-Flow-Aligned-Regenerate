@@ -199,9 +199,7 @@ def record_callback_boundary(
             "state_after_previous_solver_step": state_after_previous_outer,
             "completed_solver_step": completed_outer,
             "state_source_semantics": (
-                "last_model_call_of_previous_solver_outer"
-                if state_after_previous_outer
-                else "no_previous_solver_outer"
+                "last_model_call_of_previous_solver_outer" if state_after_previous_outer else "no_previous_solver_outer"
             ),
             "x0_semantics": "sampler_callback_denoised_after_model_wrappers",
             **_prefixed_call_fields(current_call, prefix="x0_call_"),
