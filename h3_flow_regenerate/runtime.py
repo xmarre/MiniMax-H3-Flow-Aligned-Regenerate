@@ -1776,7 +1776,9 @@ def _run_progressive(
                 "mixed_grid_representation_bridge",
                 legacy_option_name="suffix_geometric_bridge",
                 authoritative_prefix_modified=False,
-                later_suffix_extrapolated=False,
+                later_suffix_extrapolated=bool(
+                    representation_metrics["suffix_representation_bridge_accepted"]
+                ),
                 **representation_metrics,
             )
 
