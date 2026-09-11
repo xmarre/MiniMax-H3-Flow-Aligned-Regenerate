@@ -7,9 +7,14 @@ added to a generated frame: when the two representations are spatially
 misregistered, the difference is an edge/chroma residual and transplanting it
 creates visible colour ghosts.
 
-This bridge therefore estimates only a low-dimensional, colour-insensitive
-spatial registration from recent overlap frames and, when that estimate is
-stable and safe, applies one constant affine transform to the entire generated
+The bridge therefore estimates only a low-dimensional, colour-insensitive
+spatial registration from recent same-time overlap frames. Version 3 fits one
+joint transform over the overlap and validates that transform independently on
+the constituent frames. This avoids rejecting a real global offset merely
+because noisy single-frame local optima disagree in sign, while still requiring
+direct multi-frame evidence before a suffix warp is authorized.
+
+When accepted, one constant affine transform is applied to the entire generated
 suffix. The prefix remains bit-exact. No temporal fade, local residual
 injection, amplitude normalization, random field, model call, or VAE call is
 introduced.
@@ -24,11 +29,13 @@ import torch.nn.functional as F
 
 from .source_trajectory_bridge import register_pair
 
-_VERSION = 2
+_VERSION = 3
 _OVERLAP_FRAMES = 4
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 _MAX_LOG_SCALE = math.log(1.03)
+_MIN_AGGREGATE_IMPROVEMENT = 0.01
+_MAX_SINGLE_FRAME_REGRESSION = 0.03
 
 
 def _rms(value: torch.Tensor) -> float:
@@ -65,7 +72,7 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
         "suffix_representation_bridge_enabled": False,
         "suffix_representation_bridge_accepted": False,
         "suffix_representation_bridge_reason": "disabled" if not requested else "not_applied",
-        "suffix_representation_bridge_mode": "constant_overlap_geometry_v1",
+        "suffix_representation_bridge_mode": "joint_overlap_geometry_v2",
         "suffix_representation_bridge_prefix_t": p,
         "suffix_representation_bridge_corrected_tokens": 0,
         "suffix_representation_bridge_delta_rms": 0.0,
@@ -77,6 +84,10 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
         "suffix_representation_bridge_raw_structural_residual_transplanted": False,
         "suffix_representation_bridge_overlap_frames": 0,
         "suffix_representation_bridge_consensus_frames": 0,
+        "suffix_representation_bridge_validation_frames": 0,
+        "suffix_representation_bridge_improving_frames": 0,
+        "suffix_representation_bridge_median_frame_improvement": 0.0,
+        "suffix_representation_bridge_worst_frame_regression": 0.0,
         "suffix_representation_bridge_transform": (1.0, 1.0, 0.0, 0.0),
         "suffix_representation_bridge_identity_error": None,
         "suffix_representation_bridge_aligned_error": None,
@@ -129,6 +140,18 @@ def _centered_error(left: torch.Tensor, right: torch.Tensor) -> float:
     return _rms(delta)
 
 
+def _registration_values(item: dict, *, comparison: bool = False) -> tuple[float, float] | None:
+    identity = item.get("identity_error")
+    aligned = item.get("comparison_error" if comparison else "aligned_error")
+    if identity is None or aligned is None:
+        return None
+    identity = float(identity)
+    aligned = float(aligned)
+    if not math.isfinite(identity) or not math.isfinite(aligned) or identity <= 0.0:
+        return None
+    return identity, aligned
+
+
 def _candidate_transform(
     learned_prefix: torch.Tensor,
     exact_prefix: torch.Tensor,
@@ -137,6 +160,10 @@ def _candidate_transform(
     report = {
         "overlap_frames": overlap,
         "consensus_frames": 0,
+        "validation_frames": 0,
+        "improving_frames": 0,
+        "median_frame_improvement": 0.0,
+        "worst_frame_regression": 0.0,
         "transform": (1.0, 1.0, 0.0, 0.0),
         "identity_error": None,
         "aligned_error": None,
@@ -148,73 +175,101 @@ def _candidate_transform(
 
     learned_recent = learned_prefix[:, :, -overlap:]
     exact_recent = exact_prefix[:, :, -overlap:]
-    candidates: list[tuple[float, float, float, float]] = []
+
+    # Fit one transform directly against the recent overlap as a joint objective.
+    # The previous v2 path first fit each frame independently and then required
+    # majority agreement on each transform axis. 00389 demonstrated that this
+    # can reject the entire candidate even when the user-visible defect is a
+    # coherent boundary shift: local frame optima are noisy because latent
+    # representation differences and motion perturb individual fits.
+    joint = register_pair(exact_recent, learned_recent)
+    joint_values = _registration_values(joint)
+    raw_transform = joint.get("transform")
+    if joint_values is None or raw_transform is None or not joint_values[1] < joint_values[0]:
+        report["reason"] = "joint_overlap_geometry_unavailable"
+        return None, report
+
+    signed = _signed_transform(tuple(float(value) for value in raw_transform))
+    floors = (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR)
+    h, w = map(int, learned_prefix.shape[-2:])
+    safety = (_MAX_LOG_SCALE, _MAX_LOG_SCALE, min(1.5, 0.025 * w), min(1.5, 0.025 * h))
+    active = [abs(signed[axis]) >= floors[axis] for axis in range(4)]
+    if not any(active):
+        report["reason"] = "overlap_geometry_already_matched"
+        return None, report
+    if any(active[axis] and abs(signed[axis]) > safety[axis] + 1e-8 for axis in range(4)):
+        report["reason"] = "overlap_geometry_exceeds_safety_bound"
+        return None, report
+
+    filtered_signed = tuple(signed[axis] if active[axis] else 0.0 for axis in range(4))
+    transform = _transform_from_signed(filtered_signed)
+
+    # Re-score the filtered transform on the joint overlap. This is the actual
+    # transform that would be applied, so it must improve the aggregate target.
+    aggregate = register_pair(exact_recent, learned_recent, comparison=transform)
+    aggregate_values = _registration_values(aggregate, comparison=True)
+    if aggregate_values is None:
+        report["reason"] = "overlap_geometry_objective_unavailable"
+        return None, report
+    identity, aligned = aggregate_values
+    improvement = (identity - aligned) / max(identity, 1e-12)
+    report.update(
+        transform=transform,
+        identity_error=identity,
+        aligned_error=aligned,
+        improvement=max(0.0, improvement),
+    )
+    if improvement < _MIN_AGGREGATE_IMPROVEMENT:
+        report["reason"] = "overlap_geometry_joint_gain_too_small"
+        return None, report
+
+    # Cross-check the one joint transform on the individual overlap frames.
+    # We do not ask their independently fitted transforms to agree; instead we
+    # ask the proposed single transform itself to improve a strong majority of
+    # the observed same-time frame pairs and to avoid a large holdout regression.
+    frame_improvements: list[float] = []
     for index in range(overlap):
         item = register_pair(
             exact_recent[:, :, index : index + 1],
             learned_recent[:, :, index : index + 1],
+            comparison=transform,
         )
-        identity = item.get("identity_error")
-        aligned = item.get("aligned_error")
-        transform = item.get("transform")
-        if (
-            identity is None
-            or aligned is None
-            or transform is None
-            or not math.isfinite(float(identity))
-            or not math.isfinite(float(aligned))
-            or float(aligned) >= float(identity)
-        ):
+        values = _registration_values(item, comparison=True)
+        if values is None:
             continue
-        candidates.append(tuple(float(value) for value in transform))
-    report["consensus_frames"] = len(candidates)
-    if len(candidates) < 3:
-        report["reason"] = "insufficient_consistent_registration_frames"
+        frame_identity, frame_aligned = values
+        frame_improvements.append((frame_identity - frame_aligned) / max(frame_identity, 1e-12))
+
+    validation_frames = len(frame_improvements)
+    improving_frames = sum(value > 0.0 for value in frame_improvements)
+    report["validation_frames"] = validation_frames
+    report["improving_frames"] = improving_frames
+    report["consensus_frames"] = improving_frames
+    if frame_improvements:
+        ordered = sorted(frame_improvements)
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            median_improvement = ordered[mid]
+        else:
+            median_improvement = 0.5 * (ordered[mid - 1] + ordered[mid])
+        worst_regression = max(0.0, -min(frame_improvements))
+        report["median_frame_improvement"] = float(median_improvement)
+        report["worst_frame_regression"] = float(worst_regression)
+    else:
+        worst_regression = math.inf
+
+    required_support = max(3, math.ceil(0.75 * validation_frames)) if validation_frames else 3
+    if validation_frames < 3:
+        report["reason"] = "insufficient_joint_overlap_validation_frames"
+        return None, report
+    if improving_frames < required_support:
+        report["reason"] = "joint_overlap_geometry_insufficient_frame_support"
+        return None, report
+    if worst_regression > _MAX_SINGLE_FRAME_REGRESSION:
+        report["reason"] = "joint_overlap_geometry_holdout_regression"
         return None, report
 
-    signed = torch.tensor([_signed_transform(value) for value in candidates], dtype=torch.float64)
-    median = tuple(float(value) for value in signed.median(dim=0).values.tolist())
-    floors = (_SCALE_FLOOR, _SCALE_FLOOR, _TRANSLATION_FLOOR, _TRANSLATION_FLOOR)
-    h, w = map(int, learned_prefix.shape[-2:])
-    safety = (_MAX_LOG_SCALE, _MAX_LOG_SCALE, min(1.5, 0.025 * w), min(1.5, 0.025 * h))
-    active = [abs(median[axis]) >= floors[axis] for axis in range(4)]
-    if not any(active):
-        report["reason"] = "overlap_geometry_already_matched"
-        return None, report
-    if any(active[axis] and abs(median[axis]) > safety[axis] + 1e-8 for axis in range(4)):
-        report["reason"] = "overlap_geometry_exceeds_safety_bound"
-        return None, report
-
-    required = len(candidates) // 2 + 1
-    signed_rows = signed.tolist()
-    for axis in range(4):
-        if not active[axis]:
-            continue
-        sign = 1.0 if median[axis] > 0 else -1.0
-        support = sum(abs(float(row[axis])) >= floors[axis] and float(row[axis]) * sign > 0.0 for row in signed_rows)
-        if support < required:
-            report["reason"] = "overlap_geometry_direction_not_consistent"
-            return None, report
-
-    filtered_signed = tuple(median[axis] if active[axis] else 0.0 for axis in range(4))
-    transform = _transform_from_signed(filtered_signed)
-    aggregate = register_pair(exact_recent, learned_recent, comparison=transform)
-    identity = aggregate.get("identity_error")
-    aligned = aggregate.get("comparison_error")
-    if identity is None or aligned is None or not math.isfinite(float(identity)) or not math.isfinite(float(aligned)):
-        report["reason"] = "overlap_geometry_objective_unavailable"
-        return None, report
-    improvement = max(0.0, (float(identity) - float(aligned)) / max(float(identity), 1e-12))
-    report.update(
-        transform=transform,
-        identity_error=float(identity),
-        aligned_error=float(aligned),
-        improvement=improvement,
-    )
-    if not float(aligned) < float(identity):
-        report["reason"] = "overlap_geometry_did_not_improve_registration"
-        return None, report
-    report["reason"] = "constant_overlap_geometry_authorized"
+    report["reason"] = "joint_overlap_geometry_authorized"
     return transform, report
 
 
@@ -254,6 +309,10 @@ def apply_suffix_representation_bridge(
     metrics.update(
         suffix_representation_bridge_overlap_frames=registration["overlap_frames"],
         suffix_representation_bridge_consensus_frames=registration["consensus_frames"],
+        suffix_representation_bridge_validation_frames=registration["validation_frames"],
+        suffix_representation_bridge_improving_frames=registration["improving_frames"],
+        suffix_representation_bridge_median_frame_improvement=registration["median_frame_improvement"],
+        suffix_representation_bridge_worst_frame_regression=registration["worst_frame_regression"],
         suffix_representation_bridge_transform=registration["transform"],
         suffix_representation_bridge_identity_error=registration["identity_error"],
         suffix_representation_bridge_aligned_error=registration["aligned_error"],
@@ -282,7 +341,7 @@ def apply_suffix_representation_bridge(
     metrics.update(
         suffix_representation_bridge_enabled=True,
         suffix_representation_bridge_accepted=True,
-        suffix_representation_bridge_reason="constant_overlap_geometry_applied",
+        suffix_representation_bridge_reason="joint_overlap_geometry_applied",
         suffix_representation_bridge_corrected_tokens=int(suffix.shape[2]),
         suffix_representation_bridge_centered_error_after=after_error,
         suffix_representation_bridge_centered_error_ratio=ratio,
