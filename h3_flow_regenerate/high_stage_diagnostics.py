@@ -11,6 +11,17 @@ from .seam_diagnostics import measure_video_boundary
 
 HIGH_STAGE_DIAGNOSTIC_KEY = "h3_flow_mixed_grid_high_boundary_v1"
 
+_CALL_PROVENANCE_FIELDS = (
+    "logical_step",
+    "sigma",
+    "coordinate",
+    "actual",
+    "provenance",
+    "solver_phase",
+    "solver_outer_step",
+    "spectrum_step_id",
+)
+
 
 def make_high_stage_diagnostic_contract(
     *,
@@ -31,6 +42,7 @@ def make_high_stage_diagnostic_contract(
         "sampler": str(sampler),
         "call_index": 0,
         "last_call": None,
+        "call_history": [],
     }
 
 
@@ -82,7 +94,12 @@ def next_call_fields(
         "sampler": str(contract["sampler"]),
     }
     contract["call_index"] = call_index + 1
-    contract["last_call"] = fields.copy()
+    stored = fields.copy()
+    contract["last_call"] = stored
+    history = contract.setdefault("call_history", [])
+    if not isinstance(history, list):
+        raise RuntimeError("high-stage diagnostic call history is not mutable")
+    history.append(stored)
     return fields
 
 
@@ -94,6 +111,31 @@ def _boundary_fields(video: torch.Tensor, prefix_t: int, *, prefix: str = "") ->
         f"{prefix}seam_lowpass_rms": boundary["seam_lowpass_rms"],
         f"{prefix}seam_spatial_mean_rms": boundary["seam_spatial_mean_rms"],
     }
+
+
+def _prefixed_call_fields(call: dict[str, Any] | None, *, prefix: str) -> dict[str, Any]:
+    if not isinstance(call, dict):
+        return {f"{prefix}{name}": None for name in _CALL_PROVENANCE_FIELDS}
+    return {f"{prefix}{name}": call.get(name) for name in _CALL_PROVENANCE_FIELDS}
+
+
+def _state_source_call(contract: dict[str, Any], current_call: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(current_call, dict):
+        return None
+    current_outer = current_call.get("solver_outer_step")
+    if current_outer is None:
+        return None
+    current_outer = int(current_outer)
+    history = contract.get("call_history")
+    if not isinstance(history, list) or len(history) < 2:
+        return None
+    for candidate in reversed(history[:-1]):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_outer = candidate.get("solver_outer_step")
+        if candidate_outer is not None and int(candidate_outer) < current_outer:
+            return candidate
+    return None
 
 
 def record_packed_boundary(
@@ -139,16 +181,31 @@ def record_callback_boundary(
     x: torch.Tensor,
     contract: dict[str, Any],
 ) -> None:
-    call_fields = contract.get("last_call")
-    fields = dict(call_fields) if isinstance(call_fields, dict) else {}
+    current_call = contract.get("last_call")
+    fields = dict(current_call) if isinstance(current_call, dict) else {}
+    state_source = _state_source_call(contract, current_call)
+    state_after_previous_outer = state_source is not None
+    completed_outer = None if state_source is None else int(state_source["solver_outer_step"])
     fields.update(
         {
             "callback_step": int(step),
             "global_step": int(global_step),
-            "state_semantics": "pre_current_solver_update_post_previous_solver_update",
-            "state_after_previous_solver_step": bool(step > 0),
-            "completed_solver_step": int(step - 1) if step > 0 else None,
-            "x0_semantics": "sampler_callback_denoised",
+            "event_call_fields_semantics": "current_callback_x0_prediction",
+            "state_semantics": (
+                "pre_current_solver_update_post_previous_outer_update"
+                if state_after_previous_outer
+                else "high_stage_input_before_first_solver_update"
+            ),
+            "state_after_previous_solver_step": state_after_previous_outer,
+            "completed_solver_step": completed_outer,
+            "state_source_semantics": (
+                "last_model_call_of_previous_solver_outer"
+                if state_after_previous_outer
+                else "no_previous_solver_outer"
+            ),
+            "x0_semantics": "sampler_callback_denoised_after_model_wrappers",
+            **_prefixed_call_fields(current_call, prefix="x0_call_"),
+            **_prefixed_call_fields(state_source, prefix="state_source_call_"),
         }
     )
     shapes = [tuple(shape) for shape in contract["shapes"]]
