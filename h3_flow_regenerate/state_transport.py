@@ -126,6 +126,7 @@ def transport_velocity_bicubic_v1(
     target_suffix_clean = target_clean_video[:, :, prefix_t:].to(dtype=compute_dtype)
 
     displacement = source_suffix_state - source_suffix_clean
+    source_roundtrip_error = source_suffix_clean + displacement - source_suffix_state
     lifted_displacement = _resize_displacement(displacement, target_h, target_w)
     if lifted_displacement.dtype != compute_dtype:
         lifted_displacement = lifted_displacement.to(dtype=compute_dtype)
@@ -138,16 +139,24 @@ def transport_velocity_bicubic_v1(
         raise RuntimeError("reconstructed target sampler state contains NaN or Inf")
     target_video[:, :, prefix_t:] = reconstructed_suffix.to(dtype=target_video.dtype)
 
+    realized_suffix = target_video[:, :, prefix_t:].to(dtype=compute_dtype)
+    closure_error = realized_suffix - target_suffix_clean - lifted_displacement
     source_rms = float(displacement.square().mean().sqrt().item())
     lifted_rms = float(lifted_displacement.square().mean().sqrt().item())
     metrics = {
         "handoff_state_policy": HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+        "state_transport_applied": True,
         "state_transport_prefix_t": prefix_t,
         "state_transport_source_hw": (source_h, source_w),
         "state_transport_target_hw": (target_h, target_w),
         "state_transport_compute_dtype": str(compute_dtype),
         "state_transport_source_displacement_rms": source_rms,
         "state_transport_lifted_displacement_rms": lifted_rms,
+        "state_transport_lifted_over_source_rms_ratio": lifted_rms / max(source_rms, 1e-30),
+        "state_transport_source_roundtrip_max_abs": float(source_roundtrip_error.abs().max().item()),
+        "state_transport_source_roundtrip_rms": float(source_roundtrip_error.square().mean().sqrt().item()),
+        "state_transport_target_closure_max_abs": float(closure_error.abs().max().item()),
+        "state_transport_target_closure_rms": float(closure_error.square().mean().sqrt().item()),
         "state_transport_added_rng": False,
         "state_transport_temporal_mixing": False,
         "state_transport_amplitude_normalization": False,
