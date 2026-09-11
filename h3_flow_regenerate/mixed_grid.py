@@ -19,12 +19,16 @@ from dataclasses import dataclass
 
 import torch
 
+from .attention_measure import ATTENTION_MEASURE_KEY, build_attention_measure_request
 from .geometry import unpack_streams
 
 MIXED_GRID_KEY = "h3_flow_mixed_grid_v1"
 MIXED_WRAPPER_KEY = "h3_flow_regenerate.mixed_grid.v1"
 MIXED_GRID_MEASURE_KEY = "h3_flow_mixed_grid_attention_measure_v1"
 MIXED_GRID_MEASURE_MODE = "prefix_kv_stratified_subsample"
+MIXED_GRID_MEASURE_PROFILE_OFF = "off"
+MIXED_GRID_MEASURE_PROFILE_LEGACY = "legacy_representative_v1"
+MIXED_GRID_MEASURE_PROFILE_WEIGHTED = "weighted_measure_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +39,7 @@ class MixedGridPlan:
     source_w: int
     prefix_noise: torch.Tensor | None = None
     attention_measure: bool = False
+    measure_profile: str | None = None
 
     @property
     def prefix_t(self):
@@ -78,6 +83,7 @@ def build_mixed_grid_plan(
     source_h,
     source_w,
     attention_measure=False,
+    measure_profile=None,
 ):
     video_mask, _ = unpack_streams(mask, shapes)
     video, _ = unpack_streams(internal_latent, shapes)
@@ -110,26 +116,52 @@ def build_mixed_grid_plan(
         source_w,
         video_noise[:, :, :prefix_t].detach().clone(),
         bool(attention_measure),
+        measure_profile,
     )
 
 
-def mixed_attention_measure_contract(plan: MixedGridPlan, *, video_start: int, sequence_rows: int):
-    """Describe an optional uniform-measure K/V domain without changing VDN API 2.
+def mixed_attention_measure_profile(plan: MixedGridPlan) -> str:
+    """Resolve explicit profiles without reinterpreting serialized legacy graphs."""
+    if plan.measure_profile is None:
+        # ``attention_measure`` is the pre-profile control. Preserve its released
+        # representative semantics only when the new field is genuinely absent.
+        return MIXED_GRID_MEASURE_PROFILE_LEGACY if plan.attention_measure else MIXED_GRID_MEASURE_PROFILE_OFF
+    profile = str(plan.measure_profile)
+    if profile not in {
+        MIXED_GRID_MEASURE_PROFILE_OFF,
+        MIXED_GRID_MEASURE_PROFILE_LEGACY,
+        MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
+    }:
+        raise ValueError(f"unsupported Mixed-Grid measure profile {profile!r}")
+    return profile
 
-    The mixed hidden stream has target-grid prefix frames and source-grid suffix
-    frames. Equal softmax weight per row therefore gives every protected prefix
-    frame ``target_rows/source_rows`` times as much spatial measure as a suffix
-    frame. A compatible attention backend can remove that representation-density
-    artifact by retaining all Q rows while selecting one target-prefix K/V row
-    nearest each source-grid spatial coordinate. The suffix K/V domain is already
-    at source density and is copied unchanged.
+
+def mixed_attention_measure_contract(plan: MixedGridPlan, *, video_start: int, sequence_rows: int):
+    """Build the selected Mixed-Grid measure contract without changing VDN API 2.
+
+    ``legacy_representative_v1`` preserves the released deterministic reduced-K/V
+    contract for migrated graphs. ``weighted_measure_v1`` publishes the generic
+    all-row key-log-measure operator: Q/K/V topology stays unchanged and only the
+    protected-prefix key counting measure changes.
     """
-    if not plan.attention_measure:
+    profile = mixed_attention_measure_profile(plan)
+    if profile == MIXED_GRID_MEASURE_PROFILE_OFF:
         return None
     if type(video_start) is not int or type(sequence_rows) is not int:
         raise TypeError("mixed-grid attention-measure row counts must be integers")
     if video_start <= 0 or sequence_rows != video_start + plan.mixed_rows:
         raise ValueError("mixed-grid attention-measure rows do not match the mixed sequence")
+    if profile == MIXED_GRID_MEASURE_PROFILE_WEIGHTED:
+        return build_attention_measure_request(
+            q_rows=sequence_rows,
+            kv_rows=sequence_rows,
+            video_start=video_start,
+            temporal=plan.temporal,
+            prefix_t=plan.prefix_t,
+            source_grid=plan.source_grid,
+            prefix_grid=plan.target_grid,
+        )
+
     source_grid_h, source_grid_w = plan.source_grid
     prefix_grid_h, prefix_grid_w = plan.target_grid
     expected_kv_rows = video_start + plan.temporal * plan.source_rows
@@ -150,6 +182,13 @@ def mixed_attention_measure_contract(plan: MixedGridPlan, *, video_start: int, s
         "exact_prefix_queries_preserved": True,
         "suffix_kv_unchanged": True,
     }
+
+
+def _mixed_attention_measure_key(plan: MixedGridPlan) -> str:
+    profile = mixed_attention_measure_profile(plan)
+    if profile == MIXED_GRID_MEASURE_PROFILE_WEIGHTED:
+        return ATTENTION_MEASURE_KEY
+    return MIXED_GRID_MEASURE_KEY
 
 
 def carrier_layout(native, plan, text_len, audio_t, payload):
@@ -278,13 +317,24 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                     mixed_sequence_rows=mixed_layout.seq_len,
                     vdn_external_sequence_mode="dense_gate_no_linear",
                     vdn_external_sequence_api=2,
-                    attention_measure_requested=bool(plan.attention_measure),
-                    attention_measure_mode=(MIXED_GRID_MEASURE_MODE if measure_contract is not None else "disabled"),
+                    attention_measure_requested=measure_contract is not None,
+                    attention_measure_profile=mixed_attention_measure_profile(plan),
+                    attention_measure_mode=(
+                        measure_contract.get("operator", MIXED_GRID_MEASURE_MODE)
+                        if measure_contract is not None
+                        else "disabled"
+                    ),
                     attention_measure_prefix_kv_rows_before=plan.prefix_rows,
-                    attention_measure_prefix_kv_rows_after=plan.prefix_t * plan.source_rows,
+                    attention_measure_prefix_kv_rows_after=(
+                        plan.prefix_t * plan.source_rows
+                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_LEGACY
+                        else plan.prefix_rows
+                    ),
                     attention_measure_kv_rows_before=mixed_layout.seq_len,
                     attention_measure_kv_rows_after=(
-                        layout.seq_len if measure_contract is not None else mixed_layout.seq_len
+                        layout.seq_len
+                        if mixed_attention_measure_profile(plan) == MIXED_GRID_MEASURE_PROFILE_LEGACY
+                        else mixed_layout.seq_len
                     ),
                     attention_measure_prefix_density_ratio=plan.target_rows / plan.source_rows,
                     prefix_exact_latent_resized=False,
@@ -319,9 +369,10 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
                 "prefix_rows_per_frame": plan.target_rows,
             }
             if measure_contract is not None:
-                if MIXED_GRID_MEASURE_KEY in block_options:
+                measure_key = _mixed_attention_measure_key(plan)
+                if ATTENTION_MEASURE_KEY in block_options or MIXED_GRID_MEASURE_KEY in block_options:
                     raise RuntimeError("mixed-grid found an already-owned attention-measure contract")
-                block_options[MIXED_GRID_MEASURE_KEY] = measure_contract
+                block_options[measure_key] = measure_contract
             forwarded["transformer_options"] = block_options
             output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
             result = output["img"]
