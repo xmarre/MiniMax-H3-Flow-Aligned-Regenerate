@@ -1,0 +1,46 @@
+name: Fix state transport CI
+
+on:
+  push:
+    branches:
+      - mirror/mixed-grid-state-transport-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/mixed-grid-state-transport-20260911
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply evidence-driven fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('h3_flow_regenerate/runtime.py')
+          text = path.read_text()
+          old = '''                handoff_state_policy_requested=requested_state_policy,\n                handoff_state_policy=effective_state_policy,\n                source_trajectory_bridge_requested='''
+          new = '''                handoff_state_policy_requested=requested_state_policy,\n                source_trajectory_bridge_requested='''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one mixed-grid transfer telemetry match, got {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          python -m pip install ruff==0.16.7
+          ruff check --fix h3_flow_regenerate/state_transport.py tests/test_state_transport_config.py tests/test_state_transport_runtime.py
+          ruff format h3_flow_regenerate/state_transport.py tests/test_state_transport_config.py tests/test_state_transport_runtime.py
+          python -m py_compile h3_flow_regenerate/runtime.py h3_flow_regenerate/state_transport.py
+          git diff --check
+      - name: Commit fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add h3_flow_regenerate/runtime.py h3_flow_regenerate/state_transport.py tests/test_state_transport_config.py tests/test_state_transport_runtime.py
+          git commit -m 'Fix state transport CI regressions'
+          git push origin HEAD:mirror/mixed-grid-state-transport-20260911
