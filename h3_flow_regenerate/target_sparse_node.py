@@ -71,8 +71,9 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         handoff_state_policy=None,
     ):
         # Keep direct Python calls consistent with the inherited Target Input
-        # handoff default. Mixed-Grid additionally enables its overlap-geometry
-        # reconciliation by default; Target-Sparse does not expose that control.
+        # handoff default. Mixed-Grid additionally enables its persistent
+        # target-side suffix rebase by default; Target-Sparse does not expose
+        # that control.
         if handoff_transfer is None:
             handoff_transfer = "learned_3d"
         if suffix_geometric_bridge is None:
@@ -143,11 +144,12 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     DESCRIPTION = (
         "Accelerated exact-prefix Continuum path. It keeps the authoritative target-grid protected-prefix "
         "conditioning, generates a genuine low-grid suffix, performs learned 3D clean-latent transfer, "
-        "restores the exact prefix, and starts fresh target-grid refinement. The overlap bridge estimates "
-        "only safe constant target-grid geometry; raw latent residual and one-token DC transplantation are "
-        "retired because matched media showed coloured artifacts. Requires an H3 latent-upscaler provider "
-        "and VDN external-sequence API v2 when VDN is enabled. State transport remains experimental and "
-        "legacy re-noise remains the default."
+        "restores the exact prefix, and starts fresh target-grid refinement. The optional persistent suffix "
+        "rebase can independently correct a held-out-validated per-channel tone-domain offset and a bounded "
+        "constant affine frame offset inferred from the learned upscaler's own temporal motion. Any accepted "
+        "component applies to the entire generated suffix; raw structural/chroma residual and one-token DC "
+        "transplantation remain retired. Requires an H3 latent-upscaler provider and VDN external-sequence "
+        "API v2 when VDN is enabled. State transport remains experimental and legacy re-noise remains the default."
     )
 
     @classmethod
@@ -196,10 +198,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": True,
                 "tooltip": (
-                    "Enable safe target-side overlap geometry reconciliation after learned transfer. It estimates "
-                    "a consensus scale/translation from same-frame exact/learned prefix overlap and applies one "
-                    "constant transform to the entire generated suffix. It never transplants raw spatial/chroma "
-                    "residuals. This control is independent of the attention measure profile."
+                    "Legacy input name for the experimental persistent target-side suffix rebase. It may apply "
+                    "a per-channel constant latent bias validated on held-out exact/learned overlap and/or a "
+                    "small constant affine correction inferred from learned-upscaler temporal motion and validated "
+                    "at the prefix/suffix boundary plus internal suffix transitions. Any accepted correction covers "
+                    "the entire generated suffix. Raw structural/chroma residuals are never transplanted."
                 ),
             },
         )
