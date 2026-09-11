@@ -24,6 +24,16 @@ from .handoff import (
     select_handoff_index,
     upscale_learned_clean_video,
 )
+from .high_stage_diagnostics import (
+    HIGH_STAGE_DIAGNOSTIC_KEY,
+    high_stage_diagnostic_context,
+    make_high_stage_diagnostic_contract,
+    next_call_fields,
+    packed_boundary_fields,
+    record_callback_boundary,
+    record_packed_boundary,
+    record_video_boundary,
+)
 from .metrics import H3FlowMetrics
 from .mixed_grid import (
     MIXED_GRID_KEY,
@@ -46,9 +56,12 @@ from .seam_diagnostics import (
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
 from .source_trajectory_bridge import disabled_source_trajectory_bridge_metrics
 from .state_transport import (
+    HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
     HANDOFF_STATE_POLICY_LEGACY,
     HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+    measure_state_transport_comparison_v1,
     resolve_handoff_state_policy,
+    transport_endpoint_residual_bicubic_v1,
     transport_velocity_bicubic_v1,
 )
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
@@ -402,13 +415,21 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
+    transformer = (model_options or {}).get("transformer_options") or {}
+    stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
+    pre_high_diag_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)
+    high_model_input_boundary = None
+    if binding is not None and stage == "high" and isinstance(pre_high_diag_contract, dict):
+        high_model_input_boundary = packed_boundary_fields(
+            x,
+            pre_high_diag_contract,
+            field_prefix="model_input_",
+        )
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
     if binding is None:
         return result
-    transformer = (model_options or {}).get("transformer_options") or {}
     probe_context = transformer.get(PROBE_CONTEXT_KEY)
-    stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
     actual = True if actual_value is None else bool(actual_value)
     spectrum_active_step = _active_spectrum_step(spectrum_runtime) if spectrum_runtime is not None else None
@@ -488,6 +509,46 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             )
         active.call_index += 1
 
+    high_diag_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)
+    high_diag_fields = None
+    if stage == "high" and isinstance(high_diag_contract, dict):
+        if spectrum_active_step is not None:
+            _, diagnostic_phase, diagnostic_outer = spectrum_active_step
+            spectrum_step_id = getattr(spectrum_runtime, "active_step_id", None)
+        else:
+            diagnostic_phase = transformer.get(SPECTRUM_PHASE_KEY)
+            diagnostic_outer = transformer.get(SPECTRUM_OUTER_STEP_KEY)
+            spectrum_step_id = (
+                getattr(spectrum_runtime, "last_completed_step_id", None)
+                if spectrum_completed_here and spectrum_runtime is not None
+                else None
+            )
+        high_diag_fields = next_call_fields(
+            high_diag_contract,
+            sigma=sigma,
+            coordinate=coordinate,
+            actual=actual,
+            solver_phase=diagnostic_phase,
+            solver_outer_step=diagnostic_outer,
+            spectrum_step_id=spectrum_step_id,
+        )
+        if high_model_input_boundary is None:
+            raise RuntimeError("high-stage diagnostics lost the pre-executor model-input boundary")
+        binding.metrics.event(
+            "mixed_grid_high_model_input_boundary",
+            **high_diag_fields,
+            model_input_semantics="post_native_inpaint_pre_prediction_executor",
+            captured_before_executor=True,
+            **high_model_input_boundary,
+        )
+        record_packed_boundary(
+            binding.metrics,
+            "mixed_grid_high_prediction_boundary",
+            result,
+            high_diag_contract,
+            high_diag_fields,
+        )
+
     exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)
     if isinstance(exact_bridge, dict) and not bool(exact_bridge.get("applied")) and actual:
         exact_prefix = exact_bridge.get("exact_prefix")
@@ -535,6 +596,14 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             sigma=sigma,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
+        if high_diag_fields is not None and isinstance(high_diag_contract, dict):
+            record_video_boundary(
+                binding.metrics,
+                "mixed_grid_high_guided_boundary",
+                guided_video,
+                high_diag_contract,
+                high_diag_fields,
+            )
         result, _ = pack_streams((guided_video, audio_x0))
         binding.metrics.event(
             "guidance",
@@ -1563,7 +1632,7 @@ def _run_progressive(
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
         accepted_source_x0 = (
             source_x0.detach().clone()
-            if mixed_plan is not None and effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1
+            if mixed_plan is not None and effective_state_policy != HANDOFF_STATE_POLICY_LEGACY
             else None
         )
         if mixed_plan is not None:
@@ -1605,9 +1674,9 @@ def _run_progressive(
         }
         diagnostic_noise = None
 
-        if mixed_plan is not None and effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+        if mixed_plan is not None and effective_state_policy != HANDOFF_STATE_POLICY_LEGACY:
             if accepted_source_x0 is None:
-                raise RuntimeError("velocity state transport lost the immutable accepted probe clean")
+                raise RuntimeError("state transport lost the immutable accepted probe clean")
             provider_video, _provider_audio = unpack_streams(source_x0, source_shapes)
             learned_clean, transfer_metrics = upscale_learned_clean_video(
                 provider_video,
@@ -1682,13 +1751,13 @@ def _run_progressive(
                 corrected_clean_video=corrected_clean,
             )
             splice_diagnostics["splice_diagnostic_elapsed_ms"] = (time.perf_counter() - diagnostic_started) * 1000.0
-            if effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+            if effective_state_policy != HANDOFF_STATE_POLICY_LEGACY:
                 splice_diagnostics["splice_recovery"] = "retained_learned_clean"
                 splice_diagnostics["suffix_dc_bridge_state_mapping"] = (
-                    "clean_reanchor_velocity_bicubic_v1" if dc_enabled else "disabled"
+                    f"clean_reanchor_{effective_state_policy}" if dc_enabled else "disabled"
                 )
                 splice_diagnostics["suffix_representation_bridge_state_mapping"] = (
-                    "clean_reanchor_velocity_bicubic_v1"
+                    f"clean_reanchor_{effective_state_policy}"
                     if representation_metrics["suffix_representation_bridge_accepted"]
                     else "disabled_or_noop"
                 )
@@ -1711,13 +1780,32 @@ def _run_progressive(
                 **representation_metrics,
             )
 
-            if effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
-                target_video, state_transport_metrics = transport_velocity_bicubic_v1(
+            if effective_state_policy != HANDOFF_STATE_POLICY_LEGACY:
+                comparison_metrics = measure_state_transport_comparison_v1(
                     source_state_video,
                     accepted_clean_video,
                     corrected_clean,
                     prefix_t=mixed_plan.prefix_t,
+                    sigma=sigma,
                 )
+                if effective_state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+                    target_video, transport_metrics = transport_velocity_bicubic_v1(
+                        source_state_video,
+                        accepted_clean_video,
+                        corrected_clean,
+                        prefix_t=mixed_plan.prefix_t,
+                    )
+                elif effective_state_policy == HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1:
+                    target_video, transport_metrics = transport_endpoint_residual_bicubic_v1(
+                        source_state_video,
+                        accepted_clean_video,
+                        corrected_clean,
+                        prefix_t=mixed_plan.prefix_t,
+                        sigma=sigma,
+                    )
+                else:
+                    raise RuntimeError(f"unreviewed Mixed-Grid handoff state policy {effective_state_policy!r}")
+                state_transport_metrics = {**comparison_metrics, **transport_metrics}
                 binding.metrics.increment("mixed_grid_state_transport_runs")
                 binding.metrics.event("mixed_grid_state_transport", **state_transport_metrics)
             else:
@@ -1815,9 +1903,31 @@ def _run_progressive(
             binding.active_guidance_run = run
 
         def high_callback(step, x0, x, _total):
+            diagnostic_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)
+            if mixed_plan is not None and isinstance(diagnostic_contract, dict):
+                record_callback_boundary(
+                    binding.metrics,
+                    step=step,
+                    global_step=index + step,
+                    x0=x0,
+                    x=x,
+                    contract=diagnostic_contract,
+                )
             if callback is not None:
                 return callback(index + step, x0, x, len(sigmas) - 1)
             return None
+
+        high_diagnostic_context = contextlib.nullcontext(None)
+        if mixed_plan is not None:
+            high_diagnostic_context = high_stage_diagnostic_context(
+                guider,
+                make_high_stage_diagnostic_contract(
+                    prefix_t=mixed_plan.prefix_t,
+                    shapes=target_shapes,
+                    phases=_sampler_phases(sampler, high_sigmas),
+                    sampler=sampler_name(sampler),
+                ),
+            )
 
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
@@ -1830,7 +1940,7 @@ def _run_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), high_diagnostic_context:
             result = executor(
                 target_noise,
                 target_latent_image,

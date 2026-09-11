@@ -206,14 +206,15 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             },
         )
         optional["handoff_state_policy"] = (
-            ["legacy_renoise", "velocity_bicubic_v1"],
+            ["legacy_renoise", "velocity_bicubic_v1", "endpoint_residual_bicubic_v1"],
             {
                 "default": "legacy_renoise",
                 "tooltip": (
                     "Mixed-Grid handoff state policy. legacy_renoise preserves released behavior. "
-                    "velocity_bicubic_v1 re-anchors the learned corrected clean suffix while transporting "
-                    "the source sampler displacement X-C with a fixed framewise bicubic lift. This is an "
-                    "experimental controlled candidate until matched CUDA/media validation is accepted."
+                    "velocity_bicubic_v1 transports the source sampler displacement X-C. "
+                    "endpoint_residual_bicubic_v1 is the temporary matched comparator that instead preserves "
+                    "the inferred endpoint field X-(1-sigma)C. Both use the same fixed framewise bicubic lift; "
+                    "legacy_renoise remains the default and production rollback."
                 ),
             },
         )

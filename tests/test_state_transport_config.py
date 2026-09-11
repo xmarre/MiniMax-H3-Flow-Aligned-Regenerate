@@ -6,6 +6,7 @@ from test_handoff import FakeLearnedProvider
 
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.state_transport import (
+    HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
     HANDOFF_STATE_POLICY_LEGACY,
     HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
     resolve_handoff_state_policy,
@@ -55,7 +56,11 @@ def test_velocity_policy_is_restricted_to_mixed_grid_learned_transfer():
 def test_mixed_grid_ui_exposes_legacy_default_without_changing_target_sparse_ui():
     mixed = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     state_policy = mixed["optional"]["handoff_state_policy"]
-    assert state_policy[0] == [HANDOFF_STATE_POLICY_LEGACY, HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1]
+    assert state_policy[0] == [
+        HANDOFF_STATE_POLICY_LEGACY,
+        HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+        HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
+    ]
     assert state_policy[1]["default"] == HANDOFF_STATE_POLICY_LEGACY
 
     sparse = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
