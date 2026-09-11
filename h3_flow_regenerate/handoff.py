@@ -151,6 +151,7 @@ class ProgressiveTargetInputConfig:
     suffix_dc_bridge: bool = False
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
     suffix_geometric_bridge: bool = False
+    attention_measure_profile: str | None = None
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -187,6 +188,11 @@ class ProgressiveTargetInputConfig:
             raise TypeError("suffix_geometric_bridge must be boolean")
         if self.suffix_geometric_bridge and self.exact_prefix_mode != "mixed_grid_low_suffix":
             raise ValueError("suffix_geometric_bridge requires mixed-grid Continuum")
+        measure_profiles = {None, "off", "legacy_representative_v1", "weighted_measure_v1"}
+        if self.attention_measure_profile not in measure_profiles:
+            raise ValueError("unsupported attention_measure_profile")
+        if self.attention_measure_profile is not None and self.exact_prefix_mode != "mixed_grid_low_suffix":
+            raise ValueError("attention_measure_profile is only supported by mixed-grid Continuum")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 

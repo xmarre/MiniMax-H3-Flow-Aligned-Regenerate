@@ -23,7 +23,16 @@ from .handoff import (
     select_handoff_index,
 )
 from .metrics import H3FlowMetrics
-from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
+from .attention_measure import ATTENTION_MEASURE_KEY
+from .mixed_grid import (
+    MIXED_GRID_KEY,
+    MIXED_GRID_MEASURE_KEY,
+    MIXED_GRID_MEASURE_PROFILE_LEGACY,
+    MIXED_GRID_MEASURE_PROFILE_OFF,
+    MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
+    build_mixed_grid_plan,
+    mixed_attention_measure_profile,
+)
 from .representation_bridge import (
     apply_suffix_representation_bridge,
     disabled_suffix_representation_bridge_metrics,
@@ -1365,7 +1374,9 @@ def _run_progressive(
                 source_h=source_h,
                 source_w=source_w,
                 attention_measure=bool(getattr(config, "suffix_geometric_bridge", False)),
+                measure_profile=getattr(config, "attention_measure_profile", None),
             )
+            measure_profile = mixed_attention_measure_profile(mixed_plan)
             binding.metrics.event(
                 "mixed_grid_plan",
                 input_mode="mixed_grid_low_suffix",
@@ -1384,9 +1395,16 @@ def _run_progressive(
                 suffix_source_grid_rope=True,
                 continuous_temporal_rope=True,
                 low_suffix_real_latent=True,
-                attention_measure_requested=bool(mixed_plan.attention_measure),
+                attention_measure_requested=measure_profile != MIXED_GRID_MEASURE_PROFILE_OFF,
+                attention_measure_profile=measure_profile,
                 attention_measure_contract=(
-                    "h3_flow_mixed_grid_attention_measure_v1" if mixed_plan.attention_measure else None
+                    ATTENTION_MEASURE_KEY
+                    if measure_profile == MIXED_GRID_MEASURE_PROFILE_WEIGHTED
+                    else (
+                        MIXED_GRID_MEASURE_KEY
+                        if measure_profile == MIXED_GRID_MEASURE_PROFILE_LEGACY
+                        else None
+                    )
                 ),
             )
         source_shapes = list(target_shapes)

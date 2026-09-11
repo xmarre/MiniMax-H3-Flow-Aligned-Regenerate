@@ -67,6 +67,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         learned_upscaler=None,
         suffix_dc_bridge=True,
         suffix_geometric_bridge=None,
+        attention_measure_profile=None,
     ):
         # Keep direct Python calls consistent with the inherited Target Input
         # handoff default. Mixed-Grid additionally enables its validated seam
@@ -85,6 +86,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
+                attention_measure_profile=attention_measure_profile,
                 learned_upscaler=learned_upscaler,
             )
         else:
@@ -98,6 +100,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
                 suffix_dc_bridge=bool(suffix_dc_bridge),
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
+                attention_measure_profile=attention_measure_profile,
                 learned_upscaler=learned_upscaler,
             )
         guidance = GuidanceConfig(
@@ -176,15 +179,27 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                 ),
             },
         )
-        inputs.setdefault("optional", {})["suffix_geometric_bridge"] = (
+        optional = inputs.setdefault("optional", {})
+        optional["suffix_geometric_bridge"] = (
             "BOOLEAN",
             {
                 "default": True,
                 "tooltip": (
-                    "Enable the validated Mixed-Grid seam-repair path. It publishes the protected-prefix K/V "
-                    "measure contract for compatible Sol-H3 backends and applies the independent target "
-                    "exact-overlap representation reconciliation after learned transfer. The authoritative "
-                    "prefix, generated suffix ownership, audio, masks, conditioning and H3 NFE count are preserved."
+                    "Enable the target-side exact-overlap representation reconciliation after learned transfer. "
+                    "This control is independent of the explicit attention measure profile. For serialized "
+                    "pre-profile workflows only, its historical true value still selects the released legacy "
+                    "representative-K/V measure so old graphs do not silently change numerical semantics."
+                ),
+            },
+        )
+        optional["attention_measure_profile"] = (
+            ["weighted_measure_v1", "legacy_representative_v1", "off"],
+            {
+                "default": "weighted_measure_v1",
+                "tooltip": (
+                    "Mixed-Grid attention measure. weighted_measure_v1 is the canonical all-Q/K/V operator and "
+                    "publishes attention_measure_v1 independently of seam controls. legacy_representative_v1 "
+                    "keeps the released reduced-K/V comparator; off is an explicit unweighted diagnostic control."
                 ),
             },
         )

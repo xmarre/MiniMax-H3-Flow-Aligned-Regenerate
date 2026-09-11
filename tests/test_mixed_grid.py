@@ -14,7 +14,11 @@ from h3_flow_regenerate.mixed_grid import (
     MixedGridPlan,
     build_mixed_grid_plan,
     carrier_layout,
+    MIXED_GRID_MEASURE_PROFILE_LEGACY,
+    MIXED_GRID_MEASURE_PROFILE_OFF,
+    MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
     mixed_attention_measure_contract,
+    mixed_attention_measure_profile,
     mixed_mod_segments,
     mixed_positions,
 )
@@ -179,6 +183,7 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
         exact_prefix_mode="mixed_grid_low_suffix",
         transfer_mode="learned_3d",
         learned_upscaler=provider,
+        attention_measure_profile=MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
     )
     calls = []
 
@@ -187,6 +192,8 @@ def test_stage_lifetimes_learned_context_and_original_prefix(monkeypatch, fail_s
         calls.append(stage)
         contract = guider.model_options["transformer_options"].get(MIXED_GRID_KEY)
         assert (contract is not None) == (stage != "high")
+        if contract is not None:
+            assert contract["plan"].measure_profile == MIXED_GRID_MEASURE_PROFILE_WEIGHTED
         if stage == fail_stage:
             raise RuntimeError("test stage failure")
         if stage == "high":
@@ -330,6 +337,31 @@ def test_mixed_attention_measure_contract_00318_geometry():
 def test_mixed_attention_measure_is_off_by_default():
     plan = MixedGridPlan(torch.randn(1, 24, 2, 8, 12), 7, 4, 6)
     assert mixed_attention_measure_contract(plan, video_start=5, sequence_rows=83) is None
+
+
+def test_explicit_measure_profile_is_independent_of_legacy_seam_control():
+    prefix = torch.randn(1, 24, 2, 8, 12)
+    weighted = MixedGridPlan(
+        prefix, 7, 4, 6, attention_measure=False, measure_profile=MIXED_GRID_MEASURE_PROFILE_WEIGHTED
+    )
+    assert mixed_attention_measure_profile(weighted) == MIXED_GRID_MEASURE_PROFILE_WEIGHTED
+    assert mixed_attention_measure_contract(weighted, video_start=5, sequence_rows=83)["operator"] == "key_log_measure"
+
+    explicit_off = MixedGridPlan(
+        prefix, 7, 4, 6, attention_measure=True, measure_profile=MIXED_GRID_MEASURE_PROFILE_OFF
+    )
+    assert mixed_attention_measure_profile(explicit_off) == MIXED_GRID_MEASURE_PROFILE_OFF
+    assert mixed_attention_measure_contract(explicit_off, video_start=5, sequence_rows=83) is None
+
+    explicit_legacy = MixedGridPlan(
+        prefix, 7, 4, 6, attention_measure=False, measure_profile=MIXED_GRID_MEASURE_PROFILE_LEGACY
+    )
+    assert mixed_attention_measure_profile(explicit_legacy) == MIXED_GRID_MEASURE_PROFILE_LEGACY
+    legacy = mixed_attention_measure_contract(explicit_legacy, video_start=5, sequence_rows=83)
+    assert legacy["mode"] == "prefix_kv_stratified_subsample"
+
+    migrated = MixedGridPlan(prefix, 7, 4, 6, attention_measure=True)
+    assert mixed_attention_measure_profile(migrated) == MIXED_GRID_MEASURE_PROFILE_LEGACY
 
 
 def test_weighted_measure_profile_publishes_generic_all_row_contract():

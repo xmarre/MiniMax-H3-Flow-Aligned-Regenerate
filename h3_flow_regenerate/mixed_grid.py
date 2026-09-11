@@ -39,7 +39,7 @@ class MixedGridPlan:
     source_w: int
     prefix_noise: torch.Tensor | None = None
     attention_measure: bool = False
-    measure_profile: str = MIXED_GRID_MEASURE_PROFILE_OFF
+    measure_profile: str | None = None
 
     @property
     def prefix_t(self):
@@ -83,6 +83,7 @@ def build_mixed_grid_plan(
     source_h,
     source_w,
     attention_measure=False,
+    measure_profile=None,
 ):
     video_mask, _ = unpack_streams(mask, shapes)
     video, _ = unpack_streams(internal_latent, shapes)
@@ -115,24 +116,27 @@ def build_mixed_grid_plan(
         source_w,
         video_noise[:, :, :prefix_t].detach().clone(),
         bool(attention_measure),
+        measure_profile,
     )
 
 
 def mixed_attention_measure_profile(plan: MixedGridPlan) -> str:
-    """Resolve legacy compatibility separately from the new all-row operator."""
+    """Resolve explicit profiles without reinterpreting serialized legacy graphs."""
+    if plan.measure_profile is None:
+        # ``attention_measure`` is the pre-profile control. Preserve its released
+        # representative semantics only when the new field is genuinely absent.
+        return (
+            MIXED_GRID_MEASURE_PROFILE_LEGACY
+            if plan.attention_measure
+            else MIXED_GRID_MEASURE_PROFILE_OFF
+        )
     profile = str(plan.measure_profile)
-    if profile == MIXED_GRID_MEASURE_PROFILE_OFF and plan.attention_measure:
-        # ``attention_measure`` is the pre-schema-2 control. Preserve its released
-        # representative semantics; never reinterpret an old graph as weighting.
-        return MIXED_GRID_MEASURE_PROFILE_LEGACY
     if profile not in {
         MIXED_GRID_MEASURE_PROFILE_OFF,
         MIXED_GRID_MEASURE_PROFILE_LEGACY,
         MIXED_GRID_MEASURE_PROFILE_WEIGHTED,
     }:
         raise ValueError(f"unsupported Mixed-Grid measure profile {profile!r}")
-    if profile == MIXED_GRID_MEASURE_PROFILE_LEGACY and not plan.attention_measure:
-        raise ValueError("legacy representative measure profile requires the released attention_measure control")
     return profile
 
 
