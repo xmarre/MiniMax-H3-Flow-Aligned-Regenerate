@@ -1,0 +1,38 @@
+name: Fix joint bridge Ruff
+
+on:
+  push:
+    branches:
+      - mirror/pr32-joint-overlap-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr32-joint-overlap-20260912
+      - name: Apply bounded Ruff fix and remove helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("h3_flow_regenerate/representation_bridge.py")
+          text = path.read_text()
+          old = '''        if len(ordered) % 2:\n            median_improvement = ordered[mid]\n        else:\n            median_improvement = 0.5 * (ordered[mid - 1] + ordered[mid])\n'''
+          new = '''        median_improvement = (\n            ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])\n        )\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one Ruff target, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          helper = Path(".github/workflows/fix_joint_bridge_ruff.yml")
+          helper.unlink()
+          PY
+          git diff --check
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
+          git add -A
+          git commit -m "Format joint overlap geometry bridge"
+          git push origin HEAD:mirror/pr32-joint-overlap-20260912
