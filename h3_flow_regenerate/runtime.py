@@ -24,6 +24,15 @@ from .handoff import (
     select_handoff_index,
     upscale_learned_clean_video,
 )
+from .high_stage_diagnostics import (
+    HIGH_STAGE_DIAGNOSTIC_KEY,
+    high_stage_diagnostic_context,
+    make_high_stage_diagnostic_contract,
+    next_call_fields,
+    record_callback_boundary,
+    record_packed_boundary,
+    record_video_boundary,
+)
 from .metrics import H3FlowMetrics
 from .mixed_grid import (
     MIXED_GRID_KEY,
@@ -488,6 +497,37 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             )
         active.call_index += 1
 
+    high_diag_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)
+    high_diag_fields = None
+    if stage == "high" and isinstance(high_diag_contract, dict):
+        if spectrum_active_step is not None:
+            _, diagnostic_phase, diagnostic_outer = spectrum_active_step
+            spectrum_step_id = getattr(spectrum_runtime, "active_step_id", None)
+        else:
+            diagnostic_phase = transformer.get(SPECTRUM_PHASE_KEY)
+            diagnostic_outer = transformer.get(SPECTRUM_OUTER_STEP_KEY)
+            spectrum_step_id = (
+                getattr(spectrum_runtime, "last_completed_step_id", None)
+                if spectrum_completed_here and spectrum_runtime is not None
+                else None
+            )
+        high_diag_fields = next_call_fields(
+            high_diag_contract,
+            sigma=sigma,
+            coordinate=coordinate,
+            actual=actual,
+            solver_phase=diagnostic_phase,
+            solver_outer_step=diagnostic_outer,
+            spectrum_step_id=spectrum_step_id,
+        )
+        record_packed_boundary(
+            binding.metrics,
+            "mixed_grid_high_prediction_boundary",
+            result,
+            high_diag_contract,
+            high_diag_fields,
+        )
+
     exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)
     if isinstance(exact_bridge, dict) and not bool(exact_bridge.get("applied")) and actual:
         exact_prefix = exact_bridge.get("exact_prefix")
@@ -535,6 +575,14 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             sigma=sigma,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
+        if high_diag_fields is not None and isinstance(high_diag_contract, dict):
+            record_video_boundary(
+                binding.metrics,
+                "mixed_grid_high_guided_boundary",
+                guided_video,
+                high_diag_contract,
+                high_diag_fields,
+            )
         result, _ = pack_streams((guided_video, audio_x0))
         binding.metrics.event(
             "guidance",
@@ -1815,9 +1863,31 @@ def _run_progressive(
             binding.active_guidance_run = run
 
         def high_callback(step, x0, x, _total):
+            diagnostic_contract = transformer.get(HIGH_STAGE_DIAGNOSTIC_KEY)
+            if mixed_plan is not None and isinstance(diagnostic_contract, dict):
+                record_callback_boundary(
+                    binding.metrics,
+                    step=step,
+                    global_step=index + step,
+                    x0=x0,
+                    x=x,
+                    contract=diagnostic_contract,
+                )
             if callback is not None:
                 return callback(index + step, x0, x, len(sigmas) - 1)
             return None
+
+        high_diagnostic_context = contextlib.nullcontext(None)
+        if mixed_plan is not None:
+            high_diagnostic_context = high_stage_diagnostic_context(
+                guider,
+                make_high_stage_diagnostic_contract(
+                    prefix_t=mixed_plan.prefix_t,
+                    shapes=target_shapes,
+                    phases=_sampler_phases(sampler, high_sigmas),
+                    sampler=sampler_name(sampler),
+                ),
+            )
 
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
@@ -1830,7 +1900,7 @@ def _run_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider), high_diagnostic_context:
             result = executor(
                 target_noise,
                 target_latent_image,
