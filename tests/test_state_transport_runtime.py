@@ -21,6 +21,18 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
     monkeypatch.setitem(sys.modules, "comfy.samplers", fake.samplers)
 
     caller_packed, target_shapes, mask = inputs(t=7, prefix=2, h=8, w=12)
+    caller_video, caller_audio = unpack_streams(caller_packed, target_shapes)
+    # Keep the runtime fixture in a realistic latent range. The generic mixed-grid
+    # helper intentionally uses a large arange tensor, which makes the native
+    # noise->state reconstruction lose precision through cancellation and tests
+    # float32 conditioning rather than state-transport semantics.
+    caller_video = torch.linspace(
+        -0.8,
+        0.8,
+        steps=caller_video.numel(),
+        dtype=caller_video.dtype,
+    ).reshape_as(caller_video)
+    caller_packed, _ = pack_streams((caller_video, caller_audio))
     caller_noise = torch.randn_like(caller_packed)
     source_shapes = list(target_shapes)
     source_shapes[0] = (*source_shapes[0][:-2], 4, 6)
