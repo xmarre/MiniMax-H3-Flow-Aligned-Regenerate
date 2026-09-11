@@ -268,7 +268,9 @@ def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tens
     return bias, report
 
 
-def _authoritative_motion_prediction(exact_prefix: torch.Tensor) -> tuple[tuple[float, float, float, float] | None, dict]:
+def _authoritative_motion_prediction(
+    exact_prefix: torch.Tensor,
+) -> tuple[tuple[float, float, float, float] | None, dict]:
     identity = (1.0, 1.0, 0.0, 0.0)
     prefix_t = int(exact_prefix.shape[2])
     report = {
@@ -311,7 +313,8 @@ def _authoritative_motion_prediction(exact_prefix: torch.Tensor) -> tuple[tuple[
     identity_error = holdout.get("identity_error")
     aligned_error = holdout.get("aligned_error")
     prediction_error = holdout.get("comparison_error")
-    if any(value is None or not math.isfinite(float(value)) for value in (identity_error, aligned_error, prediction_error)):
+    holdout_errors = (identity_error, aligned_error, prediction_error)
+    if any(value is None or not math.isfinite(float(value)) for value in holdout_errors):
         report["reason"] = "authoritative_motion_holdout_unavailable"
         return None, report
 
@@ -329,7 +332,8 @@ def _authoritative_motion_prediction(exact_prefix: torch.Tensor) -> tuple[tuple[
         report["reason"] = "authoritative_motion_holdout_regression"
         return None, report
 
-    expected = _predict_transform(samples + [(holdout_index, _registration_transform(holdout) or identity)], prefix_t)
+    holdout_transform = _registration_transform(holdout) or identity
+    expected = _predict_transform([*samples, (holdout_index, holdout_transform)], prefix_t)
     report.update(accepted=True, reason="authoritative_motion_holdout_validated", expected_transform=expected)
     return expected, report
 
