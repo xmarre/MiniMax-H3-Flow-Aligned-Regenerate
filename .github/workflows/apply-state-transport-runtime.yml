@@ -1,0 +1,39 @@
+name: Apply state transport runtime patch
+
+on:
+  push:
+    branches:
+      - mirror/mixed-grid-state-transport-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  patch-runtime:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/mixed-grid-state-transport-20260911
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply bounded source transform
+        run: python .github/scripts/apply_state_transport_runtime.py
+      - name: Structural checks
+        run: |
+          python -m py_compile h3_flow_regenerate/runtime.py
+          git diff --check
+      - name: Commit runtime patch
+        run: |
+          if git diff --quiet -- h3_flow_regenerate/runtime.py; then
+            echo 'runtime already patched'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add h3_flow_regenerate/runtime.py
+          git commit -m 'Integrate controlled Mixed-Grid state transport'
+          git push origin HEAD:mirror/mixed-grid-state-transport-20260911
