@@ -17,8 +17,9 @@ def _pair(dtype=torch.float32):
     exact = learned[:, :, :4].clone()
     yy = torch.linspace(-1, 1, 24).view(1, 1, 1, 24, 1)
     xx = torch.linspace(-1, 1, 32).view(1, 1, 1, 1, 32)
-    # Large local/chroma-like residual: v2 must never copy this difference field
-    # onto a generated token merely to make the latent boundary algebra close.
+    # Large local/chroma-like residual: the bridge must never copy this
+    # difference field onto a generated token merely to make latent algebra
+    # close at the boundary.
     exact = exact + 0.12 + 0.08 * yy - 0.05 * xx
     return learned.to(dtype), exact.to(dtype)
 
@@ -62,11 +63,13 @@ def test_authorized_overlap_geometry_warps_entire_suffix_without_residual_transp
 
     corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
 
-    assert report["suffix_representation_bridge_version"] == 2
-    assert report["suffix_representation_bridge_mode"] == "constant_overlap_geometry_v1"
+    assert report["suffix_representation_bridge_version"] == 3
+    assert report["suffix_representation_bridge_mode"] == "joint_overlap_geometry_v2"
     assert report["suffix_representation_bridge_accepted"] is True
     assert report["suffix_representation_bridge_raw_structural_residual_transplanted"] is False
     assert report["suffix_representation_bridge_corrected_tokens"] == 3
+    assert report["suffix_representation_bridge_validation_frames"] == 4
+    assert report["suffix_representation_bridge_improving_frames"] == 4
     assert report["suffix_representation_bridge_transform"] == pytest.approx((1.0, 1.0, 0.5, -0.25))
     assert torch.equal(corrected[:, :, :4], before[:, :, :4])
     expected = _warp_suffix(before[:, :, 4:], (1.0, 1.0, 0.5, -0.25))
@@ -99,32 +102,91 @@ def test_large_raw_overlap_residual_is_noop_without_safe_geometry(monkeypatch):
     assert report["suffix_representation_bridge_structural_rms"] > 0.01
 
 
-def test_inconsistent_overlap_geometry_is_rejected(monkeypatch):
-    calls = {"index": 0}
+def test_joint_overlap_candidate_can_pass_with_one_small_frame_regression(monkeypatch):
+    comparison_errors = iter([0.65, 0.75, 0.82, 0.88, 1.01])
 
-    def alternating(_reference, _moving, *, comparison=None):
-        if comparison is not None:
+    def joint_then_validate(_reference, _moving, *, comparison=None):
+        if comparison is None:
             return {
                 "identity_error": 1.0,
-                "aligned_error": 0.4,
-                "comparison_error": 0.4,
+                "aligned_error": 0.5,
                 "transform": (1.0, 1.0, 0.5, 0.0),
                 "reason": "single_transition_diagnostic",
             }
-        calls["index"] += 1
-        tx = 0.5 if calls["index"] % 2 else -0.5
+        error = next(comparison_errors)
         return {
             "identity_error": 1.0,
-            "aligned_error": 0.4,
-            "transform": (1.0, 1.0, tx, 0.0),
+            "aligned_error": error,
+            "comparison_error": error,
+            "transform": comparison,
             "reason": "single_transition_diagnostic",
         }
 
-    monkeypatch.setattr(bridge, "register_pair", alternating)
+    monkeypatch.setattr(bridge, "register_pair", joint_then_validate)
+    learned, exact = _pair()
+    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
+    assert corrected is not learned
+    assert report["suffix_representation_bridge_accepted"] is True
+    assert report["suffix_representation_bridge_improving_frames"] == 3
+    assert report["suffix_representation_bridge_worst_frame_regression"] == pytest.approx(0.01)
+
+
+def test_joint_overlap_candidate_rejects_insufficient_frame_support(monkeypatch):
+    comparison_errors = iter([0.65, 0.75, 1.02, 1.01, 0.88])
+
+    def insufficient_support(_reference, _moving, *, comparison=None):
+        if comparison is None:
+            return {
+                "identity_error": 1.0,
+                "aligned_error": 0.5,
+                "transform": (1.0, 1.0, 0.5, 0.0),
+                "reason": "single_transition_diagnostic",
+            }
+        error = next(comparison_errors)
+        return {
+            "identity_error": 1.0,
+            "aligned_error": error,
+            "comparison_error": error,
+            "transform": comparison,
+            "reason": "single_transition_diagnostic",
+        }
+
+    monkeypatch.setattr(bridge, "register_pair", insufficient_support)
     learned, exact = _pair()
     corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
     assert corrected is learned
     assert report["suffix_representation_bridge_accepted"] is False
+    assert report["suffix_representation_bridge_reason"] == "joint_overlap_geometry_insufficient_frame_support"
+    assert report["suffix_representation_bridge_improving_frames"] == 2
+
+
+def test_joint_overlap_candidate_rejects_large_single_frame_regression(monkeypatch):
+    comparison_errors = iter([0.65, 0.75, 0.82, 0.88, 1.08])
+
+    def holdout_regression(_reference, _moving, *, comparison=None):
+        if comparison is None:
+            return {
+                "identity_error": 1.0,
+                "aligned_error": 0.5,
+                "transform": (1.0, 1.0, 0.5, 0.0),
+                "reason": "single_transition_diagnostic",
+            }
+        error = next(comparison_errors)
+        return {
+            "identity_error": 1.0,
+            "aligned_error": error,
+            "comparison_error": error,
+            "transform": comparison,
+            "reason": "single_transition_diagnostic",
+        }
+
+    monkeypatch.setattr(bridge, "register_pair", holdout_regression)
+    learned, exact = _pair()
+    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
+    assert corrected is learned
+    assert report["suffix_representation_bridge_accepted"] is False
+    assert report["suffix_representation_bridge_reason"] == "joint_overlap_geometry_holdout_regression"
+    assert report["suffix_representation_bridge_worst_frame_regression"] == pytest.approx(0.08)
 
 
 def test_disabled_path_is_exact_object_noop():
