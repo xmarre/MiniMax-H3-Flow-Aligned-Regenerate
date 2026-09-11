@@ -21,6 +21,9 @@ jobs:
           python-version: '3.12'
       - name: Apply bounded diagnostic changes
         run: python .github/scripts/apply_endpoint_transport_diagnostic.py
+      - name: Restore workflow-owned files
+        run: |
+          git checkout HEAD -- .github/workflows/ci.yml .github/workflows/apply-endpoint-transport-diagnostic.yml
       - name: Commit diagnostic candidate
         run: |
           git config user.name github-actions[bot]
