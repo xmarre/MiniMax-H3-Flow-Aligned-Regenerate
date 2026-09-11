@@ -108,4 +108,4 @@ jobs:
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
-          python -m pytest tests/test_mixed_grid.py tests/test_state_transport_native.py tests/test_decode_context.py -q
+          python -m pytest tests/test_mixed_grid.py tests/test_state_transport_native.py tests/test_high_stage_diagnostics_native.py tests/test_decode_context.py -q

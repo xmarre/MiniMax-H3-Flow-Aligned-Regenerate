@@ -71,12 +71,22 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         handoff_state_policy=None,
     ):
         # Keep direct Python calls consistent with the inherited Target Input
-        # handoff default. Mixed-Grid additionally enables its validated seam
-        # repair by default; Target-Sparse does not expose that control.
+        # handoff default. Mixed-Grid additionally enables its persistent
+        # target-side suffix rebase by default; Target-Sparse does not expose
+        # that control.
         if handoff_transfer is None:
             handoff_transfer = "learned_3d"
         if suffix_geometric_bridge is None:
             suffix_geometric_bridge = self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
+
+        # Matched 00384-00386 evidence showed that the Mixed-Grid one-token DC
+        # injection is not a safe representation bridge: a single latent-token
+        # channel offset can decode as a multi-frame colour pulse. Keep the
+        # Target-Sparse first-actual bridge unchanged, but retire this heuristic
+        # on Mixed-Grid even for older serialized graphs that stored true.
+        effective_suffix_dc_bridge = bool(suffix_dc_bridge)
+        if self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix":
+            effective_suffix_dc_bridge = False
 
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -85,7 +95,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
-                suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_dc_bridge=effective_suffix_dc_bridge,
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
                 handoff_state_policy=handoff_state_policy,
@@ -100,7 +110,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
                 exact_prefix_mode=self.EXACT_PREFIX_MODE,
-                suffix_dc_bridge=bool(suffix_dc_bridge),
+                suffix_dc_bridge=effective_suffix_dc_bridge,
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
                 handoff_state_policy=handoff_state_policy,
@@ -134,9 +144,12 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
     DESCRIPTION = (
         "Accelerated exact-prefix Continuum path. It keeps the authoritative target-grid protected-prefix "
         "conditioning, generates a genuine low-grid suffix, performs learned 3D clean-latent transfer, "
-        "restores the exact prefix, and starts fresh target-grid refinement. Requires an H3 latent-upscaler "
-        "provider and VDN external-sequence API v2 when VDN is enabled. State transport is an explicit "
-        "experimental policy and remains legacy re-noise by default until matched media acceptance."
+        "restores the exact prefix, and starts fresh target-grid refinement. The optional persistent suffix "
+        "rebase can independently correct a held-out-validated per-channel tone-domain offset and a bounded "
+        "constant affine frame offset inferred from the learned upscaler's own temporal motion. Any accepted "
+        "component applies to the entire generated suffix; raw structural/chroma residual and one-token DC "
+        "transplantation remain retired. Requires an H3 latent-upscaler provider and VDN external-sequence "
+        "API v2 when VDN is enabled. State transport remains experimental and legacy re-noise remains the default."
     )
 
     @classmethod
@@ -146,9 +159,6 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         inputs = copy.deepcopy(super().INPUT_TYPES())
         required = inputs["required"]
 
-        # Canonical production defaults. Keep every visible value aligned with
-        # the shipped workflows so a newly added node and an opened example do
-        # not silently exercise different handoff policies.
         required["source_mode"] = (["pixels", "scale"], {"default": "scale"})
         required["source_scale"] = ("FLOAT", {"default": 0.70, "min": 0.1, "max": 0.99, "step": 0.01})
         required["source_width"] = ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32})
@@ -174,10 +184,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         required["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": (
-                    "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
-                    "calibration while keeping the authoritative Continuum prefix bit-exact."
+                    "Retired for Mixed-Grid. The historical one-token per-channel DC injection can decode as "
+                    "a coloured multi-frame pulse, so Mixed-Grid ignores older serialized true values. "
+                    "Target-Sparse keeps its separate first-actual DC bridge."
                 ),
             },
         )
@@ -187,10 +198,11 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": True,
                 "tooltip": (
-                    "Enable the target-side exact-overlap representation reconciliation after learned transfer. "
-                    "This control is independent of the explicit attention measure profile. For serialized "
-                    "pre-profile workflows only, its historical true value still selects the released legacy "
-                    "representative-K/V measure so old graphs do not silently change numerical semantics."
+                    "Legacy input name for the experimental persistent target-side suffix rebase. It may apply "
+                    "a per-channel constant latent bias validated on held-out exact/learned overlap and/or a "
+                    "small constant affine correction inferred from learned-upscaler temporal motion and validated "
+                    "at the prefix/suffix boundary plus internal suffix transitions. Any accepted correction covers "
+                    "the entire generated suffix. Raw structural/chroma residuals are never transplanted."
                 ),
             },
         )
@@ -206,14 +218,13 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             },
         )
         optional["handoff_state_policy"] = (
-            ["legacy_renoise", "velocity_bicubic_v1"],
+            ["legacy_renoise", "velocity_bicubic_v1", "endpoint_residual_bicubic_v1"],
             {
                 "default": "legacy_renoise",
                 "tooltip": (
-                    "Mixed-Grid handoff state policy. legacy_renoise preserves released behavior. "
-                    "velocity_bicubic_v1 re-anchors the learned corrected clean suffix while transporting "
-                    "the source sampler displacement X-C with a fixed framewise bicubic lift. This is an "
-                    "experimental controlled candidate until matched CUDA/media validation is accepted."
+                    "Mixed-Grid handoff state policy. legacy_renoise preserves released state semantics and is the "
+                    "current matched comparator. velocity_bicubic_v1 and endpoint_residual_bicubic_v1 remain "
+                    "diagnostic candidates; matched runs 00385/00386 were worse than legacy on the current case."
                 ),
             },
         )
