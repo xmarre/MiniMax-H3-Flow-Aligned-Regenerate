@@ -1,0 +1,35 @@
+name: PR32 00390 format helper
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr32-00390-persistent-rebase-20260912
+          fetch-depth: 0
+      - name: Apply exact Ruff formatting and remove helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("h3_flow_regenerate/runtime.py")
+          text = path.read_text()
+          old = '''                later_suffix_extrapolated=bool(\n                    representation_metrics["suffix_representation_bridge_accepted"]\n                ),'''
+          new = '''                later_suffix_extrapolated=bool(representation_metrics["suffix_representation_bridge_accepted"]),'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one Ruff formatting anchor, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          PY
+          git rm .github/workflows/pr32_00390_format_helper.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add h3_flow_regenerate/runtime.py
+          git commit -m "Format PR32 persistent rebase telemetry"
+          git push origin HEAD:mirror/pr32-00390-persistent-rebase-20260912
