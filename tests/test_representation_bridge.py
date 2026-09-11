@@ -11,35 +11,21 @@ from h3_flow_regenerate.representation_bridge import (
 )
 
 
-def _pair(dtype=torch.float32):
+def _learned(dtype=torch.float32):
     torch.manual_seed(91)
-    learned = torch.randn(1, 24, 7, 24, 32, dtype=torch.float32)
-    exact = learned[:, :, :4].clone()
-    yy = torch.linspace(-1, 1, 24).view(1, 1, 1, 24, 1)
-    xx = torch.linspace(-1, 1, 32).view(1, 1, 1, 1, 32)
-    # Large local/chroma-like residual: the bridge must never copy this
-    # difference field onto a generated token merely to make latent algebra
-    # close at the boundary.
-    exact = exact + 0.12 + 0.08 * yy - 0.05 * xx
-    return learned.to(dtype), exact.to(dtype)
+    return torch.randn(1, 24, 7, 24, 32, dtype=torch.float32).to(dtype)
 
 
-def _register_translation(_reference, _moving, *, comparison=None):
-    transform = (1.0, 1.0, 0.5, -0.25)
-    if comparison is None:
-        return {
-            "identity_error": 1.0,
-            "aligned_error": 0.4,
-            "transform": transform,
-            "reason": "single_transition_diagnostic",
-        }
-    return {
+def _identity_register(_reference, _moving, *, comparison=None):
+    result = {
         "identity_error": 1.0,
-        "aligned_error": 0.35,
-        "comparison_error": 0.4,
-        "transform": transform,
+        "aligned_error": 1.0,
+        "transform": (1.0, 1.0, 0.0, 0.0),
         "reason": "single_transition_diagnostic",
     }
+    if comparison is not None:
+        result["comparison_error"] = 1.0
+    return result
 
 
 def _warp_suffix(value: torch.Tensor, transform):
@@ -56,148 +42,173 @@ def _warp_suffix(value: torch.Tensor, transform):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_authorized_overlap_geometry_warps_entire_suffix_without_residual_transplant(monkeypatch, dtype):
-    monkeypatch.setattr(bridge, "register_pair", _register_translation)
-    learned, exact = _pair(dtype)
+def test_stable_overlap_tone_bias_rebases_entire_suffix_without_structural_transplant(monkeypatch, dtype):
+    monkeypatch.setattr(bridge, "register_pair", _identity_register)
+    learned = _learned(dtype)
+    bias = torch.linspace(-0.12, 0.16, 24, dtype=torch.float32).view(1, 24, 1, 1, 1)
+    exact = learned[:, :, :4].float() + bias
+    exact = exact.to(dtype)
     before = learned.clone()
 
     corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
 
-    assert report["suffix_representation_bridge_version"] == 3
-    assert report["suffix_representation_bridge_mode"] == "joint_overlap_geometry_v2"
+    assert report["suffix_representation_bridge_version"] == 4
+    assert report["suffix_representation_bridge_mode"] == "persistent_suffix_rebase_v1"
     assert report["suffix_representation_bridge_accepted"] is True
+    assert report["suffix_representation_bridge_tone_bias_accepted"] is True
+    assert report["suffix_representation_bridge_geometry_accepted"] is False
     assert report["suffix_representation_bridge_raw_structural_residual_transplanted"] is False
     assert report["suffix_representation_bridge_corrected_tokens"] == 3
-    assert report["suffix_representation_bridge_validation_frames"] == 4
-    assert report["suffix_representation_bridge_improving_frames"] == 4
-    assert report["suffix_representation_bridge_transform"] == pytest.approx((1.0, 1.0, 0.5, -0.25))
+    assert report["suffix_representation_bridge_tone_validation_dc_improvement"] > 0.99
     assert torch.equal(corrected[:, :, :4], before[:, :, :4])
-    expected = _warp_suffix(before[:, :, 4:], (1.0, 1.0, 0.5, -0.25))
-    torch.testing.assert_close(corrected[:, :, 4:].float(), expected.float(), rtol=0, atol=2e-3)
-
-    raw_structural = exact[:, :, -1:].float() - before[:, :, 3:4].float()
-    raw_structural -= raw_structural.mean(dim=(-2, -1), keepdim=True)
-    first_change = corrected[:, :, 4:5].float() - before[:, :, 4:5].float()
-    assert not torch.allclose(first_change, raw_structural, rtol=0, atol=1e-3)
+    expected = before[:, :, 4:].float() + bias
+    torch.testing.assert_close(corrected[:, :, 4:].float(), expected, rtol=0, atol=3e-3)
 
 
-def test_large_raw_overlap_residual_is_noop_without_safe_geometry(monkeypatch):
-    def identity_registration(_reference, _moving, *, comparison=None):
-        base = {
+def test_unstable_overlap_tone_bias_is_rejected(monkeypatch):
+    monkeypatch.setattr(bridge, "register_pair", _identity_register)
+    learned = _learned()
+    exact = learned[:, :, :4].clone()
+    exact[:, :, :3] += 0.10
+    exact[:, :, 3:4] -= 0.10
+
+    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
+
+    assert corrected is learned
+    assert report["suffix_representation_bridge_accepted"] is False
+    assert report["suffix_representation_bridge_tone_bias_accepted"] is False
+    assert report["suffix_representation_bridge_tone_reason"] in {
+        "heldout_tone_gain_too_small",
+        "heldout_tone_total_regression",
+    }
+
+
+def test_geometry_rebase_uses_recent_learned_motion_and_validates_internal_suffix(monkeypatch):
+    plain_calls = 0
+    comparison_calls = 0
+
+    def measured_register(_reference, _moving, *, comparison=None):
+        nonlocal plain_calls, comparison_calls
+        if comparison is None:
+            plain_calls += 1
+            return {
+                "identity_error": 0.4,
+                "aligned_error": 0.2,
+                "transform": (1.0, 1.0, 0.0, 0.0),
+                "reason": "single_transition_diagnostic",
+            }
+        comparison_calls += 1
+        if comparison_calls == 1:
+            return {
+                "identity_error": 1.0,
+                "aligned_error": 0.25,
+                "comparison_error": 0.8,
+                "transform": (1.0, 1.0, 0.5, 0.0),
+                "reason": "single_transition_diagnostic",
+            }
+        return {
             "identity_error": 1.0,
-            "aligned_error": 1.0,
+            "aligned_error": 0.2,
+            "comparison_error": 0.4,
             "transform": (1.0, 1.0, 0.0, 0.0),
             "reason": "single_transition_diagnostic",
         }
-        if comparison is not None:
-            base["comparison_error"] = 1.0
-        return base
 
-    monkeypatch.setattr(bridge, "register_pair", identity_registration)
-    learned, exact = _pair()
+    monkeypatch.setattr(bridge, "register_pair", measured_register)
+    learned = _learned()
+    correction, report = bridge._persistent_geometry_rebase(learned, 4)
+
+    assert correction == pytest.approx((1.0, 1.0, 0.5, 0.0))
+    assert report["accepted"] is True
+    assert report["reason"] == "persistent_motion_frame_rebase_authorized"
+    assert report["improvement"] == pytest.approx(0.5)
+    assert report["validation_transitions"] == 2
+    assert report["worst_internal_regression"] == pytest.approx(0.0)
+    assert plain_calls == 7
+    assert comparison_calls == 2
+
+
+def test_authorized_geometry_rebase_warps_the_complete_suffix(monkeypatch):
+    learned = _learned()
+    exact = learned[:, :, :4].clone()
+    transform = (1.0, 1.0, 0.5, -0.25)
+
+    monkeypatch.setattr(
+        bridge,
+        "_persistent_tone_bias",
+        lambda *_args, **_kwargs: (
+            None,
+            {
+                "accepted": False,
+                "reason": "overlap_tone_already_matched",
+                "overlap_frames": 4,
+                "bias_rms": 0.0,
+                "validation_rms_before": 0.0,
+                "validation_rms_after": 0.0,
+                "validation_dc_rms_before": 0.0,
+                "validation_dc_rms_after": 0.0,
+                "validation_dc_improvement": 0.0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_persistent_geometry_rebase",
+        lambda *_args, **_kwargs: (
+            transform,
+            {
+                "accepted": True,
+                "reason": "persistent_motion_frame_rebase_authorized",
+                "expected_transform": (1.0, 1.0, 0.0, 0.0),
+                "observed_transform": transform,
+                "residual_transform": transform,
+                "boundary_error_before": 0.8,
+                "boundary_error_after": 0.4,
+                "improvement": 0.5,
+                "validation_transitions": 2,
+                "improving_transitions": 2,
+                "median_transition_improvement": 0.0,
+                "worst_internal_regression": 0.0,
+            },
+        ),
+    )
+
     corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
+
+    assert report["suffix_representation_bridge_geometry_accepted"] is True
+    assert report["suffix_representation_bridge_corrected_tokens"] == 3
+    assert torch.equal(corrected[:, :, :4], learned[:, :, :4])
+    expected = _warp_suffix(learned[:, :, 4:], transform)
+    torch.testing.assert_close(corrected[:, :, 4:], expected, rtol=0, atol=2e-5)
+
+
+def test_large_raw_structural_overlap_is_not_transplanted_when_rebases_reject(monkeypatch):
+    monkeypatch.setattr(bridge, "register_pair", _identity_register)
+    learned = _learned()
+    exact = learned[:, :, :4].clone()
+    yy = torch.linspace(-1, 1, 24).view(1, 1, 1, 24, 1)
+    xx = torch.linspace(-1, 1, 32).view(1, 1, 1, 1, 32)
+    exact += 0.08 * yy - 0.05 * xx
+
+    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
+
     assert corrected is learned
     assert report["suffix_representation_bridge_accepted"] is False
     assert report["suffix_representation_bridge_raw_structural_residual_transplanted"] is False
     assert report["suffix_representation_bridge_structural_rms"] > 0.01
 
 
-def test_joint_overlap_candidate_can_pass_with_one_small_frame_regression(monkeypatch):
-    comparison_errors = iter([0.65, 0.75, 0.82, 0.88, 1.01])
-
-    def joint_then_validate(_reference, _moving, *, comparison=None):
-        if comparison is None:
-            return {
-                "identity_error": 1.0,
-                "aligned_error": 0.5,
-                "transform": (1.0, 1.0, 0.5, 0.0),
-                "reason": "single_transition_diagnostic",
-            }
-        error = next(comparison_errors)
-        return {
-            "identity_error": 1.0,
-            "aligned_error": error,
-            "comparison_error": error,
-            "transform": comparison,
-            "reason": "single_transition_diagnostic",
-        }
-
-    monkeypatch.setattr(bridge, "register_pair", joint_then_validate)
-    learned, exact = _pair()
-    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
-    assert corrected is not learned
-    assert report["suffix_representation_bridge_accepted"] is True
-    assert report["suffix_representation_bridge_improving_frames"] == 3
-    assert report["suffix_representation_bridge_worst_frame_regression"] == pytest.approx(0.01)
-
-
-def test_joint_overlap_candidate_rejects_insufficient_frame_support(monkeypatch):
-    comparison_errors = iter([0.65, 0.75, 1.02, 1.01, 0.88])
-
-    def insufficient_support(_reference, _moving, *, comparison=None):
-        if comparison is None:
-            return {
-                "identity_error": 1.0,
-                "aligned_error": 0.5,
-                "transform": (1.0, 1.0, 0.5, 0.0),
-                "reason": "single_transition_diagnostic",
-            }
-        error = next(comparison_errors)
-        return {
-            "identity_error": 1.0,
-            "aligned_error": error,
-            "comparison_error": error,
-            "transform": comparison,
-            "reason": "single_transition_diagnostic",
-        }
-
-    monkeypatch.setattr(bridge, "register_pair", insufficient_support)
-    learned, exact = _pair()
-    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
-    assert corrected is learned
-    assert report["suffix_representation_bridge_accepted"] is False
-    assert report["suffix_representation_bridge_reason"] == "joint_overlap_geometry_insufficient_frame_support"
-    assert report["suffix_representation_bridge_improving_frames"] == 2
-
-
-def test_joint_overlap_candidate_rejects_large_single_frame_regression(monkeypatch):
-    comparison_errors = iter([0.65, 0.75, 0.82, 0.88, 1.08])
-
-    def holdout_regression(_reference, _moving, *, comparison=None):
-        if comparison is None:
-            return {
-                "identity_error": 1.0,
-                "aligned_error": 0.5,
-                "transform": (1.0, 1.0, 0.5, 0.0),
-                "reason": "single_transition_diagnostic",
-            }
-        error = next(comparison_errors)
-        return {
-            "identity_error": 1.0,
-            "aligned_error": error,
-            "comparison_error": error,
-            "transform": comparison,
-            "reason": "single_transition_diagnostic",
-        }
-
-    monkeypatch.setattr(bridge, "register_pair", holdout_regression)
-    learned, exact = _pair()
-    corrected, report = apply_suffix_representation_bridge(learned, exact, requested=True)
-    assert corrected is learned
-    assert report["suffix_representation_bridge_accepted"] is False
-    assert report["suffix_representation_bridge_reason"] == "joint_overlap_geometry_holdout_regression"
-    assert report["suffix_representation_bridge_worst_frame_regression"] == pytest.approx(0.08)
-
-
 def test_disabled_path_is_exact_object_noop():
-    learned, exact = _pair()
+    learned = _learned()
+    exact = learned[:, :, :4].clone()
     disabled, report = apply_suffix_representation_bridge(learned, exact, requested=False)
     assert disabled is learned
     assert report == disabled_suffix_representation_bridge_metrics(prefix_t=4)
 
 
 def test_nonfinite_input_is_rejected():
-    learned, exact = _pair()
+    learned = _learned()
+    exact = learned[:, :, :4].clone()
     learned = learned.clone()
     learned[0, 0, 0, 0, 0] = float("nan")
     with pytest.raises(RuntimeError, match="NaN or Inf"):
