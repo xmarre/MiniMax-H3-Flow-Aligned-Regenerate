@@ -5,6 +5,7 @@ import torch
 from h3_flow_regenerate.pr32_audio_boundary_pipeline import (
     H3ContinuumAudioBoundaryPipelineDiagnostic,
     decode_and_phase_align_audio_boundary,
+    inspect_generated_audio_latent_joins,
 )
 
 
@@ -54,6 +55,21 @@ def _case_00410_geometry():
     return latents, plan
 
 
+def test_latent_join_report_localizes_generated_suffix_edge_after_video_cut():
+    latents, plan = _case_00410_geometry()
+
+    report = inspect_generated_audio_latent_joins(latents, plan)
+
+    assert "PR #32 generated-audio latent-join diagnostic" in report
+    assert "exact_prefix=65" in report
+    assert "join_global_latent=292" in report
+    assert "join_sample=233600" in report
+    assert "video_cut_sample=233333" in report
+    assert "join_minus_video_cut=+267s (+8.3438ms)" in report
+    assert "latent_edge_rms=" in report
+    assert "edge_over_local=" in report
+
+
 def test_integrated_pipeline_executes_oracle_then_phase_alignment_serially():
     latents, plan = _case_00410_geometry()
     before = [item["samples"].clone() for item in latents]
@@ -61,6 +77,7 @@ def test_integrated_pipeline_executes_oracle_then_phase_alignment_serially():
     aligned, report = decode_and_phase_align_audio_boundary(latents, _FakeAudioVAE(), plan)
 
     assert len(aligned) == 2
+    assert "PR #32 generated-audio latent-join diagnostic" in report
     assert "PR #32 self-contained decoded-audio oracle" in report
     assert "PR #32 H3 Continuum audio latent-phase alignment" in report
     assert "group 2: origin_latent=227" in report
