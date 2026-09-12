@@ -68,10 +68,7 @@ def build_mixed_grid_plan_capture(*args, **kwargs):
 
 def _native_axis(dim: int, sqrt_area: float, samples: int) -> torch.Tensor:
     ratio = float(dim) / float(sqrt_area)
-    return (
-        torch.arange(samples, dtype=torch.float64) * (ratio / samples)
-        + (1.0 - ratio) / 2.0
-    ) * 32.0
+    return (torch.arange(samples, dtype=torch.float64) * (ratio / samples) + (1.0 - ratio) / 2.0) * 32.0
 
 
 def _source_coordinate_target_frame(
