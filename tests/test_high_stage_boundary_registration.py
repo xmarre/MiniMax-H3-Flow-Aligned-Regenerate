@@ -46,7 +46,7 @@ def test_denoised_boundary_registration_is_recorded_without_mutation():
     assert torch.equal(video, before)
     fields = metrics.events[-1].fields
     assert fields["registration_available"] is True
-    assert fields["registration_reason"] == "measured"
+    assert fields["registration_reason"] == "single_transition_diagnostic"
     assert fields["registration_transform"] is not None
     assert fields["registration_identity_error"] is not None
     assert fields["registration_aligned_error"] is not None
