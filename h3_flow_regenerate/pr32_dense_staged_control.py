@@ -3,7 +3,6 @@ from __future__ import annotations
 from . import runtime, target_sparse
 from .target_sparse_node import H3ProgressiveTargetSparseHandoff
 
-
 # 00413 showed that the previous "dense" control was not a matched sparse-vs-dense
 # comparison: exact-prefix continuation fell all the way back to one ordinary
 # target-grid sampler lifetime, which also removed the progressive low/high
