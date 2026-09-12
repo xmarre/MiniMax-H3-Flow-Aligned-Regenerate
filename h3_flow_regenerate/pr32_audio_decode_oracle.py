@@ -22,7 +22,6 @@ import torch
 import torch.nn.functional as F
 
 from .pr32_audio_decode_context import (
-    _exact_audio_prefix_steps,
     _format_match,
     _frame_sample,
     _validate_plan,
