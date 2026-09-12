@@ -46,9 +46,7 @@ _payload_var: contextvars.ContextVar[_PrefixProxyPayload | None] = contextvars.C
     "h3_flow_pr32_prefix_proxy", default=None
 )
 _ORIGINAL_APPLY_SUFFIX_REPRESENTATION_BRIDGE = _runtime.apply_suffix_representation_bridge
-_ORIGINAL_DISABLED_SUFFIX_REPRESENTATION_BRIDGE_METRICS = (
-    _runtime.disabled_suffix_representation_bridge_metrics
-)
+_ORIGINAL_DISABLED_SUFFIX_REPRESENTATION_BRIDGE_METRICS = _runtime.disabled_suffix_representation_bridge_metrics
 _ORIGINAL_FLOW_PREDICT_WRAPPER = _runtime.flow_predict_wrapper
 
 
@@ -75,29 +73,19 @@ def _capture_candidate(
         "suffix_representation_bridge_high_prefix_proxy_bias_deviation_rms": 0.0,
     }
     if not bool(metrics.get("suffix_representation_bridge_tone_bias_accepted")):
-        report["suffix_representation_bridge_high_prefix_proxy_reason"] = (
-            "tone_rebase_not_authorized"
-        )
+        report["suffix_representation_bridge_high_prefix_proxy_reason"] = "tone_rebase_not_authorized"
         return None, report
     if bool(metrics.get("suffix_representation_bridge_geometry_accepted")):
-        report["suffix_representation_bridge_high_prefix_proxy_reason"] = (
-            "geometry_rebase_would_confound_proxy"
-        )
+        report["suffix_representation_bridge_high_prefix_proxy_reason"] = "geometry_rebase_would_confound_proxy"
         return None, report
-    geometry_reason = str(
-        metrics.get("suffix_representation_bridge_geometry_reason", "")
-    )
+    geometry_reason = str(metrics.get("suffix_representation_bridge_geometry_reason", ""))
     if geometry_reason != "native_boundary_replacement_geometry_consistent":
-        report["suffix_representation_bridge_high_prefix_proxy_reason"] = (
-            "clean_geometry_not_proven_consistent"
-        )
+        report["suffix_representation_bridge_high_prefix_proxy_reason"] = "clean_geometry_not_proven_consistent"
         return None, report
 
     prefix_t = int(exact_prefix.shape[2])
     if prefix_t <= 0 or prefix_t >= int(learned_clean_video.shape[2]):
-        raise ValueError(
-            "PR32 prefix proxy requires a non-empty learned prefix and suffix"
-        )
+        raise ValueError("PR32 prefix proxy requires a non-empty learned prefix and suffix")
     if tuple(corrected_clean_video.shape) != tuple(learned_clean_video.shape):
         raise ValueError("PR32 prefix proxy bridge outputs changed video geometry")
 
@@ -111,17 +99,13 @@ def _capture_candidate(
     tolerance = max(2.0e-6, 2.0e-5 * max(_rms(tone_bias), 1.0))
     if deviation_rms > tolerance:
         report.update(
-            suffix_representation_bridge_high_prefix_proxy_reason=(
-                "authorized_bridge_not_pure_tone"
-            ),
+            suffix_representation_bridge_high_prefix_proxy_reason=("authorized_bridge_not_pure_tone"),
             suffix_representation_bridge_high_prefix_proxy_bias_deviation_rms=deviation_rms,
         )
         return None, report
 
     learned_prefix = learned_clean_video[:, :, :prefix_t].detach().float()
-    exact = exact_prefix.detach().to(
-        device=learned_prefix.device, dtype=torch.float32
-    )
+    exact = exact_prefix.detach().to(device=learned_prefix.device, dtype=torch.float32)
     proxy_prefix = learned_prefix + tone_bias
     proxy_delta_rms = _rms(proxy_prefix - exact)
     payload = _PrefixProxyPayload(
@@ -136,9 +120,7 @@ def _capture_candidate(
     )
     report.update(
         suffix_representation_bridge_high_prefix_proxy_ready=True,
-        suffix_representation_bridge_high_prefix_proxy_reason=(
-            "tone_aligned_learned_prefix_ready"
-        ),
+        suffix_representation_bridge_high_prefix_proxy_reason=("tone_aligned_learned_prefix_ready"),
         suffix_representation_bridge_high_prefix_proxy_clean_delta_rms=proxy_delta_rms,
         suffix_representation_bridge_high_prefix_proxy_bias_deviation_rms=deviation_rms,
     )
@@ -160,17 +142,13 @@ def _apply_suffix_representation_bridge_capture(
         requested=requested,
     )
     metrics = dict(metrics)
-    payload, report = _capture_candidate(
-        learned_clean_video, exact_prefix, corrected, metrics
-    )
+    payload, report = _capture_candidate(learned_clean_video, exact_prefix, corrected, metrics)
     _payload_var.set(payload)
     metrics.update(report)
     return corrected, metrics
 
 
-def _disabled_suffix_representation_bridge_metrics_capture(
-    *, prefix_t: int, requested: bool = False
-):
+def _disabled_suffix_representation_bridge_metrics_capture(*, prefix_t: int, requested: bool = False):
     _payload_var.set(None)
     metrics = dict(
         _ORIGINAL_DISABLED_SUFFIX_REPRESENTATION_BRIDGE_METRICS(
@@ -181,9 +159,7 @@ def _disabled_suffix_representation_bridge_metrics_capture(
     metrics.update(
         suffix_representation_bridge_high_prefix_proxy_mode=_MODE,
         suffix_representation_bridge_high_prefix_proxy_ready=False,
-        suffix_representation_bridge_high_prefix_proxy_reason=(
-            "representation_bridge_disabled"
-        ),
+        suffix_representation_bridge_high_prefix_proxy_reason=("representation_bridge_disabled"),
         suffix_representation_bridge_high_prefix_proxy_clean_delta_rms=0.0,
         suffix_representation_bridge_high_prefix_proxy_bias_deviation_rms=0.0,
     )
@@ -197,9 +173,7 @@ def _native_visual_cond_timestep() -> float:
 
     value = float(native.VISUAL_COND_TIMESTEP)
     if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-        raise RuntimeError(
-            "native MiniMax H3 visual conditioning timestep is invalid"
-        )
+        raise RuntimeError("native MiniMax H3 visual conditioning timestep is invalid")
     return value
 
 
@@ -210,47 +184,30 @@ def _proxy_packed_model_input(
     *,
     visual_cond_timestep: float,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    shapes = [
-        tuple(int(value) for value in shape) for shape in contract["shapes"]
-    ]
+    shapes = [tuple(int(value) for value in shape) for shape in contract["shapes"]]
     if len(shapes) != 2:
-        raise RuntimeError(
-            "PR32 prefix proxy requires packed MiniMax H3 video/audio shapes"
-        )
+        raise RuntimeError("PR32 prefix proxy requires packed MiniMax H3 video/audio shapes")
     video, audio = unpack_streams(packed, shapes)
     if tuple(video.shape) != payload.video_shape:
-        raise RuntimeError(
-            "PR32 prefix proxy payload geometry does not match the active "
-            "high-stage model input"
-        )
+        raise RuntimeError("PR32 prefix proxy payload geometry does not match the active high-stage model input")
     prefix_t = int(contract["prefix_t"])
     if prefix_t != payload.prefix_t or not 0 < prefix_t < int(video.shape[2]):
         raise RuntimeError("PR32 prefix proxy payload temporal boundary is stale")
     aug = float(visual_cond_timestep)
     if not math.isfinite(aug) or not 0.0 <= aug <= 1.0:
-        raise ValueError(
-            "PR32 prefix proxy visual conditioning timestep must be in [0, 1]"
-        )
+        raise ValueError("PR32 prefix proxy visual conditioning timestep must be in [0, 1]")
 
     exact = payload.exact_prefix.to(device=video.device, dtype=torch.float32)
     proxy = payload.proxy_prefix.to(device=video.device, dtype=torch.float32)
     delta = (proxy - exact) * aug
     proxied_video = video.clone()
-    proxied_video[:, :, :prefix_t] = (
-        proxied_video[:, :, :prefix_t].float() + delta
-    ).to(proxied_video.dtype)
+    proxied_video[:, :, :prefix_t] = (proxied_video[:, :, :prefix_t].float() + delta).to(proxied_video.dtype)
     proxied, proxied_shapes = pack_streams((proxied_video, audio))
     if proxied_shapes != shapes:
         raise RuntimeError("PR32 prefix proxy changed packed H3 geometry")
 
-    prefix_delta = (
-        proxied_video[:, :, :prefix_t].float()
-        - video[:, :, :prefix_t].float()
-    )
-    suffix_delta = (
-        proxied_video[:, :, prefix_t:].float()
-        - video[:, :, prefix_t:].float()
-    )
+    prefix_delta = proxied_video[:, :, :prefix_t].float() - video[:, :, :prefix_t].float()
+    suffix_delta = proxied_video[:, :, prefix_t:].float() - video[:, :, prefix_t:].float()
     audio_delta = unpack_streams(proxied - packed, shapes)[1]
     telemetry = {
         "prefix_proxy_mode": _MODE,
@@ -264,13 +221,8 @@ def _proxy_packed_model_input(
         "prefix_proxy_audio_delta_rms": _rms(audio_delta),
         "prefix_proxy_bridge_reason": payload.bridge_reason,
     }
-    if (
-        telemetry["prefix_proxy_suffix_delta_rms"] != 0.0
-        or telemetry["prefix_proxy_audio_delta_rms"] != 0.0
-    ):
-        raise RuntimeError(
-            "PR32 prefix proxy modified generated suffix or audio input"
-        )
+    if telemetry["prefix_proxy_suffix_delta_rms"] != 0.0 or telemetry["prefix_proxy_audio_delta_rms"] != 0.0:
+        raise RuntimeError("PR32 prefix proxy modified generated suffix or audio input")
     return proxied, telemetry
 
 
@@ -303,35 +255,25 @@ class _ModelOnlyPrefixProxyExecutor:
         return self._executor(proxied, timestep, model_options, seed)
 
 
-def flow_predict_wrapper_with_prefix_proxy(
-    executor, x, timestep, model_options=None, seed=None
-):
+def flow_predict_wrapper_with_prefix_proxy(executor, x, timestep, model_options=None, seed=None):
     """Proxy only actual inner H3 calls while Flow keeps the real sampler state."""
 
     transformer = (model_options or {}).get("transformer_options") or {}
     contract = transformer.get(_runtime.HIGH_STAGE_DIAGNOSTIC_KEY)
     payload = _payload_var.get()
     if not isinstance(contract, dict) or payload is None:
-        return _ORIGINAL_FLOW_PREDICT_WRAPPER(
-            executor, x, timestep, model_options, seed
-        )
+        return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
 
     # Spectrum forecast execution substitutes for the transformer and is not the
     # causal mechanism under test. Let it consume the untouched model input; its
     # changed history may still reflect earlier proxied actual H3 predictions.
     if transformer.get(_runtime.SPECTRUM_ACTUAL_KEY) is False:
-        return _ORIGINAL_FLOW_PREDICT_WRAPPER(
-            executor, x, timestep, model_options, seed
-        )
+        return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
 
     adapted = _ModelOnlyPrefixProxyExecutor(executor, contract, payload)
-    result = _ORIGINAL_FLOW_PREDICT_WRAPPER(
-        adapted, x, timestep, model_options, seed
-    )
+    result = _ORIGINAL_FLOW_PREDICT_WRAPPER(adapted, x, timestep, model_options, seed)
     if adapted.telemetry is None or adapted.proxied_input is None:
-        raise RuntimeError(
-            "PR32 high-stage prefix proxy was armed but did not reach the H3 executor"
-        )
+        raise RuntimeError("PR32 high-stage prefix proxy was armed but did not reach the H3 executor")
 
     binding = _runtime._resolve_binding(executor.class_obj)
     holder = contract.get("holder")
@@ -361,12 +303,8 @@ def install() -> None:
 
     if getattr(_runtime.flow_predict_wrapper, "_h3_pr32_prefix_proxy", False):
         return
-    _runtime.apply_suffix_representation_bridge = (
-        _apply_suffix_representation_bridge_capture
-    )
-    _runtime.disabled_suffix_representation_bridge_metrics = (
-        _disabled_suffix_representation_bridge_metrics_capture
-    )
+    _runtime.apply_suffix_representation_bridge = _apply_suffix_representation_bridge_capture
+    _runtime.disabled_suffix_representation_bridge_metrics = _disabled_suffix_representation_bridge_metrics_capture
     flow_predict_wrapper_with_prefix_proxy._h3_pr32_prefix_proxy = True
     _runtime.flow_predict_wrapper = flow_predict_wrapper_with_prefix_proxy
 
