@@ -161,11 +161,7 @@ def _decoded_sequence(*, right_gain: float = 1.0):
     # A deterministic non-periodic waveform prevents accidental equality under
     # shifted comparisons while preserving exact same-timeline copies.
     t = torch.arange(total_samples, dtype=torch.float32)
-    timeline = (
-        0.35 * torch.sin(t * 0.0137)
-        + 0.17 * torch.sin(t * 0.0311 + 0.4)
-        + 0.05 * torch.cos(t * 0.00073)
-    ).reshape(1, 1, -1)
+    timeline = (0.35 * torch.sin(t * 0.0137) + 0.17 * torch.sin(t * 0.0311 + 0.4) + 0.05 * torch.cos(t * 0.00073)).reshape(1, 1, -1)
     timeline = torch.cat((timeline, timeline * 0.91 + 0.013), dim=1)
 
     left_consumed = round(first_frames / fps * sample_rate)
