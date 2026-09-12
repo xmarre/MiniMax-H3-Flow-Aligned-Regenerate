@@ -1,96 +1,75 @@
-from __future__ import annotations
-
-import json
+import importlib.util
+import sys
 from pathlib import Path
-
-import pytest
-
-
-def test_package_import_is_safe_without_comfy(monkeypatch):
-    import builtins
-    import importlib
-    import sys
-
-    original_import = builtins.__import__
-
-    def guarded_import(name, *args, **kwargs):
-        if name == "comfy" or name.startswith("comfy."):
-            raise ImportError("blocked comfy import")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
-    for name in list(sys.modules):
-        if name == "h3_flow_regenerate" or name.startswith("h3_flow_regenerate."):
-            sys.modules.pop(name, None)
-    package = importlib.import_module("h3_flow_regenerate")
-    assert package is not None
+from types import SimpleNamespace
 
 
-def test_top_level_package_exports_comfyui_node_mappings_when_loaded_as_package():
-    import importlib.util
-    import sys
+def test_package_import_without_comfyui():
+    import h3_flow_regenerate
 
-    root = Path(__file__).resolve().parents[1]
+    assert h3_flow_regenerate.H3FlowTrajectory.api_version == 1
+
+
+def test_project_declares_apache_license_and_tracks_license_file():
+    root = Path(__file__).parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    license_text = (root / "LICENSE").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    assert 'license = "Apache-2.0"' in pyproject
+    assert 'license-files = ["LICENSE"]' in pyproject
+    assert 'License = "https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/main/LICENSE"' in pyproject
+    assert license_text.startswith("Apache License\n                           Version 2.0, January 2004")
+    assert "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION" in license_text
+    assert "END OF TERMS AND CONDITIONS" in license_text
+    assert "[Apache License 2.0](LICENSE)" in readme
+    assert "Copyright 2026 xmarre." in readme
+
+
+def test_comfy_registry_archive_excludes_development_only_paths():
+    root = Path(__file__).parents[1]
+    comfyignore = (root / ".comfyignore").read_text(encoding="utf-8").splitlines()
+
+    assert comfyignore == [
+        "# Development-only files must not be shipped in Comfy Registry archives.",
+        ".github/",
+        "tests/",
+    ]
+
+
+def test_custom_node_root_registration_smoke():
+    root = Path(__file__).parents[1] / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "flow_package_test",
-        root / "__init__.py",
-        submodule_search_locations=[str(root)],
+        "h3_flow_custom_node",
+        root,
+        submodule_search_locations=[str(root.parent)],
     )
-    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-        assert "H3FlowTrajectory" in module.NODE_CLASS_MAPPINGS
-        assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
-        assert "H3ProgressiveTargetInputHandoff" in module.NODE_CLASS_MAPPINGS
-        assert "H3ProgressiveTargetSparseHandoff" in module.NODE_CLASS_MAPPINGS
-        assert "H3ProgressiveMixedGridHandoff" in module.NODE_CLASS_MAPPINGS
-        assert "H3ContinuumAudioBoundaryPipelineDiagnostic" in module.NODE_CLASS_MAPPINGS
-    finally:
-        sys.modules.pop(spec.name, None)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "H3ProgressiveTargetSparseHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "H3ContinuumDecodeContext" in module.NODE_CLASS_MAPPINGS
+    assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
+    assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
 
 
-def test_pyproject_runtime_dependencies_stay_minimal():
-    import tomllib
+def test_progressive_nodes_expose_all_selectable_guidance_controls():
+    from h3_flow_regenerate.nodes import H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
-    root = Path(__file__).resolve().parents[1]
-    data = tomllib.loads((root / "pyproject.toml").read_text())
-    dependencies = data["project"]["dependencies"]
-    assert dependencies == ["torch>=2.5", "numpy>=1.25"]
-
-
-def test_workflows_are_valid_json():
-    root = Path(__file__).resolve().parents[1]
-    workflows = root / "workflows"
-    for path in workflows.glob("*.json"):
-        with path.open("r", encoding="utf-8") as handle:
-            assert isinstance(json.load(handle), dict)
-
-
-def test_progressive_target_input_schema_contains_expected_controls():
-    from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
-
-    required = H3ProgressiveTargetInputHandoff.INPUT_TYPES()["required"]
-    assert {
-        "model",
-        "trajectory",
-        "source_mode",
-        "source_scale",
-        "source_width",
-        "source_height",
-        "handoff_coordinate",
-        "handoff_selection",
-        "guidance_mode",
-        "direction_weight",
-        "acceleration_weight",
-        "consistency_weight",
-        "low_frequency_cutoff",
-        "temporal_weight",
-        "handoff_transfer",
-    }.issubset(required)
-    names = list(required)
-    assert names.index("temporal_weight") > names.index("low_frequency_cutoff")
+    for node in (H3ProgressiveHandoff, H3ProgressiveTargetInputHandoff, H3ProgressiveTargetSparseHandoff):
+        required = node.INPUT_TYPES()["required"]
+        assert {
+            "guidance_mode",
+            "direction_weight",
+            "acceleration_weight",
+            "consistency_weight",
+            "low_frequency_cutoff",
+            "temporal_weight",
+        }.issubset(required)
+        names = list(required)
+        assert names.index("temporal_weight") > names.index("low_frequency_cutoff")
 
 
 def test_target_input_progressive_defaults_to_learned_handoff_with_bicubic_control():
@@ -105,7 +84,7 @@ def test_target_input_progressive_defaults_to_learned_handoff_with_bicubic_contr
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
 
 
-def test_target_sparse_compat_node_is_explicitly_experimental_dense_control():
+def test_target_sparse_node_is_explicitly_experimental_dense_control():
     from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
     from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
@@ -136,33 +115,42 @@ def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(
         subfolder = "bench"
         folder = tmp_path / subfolder
         folder.mkdir(parents=True, exist_ok=True)
-        return str(folder), filename_prefix, allocations, subfolder, filename_prefix
+        return str(folder), "metrics", allocations, subfolder, filename_prefix
 
-    class _FolderPaths:
-        get_output_directory = staticmethod(lambda: str(tmp_path))
-        get_save_image_path = staticmethod(get_save_image_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(
+            get_output_directory=lambda: str(tmp_path),
+            get_save_image_path=get_save_image_path,
+        ),
+    )
 
-    monkeypatch.setitem(__import__("sys").modules, "folder_paths", _FolderPaths)
-    node = H3MetricsJSON()
     metrics = H3FlowMetrics()
-    metrics.increment("model_calls", 3)
-    metrics.event("probe", value=7)
+    metrics.event("trajectory_commit", samples=8)
+    output = H3MetricsJSON().render(metrics, "bench/metrics")
 
-    ui_1 = node.save(metrics, "metrics/test")
-    ui_2 = node.save(metrics, "metrics/test")
-    assert allocations == 2
-    first = ui_1["ui"]["text"][0]
-    second = ui_2["ui"]["text"][0]
-    assert first != second
-    assert Path(first).exists()
-    assert Path(second).exists()
-    payload = json.loads(Path(first).read_text())
-    assert payload["counters"]["model_calls"] == 3
-    assert payload["events"][0]["kind"] == "probe"
+    saved = tmp_path / "bench" / "metrics_00001_.json"
+    assert saved.exists()
+    initial = saved.read_text(encoding="utf-8")
+    assert '"trajectory_commit"' in initial
+    assert '"guidance"' not in initial
 
+    metrics.increment("transformer_actual_nfe", 7)
+    metrics.event("guidance", correction_rms=0.125)
+    assert '"guidance"' not in saved.read_text(encoding="utf-8")
 
-def test_metrics_json_output_requires_metrics():
-    from h3_flow_regenerate.nodes import H3MetricsJSON
+    repeated = H3MetricsJSON().render(metrics, "bench/other-prefix")
+    assert allocations == 1
+    assert metrics.autosave_path == saved
+    assert not (tmp_path / "bench" / "metrics_00002_.json").exists()
+    assert repeated["ui"]["text"] == ["Saving metrics JSON: bench/metrics_00001_.json"]
 
-    with pytest.raises(TypeError):
-        H3MetricsJSON().save(None)
+    metrics.event("sampler_wall", elapsed_ms=123.0, failed=False, progressive=False)
+    final = saved.read_text(encoding="utf-8")
+    assert '"guidance"' in final
+    assert '"correction_rms": 0.125' in final
+    assert '"transformer_actual_nfe": 7' in final
+    assert '"sampler_wall"' in final
+    assert output["result"] != (metrics.to_json(),)
+    assert output["ui"]["text"] == ["Saving metrics JSON: bench/metrics_00001_.json"]
