@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from . import runtime
-from . import target_sparse
+from . import runtime, target_sparse
 from .target_sparse_node import H3ProgressiveTargetSparseHandoff
 
 
