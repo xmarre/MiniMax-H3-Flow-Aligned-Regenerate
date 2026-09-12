@@ -41,13 +41,8 @@ def _native_audio_tensor(latent: dict, index: int) -> torch.Tensor:
         raise ValueError(f"audio decode group {index + 1} requires a tensor LATENT")
     if samples.is_nested:
         samples = samples.unbind()[-1]
-    if (
-        samples.ndim != 4
-        or tuple(samples.shape[:3]) != (1, _AUDIO_CHANNELS, _STEREO_CHANNELS)
-    ):
-        raise ValueError(
-            f"audio decode group {index + 1} requires native [1,32,2,T] audio"
-        )
+    if samples.ndim != 4 or tuple(samples.shape[:3]) != (1, _AUDIO_CHANNELS, _STEREO_CHANNELS):
+        raise ValueError(f"audio decode group {index + 1} requires native [1,32,2,T] audio")
     if not samples.is_floating_point():
         raise ValueError("H3 audio decode-oracle latents must be floating point")
     return samples
@@ -160,9 +155,7 @@ def _format_boundary_metrics(
         left_segment = segments[boundary]
         right_segment = segments[boundary + 1]
         right_trim = int(geometry[boundary + 1]["trim_samples"])
-        left_raw_stop = int(geometry[boundary]["trim_samples"]) + int(
-            geometry[boundary]["wanted"]
-        )
+        left_raw_stop = int(geometry[boundary]["trim_samples"]) + int(geometry[boundary]["wanted"])
 
         protected = min(compare_samples, right_trim, int(left_segment.shape[-1]))
         if protected > 0:
@@ -174,15 +167,11 @@ def _format_boundary_metrics(
 
         left_future_available = max(0, int(left.shape[-1]) - left_raw_stop)
         right_future_available = max(0, int(right.shape[-1]) - right_trim)
-        future_count = min(
-            compare_samples, left_future_available, right_future_available
-        )
+        future_count = min(compare_samples, left_future_available, right_future_available)
         if future_count > 0:
             left_future = left[..., left_raw_stop : left_raw_stop + future_count]
             right_future = right[..., right_trim : right_trim + future_count]
-            future_report = _format_match(
-                f"{label}_future", left_future, right_future
-            )
+            future_report = _format_match(f"{label}_future", left_future, right_future)
             continuous_left_jump = _jump(left_segment, left_future)
         else:
             future_report = f"{label}_future=unavailable"
@@ -265,12 +254,9 @@ def decode_audio_boundary_oracle(
     reports = [
         "PR #32 self-contained decoded-audio oracle",
         context_report,
-        f"rate={rate}Hz total_retained_frames={total_frames} "
-        f"shared_stream_divisor={_mean_scalar(shared_divisor):.8f}",
+        f"rate={rate}Hz total_retained_frames={total_frames} shared_stream_divisor={_mean_scalar(shared_divisor):.8f}",
     ]
-    for index, (waveform, divisor, meta) in enumerate(
-        zip(raw, core_divisors, geometry, strict=True)
-    ):
+    for index, (waveform, divisor, meta) in enumerate(zip(raw, core_divisors, geometry, strict=True)):
         exact_trim = (int(meta["trim_frames"]) * rate) % _VIDEO_FPS == 0
         raw_stop = int(meta["trim_samples"]) + int(meta["wanted"])
         extra = max(0, int(waveform.shape[-1]) - raw_stop)
@@ -316,12 +302,8 @@ def decode_audio_boundary_oracle(
         "Keep Continuum Audio Seam = Off."
     )
 
-    core_audio = [
-        {"waveform": waveform, "sample_rate": rate} for waveform in core
-    ]
-    shared_audio = [
-        {"waveform": waveform, "sample_rate": rate} for waveform in shared
-    ]
+    core_audio = [{"waveform": waveform, "sample_rate": rate} for waveform in core]
+    shared_audio = [{"waveform": waveform, "sample_rate": rate} for waveform in shared]
     return core_audio, shared_audio, "\n".join(reports)
 
 
@@ -370,7 +352,5 @@ NODE_CLASS_MAPPINGS = {
     "H3ContinuumAudioDecodeOracleDiagnostic": H3ContinuumAudioDecodeOracleDiagnostic,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3ContinuumAudioDecodeOracleDiagnostic": (
-        "MiniMax H3 Continuum Audio Decode Oracle (PR32 Diagnostic)"
-    ),
+    "H3ContinuumAudioDecodeOracleDiagnostic": ("MiniMax H3 Continuum Audio Decode Oracle (PR32 Diagnostic)"),
 }

@@ -65,9 +65,7 @@ def test_oracle_is_self_contained_and_exposes_independent_normalization_mismatch
     latents, plan = _sequence()
     before = [item["samples"].clone() for item in latents]
 
-    core_audio, shared_audio, report = decode_audio_boundary_oracle(
-        latents, _FakeAudioVAE(), plan
-    )
+    core_audio, shared_audio, report = decode_audio_boundary_oracle(latents, _FakeAudioVAE(), plan)
 
     assert "1/1 exact boundaries" in report
     assert "after exact 65-latent overlap" in report
@@ -83,10 +81,7 @@ def test_oracle_is_self_contained_and_exposes_independent_normalization_mismatch
 
     assert len(core_audio) == len(shared_audio) == 2
     assert all(item["sample_rate"] == 32000 for item in core_audio + shared_audio)
-    assert all(
-        torch.equal(item["samples"], old)
-        for item, old in zip(latents, before, strict=True)
-    )
+    assert all(torch.equal(item["samples"], old) for item, old in zip(latents, before, strict=True))
 
 
 def test_core_output_matches_core_vaedecodeaudio_normalization_exactly():
