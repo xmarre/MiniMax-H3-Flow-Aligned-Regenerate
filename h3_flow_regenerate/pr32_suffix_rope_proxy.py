@@ -18,6 +18,7 @@ added.
 
 from __future__ import annotations
 
+import contextvars
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -28,6 +29,19 @@ from . import runtime as _runtime
 
 _MODE = "source_extent_suffix_rope_v1"
 _ORIGINAL_FLOW_PREDICT_WRAPPER = _runtime.flow_predict_wrapper
+_ORIGINAL_BUILD_MIXED_GRID_PLAN = _runtime.build_mixed_grid_plan
+
+
+@dataclass(frozen=True, slots=True)
+class _RopePlan:
+    source_hw: tuple[int, int]
+    target_hw: tuple[int, int]
+    prefix_t: int
+
+
+_plan_var: contextvars.ContextVar[_RopePlan | None] = contextvars.ContextVar(
+    "h3_flow_pr32_suffix_rope_plan", default=None
+)
 
 
 def _rms(value: torch.Tensor) -> float:
@@ -35,6 +49,23 @@ def _rms(value: torch.Tensor) -> float:
     if not math.isfinite(result):
         raise RuntimeError("PR32 suffix RoPE diagnostic produced a non-finite RMS")
     return result
+
+
+def build_mixed_grid_plan_capture(*args, **kwargs):
+    """Capture only geometry already authorized by the active Mixed-Grid plan."""
+
+    _plan_var.set(None)
+    plan = _ORIGINAL_BUILD_MIXED_GRID_PLAN(*args, **kwargs)
+    source_h = int(kwargs["source_h"])
+    source_w = int(kwargs["source_w"])
+    _plan_var.set(
+        _RopePlan(
+            source_hw=(source_h, source_w),
+            target_hw=tuple(map(int, plan.target_hw)),
+            prefix_t=int(plan.prefix_t),
+        )
+    )
+    return plan
 
 
 def _axis_endpoints(frame: torch.Tensor, h: int, w: int) -> tuple[float, float, float, float]:
@@ -97,6 +128,7 @@ def _source_extent_target_frame(
 class _SuffixRopeContext:
     native_model: Any
     contract: dict[str, Any]
+    plan: _RopePlan
     cached_rope: torch.Tensor | None = None
     telemetry: dict[str, Any] | None = None
 
@@ -110,14 +142,15 @@ class _SuffixRopeContext:
         image = args.get("img")
         if layout is None or baseline is None or not torch.is_tensor(image):
             raise RuntimeError("PR32 suffix RoPE diagnostic requires native H3 block layout/rope/image arguments")
-        source_hw = self.contract.get("source_hw")
         shapes = [tuple(int(value) for value in shape) for shape in self.contract.get("shapes", ())]
-        if source_hw is None or len(shapes) != 2:
-            raise RuntimeError("PR32 suffix RoPE diagnostic contract is missing source/target geometry")
+        if len(shapes) != 2:
+            raise RuntimeError("PR32 suffix RoPE diagnostic contract is missing target AV geometry")
         target_h, target_w = map(int, shapes[0][-2:])
-        source_h, source_w = map(int, source_hw)
         prefix_t = int(self.contract["prefix_t"])
         temporal = int(shapes[0][2])
+        if self.plan.target_hw != (target_h, target_w) or self.plan.prefix_t != prefix_t:
+            raise RuntimeError("PR32 suffix RoPE diagnostic captured plan is stale for the active high stage")
+        source_h, source_w = self.plan.source_hw
         target_rows = target_h * target_w // 4
 
         video_segments = [segment for segment in layout.segments if segment[2] == "video"]
@@ -205,12 +238,13 @@ def _model_options_with_suffix_rope_proxy(
     *,
     native_model: Any,
     contract: dict[str, Any],
+    plan: _RopePlan,
 ) -> tuple[dict[str, Any], _SuffixRopeContext]:
     options = dict(model_options or {})
     transformer = dict(options.get("transformer_options") or {})
     patches_replace = dict(transformer.get("patches_replace") or {})
     dit = dict(patches_replace.get("dit") or {})
-    context = _SuffixRopeContext(native_model=native_model, contract=contract)
+    context = _SuffixRopeContext(native_model=native_model, contract=contract, plan=plan)
     for index in range(len(native_model.blocks)):
         key = ("double_block", index)
         dit[key] = _block_replacement(dit.get(key), context)
@@ -225,7 +259,8 @@ def flow_predict_wrapper_with_suffix_rope_proxy(executor, x, timestep, model_opt
 
     transformer = (model_options or {}).get("transformer_options") or {}
     contract = transformer.get(_runtime.HIGH_STAGE_DIAGNOSTIC_KEY)
-    if not isinstance(contract, dict) or contract.get("source_hw") is None:
+    plan = _plan_var.get()
+    if not isinstance(contract, dict) or plan is None:
         return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
     if transformer.get(_runtime.SPECTRUM_ACTUAL_KEY) is False:
         return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
@@ -236,6 +271,7 @@ def flow_predict_wrapper_with_suffix_rope_proxy(executor, x, timestep, model_opt
         model_options,
         native_model=native_model,
         contract=contract,
+        plan=plan,
     )
     result = _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, proxied_options, seed)
     if context.telemetry is None:
@@ -257,6 +293,7 @@ def flow_predict_wrapper_with_suffix_rope_proxy(executor, x, timestep, model_opt
 def install() -> None:
     if getattr(_runtime.flow_predict_wrapper, "_h3_pr32_suffix_rope_proxy", False):
         return
+    _runtime.build_mixed_grid_plan = build_mixed_grid_plan_capture
     flow_predict_wrapper_with_suffix_rope_proxy._h3_pr32_suffix_rope_proxy = True
     _runtime.flow_predict_wrapper = flow_predict_wrapper_with_suffix_rope_proxy
 
