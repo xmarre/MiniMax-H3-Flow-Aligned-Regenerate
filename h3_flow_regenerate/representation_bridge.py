@@ -1,21 +1,21 @@
 """Persistent target-grid suffix rebase for Mixed-Grid Continuum seams.
 
-Runs 00390/00391 separated two independent handoff defects:
+Matched runs 00390-00392 separated the handoff into two independent pieces.
+The persistent per-channel tone/DC rebase is media-proven and remains unchanged.
+The remaining spatial jump is not safely predicted from recent exact-prefix
+motion: 00392's held-out authoritative-motion predictor was worse than identity.
 
-* a persistent latent tone/DC domain offset between the authoritative exact
-  prefix and learned-upscaler suffix; and
-* a persistent spatial frame-coordinate jump that remains after the tone/DC
-  offset is removed.
-
-The tone fix from v4 is retained unchanged. Geometry v5 no longer asks the
-learned/discarded upscaler prefix to define expected motion. Instead it learns a
-robust recent motion law from the caller-owned exact target-grid prefix, holds
-out the latest exact-prefix transition to validate that law, then measures the
-exact-prefix -> tone-corrected suffix boundary against the validated next-motion
-prediction. A bounded residual transform may be applied to the complete suffix.
+Geometry v6 therefore removes motion extrapolation entirely. The learned 3D
+upscaler has already produced both sides of its own prefix/suffix boundary in one
+representation, so that directly observed native boundary is the continuation
+oracle. The bridge compares that native learned-prefix -> learned-suffix
+transform with the transform required after replacing the learned prefix by the
+caller-owned exact prefix (after the proven tone correction). Only their bounded
+residual coordinate-frame mismatch can be applied to the complete suffix.
 
 The bridge never modifies the protected prefix, transplants a raw structural
-residual, adds RNG/model/VAE work, or introduces a finite correction horizon.
+residual, predicts future motion, adds RNG/model/VAE work, or introduces a
+finite correction horizon.
 """
 
 from __future__ import annotations
@@ -28,17 +28,18 @@ import torch.nn.functional as F
 
 from .source_trajectory_bridge import register_pair
 
-_VERSION = 5
-_MODE = "persistent_suffix_rebase_v2_authoritative_motion"
+_VERSION = 6
+_MODE = "persistent_suffix_rebase_v3_native_boundary"
 _OVERLAP_FRAMES = 4
-_MOTION_FRAMES = 8
 _SCALE_FLOOR = 0.005
 _TRANSLATION_FLOOR = 0.25
 _MAX_LOG_SCALE = math.log(1.03)
 _MIN_GEOMETRY_IMPROVEMENT = 0.01
 _MAX_INTERNAL_GEOMETRY_REGRESSION = 0.03
+_MIN_NATIVE_MOTION_GAIN = 0.01
 _MIN_TONE_DC_IMPROVEMENT = 0.20
 _MAX_TONE_TOTAL_REGRESSION = 0.01
+_IDENTITY = (1.0, 1.0, 0.0, 0.0)
 
 
 def _rms(value: torch.Tensor) -> float:
@@ -69,12 +70,13 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
     p = int(prefix_t)
     if p < 1:
         raise ValueError("representation bridge prefix length must be positive")
+    reason = "disabled" if not requested else "not_applied"
     return {
         "suffix_representation_bridge_version": _VERSION,
         "suffix_representation_bridge_requested": bool(requested),
         "suffix_representation_bridge_enabled": False,
         "suffix_representation_bridge_accepted": False,
-        "suffix_representation_bridge_reason": "disabled" if not requested else "not_applied",
+        "suffix_representation_bridge_reason": reason,
         "suffix_representation_bridge_mode": _MODE,
         "suffix_representation_bridge_prefix_t": p,
         "suffix_representation_bridge_corrected_tokens": 0,
@@ -91,13 +93,13 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
         "suffix_representation_bridge_improving_frames": 0,
         "suffix_representation_bridge_median_frame_improvement": 0.0,
         "suffix_representation_bridge_worst_frame_regression": 0.0,
-        "suffix_representation_bridge_transform": (1.0, 1.0, 0.0, 0.0),
+        "suffix_representation_bridge_transform": _IDENTITY,
         "suffix_representation_bridge_identity_error": None,
         "suffix_representation_bridge_aligned_error": None,
         "suffix_representation_bridge_improvement": 0.0,
         "suffix_representation_bridge_out_of_bounds_fraction": 0.0,
         "suffix_representation_bridge_tone_bias_accepted": False,
-        "suffix_representation_bridge_tone_reason": "disabled" if not requested else "not_applied",
+        "suffix_representation_bridge_tone_reason": reason,
         "suffix_representation_bridge_tone_bias_rms": 0.0,
         "suffix_representation_bridge_tone_validation_rms_before": None,
         "suffix_representation_bridge_tone_validation_rms_after": None,
@@ -105,15 +107,25 @@ def disabled_suffix_representation_bridge_metrics(*, prefix_t: int, requested: b
         "suffix_representation_bridge_tone_validation_dc_rms_after": None,
         "suffix_representation_bridge_tone_validation_dc_improvement": 0.0,
         "suffix_representation_bridge_geometry_accepted": False,
-        "suffix_representation_bridge_geometry_reason": "disabled" if not requested else "not_applied",
+        "suffix_representation_bridge_geometry_reason": reason,
+        # v5 compatibility fields remain explicit so old metrics consumers do
+        # not mistake the absence of motion-prediction telemetry for zero data.
         "suffix_representation_bridge_geometry_training_transitions": 0,
         "suffix_representation_bridge_geometry_holdout_identity_error": None,
         "suffix_representation_bridge_geometry_holdout_aligned_error": None,
         "suffix_representation_bridge_geometry_holdout_prediction_error": None,
         "suffix_representation_bridge_geometry_holdout_prediction_gain": 0.0,
-        "suffix_representation_bridge_geometry_expected_transform": (1.0, 1.0, 0.0, 0.0),
-        "suffix_representation_bridge_geometry_observed_transform": (1.0, 1.0, 0.0, 0.0),
-        "suffix_representation_bridge_geometry_residual_transform": (1.0, 1.0, 0.0, 0.0),
+        "suffix_representation_bridge_geometry_motion_prediction_used": False,
+        "suffix_representation_bridge_geometry_native_boundary_direct": False,
+        "suffix_representation_bridge_geometry_native_identity_error": None,
+        "suffix_representation_bridge_geometry_native_aligned_error": None,
+        "suffix_representation_bridge_geometry_native_improvement": 0.0,
+        "suffix_representation_bridge_geometry_prefix_replacement_identity_error": None,
+        "suffix_representation_bridge_geometry_prefix_replacement_aligned_error": None,
+        "suffix_representation_bridge_geometry_prefix_replacement_transform": _IDENTITY,
+        "suffix_representation_bridge_geometry_expected_transform": _IDENTITY,
+        "suffix_representation_bridge_geometry_observed_transform": _IDENTITY,
+        "suffix_representation_bridge_geometry_residual_transform": _IDENTITY,
         "suffix_representation_bridge_geometry_boundary_error_before": None,
         "suffix_representation_bridge_geometry_boundary_error_after": None,
         "suffix_representation_bridge_geometry_internal_validation_transitions": 0,
@@ -193,28 +205,6 @@ def _registration_transform(item: dict) -> tuple[float, float, float, float] | N
         return None
 
 
-def _theil_sen_predict(samples: list[tuple[int, float]], target_index: int) -> float:
-    if len(samples) < 2:
-        raise ValueError("motion predictor requires at least two samples")
-    slopes = [
-        (samples[j][1] - samples[i][1]) / (samples[j][0] - samples[i][0])
-        for i in range(len(samples))
-        for j in range(i + 1, len(samples))
-        if samples[j][0] != samples[i][0]
-    ]
-    slope = float(median(slopes)) if slopes else 0.0
-    intercept = float(median([value - slope * index for index, value in samples]))
-    return intercept + slope * int(target_index)
-
-
-def _predict_transform(samples: list[tuple[int, tuple[float, float, float, float]]], target_index: int):
-    signed = [(_index, _signed_transform(transform)) for _index, transform in samples]
-    values = tuple(
-        _theil_sen_predict([(index, vector[axis]) for index, vector in signed], target_index) for axis in range(4)
-    )
-    return _from_signed(values)
-
-
 def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tensor) -> tuple[torch.Tensor | None, dict]:
     overlap = min(_OVERLAP_FRAMES, int(exact_prefix.shape[2]))
     report = {
@@ -267,92 +257,42 @@ def _persistent_tone_bias(learned_prefix: torch.Tensor, exact_prefix: torch.Tens
     return bias, report
 
 
-def _authoritative_motion_prediction(
-    exact_prefix: torch.Tensor,
-) -> tuple[tuple[float, float, float, float] | None, dict]:
-    identity = (1.0, 1.0, 0.0, 0.0)
-    prefix_t = int(exact_prefix.shape[2])
-    report = {
-        "accepted": False,
-        "reason": "insufficient_authoritative_motion_history",
-        "training_transitions": 0,
-        "holdout_identity_error": None,
-        "holdout_aligned_error": None,
-        "holdout_prediction_error": None,
-        "holdout_prediction_gain": 0.0,
-        "expected_transform": identity,
-    }
-    if prefix_t < 5:
-        return None, report
-
-    start = max(1, prefix_t - _MOTION_FRAMES + 1)
-    holdout_index = prefix_t - 1
-    samples: list[tuple[int, tuple[float, float, float, float]]] = []
-    for index in range(start, holdout_index):
-        item = register_pair(
-            exact_prefix[:, :, index - 1 : index],
-            exact_prefix[:, :, index : index + 1],
-        )
-        transform = _registration_transform(item)
-        identity_error = item.get("identity_error")
-        if transform is None or identity_error is None or not math.isfinite(float(identity_error)):
-            continue
-        samples.append((index, transform))
-
-    report["training_transitions"] = len(samples)
-    if len(samples) < 3 or samples[-1][0] - samples[0][0] < 2:
-        return None, report
-
-    holdout_prediction = _predict_transform(samples, holdout_index)
-    holdout = register_pair(
-        exact_prefix[:, :, holdout_index - 1 : holdout_index],
-        exact_prefix[:, :, holdout_index : holdout_index + 1],
-        comparison=holdout_prediction,
-    )
-    identity_error = holdout.get("identity_error")
-    aligned_error = holdout.get("aligned_error")
-    prediction_error = holdout.get("comparison_error")
-    holdout_errors = (identity_error, aligned_error, prediction_error)
-    if any(value is None or not math.isfinite(float(value)) for value in holdout_errors):
-        report["reason"] = "authoritative_motion_holdout_unavailable"
-        return None, report
-
-    identity_error = float(identity_error)
-    aligned_error = float(aligned_error)
-    prediction_error = float(prediction_error)
-    prediction_gain = (identity_error - prediction_error) / max(identity_error, 1e-12)
-    report.update(
-        holdout_identity_error=identity_error,
-        holdout_aligned_error=aligned_error,
-        holdout_prediction_error=prediction_error,
-        holdout_prediction_gain=prediction_gain,
-    )
-    if prediction_error > identity_error + 1e-8:
-        report["reason"] = "authoritative_motion_holdout_regression"
-        return None, report
-
-    holdout_transform = _registration_transform(holdout) or identity
-    expected = _predict_transform([*samples, (holdout_index, holdout_transform)], prefix_t)
-    report.update(accepted=True, reason="authoritative_motion_holdout_validated", expected_transform=expected)
-    return expected, report
-
-
 def _persistent_geometry_rebase(
+    learned_video: torch.Tensor,
     exact_prefix: torch.Tensor,
     suffix: torch.Tensor,
 ) -> tuple[tuple[float, float, float, float] | None, dict]:
-    identity = (1.0, 1.0, 0.0, 0.0)
+    """Match exact-prefix replacement to the upscaler's directly observed boundary.
+
+    ``register_pair(reference, moving)`` returns the output-to-input transform
+    applied to ``moving`` to align it with ``reference``. The learned upscaler's
+    final prefix -> first suffix transition therefore provides the expected
+    transform without forecasting motion. The exact-prefix -> corrected-suffix
+    transition provides the observed transform. Their residual is precisely the
+    coordinate-frame error introduced by replacing the learned prefix with the
+    authoritative prefix under the affine registration model.
+    """
+
+    prefix_t = int(exact_prefix.shape[2])
     report = {
         "accepted": False,
-        "reason": "insufficient_authoritative_motion_history",
+        "reason": "native_boundary_unavailable",
         "training_transitions": 0,
         "holdout_identity_error": None,
         "holdout_aligned_error": None,
         "holdout_prediction_error": None,
         "holdout_prediction_gain": 0.0,
-        "expected_transform": identity,
-        "observed_transform": identity,
-        "residual_transform": identity,
+        "motion_prediction_used": False,
+        "native_boundary_direct": False,
+        "native_identity_error": None,
+        "native_aligned_error": None,
+        "native_improvement": 0.0,
+        "prefix_replacement_identity_error": None,
+        "prefix_replacement_aligned_error": None,
+        "prefix_replacement_transform": _IDENTITY,
+        "expected_transform": _IDENTITY,
+        "observed_transform": _IDENTITY,
+        "residual_transform": _IDENTITY,
         "boundary_error_before": None,
         "boundary_error_after": None,
         "improvement": 0.0,
@@ -361,31 +301,68 @@ def _persistent_geometry_rebase(
         "median_transition_improvement": 0.0,
         "worst_internal_regression": 0.0,
     }
-    if int(suffix.shape[2]) < 2 or min(suffix.shape[-2:]) < 16:
+    if prefix_t < 1 or int(learned_video.shape[2]) <= prefix_t or int(suffix.shape[2]) < 2:
+        return None, report
+    if min(suffix.shape[-2:]) < 16:
+        report["reason"] = "unsupported_geometry"
         return None, report
 
-    expected, motion = _authoritative_motion_prediction(exact_prefix)
+    learned_last = learned_video[:, :, prefix_t - 1 : prefix_t]
+    learned_first_suffix = learned_video[:, :, prefix_t : prefix_t + 1]
+    native = register_pair(learned_last, learned_first_suffix)
+    expected = _registration_transform(native)
+    native_identity = native.get("identity_error")
+    native_aligned = native.get("aligned_error")
+    if (
+        expected is None
+        or native_identity is None
+        or native_aligned is None
+        or not math.isfinite(float(native_identity))
+        or not math.isfinite(float(native_aligned))
+    ):
+        report["reason"] = "native_boundary_registration_unavailable"
+        return None, report
+
+    native_identity = float(native_identity)
+    native_aligned = float(native_aligned)
+    native_improvement = max(0.0, (native_identity - native_aligned) / max(native_identity, 1e-12))
+    expected_signed = _signed_transform(expected)
+    expected_active = (
+        abs(expected_signed[0]) >= _SCALE_FLOOR
+        or abs(expected_signed[1]) >= _SCALE_FLOOR
+        or abs(expected_signed[2]) >= _TRANSLATION_FLOOR
+        or abs(expected_signed[3]) >= _TRANSLATION_FLOOR
+    )
     report.update(
-        reason=motion["reason"],
-        training_transitions=int(motion["training_transitions"]),
-        holdout_identity_error=motion["holdout_identity_error"],
-        holdout_aligned_error=motion["holdout_aligned_error"],
-        holdout_prediction_error=motion["holdout_prediction_error"],
-        holdout_prediction_gain=float(motion["holdout_prediction_gain"]),
-        expected_transform=motion["expected_transform"],
+        native_boundary_direct=True,
+        native_identity_error=native_identity,
+        native_aligned_error=native_aligned,
+        native_improvement=native_improvement,
+        expected_transform=expected,
     )
-    if expected is None:
+    if expected_active and native_improvement < _MIN_NATIVE_MOTION_GAIN:
+        report["reason"] = "native_boundary_motion_unreliable"
         return None, report
 
-    observed_item = register_pair(
-        exact_prefix[:, :, -1:],
-        suffix[:, :, :1],
-        comparison=expected,
-    )
+    # Same-time learned/exact prefix registration is diagnostic only. It tells
+    # us whether the direct boundary residual agrees with a persistent prefix
+    # coordinate offset, but it is not required to authorize the correction.
+    replacement = register_pair(exact_prefix[:, :, -1:], learned_last)
+    replacement_transform = _registration_transform(replacement)
+    replacement_identity = replacement.get("identity_error")
+    replacement_aligned = replacement.get("aligned_error")
+    if replacement_transform is not None:
+        report["prefix_replacement_transform"] = replacement_transform
+    if replacement_identity is not None and math.isfinite(float(replacement_identity)):
+        report["prefix_replacement_identity_error"] = float(replacement_identity)
+    if replacement_aligned is not None and math.isfinite(float(replacement_aligned)):
+        report["prefix_replacement_aligned_error"] = float(replacement_aligned)
+
+    observed_item = register_pair(exact_prefix[:, :, -1:], suffix[:, :, :1], comparison=expected)
     observed = _registration_transform(observed_item)
     comparison_error = observed_item.get("comparison_error")
     if observed is None or comparison_error is None or not math.isfinite(float(comparison_error)):
-        report["reason"] = "authoritative_boundary_registration_unavailable"
+        report["reason"] = "exact_replacement_boundary_registration_unavailable"
         return None, report
 
     residual = _residual_transform(observed, expected)
@@ -396,24 +373,20 @@ def _persistent_geometry_rebase(
     active = [abs(signed[axis]) >= floors[axis] for axis in range(4)]
     report.update(observed_transform=observed, residual_transform=residual)
     if not any(active):
-        report["reason"] = "authoritative_boundary_motion_consistent"
+        report["reason"] = "native_boundary_replacement_geometry_consistent"
         return None, report
     if any(active[axis] and abs(signed[axis]) > safety[axis] + 1e-8 for axis in range(4)):
-        report["reason"] = "authoritative_boundary_residual_exceeds_safety_bound"
+        report["reason"] = "native_boundary_replacement_residual_exceeds_safety_bound"
         return None, report
 
     filtered = tuple(signed[axis] if active[axis] else 0.0 for axis in range(4))
     correction = _from_signed(filtered)
     warped_suffix, _ = _warp_video_constant(suffix, correction)
-    after_item = register_pair(
-        exact_prefix[:, :, -1:],
-        warped_suffix[:, :, :1],
-        comparison=expected,
-    )
+    after_item = register_pair(exact_prefix[:, :, -1:], warped_suffix[:, :, :1], comparison=expected)
     before_error = float(comparison_error)
     after_error_value = after_item.get("comparison_error")
     if after_error_value is None or not math.isfinite(float(after_error_value)):
-        report["reason"] = "corrected_authoritative_boundary_registration_unavailable"
+        report["reason"] = "corrected_native_boundary_registration_unavailable"
         return None, report
     after_error = float(after_error_value)
     improvement = (before_error - after_error) / max(before_error, 1e-12)
@@ -424,7 +397,7 @@ def _persistent_geometry_rebase(
         improvement=max(0.0, improvement),
     )
     if improvement < _MIN_GEOMETRY_IMPROVEMENT:
-        report["reason"] = "authoritative_boundary_geometry_gain_too_small"
+        report["reason"] = "native_boundary_replacement_gain_too_small"
         return None, report
 
     transition_improvements: list[float] = []
@@ -457,7 +430,7 @@ def _persistent_geometry_rebase(
         report["reason"] = "persistent_geometry_internal_regression"
         return None, report
 
-    report.update(accepted=True, reason="authoritative_motion_suffix_rebase_authorized")
+    report.update(accepted=True, reason="native_boundary_suffix_rebase_authorized")
     return correction, report
 
 
@@ -468,7 +441,7 @@ def apply_suffix_representation_bridge(
     *,
     requested: bool = True,
 ) -> tuple[torch.Tensor, dict]:
-    """Rebase a generated suffix persistently from directly observed overlap."""
+    """Rebase generated suffix values without modifying caller-owned prefix."""
 
     prefix_t = _validate_pair(learned_clean_video, exact_prefix)
     if not isinstance(requested, bool):
@@ -503,7 +476,7 @@ def apply_suffix_representation_bridge(
     if tone_bias is not None:
         tone_corrected_suffix = suffix.float().add(tone_bias).to(learned_clean_video.dtype)
 
-    geometry_transform, geometry = _persistent_geometry_rebase(exact, tone_corrected_suffix)
+    geometry_transform, geometry = _persistent_geometry_rebase(learned_clean_video, exact, tone_corrected_suffix)
     corrected_suffix = tone_corrected_suffix
     out_of_bounds = 0.0
     if geometry_transform is not None:
@@ -523,11 +496,11 @@ def apply_suffix_representation_bridge(
         corrected = learned_clean_video
 
     if tone_accepted and geometry_accepted:
-        reason = "persistent_tone_and_authoritative_geometry_rebase_authorized"
+        reason = "persistent_tone_and_native_boundary_rebase_authorized"
     elif tone_accepted:
         reason = "persistent_tone_rebase_authorized"
     elif geometry_accepted:
-        reason = "authoritative_geometry_rebase_authorized"
+        reason = "native_boundary_geometry_rebase_authorized"
     else:
         reason = f"tone={tone['reason']};geometry={geometry['reason']}"
 
@@ -542,14 +515,11 @@ def apply_suffix_representation_bridge(
         suffix_representation_bridge_validation_frames=validation_frames,
         suffix_representation_bridge_improving_frames=improving_frames,
         suffix_representation_bridge_median_frame_improvement=float(tone["validation_dc_improvement"]),
-        suffix_representation_bridge_worst_frame_regression=max(
-            0.0,
-            float(geometry.get("worst_internal_regression", 0.0)),
-        ),
-        suffix_representation_bridge_transform=geometry.get("residual_transform", (1.0, 1.0, 0.0, 0.0)),
-        suffix_representation_bridge_identity_error=geometry.get("boundary_error_before"),
-        suffix_representation_bridge_aligned_error=geometry.get("boundary_error_after"),
-        suffix_representation_bridge_improvement=float(geometry.get("improvement", 0.0)),
+        suffix_representation_bridge_worst_frame_regression=max(0.0, float(geometry["worst_internal_regression"])),
+        suffix_representation_bridge_transform=geometry["residual_transform"],
+        suffix_representation_bridge_identity_error=geometry["boundary_error_before"],
+        suffix_representation_bridge_aligned_error=geometry["boundary_error_after"],
+        suffix_representation_bridge_improvement=float(geometry["improvement"]),
         suffix_representation_bridge_out_of_bounds_fraction=out_of_bounds,
         suffix_representation_bridge_tone_bias_accepted=tone_accepted,
         suffix_representation_bridge_tone_reason=tone["reason"],
@@ -566,6 +536,18 @@ def apply_suffix_representation_bridge(
         suffix_representation_bridge_geometry_holdout_aligned_error=geometry["holdout_aligned_error"],
         suffix_representation_bridge_geometry_holdout_prediction_error=geometry["holdout_prediction_error"],
         suffix_representation_bridge_geometry_holdout_prediction_gain=float(geometry["holdout_prediction_gain"]),
+        suffix_representation_bridge_geometry_motion_prediction_used=bool(geometry["motion_prediction_used"]),
+        suffix_representation_bridge_geometry_native_boundary_direct=bool(geometry["native_boundary_direct"]),
+        suffix_representation_bridge_geometry_native_identity_error=geometry["native_identity_error"],
+        suffix_representation_bridge_geometry_native_aligned_error=geometry["native_aligned_error"],
+        suffix_representation_bridge_geometry_native_improvement=float(geometry["native_improvement"]),
+        suffix_representation_bridge_geometry_prefix_replacement_identity_error=geometry[
+            "prefix_replacement_identity_error"
+        ],
+        suffix_representation_bridge_geometry_prefix_replacement_aligned_error=geometry[
+            "prefix_replacement_aligned_error"
+        ],
+        suffix_representation_bridge_geometry_prefix_replacement_transform=geometry["prefix_replacement_transform"],
         suffix_representation_bridge_geometry_expected_transform=geometry["expected_transform"],
         suffix_representation_bridge_geometry_observed_transform=geometry["observed_transform"],
         suffix_representation_bridge_geometry_residual_transform=geometry["residual_transform"],
