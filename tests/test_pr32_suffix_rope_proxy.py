@@ -9,43 +9,51 @@ from h3_flow_regenerate.pr32_suffix_rope_proxy import (
     _RopePlan,
     _block_replacement,
     _model_options_with_suffix_rope_proxy,
-    _source_extent_target_frame,
+    _source_coordinate_target_frame,
     flow_predict_wrapper_with_suffix_rope_proxy,
 )
-
-
-class _NativeFrameGrid:
-    @staticmethod
-    def _frame_grid(lat_h: int, lat_w: int):
-        sqrt_area = math.sqrt(lat_h * lat_w)
-        ratio_h = lat_h / sqrt_area
-        ratio_w = lat_w / sqrt_area
-        nh, nw = lat_h // 2, lat_w // 2
-        h = (torch.arange(nh, dtype=torch.float64) * (ratio_h / nh) + (1.0 - ratio_h) / 2.0) * 32.0
-        w = (torch.arange(nw, dtype=torch.float64) * (ratio_w / nw) + (1.0 - ratio_w) / 2.0) * 32.0
-        hh, ww = torch.meshgrid(h, w, indexing="ij")
-        frame = torch.stack((hh.reshape(-1), ww.reshape(-1)), dim=-1)
-        return frame, (nh, nw)
 
 
 class _FakeModel:
     blocks = (object(), object(), object())
 
 
-def test_source_extent_target_frame_matches_source_endpoints():
-    frame, report = _source_extent_target_frame(
-        _NativeFrameGrid,
+def test_source_coordinate_target_frame_uses_source_native_ratios_at_target_density():
+    frame, report = _source_coordinate_target_frame(
         source_hw=(40, 52),
         target_hw=(56, 74),
     )
     assert tuple(frame.shape) == (28 * 37, 2)
+    source_area = math.sqrt(40 * 52)
+    target_area = math.sqrt(56 * 74)
+    source_h_ratio = 40 / source_area
+    source_w_ratio = 52 / source_area
+    target_h_ratio = 56 / target_area
+    target_w_ratio = 74 / target_area
     grid = frame.reshape(28, 37, 2)
-    assert math.isclose(float(grid[0, 0, 0]), report["suffix_rope_proxy_source_h_endpoints"][0])
-    assert math.isclose(float(grid[-1, 0, 0]), report["suffix_rope_proxy_source_h_endpoints"][1])
-    assert math.isclose(float(grid[0, 0, 1]), report["suffix_rope_proxy_source_w_endpoints"][0])
-    assert math.isclose(float(grid[0, -1, 1]), report["suffix_rope_proxy_source_w_endpoints"][1])
-    assert math.isclose(report["suffix_rope_proxy_h_extent_ratio"], 0.9932716561368693, rel_tol=0.0, abs_tol=1e-12)
-    assert math.isclose(report["suffix_rope_proxy_w_extent_ratio"], 0.980202292240332, rel_tol=0.0, abs_tol=1e-12)
+
+    expected_h0 = 32.0 * (1.0 - source_h_ratio) / 2.0
+    expected_w0 = 32.0 * (1.0 - source_w_ratio) / 2.0
+    expected_h_last = 32.0 * ((1.0 - source_h_ratio) / 2.0 + source_h_ratio * 27 / 28)
+    expected_w_last = 32.0 * ((1.0 - source_w_ratio) / 2.0 + source_w_ratio * 36 / 37)
+    assert math.isclose(float(grid[0, 0, 0]), expected_h0, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(float(grid[-1, 0, 0]), expected_h_last, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(float(grid[0, 0, 1]), expected_w0, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(float(grid[0, -1, 1]), expected_w_last, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(
+        report["suffix_rope_proxy_h_coordinate_scale"],
+        source_h_ratio / target_h_ratio,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    assert math.isclose(
+        report["suffix_rope_proxy_w_coordinate_scale"],
+        source_w_ratio / target_w_ratio,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    assert math.isclose(report["suffix_rope_proxy_h_coordinate_scale"], 1.0082080720186268, abs_tol=1e-12)
+    assert math.isclose(report["suffix_rope_proxy_w_coordinate_scale"], 0.9918587519318383, abs_tol=1e-12)
 
 
 def test_block_replacement_changes_only_rope_argument_and_preserves_chain():
