@@ -146,9 +146,9 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         "conditioning, generates a genuine low-grid suffix, performs learned 3D clean-latent transfer, "
         "restores the exact prefix, and starts fresh target-grid refinement. The optional persistent suffix "
         "rebase can independently correct a held-out-validated per-channel tone-domain offset and a bounded "
-        "constant affine frame offset inferred from the learned upscaler's own temporal motion. Any accepted "
-        "component applies to the entire generated suffix; raw structural/chroma residual and one-token DC "
-        "transplantation remain retired. Requires an H3 latent-upscaler provider and VDN external-sequence "
+        "constant affine frame offset measured directly from the learned upscaler's native prefix/suffix boundary. "
+        "Any accepted component applies to the entire generated suffix; raw structural/chroma residual and one-token "
+        "DC transplantation remain retired. Requires an H3 latent-upscaler provider and VDN external-sequence "
         "API v2 when VDN is enabled. State transport remains experimental and legacy re-noise remains the default."
     )
 
@@ -200,9 +200,9 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                 "tooltip": (
                     "Legacy input name for the experimental persistent target-side suffix rebase. It may apply "
                     "a per-channel constant latent bias validated on held-out exact/learned overlap and/or a "
-                    "small constant affine correction inferred from learned-upscaler temporal motion and validated "
-                    "at the prefix/suffix boundary plus internal suffix transitions. Any accepted correction covers "
-                    "the entire generated suffix. Raw structural/chroma residuals are never transplanted."
+                    "small constant affine correction measured from the learned upscaler's direct native boundary "
+                    "and the exact-prefix replacement boundary. Any accepted correction covers the entire generated "
+                    "suffix. Raw structural/chroma residuals are never transplanted; future motion is not extrapolated."
                 ),
             },
         )
