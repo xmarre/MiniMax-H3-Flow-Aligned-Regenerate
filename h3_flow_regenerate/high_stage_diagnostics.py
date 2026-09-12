@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,6 +10,7 @@ import torch
 from .geometry import unpack_streams
 from .metrics import H3FlowMetrics
 from .seam_diagnostics import measure_video_boundary
+from .source_trajectory_bridge import register_pair
 
 HIGH_STAGE_DIAGNOSTIC_KEY = "h3_flow_mixed_grid_high_boundary_v1"
 
@@ -122,14 +124,66 @@ def next_call_fields(
     return fields
 
 
-def _boundary_fields(video: torch.Tensor, prefix_t: int, *, prefix: str = "") -> dict[str, Any]:
+def _registration_fields(video: torch.Tensor, prefix_t: int, *, prefix: str = "") -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        f"{prefix}registration_available": False,
+        f"{prefix}registration_reason": "invalid_boundary",
+        f"{prefix}registration_transform": None,
+        f"{prefix}registration_identity_error": None,
+        f"{prefix}registration_aligned_error": None,
+        f"{prefix}registration_improvement": 0.0,
+    }
+    if prefix_t <= 0 or prefix_t >= int(video.shape[2]):
+        return fields
+
+    item = register_pair(
+        video[:, :, prefix_t - 1 : prefix_t],
+        video[:, :, prefix_t : prefix_t + 1],
+    )
+    reason = str(item.get("reason", "unavailable"))
+    transform = item.get("transform")
+    identity = item.get("identity_error")
+    aligned = item.get("aligned_error")
+    improvement = item.get("improvement", 0.0)
+    available = (
+        transform is not None
+        and identity is not None
+        and aligned is not None
+        and math.isfinite(float(identity))
+        and math.isfinite(float(aligned))
+        and math.isfinite(float(improvement))
+    )
+    fields[f"{prefix}registration_reason"] = reason
+    if available:
+        fields.update(
+            {
+                f"{prefix}registration_available": True,
+                f"{prefix}registration_transform": tuple(float(value) for value in transform),
+                f"{prefix}registration_identity_error": float(identity),
+                f"{prefix}registration_aligned_error": float(aligned),
+                f"{prefix}registration_improvement": float(improvement),
+            }
+        )
+    return fields
+
+
+def _boundary_fields(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    prefix: str = "",
+    include_registration: bool = False,
+) -> dict[str, Any]:
     boundary = measure_video_boundary(video, prefix_t)
-    return {
+    fields = {
         f"{prefix}seam_lowpass_kernel": boundary["lowpass_kernel"],
         f"{prefix}seam_rms": boundary["seam_rms"],
         f"{prefix}seam_lowpass_rms": boundary["seam_lowpass_rms"],
         f"{prefix}seam_spatial_mean_rms": boundary["seam_spatial_mean_rms"],
     }
+    if include_registration:
+        fields.update(_registration_fields(video, prefix_t, prefix=prefix))
+    return fields
 
 
 def packed_boundary_fields(
@@ -137,10 +191,16 @@ def packed_boundary_fields(
     contract: dict[str, Any],
     *,
     field_prefix: str = "",
+    include_registration: bool = False,
 ) -> dict[str, Any]:
     shapes = [tuple(shape) for shape in contract["shapes"]]
     video, _audio = unpack_streams(packed, shapes)
-    return _boundary_fields(video, int(contract["prefix_t"]), prefix=field_prefix)
+    return _boundary_fields(
+        video,
+        int(contract["prefix_t"]),
+        prefix=field_prefix,
+        include_registration=include_registration,
+    )
 
 
 def _prefixed_call_fields(call: dict[str, Any] | None, *, prefix: str) -> dict[str, Any]:
@@ -174,7 +234,20 @@ def record_packed_boundary(
     *,
     field_prefix: str = "",
 ) -> None:
-    metrics.event(kind, **fields, **packed_boundary_fields(packed, contract, field_prefix=field_prefix))
+    # Registration is meaningful for denoised predictions, not for the
+    # sigma-noisy post-inpaint model input. This keeps diagnostic cost bounded
+    # while still locating whether geometry is created by the raw model output.
+    include_registration = kind == "mixed_grid_high_prediction_boundary"
+    metrics.event(
+        kind,
+        **fields,
+        **packed_boundary_fields(
+            packed,
+            contract,
+            field_prefix=field_prefix,
+            include_registration=include_registration,
+        ),
+    )
 
 
 def record_video_boundary(
@@ -189,7 +262,12 @@ def record_video_boundary(
     metrics.event(
         kind,
         **fields,
-        **_boundary_fields(video, int(contract["prefix_t"]), prefix=field_prefix),
+        **_boundary_fields(
+            video,
+            int(contract["prefix_t"]),
+            prefix=field_prefix,
+            include_registration=True,
+        ),
     )
 
 
@@ -235,5 +313,10 @@ def record_callback_boundary(
         "mixed_grid_high_step_boundary",
         **fields,
         **_boundary_fields(state_video, int(contract["prefix_t"]), prefix="state_"),
-        **_boundary_fields(x0_video, int(contract["prefix_t"]), prefix="x0_"),
+        **_boundary_fields(
+            x0_video,
+            int(contract["prefix_t"]),
+            prefix="x0_",
+            include_registration=True,
+        ),
     )
