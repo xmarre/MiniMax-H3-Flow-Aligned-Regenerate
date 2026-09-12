@@ -1,4 +1,4 @@
-"""PR #32 diagnostic: preserve source-grid spatial RoPE extent in high-stage suffix.
+"""PR #32 diagnostic: keep high-stage suffix on the source spatial RoPE coordinate law.
 
 00395 falsified the protected-prefix value/representation proxy as the primary
 cause of the persistent framing contraction. The first raw high-stage H3
@@ -9,11 +9,11 @@ The remaining discrete boundary is positional: Mixed-Grid's generated suffix
 uses the source spatial grid before handoff and native target-grid spatial RoPE
 after handoff. This temporary diagnostic keeps target-grid latent values, token
 count, timesteps, masks, prefix/noise, audio and layout ownership unchanged, but
-for *actual* high-stage H3 evaluations only it reparameterizes generated-suffix
-spatial RoPE rows onto the exact spatial extent occupied by the source grid.
-Protected-prefix and every non-video RoPE row remain bit-identical to native.
-Spectrum forecast calls are not directly modified. No model/VAE/RNG/NFE is
-added.
+for *actual* high-stage H3 evaluations only it evaluates generated-suffix
+spatial RoPE on the source grid's native area-normalized coordinate law at the
+target-grid sampling density. Protected-prefix and every non-video RoPE row
+remain bit-identical to native. Spectrum forecast calls are not directly
+modified. No model/VAE/RNG/NFE is added.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import torch
 
 from . import runtime as _runtime
 
-_MODE = "source_extent_suffix_rope_v1"
+_MODE = "source_coordinate_suffix_rope_v1"
 _ORIGINAL_FLOW_PREDICT_WRAPPER = _runtime.flow_predict_wrapper
 _ORIGINAL_BUILD_MIXED_GRID_PLAN = _runtime.build_mixed_grid_plan
 
@@ -56,11 +56,9 @@ def build_mixed_grid_plan_capture(*args, **kwargs):
 
     _plan_var.set(None)
     plan = _ORIGINAL_BUILD_MIXED_GRID_PLAN(*args, **kwargs)
-    source_h = int(kwargs["source_h"])
-    source_w = int(kwargs["source_w"])
     _plan_var.set(
         _RopePlan(
-            source_hw=(source_h, source_w),
+            source_hw=(int(kwargs["source_h"]), int(kwargs["source_w"])),
             target_hw=tuple(map(int, plan.target_hw)),
             prefix_t=int(plan.prefix_t),
         )
@@ -68,23 +66,29 @@ def build_mixed_grid_plan_capture(*args, **kwargs):
     return plan
 
 
-def _axis_endpoints(frame: torch.Tensor, h: int, w: int) -> tuple[float, float, float, float]:
-    gh, gw = h // 2, w // 2
-    grid = frame.reshape(gh, gw, 2)
+def _native_axis(dim: int, sqrt_area: float, samples: int) -> torch.Tensor:
+    ratio = float(dim) / float(sqrt_area)
     return (
-        float(grid[0, 0, 0]),
-        float(grid[-1, 0, 0]),
-        float(grid[0, 0, 1]),
-        float(grid[0, -1, 1]),
-    )
+        torch.arange(samples, dtype=torch.float64) * (ratio / samples)
+        + (1.0 - ratio) / 2.0
+    ) * 32.0
 
 
-def _source_extent_target_frame(
-    native: Any,
+def _source_coordinate_target_frame(
     *,
     source_hw: tuple[int, int],
     target_hw: tuple[int, int],
 ) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Sample the source native coordinate law at target-grid density.
+
+    Native H3 uses, per spatial axis,
+      32 * ((1-ratio)/2 + ratio * index / grid_size),
+    where ratio is axis/sqrt(HW). At handoff the target grid changes both the
+    number of samples and, when rounding changes aspect ratio, ``ratio``. This
+    diagnostic changes only the latter back to the source value while retaining
+    the target number of rows.
+    """
+
     source_h, source_w = map(int, source_hw)
     target_h, target_w = map(int, target_hw)
     if min(source_h, source_w, target_h, target_w) < 2 or any(
@@ -94,32 +98,39 @@ def _source_extent_target_frame(
     if source_h > target_h or source_w > target_w or (source_h, source_w) == (target_h, target_w):
         raise ValueError("PR32 suffix RoPE diagnostic requires a strictly reduced source grid")
 
-    source_frame, _ = native._frame_grid(source_h, source_w)
-    target_frame, _ = native._frame_grid(target_h, target_w)
-    sh0, sh1, sw0, sw1 = _axis_endpoints(source_frame, source_h, source_w)
-    th0, th1, tw0, tw1 = _axis_endpoints(target_frame, target_h, target_w)
+    source_area = math.sqrt(source_h * source_w)
+    target_area = math.sqrt(target_h * target_w)
+    source_h_ratio = source_h / source_area
+    source_w_ratio = source_w / source_area
+    target_h_ratio = target_h / target_area
+    target_w_ratio = target_w / target_area
     target_gh, target_gw = target_h // 2, target_w // 2
-    h_axis = torch.linspace(sh0, sh1, target_gh, dtype=torch.float64)
-    w_axis = torch.linspace(sw0, sw1, target_gw, dtype=torch.float64)
+
+    h_axis = _native_axis(source_h, source_area, target_gh)
+    w_axis = _native_axis(source_w, source_area, target_gw)
+    native_target_h_axis = _native_axis(target_h, target_area, target_gh)
+    native_target_w_axis = _native_axis(target_w, target_area, target_gw)
     hh, ww = torch.meshgrid(h_axis, w_axis, indexing="ij")
     frame = torch.stack((hh.reshape(-1), ww.reshape(-1)), dim=-1)
 
-    source_h_span = sh1 - sh0
-    source_w_span = sw1 - sw0
-    target_h_span = th1 - th0
-    target_w_span = tw1 - tw0
-    if min(abs(target_h_span), abs(target_w_span)) <= 1e-12:
-        raise RuntimeError("PR32 suffix RoPE diagnostic found a degenerate native target position span")
     report = {
         "suffix_rope_proxy_mode": _MODE,
         "suffix_rope_proxy_source_hw": (source_h, source_w),
         "suffix_rope_proxy_target_hw": (target_h, target_w),
-        "suffix_rope_proxy_source_h_endpoints": (sh0, sh1),
-        "suffix_rope_proxy_source_w_endpoints": (sw0, sw1),
-        "suffix_rope_proxy_target_h_endpoints": (th0, th1),
-        "suffix_rope_proxy_target_w_endpoints": (tw0, tw1),
-        "suffix_rope_proxy_h_extent_ratio": source_h_span / target_h_span,
-        "suffix_rope_proxy_w_extent_ratio": source_w_span / target_w_span,
+        "suffix_rope_proxy_h_coordinate_scale": source_h_ratio / target_h_ratio,
+        "suffix_rope_proxy_w_coordinate_scale": source_w_ratio / target_w_ratio,
+        "suffix_rope_proxy_source_h_ratio": source_h_ratio,
+        "suffix_rope_proxy_source_w_ratio": source_w_ratio,
+        "suffix_rope_proxy_target_h_ratio": target_h_ratio,
+        "suffix_rope_proxy_target_w_ratio": target_w_ratio,
+        "suffix_rope_proxy_h_first": float(h_axis[0]),
+        "suffix_rope_proxy_h_last": float(h_axis[-1]),
+        "suffix_rope_proxy_w_first": float(w_axis[0]),
+        "suffix_rope_proxy_w_last": float(w_axis[-1]),
+        "suffix_rope_proxy_native_target_h_first": float(native_target_h_axis[0]),
+        "suffix_rope_proxy_native_target_h_last": float(native_target_h_axis[-1]),
+        "suffix_rope_proxy_native_target_w_first": float(native_target_w_axis[0]),
+        "suffix_rope_proxy_native_target_w_last": float(native_target_w_axis[-1]),
     }
     return frame, report
 
@@ -162,16 +173,15 @@ class _SuffixRopeContext:
         if not 0 < prefix_t < temporal:
             raise RuntimeError("PR32 suffix RoPE diagnostic requires a non-empty prefix and suffix")
 
-        source_extent_frame, report = _source_extent_target_frame(
-            native,
+        source_frame, report = _source_coordinate_target_frame(
             source_hw=(source_h, source_w),
             target_hw=(target_h, target_w),
         )
         positions = layout.position_ids.detach().clone()
         original_positions = positions.clone()
         video_positions = positions[va:vb].reshape(temporal, target_rows, 3)
-        source_extent_frame = source_extent_frame.to(device=video_positions.device, dtype=video_positions.dtype)
-        video_positions[prefix_t:, :, 1:] = source_extent_frame.unsqueeze(0)
+        source_frame = source_frame.to(device=video_positions.device, dtype=video_positions.dtype)
+        video_positions[prefix_t:, :, 1:] = source_frame.unsqueeze(0)
 
         suffix_start = va + prefix_t * target_rows
         suffix_stop = vb
