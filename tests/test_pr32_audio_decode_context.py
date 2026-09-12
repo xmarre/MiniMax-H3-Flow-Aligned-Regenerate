@@ -124,12 +124,16 @@ def test_future_context_removes_independent_noncausal_decoder_endpoint_error():
 
     old = torch.cat((old_left, right), dim=-1)
     corrected = torch.cat((corrected_left, right), dim=-1)
+    expected_segment = expected[..., : corrected.shape[-1]]
 
-    assert torch.equal(corrected, expected[..., : corrected.shape[-1]])
-    assert not torch.equal(old, expected[..., : old.shape[-1]])
-    # The only old mismatch is the left decoder's terminal receptive-field band.
-    assert torch.equal(old[..., : first_t - 5], expected[..., : first_t - 5])
-    assert not torch.equal(old[..., first_t - 5 : first_t], expected[..., first_t - 5 : first_t])
+    # The same continuous latent context can take slightly different CPU conv
+    # reduction paths when decoded as one tensor versus a concatenated view, so
+    # compare at numerical tolerance rather than requiring bit identity.
+    torch.testing.assert_close(corrected, expected_segment, rtol=1e-6, atol=1e-7)
+    assert torch.max(torch.abs(old - expected_segment)).item() > 1e-5
+    # The old mismatch is localized to the left decoder's terminal receptive-field band.
+    torch.testing.assert_close(old[..., : first_t - 5], expected[..., : first_t - 5], rtol=1e-6, atol=1e-7)
+    assert torch.max(torch.abs(old[..., first_t - 5 : first_t] - expected[..., first_t - 5 : first_t])).item() > 1e-5
 
 
 def test_decode_groups_take_precedence_over_logical_chunks():
