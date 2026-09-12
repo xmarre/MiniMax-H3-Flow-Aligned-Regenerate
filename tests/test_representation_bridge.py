@@ -60,6 +60,18 @@ def _warp_suffix(value: torch.Tensor, transform):
     return warped.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4).to(value.dtype)
 
 
+def test_native_boundary_residual_composition_matches_warp_registration_order():
+    expected = (1.008, 0.996, 0.20, -0.10)
+    observed = (1.015, 0.992, 0.55, -0.35)
+
+    correction = bridge._residual_transform(observed, expected)
+
+    # W_expected(W_correction(x)) == W_observed(x), because grid_sample
+    # composition follows correction o expected in output-to-input coordinates.
+    recomposed = bridge._compose_transform(correction, expected)
+    assert recomposed == pytest.approx(observed, abs=1e-12)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_stable_overlap_tone_bias_rebases_entire_suffix_without_structural_transplant(monkeypatch, dtype):
     monkeypatch.setattr(
