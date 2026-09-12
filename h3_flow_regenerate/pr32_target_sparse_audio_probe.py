@@ -1,7 +1,7 @@
 """PR #32 diagnostic: isolate Target-Sparse audio continuity at the handoff.
 
 00403 shows a visually clean Target-Sparse Continuum boundary but an audible
-chunk seam.  Target-Sparse keeps every audio row while reducing the video token
+chunk seam. Target-Sparse keeps every audio row while reducing the video token
 stream during its early sampler lifetime, so the audio trajectory is still
 predicted against an approximate video context.
 
@@ -11,17 +11,17 @@ handoff probes from the exact same target-grid sampler state:
 * one probe with the Target-Sparse transformer contract still active;
 * one probe with the sparse contract removed, i.e. the full H3 transformer.
 
-Only the audio x0 disagreement is used.  The high-stage initial audio state is
+Only the audio x0 disagreement is used. The high-stage initial audio state is
 rebased by the exact flow-interpolation identity
 
     x_sigma' = x_sigma + (1 - sigma) * (x0_full - x0_sparse)
 
-while the caller's video noise/state remains bit-identical.  The probes are
+while the caller's video noise/state remains bit-identical. The probes are
 excluded from trajectory capture and are telemetry-only apart from that bounded
-audio-state rebase.  No video state, mask, conditioning, RoPE, scheduler state,
+audio-state rebase. No video state, mask, conditioning, RoPE, scheduler state,
 VDN/Sol/Spectrum ownership, or normal sampler schedule is changed.
 
-This is temporary diagnostic work.  It intentionally adds two H3 probe NFEs and
+This is temporary diagnostic work. It intentionally adds two H3 probe NFEs and
 must not be promoted without decoded-media evidence.
 """
 
@@ -259,7 +259,10 @@ class _TargetSparseAudioProbeExecutor:
 
         clean_delta = full_audio.float() - sparse_audio.float()
         audio_state_correction = (1.0 - sigma) * clean_delta
-        corrected_audio_state = state_audio + audio_state_correction.to(device=state_audio.device, dtype=state_audio.dtype)
+        corrected_audio_state = state_audio + audio_state_correction.to(
+            device=state_audio.device,
+            dtype=state_audio.dtype,
+        )
         corrected_state = pack_streams((state_video, corrected_audio_state))[0]
         corrected_noise = _runtime._noise_argument(base_model, corrected_state, sigma, latent_internal)
         corrected_noise = _runtime._merge_preserved_noise(corrected_noise, original_noise, denoise_mask)
