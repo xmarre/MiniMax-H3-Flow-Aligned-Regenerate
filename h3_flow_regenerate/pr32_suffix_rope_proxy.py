@@ -132,6 +132,18 @@ def _source_coordinate_target_frame(
     return frame, report
 
 
+def _plan_matches_contract(plan: _RopePlan, contract: dict[str, Any]) -> bool:
+    shapes = [tuple(int(value) for value in shape) for shape in contract.get("shapes", ())]
+    if len(shapes) != 2 or len(shapes[0]) < 5:
+        return False
+    prefix_t = int(contract.get("prefix_t", -1))
+    return (
+        tuple(shapes[0][-2:]) == plan.target_hw
+        and prefix_t == plan.prefix_t
+        and 0 < prefix_t < int(shapes[0][2])
+    )
+
+
 @dataclass(slots=True)
 class _SuffixRopeContext:
     native_model: Any
@@ -267,7 +279,7 @@ def flow_predict_wrapper_with_suffix_rope_proxy(executor, x, timestep, model_opt
     transformer = (model_options or {}).get("transformer_options") or {}
     contract = transformer.get(_runtime.HIGH_STAGE_DIAGNOSTIC_KEY)
     plan = _plan_var.get()
-    if not isinstance(contract, dict) or plan is None:
+    if not isinstance(contract, dict) or plan is None or not _plan_matches_contract(plan, contract):
         return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
     if transformer.get(_runtime.SPECTRUM_ACTUAL_KEY) is False:
         return _ORIGINAL_FLOW_PREDICT_WRAPPER(executor, x, timestep, model_options, seed)
