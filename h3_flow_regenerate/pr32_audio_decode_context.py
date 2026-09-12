@@ -243,9 +243,7 @@ def inspect_decoded_audio_boundaries(audio: list[dict], plan: dict) -> tuple[lis
         missing = wanted - int(segment.shape[-1])
         if missing > 0:
             if int(segment.shape[-1]) > 0:
-                segment = torch.cat(
-                    (segment, segment[..., -1:].expand(*segment.shape[:-1], missing).clone()), dim=-1
-                )
+                segment = torch.cat((segment, segment[..., -1:].expand(*segment.shape[:-1], missing).clone()), dim=-1)
             else:
                 segment = F.pad(segment, (0, missing))
         segment = segment.contiguous()
@@ -269,9 +267,7 @@ def inspect_decoded_audio_boundaries(audio: list[dict], plan: dict) -> tuple[lis
     if sample_rate is None:
         raise RuntimeError("decoded-audio diagnostic received no groups")
     if sample_rate != _H3_AUDIO_SAMPLE_RATE:
-        reports.append(
-            f"warning: expected MiniMax-H3 output rate {_H3_AUDIO_SAMPLE_RATE}, observed {sample_rate}"
-        )
+        reports.append(f"warning: expected MiniMax-H3 output rate {_H3_AUDIO_SAMPLE_RATE}, observed {sample_rate}")
 
     compare_samples = max(8, round(sample_rate * _COMPARE_SECONDS))
     for boundary in range(len(decoded) - 1):
@@ -298,17 +294,13 @@ def inspect_decoded_audio_boundaries(audio: list[dict], plan: dict) -> tuple[lis
             left_future = left[..., left_raw_stop : left_raw_stop + future_count]
             right_future = right[..., right_trim : right_trim + future_count]
             future_report = _format_match("future", left_future, right_future)
-            continuous_left_jump = float(
-                torch.mean(torch.abs(left_segment[..., -1] - left_future[..., 0])).item()
-            )
+            continuous_left_jump = float(torch.mean(torch.abs(left_segment[..., -1] - left_future[..., 0])).item())
         else:
             future_report = "future=unavailable"
             continuous_left_jump = math.nan
 
         if int(left_segment.shape[-1]) > 0 and int(right_segment.shape[-1]) > 0:
-            actual_jump = float(
-                torch.mean(torch.abs(left_segment[..., -1] - right_segment[..., 0])).item()
-            )
+            actual_jump = float(torch.mean(torch.abs(left_segment[..., -1] - right_segment[..., 0])).item())
         else:
             actual_jump = math.nan
 
