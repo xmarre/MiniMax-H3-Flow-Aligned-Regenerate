@@ -6,9 +6,9 @@ import torch
 
 from h3_flow_regenerate import runtime
 from h3_flow_regenerate.pr32_suffix_rope_proxy import (
-    _RopePlan,
     _block_replacement,
     _model_options_with_suffix_rope_proxy,
+    _RopePlan,
     _source_coordinate_target_frame,
     flow_predict_wrapper_with_suffix_rope_proxy,
 )
