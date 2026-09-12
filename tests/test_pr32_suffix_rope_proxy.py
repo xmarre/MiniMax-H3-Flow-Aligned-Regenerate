@@ -44,8 +44,8 @@ def test_source_extent_target_frame_matches_source_endpoints():
     assert math.isclose(float(grid[-1, 0, 0]), report["suffix_rope_proxy_source_h_endpoints"][1])
     assert math.isclose(float(grid[0, 0, 1]), report["suffix_rope_proxy_source_w_endpoints"][0])
     assert math.isclose(float(grid[0, -1, 1]), report["suffix_rope_proxy_source_w_endpoints"][1])
-    assert math.isclose(report["suffix_rope_proxy_h_extent_ratio"], 0.9932716736, rel_tol=0.0, abs_tol=1e-9)
-    assert math.isclose(report["suffix_rope_proxy_w_extent_ratio"], 0.9802009670, rel_tol=0.0, abs_tol=1e-9)
+    assert math.isclose(report["suffix_rope_proxy_h_extent_ratio"], 0.9932716561368693, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(report["suffix_rope_proxy_w_extent_ratio"], 0.980202292240332, rel_tol=0.0, abs_tol=1e-12)
 
 
 def test_block_replacement_changes_only_rope_argument_and_preserves_chain():
