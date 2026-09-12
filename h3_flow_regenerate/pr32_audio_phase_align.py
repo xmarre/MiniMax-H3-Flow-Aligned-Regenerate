@@ -17,7 +17,6 @@ and never touches sampler latents or the assembly plan.
 from __future__ import annotations
 
 import logging
-import math
 
 import torch
 
