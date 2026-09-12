@@ -57,15 +57,22 @@ def test_exact_protected_rows_match_native_2x2_max_semantics():
     assert rows.tolist() == [0]
 
 
-def test_target_sparse_plan_retains_every_protected_row_plus_coarse_anchors():
-    _latent, shapes, denoise_mask = _masked_target(target_t=2, target_h=8, target_w=8)
+def test_target_sparse_plan_retains_protected_rows_dense_decoder_collar_and_anchors():
+    _latent, shapes, denoise_mask = _masked_target(target_t=8, target_h=8, target_w=8)
     plan = build_target_sparse_plan(denoise_mask, shapes, source_h=4, source_w=4)
 
-    assert plan.target_video_rows == 32
+    assert plan.target_video_rows == 128
     assert plan.protected_video_rows.tolist() == list(range(16))
-    assert plan.anchor_video_row_count == 8
+    assert plan.anchor_video_row_count == 32
+    assert plan.dense_collar_t == 5
+    assert plan.dense_collar_video_rows.tolist() == list(range(16, 96))
+    assert plan.dense_collar_video_row_count == 80
     assert set(plan.protected_video_rows.tolist()).issubset(set(plan.selected_video_rows.tolist()))
+    assert set(plan.dense_collar_video_rows.tolist()).issubset(set(plan.selected_video_rows.tolist()))
     assert set(plan.anchor_video_rows.tolist()).issubset(set(plan.selected_video_rows.tolist()))
+    # Frame 0 is fully protected, frames 1..5 are dense collar, and only the
+    # final two generated frames remain anchor-only: 16 + 5*16 + 2*4 = 104.
+    assert plan.selected_video_row_count == 104
     assert plan.selected_video_row_count < plan.target_video_rows
 
 
@@ -159,6 +166,9 @@ def test_target_sparse_block_contract_reduces_then_restores_dict_output():
     restored_selected = last_out["img"][video_start:].index_select(0, plan.selected_video_rows)
     assert torch.equal(restored_selected, compact_after_last)
     assert metrics.counters["target_sparse_actual_calls"] == 1
+    first_event = [event for event in metrics.events if event.kind == "target_sparse_transformer"][-1]
+    assert first_event.fields["dense_collar_t"] == plan.dense_collar_t
+    assert first_event.fields["dense_collar_video_rows"] == plan.dense_collar_video_row_count
     assert any(event.kind == "target_sparse_lift" for event in metrics.events)
 
 
