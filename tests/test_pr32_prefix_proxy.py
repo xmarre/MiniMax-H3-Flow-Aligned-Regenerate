@@ -54,7 +54,9 @@ def test_prefix_proxy_replaces_only_protected_model_representation():
     expected_proxy_clean = learned[:, :, :prefix_t] + tone_bias
     expected_prefix = aug * expected_proxy_clean + (1.0 - aug) * noise
 
-    torch.testing.assert_close(out_video[:, :, :prefix_t], expected_prefix, rtol=0.0, atol=2e-7)
+    # Re-associating the float32 expression can differ by one ULP. The proxy
+    # algebra must still reproduce native-inpaint semantics to float32 precision.
+    torch.testing.assert_close(out_video[:, :, :prefix_t], expected_prefix, rtol=0.0, atol=1e-6)
     assert torch.equal(out_video[:, :, prefix_t:], model_video[:, :, prefix_t:])
     assert torch.equal(out_audio, audio)
     assert torch.equal(packed, before)
