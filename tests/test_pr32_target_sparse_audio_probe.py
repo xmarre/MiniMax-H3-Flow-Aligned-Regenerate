@@ -9,8 +9,8 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.pr32_target_sparse_audio_probe import (
     _MODE,
-    _TargetSparseAudioProbeExecutor,
     _continuum_target_sparse_enabled,
+    _TargetSparseAudioProbeExecutor,
 )
 
 
