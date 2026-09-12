@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import contextlib
-
-from . import runtime, target_sparse
+from . import runtime
+from . import target_sparse
 from .target_sparse_node import H3ProgressiveTargetSparseHandoff
 
 
@@ -18,24 +17,18 @@ from .target_sparse_node import H3ProgressiveTargetSparseHandoff
 _PR32_FULL_SUFFIX_DENSE_COLLAR_T = 1 << 30
 
 
-@contextlib.contextmanager
-def _full_suffix_dense_plan():
-    previous = target_sparse._BOUNDARY_DENSE_COLLAR_T
-    target_sparse._BOUNDARY_DENSE_COLLAR_T = _PR32_FULL_SUFFIX_DENSE_COLLAR_T
-    try:
-        yield
-    finally:
-        target_sparse._BOUNDARY_DENSE_COLLAR_T = previous
-
-
 _original_target_sparse_exact_prefix = runtime._run_target_sparse_exact_prefix
 if getattr(_original_target_sparse_exact_prefix, "_pr32_dense_staged_control", False):
     _dense_staged_exact_prefix = _original_target_sparse_exact_prefix
 else:
 
     def _dense_staged_exact_prefix(*args, **kwargs):
-        with _full_suffix_dense_plan():
+        previous = target_sparse._BOUNDARY_DENSE_COLLAR_T
+        target_sparse._BOUNDARY_DENSE_COLLAR_T = _PR32_FULL_SUFFIX_DENSE_COLLAR_T
+        try:
             return _original_target_sparse_exact_prefix(*args, **kwargs)
+        finally:
+            target_sparse._BOUNDARY_DENSE_COLLAR_T = previous
 
     _dense_staged_exact_prefix._pr32_dense_staged_control = True
     _dense_staged_exact_prefix._pr32_original = _original_target_sparse_exact_prefix
