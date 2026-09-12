@@ -8,6 +8,8 @@ import torch.nn.functional as F
 
 from h3_flow_regenerate.pr32_audio_decode_context import (
     H3ContinuumAudioDecodeContextDiagnostic,
+    H3ContinuumDecodedAudioBoundaryDiagnostic,
+    inspect_decoded_audio_boundaries,
     prepare_audio_decode_context,
 )
 
@@ -143,3 +145,93 @@ def test_decode_groups_take_precedence_over_logical_chunks():
     result, report = prepare_audio_decode_context(latents, plan)
     assert len(result) == 2
     assert "1/1 exact boundaries" in report
+
+
+def _decoded_sequence(*, right_gain: float = 1.0):
+    sample_rate = 32000
+    fps = 24
+    first_frames = 120
+    overlap_frames = 39
+    second_net_frames = 120
+    total_frames = first_frames + second_net_frames
+    total_samples = round(total_frames / fps * sample_rate)
+    right_start_frame = first_frames - overlap_frames
+    right_start_sample = round(right_start_frame / fps * sample_rate)
+
+    # A deterministic non-periodic waveform prevents accidental equality under
+    # shifted comparisons while preserving exact same-timeline copies.
+    t = torch.arange(total_samples, dtype=torch.float32)
+    timeline = (
+        0.35 * torch.sin(t * 0.0137)
+        + 0.17 * torch.sin(t * 0.0311 + 0.4)
+        + 0.05 * torch.cos(t * 0.00073)
+    ).reshape(1, 1, -1)
+    timeline = torch.cat((timeline, timeline * 0.91 + 0.013), dim=1)
+
+    left_consumed = round(first_frames / fps * sample_rate)
+    left_extended = timeline.clone()
+    right = timeline[..., right_start_sample:].clone() * float(right_gain)
+    audio = [
+        {"waveform": left_extended, "sample_rate": sample_rate},
+        {"waveform": right, "sample_rate": sample_rate},
+    ]
+    plan = {
+        "magic": "H3_CONTINUUM_ASSEMBLY_PLAN",
+        "schema_version": 1,
+        "fps": fps,
+        "decode_groups": [
+            {
+                "total_frames": first_frames,
+                "trim_frames": 0,
+                "net_frames": first_frames,
+            },
+            {
+                "total_frames": overlap_frames + second_net_frames,
+                "trim_frames": overlap_frames,
+                "net_frames": second_net_frames,
+            },
+        ],
+    }
+    return audio, plan, left_consumed
+
+
+def test_decoded_audio_boundary_diagnostic_reproduces_exact_assembly_regions_without_mutation():
+    audio, plan, left_consumed = _decoded_sequence()
+    before = [item["waveform"].clone() for item in audio]
+
+    result, report = H3ContinuumDecodedAudioBoundaryDiagnostic().inspect(audio, [plan])
+
+    assert result[0] is audio[0]
+    assert result[1] is audio[1]
+    assert all(torch.equal(item["waveform"], old) for item, old in zip(audio, before, strict=True))
+    assert "rate=32000" in report
+    assert "trim=39f/52000s exact_trim=True" in report
+    assert f"raw_stop={left_consumed}" in report
+    assert "precut_rel=0.000000" in report
+    assert "precut_corr=1.000000" in report
+    assert "precut_gain=1.000000" in report
+    assert "future_rel=0.000000" in report
+    assert "future_corr=1.000000" in report
+    assert "future_gain=1.000000" in report
+
+
+def test_decoded_audio_boundary_diagnostic_exposes_chunk_global_gain_mismatch():
+    audio, plan, _ = _decoded_sequence(right_gain=0.75)
+
+    _, report = inspect_decoded_audio_boundaries(audio, plan)
+
+    # Same-timeline regions remain perfectly correlated but no longer have the
+    # same amplitude. This is the signature expected from independent per-chunk
+    # normalization/gain rather than a timing offset.
+    assert "precut_corr=1.000000" in report
+    assert "future_corr=1.000000" in report
+    assert "precut_gain=1.333333" in report
+    assert "future_gain=1.333333" in report
+    assert "future_rel=0.285714" in report
+
+
+def test_decoded_audio_boundary_diagnostic_rejects_stale_group_count():
+    audio, plan, _ = _decoded_sequence()
+    plan["decode_groups"].append(copy.deepcopy(plan["decode_groups"][-1]))
+    with pytest.raises(ValueError, match="item count"):
+        inspect_decoded_audio_boundaries(audio, plan)
