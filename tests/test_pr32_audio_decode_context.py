@@ -67,10 +67,7 @@ def test_exact_audio_overlap_gets_full_adjacent_generated_suffix_without_mutatio
         assert result[index]["samples"].data_ptr() != latents[index]["samples"].data_ptr()
     assert result[-1] is latents[-1]
     assert plan == old_plan
-    assert all(
-        torch.equal(item["samples"], original)
-        for item, original in zip(latents, before, strict=True)
-    )
+    assert all(torch.equal(item["samples"], original) for item, original in zip(latents, before, strict=True))
 
 
 def test_nonexact_overlap_is_not_extended():
