@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import torch
 
+from h3_flow_regenerate import runtime
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.pr32_prefix_proxy import (
     _capture_candidate,
     _proxy_packed_model_input,
     flow_predict_wrapper_with_prefix_proxy,
 )
-from h3_flow_regenerate import runtime
 
 
 def _eligible_metrics():
