@@ -64,9 +64,7 @@ def prepare_audio_decode_context(latents: list[dict], plan: dict) -> tuple[list[
             or audio.ndim != 4
             or tuple(audio.shape[:3]) != (1, _AUDIO_CHANNELS, _STEREO_CHANNELS)
         ):
-            raise ValueError(
-                f"audio decode group {index + 1} requires native [1,32,2,T] audio"
-            )
+            raise ValueError(f"audio decode group {index + 1} requires native [1,32,2,T] audio")
         if not audio.is_floating_point():
             raise ValueError("H3 audio decode-context latents must be floating point")
         expected_t = int(group.get("expected_audio_latent_t", 0))
@@ -85,14 +83,10 @@ def prepare_audio_decode_context(latents: list[dict], plan: dict) -> tuple[list[
         trim_frames = int(groups[index + 1].get("trim_frames", -1))
         prefix = _exact_audio_prefix_steps(trim_frames)
         if prefix is None or prefix <= 0:
-            reports.append(
-                f"boundary {index + 1}: unchanged (no exact 24-fps/40-Hz audio boundary)"
-            )
+            reports.append(f"boundary {index + 1}: unchanged (no exact 24-fps/40-Hz audio boundary)")
             continue
         if prefix > int(left.shape[-1]) or int(right.shape[-1]) <= prefix:
-            reports.append(
-                f"boundary {index + 1}: unchanged (insufficient exact overlap or future audio)"
-            )
+            reports.append(f"boundary {index + 1}: unchanged (insufficient exact overlap or future audio)")
             continue
         if tuple(left.shape[:3]) != tuple(right.shape[:3]):
             reports.append(f"boundary {index + 1}: unchanged (audio geometry differs)")
@@ -101,9 +95,7 @@ def prepare_audio_decode_context(latents: list[dict], plan: dict) -> tuple[list[
             reports.append(f"boundary {index + 1}: unchanged (audio dtype/device differs)")
             continue
         if not torch.equal(left[..., -prefix:], right[..., :prefix]):
-            reports.append(
-                f"boundary {index + 1}: unchanged (protected audio overlap is not exact)"
-            )
+            reports.append(f"boundary {index + 1}: unchanged (protected audio overlap is not exact)")
             continue
 
         future = right[..., prefix:]
@@ -125,8 +117,7 @@ def prepare_audio_decode_context(latents: list[dict], plan: dict) -> tuple[list[
         "PR #32 H3 Continuum audio decode context: "
         f"{joined}/{max(0, len(audios) - 1)} exact boundaries. "
         "This is a decode-only causal diagnostic; use the original assembly plan "
-        "and Audio Seam = Off for the matched test.\n"
-        + "\n".join(reports)
+        "and Audio Seam = Off for the matched test.\n" + "\n".join(reports)
     )
     return output, report
 
