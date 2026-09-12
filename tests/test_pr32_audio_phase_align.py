@@ -29,10 +29,10 @@ def _case_00410_geometry():
     global_samples = right_origin + right_t * samples_per_latent
     t = torch.arange(global_samples, dtype=torch.float32)
     global_wave = (
-        0.35 * torch.sin(t * 0.0137)
-        + 0.17 * torch.sin(t * 0.0311 + 0.4)
-        + 0.05 * torch.cos(t * 0.0713)
-    ).reshape(1, 1, -1).repeat(1, 2, 1)
+        (0.35 * torch.sin(t * 0.0137) + 0.17 * torch.sin(t * 0.0311 + 0.4) + 0.05 * torch.cos(t * 0.0713))
+        .reshape(1, 1, -1)
+        .repeat(1, 2, 1)
+    )
     left_wave = global_wave[..., : left_t * samples_per_latent].clone()
     right_wave = global_wave[..., right_origin : right_origin + right_t * samples_per_latent].clone()
 

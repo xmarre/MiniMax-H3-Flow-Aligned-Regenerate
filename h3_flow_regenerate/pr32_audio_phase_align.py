@@ -111,9 +111,7 @@ def phase_align_decoded_audio(
             or not torch.equal(left[..., -prefix:], right[..., :prefix])
         ):
             origins.append(None)
-            boundary_reports.append(
-                f"boundary {index}: phase alignment disabled (audio protected carry is not exact)"
-            )
+            boundary_reports.append(f"boundary {index}: phase alignment disabled (audio protected carry is not exact)")
             continue
         origins.append(previous_origin + int(left.shape[-1]) - prefix)
 
