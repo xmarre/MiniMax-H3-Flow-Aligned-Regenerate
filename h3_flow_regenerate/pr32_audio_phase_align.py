@@ -162,7 +162,8 @@ def phase_align_decoded_audio(
 
         original_segment = waveform[..., native_trim : native_trim + wanted]
         aligned_segment = aligned[..., native_trim : native_trim + wanted]
-        if int(aligned_segment.shape[-1]) != wanted:
+        aligned_shortfall = wanted - int(aligned_segment.shape[-1])
+        if aligned_shortfall > 0 and origin_latents is not None:
             raise ValueError(
                 f"audio phase group {index + 1} still lacks retained samples after alignment: "
                 f"{int(aligned_segment.shape[-1])} != {wanted}"
@@ -173,7 +174,7 @@ def phase_align_decoded_audio(
             f"native_trim={native_trim}s phase_trim={phase_trim} phase_delta={delta:+d}s "
             f"({delta / rate * 1000.0:+.4f}ms) wanted={wanted}s "
             f"input_samples={int(waveform.shape[-1])} output_samples={int(aligned.shape[-1])} "
-            f"reason={reason}"
+            f"native_shortfall={max(0, aligned_shortfall)}s reason={reason}"
         )
 
         if index > 0 and previous_original_segment is not None and previous_aligned_segment is not None:
