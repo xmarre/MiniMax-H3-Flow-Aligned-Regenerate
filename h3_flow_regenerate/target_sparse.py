@@ -14,6 +14,12 @@ TARGET_SPARSE_API_VERSION = 1
 VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
 VDN_EXTERNAL_SEQUENCE_API_VERSION = 1
 VDN_EXTERNAL_SEQUENCE_MODE = "dense_gate_no_linear"
+# H3's temporal video decoder advances in five-latent cycles. 00410 proved that
+# exact protected output alone is not content-independent: the first generated
+# suffix can still be reconstructed from sparse/interpolated transformer rows.
+# Keep one complete decoder cycle dense immediately after a contiguous exact
+# protected prefix so the first new decode window is represented natively.
+_BOUNDARY_DENSE_COLLAR_T = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +27,11 @@ class TargetSparsePlan:
     """Immutable early-stage token plan for exact-prefix target-grid sampling.
 
     The sampler latent remains on the full target grid. Only the H3 transformer
-    token stream is reduced: all non-video rows and every exactly protected video
-    patch row are retained, while generated video rows are represented by a
-    regular target-grid anchor lattice. The final block lifts the anchor features
-    back to the full target video grid before H3's native final layer.
+    token stream is reduced: all non-video rows, every exactly protected video
+    patch row, and one five-latent dense seam collar after a contiguous protected
+    prefix are retained. Later generated video rows use a regular target-grid
+    anchor lattice. The final block lifts only absent rows back to the full target
+    video grid before H3's native final layer.
     """
 
     target_t: int
@@ -35,6 +42,8 @@ class TargetSparsePlan:
     selected_video_rows: torch.Tensor
     anchor_video_rows: torch.Tensor
     protected_video_rows: torch.Tensor
+    dense_collar_video_rows: torch.Tensor | None = None
+    dense_collar_t: int = 0
 
     @property
     def target_patch_h(self) -> int:
@@ -67,6 +76,12 @@ class TargetSparsePlan:
     @property
     def protected_video_row_count(self) -> int:
         return int(self.protected_video_rows.numel())
+
+    @property
+    def dense_collar_video_row_count(self) -> int:
+        if self.dense_collar_video_rows is None:
+            return 0
+        return int(self.dense_collar_video_rows.numel())
 
     @property
     def video_row_fraction(self) -> float:
@@ -130,6 +145,42 @@ def exact_protected_video_patch_rows(
     return torch.nonzero(row_values == 0, as_tuple=False).reshape(-1).to(torch.long)
 
 
+def _protected_prefix_t(
+    protected_rows: torch.Tensor,
+    *,
+    target_t: int,
+    rows_per_frame: int,
+) -> int:
+    if int(protected_rows.numel()) == 0:
+        return 0
+    protected = torch.zeros(target_t * rows_per_frame, dtype=torch.bool)
+    protected.index_fill_(0, protected_rows.to(dtype=torch.long, device="cpu"), True)
+    full_frames = protected.reshape(target_t, rows_per_frame).all(dim=1)
+    prefix_t = 0
+    while prefix_t < target_t and bool(full_frames[prefix_t].item()):
+        prefix_t += 1
+    return prefix_t
+
+
+def _dense_boundary_rows(
+    protected_rows: torch.Tensor,
+    *,
+    target_t: int,
+    rows_per_frame: int,
+) -> tuple[torch.Tensor, int]:
+    prefix_t = _protected_prefix_t(
+        protected_rows,
+        target_t=target_t,
+        rows_per_frame=rows_per_frame,
+    )
+    if prefix_t <= 0 or prefix_t >= target_t:
+        return torch.empty(0, dtype=torch.long), 0
+    collar_t = min(_BOUNDARY_DENSE_COLLAR_T, target_t - prefix_t)
+    start = prefix_t * rows_per_frame
+    stop = (prefix_t + collar_t) * rows_per_frame
+    return torch.arange(start, stop, dtype=torch.long), collar_t
+
+
 def build_target_sparse_plan(
     denoise_mask: torch.Tensor,
     shapes: list[tuple[int, ...]],
@@ -162,7 +213,16 @@ def build_target_sparse_plan(
     protected_rows = exact_protected_video_patch_rows(denoise_mask, shapes)
     if protected_rows.numel() == 0:
         raise ValueError("target-sparse exact-prefix mode requires at least one exactly protected video row")
-    selected_rows = torch.unique(torch.cat((anchor_rows, protected_rows)), sorted=True)
+    rows_per_frame = (target_h // 2) * (target_w // 2)
+    dense_collar_rows, dense_collar_t = _dense_boundary_rows(
+        protected_rows,
+        target_t=target_t,
+        rows_per_frame=rows_per_frame,
+    )
+    selected_rows = torch.unique(
+        torch.cat((anchor_rows, protected_rows, dense_collar_rows)),
+        sorted=True,
+    )
     return TargetSparsePlan(
         target_t=target_t,
         target_h=target_h,
@@ -172,6 +232,8 @@ def build_target_sparse_plan(
         selected_video_rows=selected_rows.contiguous(),
         anchor_video_rows=anchor_rows.contiguous(),
         protected_video_rows=protected_rows.contiguous(),
+        dense_collar_video_rows=dense_collar_rows.contiguous(),
+        dense_collar_t=dense_collar_t,
     )
 
 
@@ -367,6 +429,8 @@ def make_target_sparse_block_wrapper(
                 selected_video_rows=plan.selected_video_row_count,
                 anchor_video_rows=plan.anchor_video_row_count,
                 protected_video_rows=plan.protected_video_row_count,
+                dense_collar_video_rows=plan.dense_collar_video_row_count,
+                dense_collar_t=plan.dense_collar_t,
                 video_row_fraction=plan.video_row_fraction,
                 source_hw=(plan.source_h, plan.source_w),
                 target_hw=(plan.target_h, plan.target_w),
