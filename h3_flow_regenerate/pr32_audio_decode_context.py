@@ -127,7 +127,7 @@ def prepare_audio_decode_context(latents: list[dict], plan: dict) -> tuple[list[
 def _frame_sample(frame: int, sample_rate: int) -> int:
     """Mirror Continuum V3's cumulative frame->sample rounding."""
 
-    return int(round(float(int(frame)) / _VIDEO_FPS * int(sample_rate)))
+    return round(float(int(frame)) / _VIDEO_FPS * int(sample_rate))
 
 
 def _decoded_audio(audio: dict, index: int) -> tuple[torch.Tensor, int]:
@@ -273,7 +273,7 @@ def inspect_decoded_audio_boundaries(audio: list[dict], plan: dict) -> tuple[lis
             f"warning: expected MiniMax-H3 output rate {_H3_AUDIO_SAMPLE_RATE}, observed {sample_rate}"
         )
 
-    compare_samples = max(8, int(round(sample_rate * _COMPARE_SECONDS)))
+    compare_samples = max(8, round(sample_rate * _COMPARE_SECONDS))
     for boundary in range(len(decoded) - 1):
         left = decoded[boundary]
         right = decoded[boundary + 1]
