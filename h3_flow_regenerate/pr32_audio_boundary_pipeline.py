@@ -109,7 +109,5 @@ NODE_CLASS_MAPPINGS = {
     "H3ContinuumAudioBoundaryPipelineDiagnostic": H3ContinuumAudioBoundaryPipelineDiagnostic,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3ContinuumAudioBoundaryPipelineDiagnostic": (
-        "MiniMax H3 Continuum Audio Boundary Pipeline (PR32 Diagnostic)"
-    ),
+    "H3ContinuumAudioBoundaryPipelineDiagnostic": ("MiniMax H3 Continuum Audio Boundary Pipeline (PR32 Diagnostic)"),
 }
