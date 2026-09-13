@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
 from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff, H3ProgressiveTargetSparseHandoff
@@ -58,7 +60,17 @@ def test_generic_target_input_ui_defaults_match_shipped_workflow():
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
 
 
-def test_target_sparse_node_sets_opt_in_exact_prefix_mode(monkeypatch):
+def test_pr32_sparse_ui_exposes_locked_exact_prefix_mode_without_shifting_required_widgets():
+    inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    mode = inputs["optional"]["exact_prefix_mode"]
+
+    assert "exact_prefix_mode" not in inputs["required"]
+    assert mode[0] == ["target_sparse_lifter"]
+    assert mode[1]["default"] == "target_sparse_lifter"
+    assert list(inputs["optional"])[-1] == "exact_prefix_mode"
+
+
+def test_pr32_sparse_compat_node_uses_target_sparse_lifter(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -78,6 +90,7 @@ def test_target_sparse_node_sets_opt_in_exact_prefix_mode(monkeypatch):
     assert progressive.exact_prefix_mode == "target_sparse_lifter"
     assert progressive.source_scale == 0.7
     assert progressive.transfer_mode == "bicubic"
+    assert progressive.suffix_dc_bridge is False
     assert progressive.suffix_geometric_bridge is False
     assert captured["capture_enabled"] is True
     assert captured["capture_forecasts"] is False
@@ -85,7 +98,7 @@ def test_target_sparse_node_sets_opt_in_exact_prefix_mode(monkeypatch):
     assert captured["clear_guidance_run_id"] is True
 
 
-def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semantics(monkeypatch):
+def test_pr32_target_sparse_pixel_mode_preserves_existing_source_geometry_semantics(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -105,14 +118,15 @@ def test_target_sparse_node_pixel_mode_preserves_existing_source_geometry_semant
     assert progressive.source_latent_w is not None
 
 
-def test_target_sparse_inherits_learned_transfer_default():
+def test_pr32_target_sparse_inherits_learned_transfer_default():
     required = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()["required"]
 
     assert required["handoff_transfer"][0] == ["bicubic", "learned_3d"]
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
+    assert required["suffix_dc_bridge"][1]["default"] is False
 
 
-def test_target_sparse_direct_call_uses_inherited_learned_transfer_default(monkeypatch):
+def test_pr32_target_sparse_direct_call_uses_inherited_learned_transfer_default(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -130,12 +144,38 @@ def test_target_sparse_direct_call_uses_inherited_learned_transfer_default(monke
     assert progressive.exact_prefix_mode == "target_sparse_lifter"
     assert progressive.transfer_mode == "learned_3d"
     assert progressive.learned_upscaler is kwargs["learned_upscaler"]
+    assert progressive.suffix_dc_bridge is False
     assert progressive.suffix_geometric_bridge is False
 
 
-def test_mixed_grid_ui_defaults_match_canonical_workflow():
+def test_pr32_target_sparse_rejects_foreign_exact_prefix_mode():
+    kwargs = _patch_kwargs()
+    kwargs["exact_prefix_mode"] = "mixed_grid_low_suffix"
+
+    with pytest.raises(ValueError, match="only supports exact_prefix_mode='target_sparse_lifter'"):
+        H3ProgressiveTargetSparseHandoff().patch(**kwargs)
+
+
+def test_pr32_target_sparse_ignores_historical_serialized_dc_bridge(monkeypatch):
+    captured = {}
+
+    def fake_patch_flow_model(model, **kwargs):
+        captured.update(kwargs)
+        return model, object()
+
+    monkeypatch.setattr("h3_flow_regenerate.target_sparse_node.patch_flow_model", fake_patch_flow_model)
+    kwargs = _patch_kwargs()
+    kwargs["suffix_dc_bridge"] = True
+
+    H3ProgressiveTargetSparseHandoff().patch(**kwargs)
+
+    assert captured["progressive"].suffix_dc_bridge is False
+
+
+def test_mixed_grid_ui_defaults_match_canonical_workflow_and_append_mode_last():
     inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     required = inputs["required"]
+    optional = inputs["optional"]
 
     assert required["source_mode"][1]["default"] == "scale"
     assert required["source_scale"][1]["default"] == 0.70
@@ -149,16 +189,20 @@ def test_mixed_grid_ui_defaults_match_canonical_workflow():
     assert required["consistency_weight"][1]["default"] == 0.25
     assert required["low_frequency_cutoff"][1]["default"] == 0.25
     assert required["temporal_weight"][1]["default"] == 0.20
+    assert "exact_prefix_mode" not in required
     assert required["handoff_transfer"] == (["learned_3d"], required["handoff_transfer"][1])
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
-    assert required["suffix_dc_bridge"][1]["default"] is True
-    assert inputs["optional"]["suffix_geometric_bridge"][1]["default"] is True
-    profile = inputs["optional"]["attention_measure_profile"]
+    assert required["suffix_dc_bridge"][1]["default"] is False
+    assert optional["suffix_geometric_bridge"][1]["default"] is True
+    profile = optional["attention_measure_profile"]
     assert profile[0] == ["weighted_measure_v1", "legacy_representative_v1", "off"]
     assert profile[1]["default"] == "weighted_measure_v1"
+    assert optional["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
+    assert optional["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert list(optional)[-1] == "exact_prefix_mode"
 
 
-def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_seam_repair(monkeypatch):
+def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_safe_geometry_only(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -180,11 +224,62 @@ def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_seam_repair(mon
     progressive = captured["progressive"]
     assert progressive.exact_prefix_mode == "mixed_grid_low_suffix"
     assert progressive.transfer_mode == "learned_3d"
-    assert progressive.suffix_dc_bridge is True
+    assert progressive.suffix_dc_bridge is False
     assert progressive.suffix_geometric_bridge is True
-    # Direct calls that omit the new field intentionally retain serialized legacy semantics.
     assert progressive.attention_measure_profile is None
     assert progressive.learned_upscaler is kwargs["learned_upscaler"]
+
+
+def test_mixed_grid_explicit_visible_mode_reaches_runtime_config(monkeypatch):
+    captured = {}
+
+    def fake_patch_flow_model(model, **kwargs):
+        captured.update(kwargs)
+        return model, object()
+
+    monkeypatch.setattr("h3_flow_regenerate.target_sparse_node.patch_flow_model", fake_patch_flow_model)
+    kwargs = _patch_kwargs()
+    kwargs.update(
+        handoff_transfer="learned_3d",
+        learned_upscaler=_LearnedProvider(),
+        exact_prefix_mode="mixed_grid_low_suffix",
+    )
+
+    H3ProgressiveMixedGridHandoff().patch(**kwargs)
+
+    assert captured["progressive"].exact_prefix_mode == "mixed_grid_low_suffix"
+
+
+def test_mixed_grid_rejects_foreign_exact_prefix_mode():
+    kwargs = _patch_kwargs()
+    kwargs.update(
+        handoff_transfer="learned_3d",
+        learned_upscaler=_LearnedProvider(),
+        exact_prefix_mode="target_sparse_lifter",
+    )
+
+    with pytest.raises(ValueError, match="only supports exact_prefix_mode='mixed_grid_low_suffix'"):
+        H3ProgressiveMixedGridHandoff().patch(**kwargs)
+
+
+def test_mixed_grid_ignores_historical_serialized_true_dc_bridge(monkeypatch):
+    captured = {}
+
+    def fake_patch_flow_model(model, **kwargs):
+        captured.update(kwargs)
+        return model, object()
+
+    monkeypatch.setattr("h3_flow_regenerate.target_sparse_node.patch_flow_model", fake_patch_flow_model)
+    kwargs = _patch_kwargs()
+    kwargs.update(
+        handoff_transfer="learned_3d",
+        learned_upscaler=_LearnedProvider(),
+        suffix_dc_bridge=True,
+    )
+
+    H3ProgressiveMixedGridHandoff().patch(**kwargs)
+
+    assert captured["progressive"].suffix_dc_bridge is False
 
 
 def test_mixed_grid_explicit_weighted_profile_reaches_runtime_config(monkeypatch):
@@ -208,19 +303,25 @@ def test_mixed_grid_explicit_weighted_profile_reaches_runtime_config(monkeypatch
     assert progressive.exact_prefix_mode == "mixed_grid_low_suffix"
     assert progressive.attention_measure_profile == "weighted_measure_v1"
     assert progressive.suffix_geometric_bridge is True
+    assert progressive.suffix_dc_bridge is False
 
 
-def test_suffix_dc_bridge_is_exposed_only_on_continuum_specific_progressive_nodes():
+def test_suffix_dc_bridge_exposure_distinguishes_target_sparse_from_mixed_grid():
     target_inputs = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
     sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_inputs["required"]
+    assert "exact_prefix_mode" not in target_inputs.get("optional", {})
     assert "attention_measure_profile" not in target_inputs.get("optional", {})
     assert "attention_measure_profile" not in sparse_inputs.get("optional", {})
     assert "attention_measure_profile" in mixed_inputs["optional"]
-    for inputs in (sparse_inputs, mixed_inputs):
-        bridge = inputs["required"]["suffix_dc_bridge"]
-        assert bridge[0] == "BOOLEAN"
-        assert bridge[1]["default"] is True
+    sparse_bridge = sparse_inputs["required"]["suffix_dc_bridge"]
+    mixed_bridge = mixed_inputs["required"]["suffix_dc_bridge"]
+    assert sparse_bridge[0] == "BOOLEAN"
+    assert sparse_bridge[1]["default"] is False
+    assert mixed_bridge[0] == "BOOLEAN"
+    assert mixed_bridge[1]["default"] is False
+    assert sparse_inputs["optional"]["exact_prefix_mode"][0] == ["target_sparse_lifter"]
+    assert mixed_inputs["optional"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
     assert mixed_inputs["required"]["handoff_transfer"][0] == ["learned_3d"]
     assert sparse_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
