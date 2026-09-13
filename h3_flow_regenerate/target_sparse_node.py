@@ -32,17 +32,6 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         import copy
 
         inputs = copy.deepcopy(super().INPUT_TYPES())
-        inputs["required"]["exact_prefix_mode"] = (
-            [cls.EXACT_PREFIX_MODE],
-            {
-                "default": cls.EXACT_PREFIX_MODE,
-                "tooltip": (
-                    "Explicit execution contract for exact Native Masked continuation. This node exposes its "
-                    "single valid mode rather than hiding it in the class implementation. Use the dedicated "
-                    "Mixed-Grid node for mixed_grid_low_suffix."
-                ),
-            },
-        )
         inputs["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
@@ -50,6 +39,19 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 "tooltip": (
                     "Retired diagnostic input. Historical one-token per-channel DC transplantation is ignored; "
                     "the authoritative exact prefix is preserved without that seam intervention."
+                ),
+            },
+        )
+        # Keep this visible without shifting any existing serialized widget
+        # positions. It is appended as the last optional widget and locked to
+        # the single execution mode owned by this dedicated node class.
+        inputs.setdefault("optional", {})["exact_prefix_mode"] = (
+            [cls.EXACT_PREFIX_MODE],
+            {
+                "default": cls.EXACT_PREFIX_MODE,
+                "tooltip": (
+                    "Explicit exact-prefix execution contract. This dedicated node exposes its single valid mode "
+                    "for workflow auditability instead of hiding it in the implementation."
                 ),
             },
         )
@@ -185,16 +187,6 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         required["consistency_weight"] = ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01})
         required["low_frequency_cutoff"] = ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01})
         required["temporal_weight"] = ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01})
-        required["exact_prefix_mode"] = (
-            [cls.EXACT_PREFIX_MODE],
-            {
-                "default": cls.EXACT_PREFIX_MODE,
-                "tooltip": (
-                    "Mixed-Grid exact-prefix execution mode. The field is intentionally visible for workflow "
-                    "auditability but locked to mixed_grid_low_suffix on this dedicated node."
-                ),
-            },
-        )
         required["handoff_transfer"] = (
             ["learned_3d"],
             {
@@ -213,6 +205,9 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             },
         )
         optional = inputs.setdefault("optional", {})
+        # The inherited audit widget must be moved behind every pre-existing
+        # Mixed-Grid widget so old workflow widget_values retain their indexes.
+        optional.pop("exact_prefix_mode", None)
         optional["suffix_geometric_bridge"] = (
             "BOOLEAN",
             {
@@ -246,6 +241,16 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
                     "Mixed-Grid handoff state policy. legacy_renoise preserves released state semantics and is the "
                     "current matched comparator. velocity_bicubic_v1 and endpoint_residual_bicubic_v1 remain "
                     "diagnostic candidates; matched runs 00385/00386 were worse than legacy on the current case."
+                ),
+            },
+        )
+        optional["exact_prefix_mode"] = (
+            [cls.EXACT_PREFIX_MODE],
+            {
+                "default": cls.EXACT_PREFIX_MODE,
+                "tooltip": (
+                    "Mixed-Grid exact-prefix execution contract. Visible for workflow auditability and locked to "
+                    "mixed_grid_low_suffix on this dedicated node."
                 ),
             },
         )
