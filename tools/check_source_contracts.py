@@ -232,6 +232,10 @@ def main() -> None:
         "w_pixel_final, h_pixel_final = _aligned_pixel_size(",
     )
     require_symbols(
+        args.upscaler / "nodes/minimax_h3_latent_upscaler_3d.py",
+        functions=("upscale_clean_video_exact",),
+    )
+    require_symbols(
         args.upscaler / "nodes/minimax_h3_handoff_provider.py",
         classes=("H3LatentUpscalerProvider", "MinimaxH3LatentUpscaler3DProvider"),
     )
