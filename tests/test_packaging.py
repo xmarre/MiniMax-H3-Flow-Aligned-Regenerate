@@ -97,7 +97,7 @@ def test_target_sparse_and_mixed_grid_keep_canonical_execution_modes():
     sparse_required = sparse_schema["required"].copy()
     bridge = sparse_required.pop("suffix_dc_bridge")
     assert bridge[0] == "BOOLEAN"
-    assert bridge[1]["default"] is True
+    assert bridge[1]["default"] is False
     assert sparse_required == target_schema["required"]
     assert sparse_schema["optional"] == target_schema["optional"]
     assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
