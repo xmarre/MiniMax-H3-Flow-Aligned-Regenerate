@@ -38,6 +38,8 @@ def test_comfy_registry_archive_excludes_development_only_paths():
 
 
 def test_custom_node_root_registration_smoke():
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff, H3ProgressiveTargetSparseHandoff
+
     root = Path(__file__).parents[1] / "__init__.py"
     spec = importlib.util.spec_from_file_location(
         "h3_flow_custom_node",
@@ -48,7 +50,8 @@ def test_custom_node_root_registration_smoke():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     assert "H3ProgressiveHandoff" in module.NODE_CLASS_MAPPINGS
-    assert "H3ProgressiveTargetSparseHandoff" in module.NODE_CLASS_MAPPINGS
+    assert module.NODE_CLASS_MAPPINGS["H3ProgressiveTargetSparseHandoff"] is H3ProgressiveTargetSparseHandoff
+    assert module.NODE_CLASS_MAPPINGS["H3ProgressiveMixedGridHandoff"] is H3ProgressiveMixedGridHandoff
     assert "H3ContinuumDecodeContext" in module.NODE_CLASS_MAPPINGS
     assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
@@ -84,21 +87,35 @@ def test_target_input_progressive_defaults_to_learned_handoff_with_bicubic_contr
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
 
 
-def test_target_sparse_node_is_explicitly_experimental_and_only_adds_continuum_bridge_schema():
+def test_target_sparse_and_mixed_grid_keep_canonical_execution_modes():
     from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
-    from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
+    from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff, H3ProgressiveTargetSparseHandoff
 
     target_schema = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
     sparse_schema = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_schema["required"]
+    assert "exact_prefix_mode" not in target_schema.get("optional", {})
     sparse_required = sparse_schema["required"].copy()
     bridge = sparse_required.pop("suffix_dc_bridge")
     assert bridge[0] == "BOOLEAN"
-    assert bridge[1]["default"] is True
+    assert bridge[1]["default"] is False
     assert sparse_required == target_schema["required"]
-    assert sparse_schema["optional"] == target_schema["optional"]
+    sparse_optional = sparse_schema["optional"].copy()
+    exact_mode = sparse_optional.pop("exact_prefix_mode")
+    assert exact_mode[0] == ["target_sparse_lifter"]
+    assert exact_mode[1]["default"] == "target_sparse_lifter"
+    assert sparse_optional == target_schema["optional"]
     assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
-    assert "Exact Native Masked video prefixes stay on the target grid" in H3ProgressiveTargetSparseHandoff.DESCRIPTION
+    assert H3ProgressiveTargetSparseHandoff.EXACT_PREFIX_MODE == "target_sparse_lifter"
+
+    mixed_schema = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
+    assert H3ProgressiveMixedGridHandoff.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
+    assert mixed_schema["optional"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
+    assert mixed_schema["optional"]["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert list(mixed_schema["optional"])[-1] == "exact_prefix_mode"
+    assert mixed_schema["optional"]["attention_measure_profile"][1]["default"] == "weighted_measure_v1"
+    assert mixed_schema["optional"]["suffix_geometric_bridge"][1]["default"] is True
+    assert mixed_schema["required"]["handoff_transfer"][0] == ["learned_3d"]
 
 
 def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(monkeypatch, tmp_path):
