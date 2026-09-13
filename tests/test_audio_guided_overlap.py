@@ -81,6 +81,32 @@ def test_audio_guided_overlap_all_generated_audio_is_expected_noop():
     assert packed.shape == mask.shape
 
 
+def test_audio_guided_overlap_all_protected_audio_is_expected_noop():
+    _packed, shapes, mask = _packed_case(audio_t=11, audio_prefix=11)
+    original = mask.clone()
+
+    runtime_mask, report = apply_audio_guided_overlap_mask(mask, shapes, ticks=4)
+
+    assert runtime_mask is mask
+    assert torch.equal(mask, original)
+    assert report["applied"] is False
+    assert report["reason"] == "no_generated_audio_suffix"
+    assert report["audio_prefix_ticks"] == 11
+
+
+def test_audio_guided_overlap_short_exact_prefix_preserves_native_path():
+    _packed, shapes, mask = _packed_case(audio_prefix=4)
+    original = mask.clone()
+
+    runtime_mask, report = apply_audio_guided_overlap_mask(mask, shapes, ticks=4)
+
+    assert runtime_mask is mask
+    assert torch.equal(mask, original)
+    assert report["applied"] is False
+    assert report["reason"] == "exact_audio_prefix_too_short"
+    assert report["audio_prefix_ticks"] == 4
+
+
 def test_audio_guided_overlap_rejects_noncanonical_partial_audio_mask():
     _packed, shapes, mask = _packed_case(audio_prefix=5)
     _video_mask, audio_mask = unpack_streams(mask, shapes)
