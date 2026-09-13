@@ -1,3 +1,19 @@
+from __future__ import annotations
+
+import logging
+import os
+
+# PR #32 is itself the opt-in surface when materialized by ComfyUI-Patcher.
+# Make the diagnostic active from the patched tree with no separate shell setup.
+# An explicit environment value still wins, so setting this to 0 remains a
+# deterministic emergency disable/bisect hook.
+_PR32_AUDIO_GUIDED_OVERLAP_ENV = "H3_FLOW_PR32_AUDIO_GUIDED_OVERLAP_TICKS"
+os.environ.setdefault(_PR32_AUDIO_GUIDED_OVERLAP_ENV, "4")
+logging.getLogger(__name__).info(
+    "PR #32 audio guided overlap default=%s ticks (Patcher-applied diagnostic)",
+    os.environ.get(_PR32_AUDIO_GUIDED_OVERLAP_ENV, ""),
+)
+
 try:
     from .h3_flow_regenerate.decode_context import (
         NODE_CLASS_MAPPINGS as DECODE_NODE_CLASS_MAPPINGS,
