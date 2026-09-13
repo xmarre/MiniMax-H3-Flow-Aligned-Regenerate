@@ -56,9 +56,10 @@ def apply_audio_guided_overlap_mask(
     Video is byte-for-byte untouched. The original mask remains caller-owned
     and is required for final exact-prefix canonicalization.
 
-    All-one audio (ordinary first chunk) is an expected no-op. Any other
-    partially protected but non-canonical audio layout is rejected rather than
-    silently applying a heuristic to unknown semantics.
+    All-one audio (ordinary first chunk), all-protected audio, and exact
+    prefixes too short to leave at least one fully protected tick are expected
+    no-ops. Any other partially protected but non-canonical audio layout is
+    rejected rather than silently applying a heuristic to unknown semantics.
     """
 
     ticks = int(ticks)
@@ -96,8 +97,17 @@ def apply_audio_guided_overlap_mask(
         report["reason"] = "no_exact_audio_prefix"
         return denoise_mask, report
 
-    prefix = 0
     temporal = int(audio_mask.shape[-1])
+    if bool(exact_zero.all().item()):
+        report.update(
+            {
+                "reason": "no_generated_audio_suffix",
+                "audio_prefix_ticks": temporal,
+            }
+        )
+        return denoise_mask, report
+
+    prefix = 0
     while prefix < temporal and bool(exact_zero[prefix].item()):
         prefix += 1
     report["audio_prefix_ticks"] = prefix
@@ -108,7 +118,8 @@ def apply_audio_guided_overlap_mask(
             "audio guided overlap requires a contiguous exact audio prefix followed by a fully generated suffix"
         )
     if ticks >= prefix:
-        raise ValueError(f"audio guided overlap width {ticks} must be smaller than exact audio prefix {prefix}")
+        report["reason"] = "exact_audio_prefix_too_short"
+        return denoise_mask, report
 
     raw_ramp = torch.arange(1, ticks + 1, device=audio_mask.device, dtype=torch.float32) / float(ticks + 1)
     ramp = torch.ceil(raw_ramp * _MASK_QUANTIZATION_LEVELS) / _MASK_QUANTIZATION_LEVELS
