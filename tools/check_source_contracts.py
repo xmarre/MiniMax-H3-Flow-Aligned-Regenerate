@@ -119,6 +119,9 @@ def main() -> None:
         "self.conds = process_conds(",
         "noise = noise.to(device=device, dtype=torch.float32)",
         "latent_image = latent_image.to(device=device, dtype=torch.float32)",
+        "latent_mask = 1. - denoise_mask",
+        "x = x * denoise_mask + self.inner_model.inner_model.scale_latent_inpaint(",
+        "out = out * denoise_mask + self.latent_image * latent_mask",
     )
     require(
         args.comfy / "comfy/sampler_helpers.py",
