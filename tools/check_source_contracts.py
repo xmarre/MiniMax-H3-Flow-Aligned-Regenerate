@@ -69,7 +69,6 @@ def main() -> None:
         "time_shift_sigma(sigma_v, shift_v, shift_a)",
         "mask=None, skip_reshape=True",
         "audio_denoise_mask=None",
-        "out[1] = out[1] * audio_denoise_mask",
         "rows_t = (1.0 - m * sigma_a).clamp(max=t_pin_a)",
     )
     require(
@@ -231,10 +230,6 @@ def main() -> None:
         "w_pixel_target = w_in * downsample * scale_val",
         "h_pixel_target = h_in * downsample * scale_val",
         "w_pixel_final, h_pixel_final = _aligned_pixel_size(",
-    )
-    require_symbols(
-        args.upscaler / "nodes/minimax_h3_latent_upscaler_3d.py",
-        functions=("upscale_clean_video_exact",),
     )
     require_symbols(
         args.upscaler / "nodes/minimax_h3_handoff_provider.py",
