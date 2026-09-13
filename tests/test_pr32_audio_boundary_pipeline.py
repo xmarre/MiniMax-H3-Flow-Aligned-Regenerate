@@ -12,7 +12,11 @@ from h3_flow_regenerate.pr32_audio_boundary_pipeline import (
 class _FakeAudioVAE:
     audio_sample_rate_output = 32000
 
+    def __init__(self):
+        self.decoded_t: list[int] = []
+
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        self.decoded_t.append(int(latent.shape[-1]))
         stereo = latent.mean(dim=1)
         waveform = stereo.repeat_interleave(800, dim=-1)
         return waveform.movedim(1, -1)
@@ -70,25 +74,27 @@ def test_latent_join_report_localizes_generated_suffix_edge_after_video_cut():
     assert "edge_over_local=" in report
 
 
-def test_integrated_pipeline_executes_oracle_then_phase_alignment_serially():
+def test_integrated_pipeline_decodes_only_original_groups_then_phase_aligns():
     latents, plan = _case_00410_geometry()
     before = [item["samples"].clone() for item in latents]
+    vae = _FakeAudioVAE()
 
-    aligned, report = decode_and_phase_align_audio_boundary(latents, _FakeAudioVAE(), plan)
+    aligned, report = decode_and_phase_align_audio_boundary(latents, vae, plan)
 
     assert len(aligned) == 2
+    assert vae.decoded_t == [292, 348]
     assert "PR #32 generated-audio latent-join diagnostic" in report
-    assert "PR #32 self-contained decoded-audio oracle" in report
+    assert "PR #32 native per-group Core audio decode control" in report
+    assert "decode_context_extension=false shared_gain=false" in report
+    assert "PR #32 self-contained decoded-audio oracle" not in report
     assert "PR #32 H3 Continuum audio latent-phase alignment" in report
     assert "group 2: origin_latent=227" in report
     assert "native_trim=52000s phase_trim=51733" in report
     assert "phase_delta=+267s" in report
-    assert "FINAL AUDIO OUTPUT" in report
+    assert "No future-context extension, shared gain, resampling or crossfade" in report
 
     boundary_sample = round(175 / 24 * 32000)
     native_group2_trim = round(39 / 24 * 32000)
-    wanted = round((175 + 170) / 24 * 32000) - boundary_sample
-    assert native_group2_trim + wanted == aligned[1]["waveform"].shape[-1]
     torch.testing.assert_close(
         aligned[0]["waveform"][..., boundary_sample],
         aligned[1]["waveform"][..., native_group2_trim],
@@ -106,5 +112,6 @@ def test_integrated_node_exposes_only_final_audio_and_report():
 
     assert len(aligned) == 2
     assert "phase_delta=+267s" in report
+    assert "decode_context_extension=false" in report
     assert node.RETURN_NAMES == ("phase_aligned_audio", "report")
     assert node.OUTPUT_IS_LIST == (True, False)
