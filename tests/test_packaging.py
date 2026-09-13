@@ -94,23 +94,25 @@ def test_target_sparse_and_mixed_grid_keep_canonical_execution_modes():
     target_schema = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
     sparse_schema = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_schema["required"]
-    assert "exact_prefix_mode" not in target_schema["required"]
+    assert "exact_prefix_mode" not in target_schema.get("optional", {})
     sparse_required = sparse_schema["required"].copy()
     bridge = sparse_required.pop("suffix_dc_bridge")
-    exact_mode = sparse_required.pop("exact_prefix_mode")
     assert bridge[0] == "BOOLEAN"
     assert bridge[1]["default"] is False
+    assert sparse_required == target_schema["required"]
+    sparse_optional = sparse_schema["optional"].copy()
+    exact_mode = sparse_optional.pop("exact_prefix_mode")
     assert exact_mode[0] == ["target_sparse_lifter"]
     assert exact_mode[1]["default"] == "target_sparse_lifter"
-    assert sparse_required == target_schema["required"]
-    assert sparse_schema["optional"] == target_schema["optional"]
+    assert sparse_optional == target_schema["optional"]
     assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
     assert H3ProgressiveTargetSparseHandoff.EXACT_PREFIX_MODE == "target_sparse_lifter"
 
     mixed_schema = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert H3ProgressiveMixedGridHandoff.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
-    assert mixed_schema["required"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
-    assert mixed_schema["required"]["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert mixed_schema["optional"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
+    assert mixed_schema["optional"]["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert list(mixed_schema["optional"])[-1] == "exact_prefix_mode"
     assert mixed_schema["optional"]["attention_measure_profile"][1]["default"] == "weighted_measure_v1"
     assert mixed_schema["optional"]["suffix_geometric_bridge"][1]["default"] is True
     assert mixed_schema["required"]["handoff_transfer"][0] == ["learned_3d"]
