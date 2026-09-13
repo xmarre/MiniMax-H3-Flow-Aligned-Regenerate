@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import replace
 from typing import Any
 
 import torch
 
 from .attention import AttentionConfig, make_attention_override, make_layout_block_wrapper, mark_layout_wrapper
+from .audio_guided_overlap import (
+    apply_audio_guided_overlap_mask,
+    configured_audio_guided_overlap_ticks,
+)
 from .contracts import H3FlowTrajectory
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
@@ -26,6 +31,8 @@ from .runtime import (
     sampler_name,
 )
 from .target_sparse import VDN_EXTERNAL_SEQUENCE_API_VERSION, make_target_sparse_block_wrapper
+
+LOG = logging.getLogger(__name__)
 
 
 def validate_h3_model(model: Any) -> Any:
@@ -223,6 +230,11 @@ def flow_outer_wrapper_with_exact_mask(
     each final target-grid sampler lifetime returns. Progressive high stages are
     fixed before runtime's hard exact-prefix check and seam diagnostics; the
     conservative fallback is fixed inside its single stage-less target-grid call.
+
+    The conservative fallback additionally exposes a short guided overlap at the
+    tail of a canonical carried audio prefix during sampler lifetime. The video
+    mask remains unchanged and the original exact mask still owns the returned
+    caller-visible video/audio values.
     """
 
     guider = executor.class_obj
@@ -243,6 +255,23 @@ def flow_outer_wrapper_with_exact_mask(
             latent_shapes=latent_shapes,
         )
 
+    runtime_denoise_mask = denoise_mask
+    guided_ticks = configured_audio_guided_overlap_ticks()
+    if guided_ticks and progressive.exact_prefix_mode == "fallback":
+        runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
+            denoise_mask,
+            latent_shapes,
+            ticks=guided_ticks,
+        )
+        binding.metrics.event("audio_guided_overlap", **guided_report)
+        if bool(guided_report.get("applied")):
+            LOG.info(
+                "audio guided overlap active ticks=%d exact_prefix=%d ramp=%s final_exact_restore=true",
+                guided_ticks,
+                int(guided_report.get("audio_prefix_ticks", 0)),
+                guided_report.get("ramp_values"),
+            )
+
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
@@ -257,7 +286,7 @@ def flow_outer_wrapper_with_exact_mask(
         latent_image,
         sampler,
         sigmas,
-        denoise_mask,
+        runtime_denoise_mask,
         callback,
         disable_pbar,
         seed,
