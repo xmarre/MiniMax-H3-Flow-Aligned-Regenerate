@@ -60,12 +60,14 @@ def test_generic_target_input_ui_defaults_match_shipped_workflow():
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
 
 
-def test_pr32_sparse_ui_exposes_locked_exact_prefix_mode():
-    required = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()["required"]
-    mode = required["exact_prefix_mode"]
+def test_pr32_sparse_ui_exposes_locked_exact_prefix_mode_without_shifting_required_widgets():
+    inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    mode = inputs["optional"]["exact_prefix_mode"]
 
+    assert "exact_prefix_mode" not in inputs["required"]
     assert mode[0] == ["target_sparse_lifter"]
     assert mode[1]["default"] == "target_sparse_lifter"
+    assert list(inputs["optional"])[-1] == "exact_prefix_mode"
 
 
 def test_pr32_sparse_compat_node_uses_target_sparse_lifter(monkeypatch):
@@ -170,9 +172,10 @@ def test_pr32_target_sparse_ignores_historical_serialized_dc_bridge(monkeypatch)
     assert captured["progressive"].suffix_dc_bridge is False
 
 
-def test_mixed_grid_ui_defaults_match_canonical_workflow():
+def test_mixed_grid_ui_defaults_match_canonical_workflow_and_append_mode_last():
     inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     required = inputs["required"]
+    optional = inputs["optional"]
 
     assert required["source_mode"][1]["default"] == "scale"
     assert required["source_scale"][1]["default"] == 0.70
@@ -186,15 +189,17 @@ def test_mixed_grid_ui_defaults_match_canonical_workflow():
     assert required["consistency_weight"][1]["default"] == 0.25
     assert required["low_frequency_cutoff"][1]["default"] == 0.25
     assert required["temporal_weight"][1]["default"] == 0.20
-    assert required["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
-    assert required["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert "exact_prefix_mode" not in required
     assert required["handoff_transfer"] == (["learned_3d"], required["handoff_transfer"][1])
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
     assert required["suffix_dc_bridge"][1]["default"] is False
-    assert inputs["optional"]["suffix_geometric_bridge"][1]["default"] is True
-    profile = inputs["optional"]["attention_measure_profile"]
+    assert optional["suffix_geometric_bridge"][1]["default"] is True
+    profile = optional["attention_measure_profile"]
     assert profile[0] == ["weighted_measure_v1", "legacy_representative_v1", "off"]
     assert profile[1]["default"] == "weighted_measure_v1"
+    assert optional["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
+    assert optional["exact_prefix_mode"][1]["default"] == "mixed_grid_low_suffix"
+    assert list(optional)[-1] == "exact_prefix_mode"
 
 
 def test_mixed_grid_direct_call_defaults_to_learned_transfer_and_safe_geometry_only(monkeypatch):
@@ -306,7 +311,7 @@ def test_suffix_dc_bridge_exposure_distinguishes_target_sparse_from_mixed_grid()
     sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_inputs["required"]
-    assert "exact_prefix_mode" not in target_inputs["required"]
+    assert "exact_prefix_mode" not in target_inputs.get("optional", {})
     assert "attention_measure_profile" not in target_inputs.get("optional", {})
     assert "attention_measure_profile" not in sparse_inputs.get("optional", {})
     assert "attention_measure_profile" in mixed_inputs["optional"]
@@ -316,7 +321,7 @@ def test_suffix_dc_bridge_exposure_distinguishes_target_sparse_from_mixed_grid()
     assert sparse_bridge[1]["default"] is False
     assert mixed_bridge[0] == "BOOLEAN"
     assert mixed_bridge[1]["default"] is False
-    assert sparse_inputs["required"]["exact_prefix_mode"][0] == ["target_sparse_lifter"]
-    assert mixed_inputs["required"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
+    assert sparse_inputs["optional"]["exact_prefix_mode"][0] == ["target_sparse_lifter"]
+    assert mixed_inputs["optional"]["exact_prefix_mode"][0] == ["mixed_grid_low_suffix"]
     assert mixed_inputs["required"]["handoff_transfer"][0] == ["learned_3d"]
     assert sparse_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
