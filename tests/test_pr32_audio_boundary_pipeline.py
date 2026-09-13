@@ -59,14 +59,20 @@ def _case_00410_geometry():
     return latents, plan
 
 
-def test_latent_join_report_localizes_generated_suffix_edge_after_video_cut():
+def test_latent_join_report_localizes_generated_suffix_edge_and_sampling_phase():
     latents, plan = _case_00410_geometry()
 
     report = inspect_generated_audio_latent_joins(latents, plan)
 
     assert "PR #32 generated-audio latent-join diagnostic" in report
     assert "exact_prefix=65" in report
+    assert "right_origin_latent=227" in report
+    assert "physical_start_frame=136" in report
+    assert "ideal_start_tick=680/3" in report
+    assert "carry_phase_ticks=1/3" in report
+    assert "carry_phase_ms=+8.3333" in report
     assert "join_global_latent=292" in report
+    assert "join_phase_ticks=1/3" in report
     assert "join_sample=233600" in report
     assert "video_cut_sample=233333" in report
     assert "join_minus_video_cut=+267s (+8.3438ms)" in report
@@ -84,6 +90,7 @@ def test_integrated_pipeline_decodes_only_original_groups_then_phase_aligns():
     assert len(aligned) == 2
     assert vae.decoded_t == [292, 348]
     assert "PR #32 generated-audio latent-join diagnostic" in report
+    assert "carry_phase_ticks=1/3" in report
     assert "PR #32 native per-group Core audio decode control" in report
     assert "decode_context_extension=false shared_gain=false" in report
     assert "PR #32 self-contained decoded-audio oracle" not in report
@@ -111,6 +118,7 @@ def test_integrated_node_exposes_only_final_audio_and_report():
     aligned, report = node.decode_and_align(latents, [_FakeAudioVAE()], [plan])
 
     assert len(aligned) == 2
+    assert "carry_phase_ms=+8.3333" in report
     assert "phase_delta=+267s" in report
     assert "decode_context_extension=false" in report
     assert node.RETURN_NAMES == ("phase_aligned_audio", "report")
