@@ -29,6 +29,8 @@ def main() -> None:
         args.comfy / "comfy/samplers.py",
         "class KSamplerX0Inpaint:",
         "latent_mask = 1. - denoise_mask",
+        "x = x * denoise_mask + self.inner_model.inner_model.scale_latent_inpaint",
+        "out = self.inner_model(x, sigma, model_options=model_options, seed=seed)",
         "noise=self.noise, latent_image=self.latent_image, denoise_mask=denoise_mask",
         "out = out * denoise_mask + self.latent_image * latent_mask",
         "self.model_options = comfy.model_patcher.create_model_options_clone(self.model_options)",
@@ -36,6 +38,8 @@ def main() -> None:
         "WrappersMP.OUTER_SAMPLE",
         "WrappersMP.PREDICT_NOISE",
         "WrappersMP.SAMPLER_SAMPLE",
+        "WrapperExecutor.new_class_executor(",
+        "self.predict_noise,",
     )
     require(
         args.comfy / "comfy/model_patcher.py",
@@ -45,6 +49,7 @@ def main() -> None:
     require(
         args.comfy / "comfy/patcher_extension.py",
         "def copy_nested_dicts(input_dict: dict):",
+        "new_dict = input_dict.copy()",
         "new_dict[key] = copy_nested_dicts(value)",
         "new_dict[key] = value.copy()",
         "self.wrappers = wrappers.copy()",

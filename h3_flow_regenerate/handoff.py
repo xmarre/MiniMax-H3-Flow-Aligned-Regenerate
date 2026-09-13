@@ -11,6 +11,7 @@ from .geometry import normalize_target_geometry, pack_streams, unpack_streams, v
 from .guidance import conditional_renoise_alignment, conditional_renoise_target
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 from .state_transport import (
+    HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
     HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
     resolve_handoff_state_policy,
 )
@@ -257,8 +258,15 @@ class ProgressiveTargetInputConfig:
         state_policy = resolve_handoff_state_policy(self.handoff_state_policy)
         if self.handoff_state_policy is not None and self.exact_prefix_mode != "mixed_grid_low_suffix":
             raise ValueError("handoff_state_policy is only supported by mixed-grid Continuum")
-        if state_policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1 and self.transfer_mode != "learned_3d":
-            raise ValueError("velocity_bicubic_v1 requires learned_3d clean transfer")
+        if (
+            state_policy
+            in {
+                HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+                HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
+            }
+            and self.transfer_mode != "learned_3d"
+        ):
+            raise ValueError(f"{state_policy} requires learned_3d clean transfer")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 

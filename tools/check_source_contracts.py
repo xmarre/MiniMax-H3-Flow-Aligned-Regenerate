@@ -68,6 +68,8 @@ def main() -> None:
         'segments.append(("video"',
         "time_shift_sigma(sigma_v, shift_v, shift_a)",
         "mask=None, skip_reshape=True",
+        "audio_denoise_mask=None",
+        "rows_t = (1.0 - m * sigma_a).clamp(max=t_pin_a)",
     )
     require(
         args.comfy / "comfy_extras/nodes_minimax_h3.py",
@@ -82,6 +84,11 @@ def main() -> None:
         "class MiniMaxH3(BaseModel):",
         "return self.model_sampling.audio_scale",
         'payload["audio_scale"] = self.audio_scale()',
+        "def _pool_masks_to_token_grid(self, masks):",
+        "def _token_grid_masks(self, denoise_mask, latent_shapes):",
+        "torch.ceil(mask * 256.0) / 256.0",
+        "out['audio_denoise_mask'] = masks[1][:1].amax(dim=1, keepdim=True)",
+        "x_blend_weight = (token_grid_mask - denoise_mask) / (1.0 - denoise_mask).clamp(min=1e-6)",
     )
     require(
         args.comfy / "comfy/model_sampling.py",
