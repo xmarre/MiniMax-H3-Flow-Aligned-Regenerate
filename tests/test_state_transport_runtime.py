@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from types import ModuleType, SimpleNamespace
 
+import pytest
 import torch
 from test_handoff import FakeLearnedProvider
 from test_mixed_grid import inputs
@@ -10,10 +11,17 @@ from test_mixed_grid import inputs
 from h3_flow_regenerate.geometry import pack_streams, resize_spatial_5d, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.runtime import FlowBinding, _run_progressive
-from h3_flow_regenerate.state_transport import HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1
+from h3_flow_regenerate.state_transport import (
+    HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1,
+    HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+)
 
 
-def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_boundaries(monkeypatch):
+@pytest.mark.parametrize(
+    "policy",
+    [HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1, HANDOFF_STATE_POLICY_ENDPOINT_RESIDUAL_BICUBIC_V1],
+)
+def test_mixed_grid_transport_preserves_state_noise_audio_and_sampler_boundaries(monkeypatch, policy):
     fake = ModuleType("comfy")
     fake.samplers = ModuleType("comfy.samplers")
     fake.samplers.KSAMPLER = lambda function, **kw: SimpleNamespace(sampler_function=function, extra_options={})
@@ -76,7 +84,7 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
         learned_upscaler=provider,
         suffix_dc_bridge=False,
         suffix_geometric_bridge=False,
-        handoff_state_policy=HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1,
+        handoff_state_policy=policy,
     )
 
     base = SimpleNamespace(process_latent_in=lambda value: value, diffusion_model=SimpleNamespace(blocks=[]))
@@ -123,8 +131,13 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
 
             initial_state = sigma * noise + (1.0 - sigma) * latent
             initial_video, initial_audio = unpack_streams(initial_state, target_shapes)
-            lifted_displacement = resize_spatial_5d(realized_source_displacement, 8, 12, mode="bicubic")
-            expected_suffix = target_clean_video[:, :, 2:] + lifted_displacement[:, :, 2:]
+            if policy == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1:
+                lifted_displacement = resize_spatial_5d(realized_source_displacement, 8, 12, mode="bicubic")
+                expected_suffix = target_clean_video[:, :, 2:] + lifted_displacement[:, :, 2:]
+            else:
+                endpoint_residual = source_state_video - (1.0 - sigma) * source_clean_video
+                lifted_endpoint = resize_spatial_5d(endpoint_residual, 8, 12, mode="bicubic")
+                expected_suffix = (1.0 - sigma) * target_clean_video[:, :, 2:] + lifted_endpoint[:, :, 2:]
             torch.testing.assert_close(initial_video[:, :, 2:], expected_suffix, rtol=2e-5, atol=2e-5)
             torch.testing.assert_close(initial_audio, source_audio_state, rtol=2e-5, atol=2e-5)
             observed["initial_video"] = initial_video.clone()
@@ -152,7 +165,7 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
     assert calls == ["low", "probe", "high"]
     assert len(provider.calls) == 1
     # The only deterministic transfer-independent draw is the existing private
-    # low-grid source noise. velocity_bicubic_v1 adds no target-grid random field.
+    # low-grid source noise. Neither transport candidate adds a target-grid random field.
     assert len(deterministic_noise_calls) == 1
 
     original_video, _ = unpack_streams(caller_packed, target_shapes)
@@ -162,7 +175,7 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
     transport_events = [event for event in binding.metrics.events if event.kind == "mixed_grid_state_transport"]
     assert len(transport_events) == 1
     transport = transport_events[0].fields
-    assert transport["handoff_state_policy"] == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1
+    assert transport["handoff_state_policy"] == policy
     assert transport["state_transport_applied"] is True
     assert transport["state_transport_added_rng"] is False
     assert transport["state_transport_temporal_mixing"] is False
@@ -175,5 +188,5 @@ def test_mixed_grid_velocity_transport_preserves_state_noise_audio_and_sampler_b
     assert complete[0].fields["sampler_invocation_count"] == 3
     assert complete[0].fields["history_boundary_count"] == 2
     assert complete[0].fields["exact_probe_performed"] is True
-    assert complete[0].fields["handoff_state_policy"] == HANDOFF_STATE_POLICY_VELOCITY_BICUBIC_V1
+    assert complete[0].fields["handoff_state_policy"] == policy
     assert binding.metrics.counters["handoff_exact_probe_nfe"] == 1
