@@ -58,7 +58,7 @@ def test_generic_target_input_ui_defaults_match_shipped_workflow():
     assert required["handoff_transfer"][1]["default"] == "learned_3d"
 
 
-def test_pr32_sparse_compat_node_uses_dense_exact_prefix_fallback(monkeypatch):
+def test_pr32_sparse_compat_node_uses_target_sparse_lifter(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -75,7 +75,7 @@ def test_pr32_sparse_compat_node_uses_dense_exact_prefix_fallback(monkeypatch):
     assert metrics is captured["metrics"]
     progressive = captured["progressive"]
     assert isinstance(progressive, ProgressiveTargetInputConfig)
-    assert progressive.exact_prefix_mode == "fallback"
+    assert progressive.exact_prefix_mode == "target_sparse_lifter"
     assert progressive.source_scale == 0.7
     assert progressive.transfer_mode == "bicubic"
     assert progressive.suffix_dc_bridge is False
@@ -86,7 +86,7 @@ def test_pr32_sparse_compat_node_uses_dense_exact_prefix_fallback(monkeypatch):
     assert captured["clear_guidance_run_id"] is True
 
 
-def test_pr32_dense_control_pixel_mode_preserves_existing_source_geometry_semantics(monkeypatch):
+def test_pr32_target_sparse_pixel_mode_preserves_existing_source_geometry_semantics(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -100,13 +100,13 @@ def test_pr32_dense_control_pixel_mode_preserves_existing_source_geometry_semant
     H3ProgressiveTargetSparseHandoff().patch(**kwargs)
 
     progressive = captured["progressive"]
-    assert progressive.exact_prefix_mode == "fallback"
+    assert progressive.exact_prefix_mode == "target_sparse_lifter"
     assert progressive.source_scale is None
     assert progressive.source_latent_h is not None
     assert progressive.source_latent_w is not None
 
 
-def test_pr32_dense_control_inherits_learned_transfer_default():
+def test_pr32_target_sparse_inherits_learned_transfer_default():
     required = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()["required"]
 
     assert required["handoff_transfer"][0] == ["bicubic", "learned_3d"]
@@ -114,7 +114,7 @@ def test_pr32_dense_control_inherits_learned_transfer_default():
     assert required["suffix_dc_bridge"][1]["default"] is False
 
 
-def test_pr32_dense_control_direct_call_uses_inherited_learned_transfer_default(monkeypatch):
+def test_pr32_target_sparse_direct_call_uses_inherited_learned_transfer_default(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -129,14 +129,14 @@ def test_pr32_dense_control_direct_call_uses_inherited_learned_transfer_default(
     H3ProgressiveTargetSparseHandoff().patch(**kwargs)
 
     progressive = captured["progressive"]
-    assert progressive.exact_prefix_mode == "fallback"
+    assert progressive.exact_prefix_mode == "target_sparse_lifter"
     assert progressive.transfer_mode == "learned_3d"
     assert progressive.learned_upscaler is kwargs["learned_upscaler"]
     assert progressive.suffix_dc_bridge is False
     assert progressive.suffix_geometric_bridge is False
 
 
-def test_pr32_dense_control_ignores_historical_serialized_dc_bridge(monkeypatch):
+def test_pr32_target_sparse_ignores_historical_serialized_dc_bridge(monkeypatch):
     captured = {}
 
     def fake_patch_flow_model(model, **kwargs):
@@ -249,19 +249,19 @@ def test_mixed_grid_explicit_weighted_profile_reaches_runtime_config(monkeypatch
     assert progressive.suffix_dc_bridge is False
 
 
-def test_suffix_dc_bridge_exposure_distinguishes_dense_control_from_mixed_grid():
+def test_suffix_dc_bridge_exposure_distinguishes_target_sparse_from_mixed_grid():
     target_inputs = H3ProgressiveTargetInputHandoff.INPUT_TYPES()
-    dense_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
+    sparse_inputs = H3ProgressiveTargetSparseHandoff.INPUT_TYPES()
     mixed_inputs = H3ProgressiveMixedGridHandoff.INPUT_TYPES()
     assert "suffix_dc_bridge" not in target_inputs["required"]
     assert "attention_measure_profile" not in target_inputs.get("optional", {})
-    assert "attention_measure_profile" not in dense_inputs.get("optional", {})
+    assert "attention_measure_profile" not in sparse_inputs.get("optional", {})
     assert "attention_measure_profile" in mixed_inputs["optional"]
-    dense_bridge = dense_inputs["required"]["suffix_dc_bridge"]
+    sparse_bridge = sparse_inputs["required"]["suffix_dc_bridge"]
     mixed_bridge = mixed_inputs["required"]["suffix_dc_bridge"]
-    assert dense_bridge[0] == "BOOLEAN"
-    assert dense_bridge[1]["default"] is False
+    assert sparse_bridge[0] == "BOOLEAN"
+    assert sparse_bridge[1]["default"] is False
     assert mixed_bridge[0] == "BOOLEAN"
     assert mixed_bridge[1]["default"] is False
     assert mixed_inputs["required"]["handoff_transfer"][0] == ["learned_3d"]
-    assert dense_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
+    assert sparse_inputs["required"]["handoff_transfer"][0] == ["bicubic", "learned_3d"]
