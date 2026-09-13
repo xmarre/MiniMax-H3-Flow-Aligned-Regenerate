@@ -1,24 +1,25 @@
 """PR #32 one-node H3 Continuum audio boundary diagnostic pipeline.
 
-This node intentionally collapses the decoded-audio oracle and latent-phase
-alignment intervention into one executable graph node.  The user-facing path is
-therefore strictly serial:
+The user-facing path is strictly serial:
 
     Continuum audio_latents + Audio VAE + assembly_plan
         -> Audio Boundary Pipeline
         -> phase_aligned_audio
         -> Continuum Assemble.audio
 
-The original LATENT groups and assembly plan are still used internally to prove
-exact protected carry, derive the global 40-Hz audio-latent origin, and measure
-the actual generated-latent transition where the exact carried prefix ends and
-the newly generated suffix begins. They are not parallel audio branches and are
-never emitted as competing AUDIO outputs.
+00417 removed the audible click while the global 40-Hz latent-phase correction
+was active, but the user reported a mild audio-quality regression.  Earlier
+controls had already falsified independent Core normalization and full right-side
+decoder context as sufficient causes of the click.  This revision therefore
+keeps the phase correction but removes both broader decode interventions from the
+final AUDIO path: each original physical group is decoded exactly once with
+Core-equivalent per-group normalization, then phase-aligned before assembly.
 
-No additional H3 evaluation or VAE decode is introduced: the oracle decodes each
-physical group once, then phase alignment operates only on those decoded AUDIO
-containers.  The existing standalone diagnostic nodes remain available for
-isolated investigation, but they are not required for the matched PR #32 test.
+The original LATENT groups and assembly plan are also used to prove exact
+protected carry and measure the generated-latent transition.  No additional H3
+evaluation or VAE decode is introduced.  The older decode-context/oracle nodes
+remain available as isolated diagnostics, but their extended/shared-gain AUDIO
+is no longer used by this integrated control.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import math
 import torch
 
 from .pr32_audio_decode_context import _exact_audio_prefix_steps, _validate_plan
-from .pr32_audio_decode_oracle import decode_audio_boundary_oracle
+from .pr32_audio_decode_oracle import _core_divisor, _decode_raw, _mean_scalar, _sample_rate
 from .pr32_audio_phase_align import phase_align_decoded_audio
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,12 +49,11 @@ def _rms(value: torch.Tensor) -> float:
 def inspect_generated_audio_latent_joins(audio_latents: list[dict], assembly_plan: dict) -> str:
     """Measure the exact carried-prefix -> newly-generated audio-latent edge.
 
-    00412 showed that decoder future-context, shared normalization and global
-    40-Hz phase can all agree essentially perfectly while the audible hiccup
-    remains. That moves the leading boundary upstream: the first right-group
-    latent *after* the exact protected overlap. This diagnostic compares that
-    edge against nearby ordinary temporal latent deltas and reports where the
-    edge lands relative to the 24-fps retained video cut.
+    Decoder future-context, shared normalization and global 40-Hz phase can all
+    agree closely while a generated-latent transition remains.  Compare the
+    first newly generated right-group latent against nearby ordinary temporal
+    latent deltas and report where that edge lands relative to the 24-fps
+    retained-video cut.
 
     It is observational only and touches neither accepted latents nor AUDIO.
     """
@@ -84,10 +84,6 @@ def inspect_generated_audio_latent_joins(audio_latents: list[dict], assembly_pla
             global_origin_latent += max(0, int(left.shape[-1]) - prefix)
             continue
 
-        # The first generated right latent corresponds to the global position
-        # immediately after the final left latent. Consecutive latent values are
-        # not expected to be equal, so compare its delta against local temporal
-        # deltas rather than against zero.
         edge_delta = right[..., prefix] - left[..., -1]
         edge_rms = _rms(edge_delta)
 
@@ -120,11 +116,50 @@ def inspect_generated_audio_latent_joins(audio_latents: list[dict], assembly_pla
             f"right_local_step_rms={right_baseline:.8f} edge_over_local={ratio:.6f}"
         )
 
-        # The next group's global origin is the left origin plus the non-overlap
-        # length. Exact carry makes this identity unambiguous.
         global_origin_latent += int(left.shape[-1]) - prefix
 
     return "\n".join(reports)
+
+
+def decode_native_core_audio(
+    audio_latents: list[dict],
+    vae,
+    assembly_plan: dict,
+) -> tuple[list[dict], str]:
+    """Decode only the original physical groups using Core-equivalent normalization.
+
+    Unlike the earlier oracle, this control does not append future latents to a
+    preceding group and does not derive a shared-stream gain.  Each original
+    group is decoded once, exactly as a Core VAEDecodeAudio branch would be,
+    leaving phase alignment as the only waveform intervention before assembly.
+    """
+
+    groups = _validate_plan(assembly_plan, len(audio_latents))
+    rate = _sample_rate(vae)
+    output: list[dict] = []
+    reports = [
+        "PR #32 native per-group Core audio decode control",
+        "decode_context_extension=false shared_gain=false; final-path intervention=global_latent_phase_only",
+    ]
+    for index, (latent, group) in enumerate(zip(audio_latents, groups, strict=True)):
+        samples = latent.get("samples") if isinstance(latent, dict) else None
+        if not torch.is_tensor(samples):
+            raise ValueError(f"native audio decode group {index + 1} requires a tensor LATENT")
+        expected_t = int(group.get("expected_audio_latent_t", 0))
+        if expected_t != int(samples.shape[-1]):
+            raise ValueError(
+                f"native audio decode group {index + 1} has stale assembly metadata: "
+                f"T={int(samples.shape[-1])}, expected={expected_t}"
+            )
+        raw = _decode_raw(vae, latent, index)
+        divisor = _core_divisor(raw)
+        waveform = raw / divisor
+        reports.append(
+            f"group {index + 1}: latent_t={int(samples.shape[-1])} "
+            f"raw_samples={int(raw.shape[-1])} core_divisor={_mean_scalar(divisor):.8f}"
+        )
+        output.append({"waveform": waveform, "sample_rate": rate})
+    return output, "\n".join(reports)
 
 
 def decode_and_phase_align_audio_boundary(
@@ -132,16 +167,16 @@ def decode_and_phase_align_audio_boundary(
     vae,
     assembly_plan: dict,
 ) -> tuple[list[dict], str]:
-    """Decode once, phase-align AUDIO, and report the generated latent edge."""
+    """Native-decode once, phase-align AUDIO, and report the latent edge."""
 
     latent_join_report = inspect_generated_audio_latent_joins(audio_latents, assembly_plan)
-    _core_audio, shared_audio, oracle_report = decode_audio_boundary_oracle(
+    native_audio, decode_report = decode_native_core_audio(
         audio_latents,
         vae,
         assembly_plan,
     )
     phase_aligned_audio, phase_report = phase_align_decoded_audio(
-        shared_audio,
+        native_audio,
         audio_latents,
         assembly_plan,
     )
@@ -149,9 +184,10 @@ def decode_and_phase_align_audio_boundary(
         (
             "PR #32 integrated decoded-audio boundary pipeline",
             latent_join_report,
-            oracle_report,
+            decode_report,
             phase_report,
-            "FINAL AUDIO OUTPUT = shared-gain decoded waveform after global latent-phase alignment. "
+            "FINAL AUDIO OUTPUT = native per-group Core decode after global latent-phase alignment. "
+            "No future-context extension, shared gain, resampling or crossfade. "
             "Connect phase_aligned_audio directly to Continuum Assemble.audio; keep Audio Seam = Off.",
         )
     )
@@ -161,12 +197,12 @@ def decode_and_phase_align_audio_boundary(
 class H3ContinuumAudioBoundaryPipelineDiagnostic:
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "PR #32 integrated audio boundary diagnostic. Connect the ORIGINAL Continuum "
-        "audio_latents, the Audio VAE, and the unchanged assembly_plan here, then connect "
-        "only phase_aligned_audio to Continuum Assemble.audio. Internally this measures the "
-        "exact carried-prefix/generated-suffix latent edge, performs the self-contained decode "
-        "oracle, then applies global 40-Hz latent-phase alignment. It adds no H3 call, no extra "
-        "VAE decode, no resampling, and no crossfade."
+        "PR #32 integrated audio boundary control. Connect the ORIGINAL Continuum audio_latents, "
+        "the Audio VAE, and the unchanged assembly_plan here, then connect only phase_aligned_audio "
+        "to Continuum Assemble.audio. It measures the exact generated-latent boundary, decodes each "
+        "original physical group once with Core-equivalent normalization, then applies only the global "
+        "40-Hz latent-phase correction. No future-context extension, shared gain, H3 call, resampling, "
+        "or crossfade is added."
     )
     INPUT_IS_LIST = True
     RETURN_TYPES = ("AUDIO", "STRING")
