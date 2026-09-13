@@ -26,9 +26,9 @@ is no longer used by this integrated control.
 
 from __future__ import annotations
 
-from fractions import Fraction
 import logging
 import math
+from fractions import Fraction
 
 import torch
 
