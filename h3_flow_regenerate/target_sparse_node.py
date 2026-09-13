@@ -32,6 +32,17 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         import copy
 
         inputs = copy.deepcopy(super().INPUT_TYPES())
+        inputs["required"]["exact_prefix_mode"] = (
+            [cls.EXACT_PREFIX_MODE],
+            {
+                "default": cls.EXACT_PREFIX_MODE,
+                "tooltip": (
+                    "Explicit execution contract for exact Native Masked continuation. This node exposes its "
+                    "single valid mode rather than hiding it in the class implementation. Use the dedicated "
+                    "Mixed-Grid node for mixed_grid_low_suffix."
+                ),
+            },
+        )
         inputs["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
@@ -63,6 +74,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         temporal_weight=0.20,
         handoff_transfer=None,
         learned_upscaler=None,
+        exact_prefix_mode=None,
         suffix_dc_bridge=False,
         suffix_geometric_bridge=None,
         attention_measure_profile=None,
@@ -70,8 +82,15 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
     ):
         if handoff_transfer is None:
             handoff_transfer = "learned_3d"
+        if exact_prefix_mode is None:
+            exact_prefix_mode = self.EXACT_PREFIX_MODE
+        if exact_prefix_mode != self.EXACT_PREFIX_MODE:
+            raise ValueError(
+                f"{type(self).__name__} only supports exact_prefix_mode={self.EXACT_PREFIX_MODE!r}; "
+                f"received {exact_prefix_mode!r}"
+            )
         if suffix_geometric_bridge is None:
-            suffix_geometric_bridge = self.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
+            suffix_geometric_bridge = exact_prefix_mode == "mixed_grid_low_suffix"
 
         # PR32 retired the historical one-token DC transplant for both the
         # Target-Sparse diagnostic and Mixed-Grid. Ignore old serialized true
@@ -85,7 +104,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
-                exact_prefix_mode=self.EXACT_PREFIX_MODE,
+                exact_prefix_mode=exact_prefix_mode,
                 suffix_dc_bridge=effective_suffix_dc_bridge,
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
@@ -100,7 +119,7 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
                 handoff_coordinate=handoff_coordinate,
                 handoff_selection=handoff_selection,
                 transfer_mode=handoff_transfer,
-                exact_prefix_mode=self.EXACT_PREFIX_MODE,
+                exact_prefix_mode=exact_prefix_mode,
                 suffix_dc_bridge=effective_suffix_dc_bridge,
                 suffix_geometric_bridge=bool(suffix_geometric_bridge),
                 attention_measure_profile=attention_measure_profile,
@@ -166,6 +185,16 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         required["consistency_weight"] = ("FLOAT", {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.01})
         required["low_frequency_cutoff"] = ("FLOAT", {"default": 0.25, "min": 0.02, "max": 1.0, "step": 0.01})
         required["temporal_weight"] = ("FLOAT", {"default": 0.20, "min": 0.0, "max": 1.0, "step": 0.01})
+        required["exact_prefix_mode"] = (
+            [cls.EXACT_PREFIX_MODE],
+            {
+                "default": cls.EXACT_PREFIX_MODE,
+                "tooltip": (
+                    "Mixed-Grid exact-prefix execution mode. The field is intentionally visible for workflow "
+                    "auditability but locked to mixed_grid_low_suffix on this dedicated node."
+                ),
+            },
+        )
         required["handoff_transfer"] = (
             ["learned_3d"],
             {
@@ -189,11 +218,12 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": True,
                 "tooltip": (
-                    "Legacy input name for the experimental persistent target-side suffix rebase. It may apply "
-                    "a per-channel constant latent bias validated on held-out exact/learned overlap and/or a "
-                    "small constant affine correction measured from the learned upscaler's direct native boundary "
-                    "and the exact-prefix replacement boundary. Any accepted correction covers the entire generated "
-                    "suffix. Raw structural/chroma residuals are never transplanted; future motion is not extrapolated."
+                    "Canonical Mixed-Grid suffix representation bridge for the current workflow. It may apply "
+                    "a held-out-validated per-channel constant latent bias and/or a bounded constant affine "
+                    "coordinate correction derived from the learned upscaler's own native prefix/suffix boundary. "
+                    "Each component is independently gated by objective validation; the protected prefix is never "
+                    "modified, raw structural/chroma residuals are never transplanted, and future motion is not "
+                    "extrapolated. Keep enabled for the matched weighted Mixed-Grid full-stack run."
                 ),
             },
         )
