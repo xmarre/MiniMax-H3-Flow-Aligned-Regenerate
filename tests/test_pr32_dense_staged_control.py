@@ -39,9 +39,7 @@ def _args(plan, *, img=None):
         "rope_freqs": torch.zeros(1, 8, 1, 1, 1, 1),
         "mod_segments": [(0, 2, 1), (2, 4, 2), (4, 8, torch.arange(4))],
         "layout": _layout(),
-        "transformer_options": {
-            target_sparse.TARGET_SPARSE_CONTRACT_KEY: target_sparse.target_sparse_contract(plan)
-        },
+        "transformer_options": {target_sparse.TARGET_SPARSE_CONTRACT_KEY: target_sparse.target_sparse_contract(plan)},
     }
 
 
