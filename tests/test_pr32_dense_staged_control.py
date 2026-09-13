@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import torch
 
+import h3_flow_regenerate.pr32_dense_staged_control  # noqa: F401
 from h3_flow_regenerate import comfy_compat, target_sparse
 from h3_flow_regenerate.metrics import H3FlowMetrics
-import h3_flow_regenerate.pr32_dense_staged_control  # noqa: F401
 
 
 def _dense_plan():
