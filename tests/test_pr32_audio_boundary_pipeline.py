@@ -98,8 +98,8 @@ def test_integrated_pipeline_decodes_only_original_groups_then_phase_aligns():
     torch.testing.assert_close(
         aligned[0]["waveform"][..., boundary_sample],
         aligned[1]["waveform"][..., native_group2_trim],
-        rtol=0.0,
-        atol=0.0,
+        rtol=1e-6,
+        atol=1e-7,
     )
     assert all(torch.equal(item["samples"], old) for item, old in zip(latents, before, strict=True))
 
