@@ -84,7 +84,7 @@ def test_target_input_progressive_defaults_to_learned_handoff_with_bicubic_contr
     assert "handoff_transfer" not in H3ProgressiveHandoff.INPUT_TYPES()["required"]
 
 
-def test_target_sparse_node_is_explicitly_experimental_and_only_adds_continuum_bridge_schema():
+def test_target_sparse_node_is_explicitly_experimental_dense_control():
     from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
     from h3_flow_regenerate.target_sparse_node import H3ProgressiveTargetSparseHandoff
 
@@ -94,11 +94,12 @@ def test_target_sparse_node_is_explicitly_experimental_and_only_adds_continuum_b
     sparse_required = sparse_schema["required"].copy()
     bridge = sparse_required.pop("suffix_dc_bridge")
     assert bridge[0] == "BOOLEAN"
-    assert bridge[1]["default"] is True
+    assert bridge[1]["default"] is False
     assert sparse_required == target_schema["required"]
     assert sparse_schema["optional"] == target_schema["optional"]
     assert H3ProgressiveTargetSparseHandoff.CATEGORY.endswith("/experimental")
-    assert "Exact Native Masked video prefixes stay on the target grid" in H3ProgressiveTargetSparseHandoff.DESCRIPTION
+    assert H3ProgressiveTargetSparseHandoff.EXACT_PREFIX_MODE == "fallback"
+    assert "full target-grid" in H3ProgressiveTargetSparseHandoff.DESCRIPTION
 
 
 def test_metrics_json_output_node_saves_unique_json_and_refreshes_after_sampler(monkeypatch, tmp_path):
