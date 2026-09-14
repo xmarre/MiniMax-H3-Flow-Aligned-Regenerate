@@ -20,88 +20,50 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install ruff
-      - name: Move checkpoint hashing to node preflight
+      - run: python -m pip install -e '.[test]' ruff
+      - name: Add cheap post-preflight checkpoint guard
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path("h3_flow_regenerate/same_state_high_replay.py")
           text = path.read_text(encoding="utf-8")
+          marker = '''    return {\n        "resolved_path": str(path),\n        "size": int(stat.st_size),\n        "mtime_ns": int(stat.st_mtime_ns),\n        "sha256": _sha256_file(path),\n    }\n\n\n_DROP_PROVENANCE = object()\n'''
+          replacement = '''    return {\n        "resolved_path": str(path),\n        "size": int(stat.st_size),\n        "mtime_ns": int(stat.st_mtime_ns),\n        "sha256": _sha256_file(path),\n    }\n\n\ndef _assert_checkpoint_identity_unchanged(identity: dict[str, Any]) -> None:\n    """Fail before sampling if the checkpoint file changed after the preflight hash."""\n    raw_path = identity.get("resolved_path")\n    if not isinstance(raw_path, str) or not raw_path:\n        raise RuntimeError("same-state replay preflight checkpoint identity has no path")\n    try:\n        path = Path(raw_path).resolve(strict=True)\n        stat = path.stat()\n    except OSError as exc:\n        raise RuntimeError(f"same-state replay checkpoint path is not readable after preflight: {raw_path}") from exc\n    if not path.is_file():\n        raise RuntimeError("same-state replay checkpoint identity requires a regular file")\n    if str(path) != raw_path:\n        raise RuntimeError("same-state replay checkpoint path changed after preflight")\n    if int(stat.st_size) != int(identity.get("size", -1)):\n        raise RuntimeError("same-state replay checkpoint size changed after preflight")\n    if int(stat.st_mtime_ns) != int(identity.get("mtime_ns", -1)):\n        raise RuntimeError("same-state replay checkpoint mtime changed after preflight")\n\n\n_DROP_PROVENANCE = object()\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("checkpoint helper insertion target was not unique")
+          text = text.replace(marker, replacement, 1)
 
-          replacements = [
-              (
-                  '''@dataclass(slots=True)\nclass _CaptureState:\n    complete: deque[_ReplayMaterial] = field(default_factory=lambda: deque(maxlen=_MAX_BUNDLES))\n\n\n@dataclass(slots=True)\nclass _ReplayState:\n    manifest_path: str\n    manifest: dict[str, Any]\n    tensors: dict[str, torch.Tensor]\n    complete: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_REPORTS))\n''',
-                  '''@dataclass(slots=True)\nclass _CaptureState:\n    exact_checkpoint_identity: dict[str, Any]\n    complete: deque[_ReplayMaterial] = field(default_factory=lambda: deque(maxlen=_MAX_BUNDLES))\n\n\n@dataclass(slots=True)\nclass _ReplayState:\n    manifest_path: str\n    manifest: dict[str, Any]\n    tensors: dict[str, torch.Tensor]\n    exact_checkpoint_identity: dict[str, Any]\n    complete: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_REPORTS))\n''',
-              ),
-              (
-                  'def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial:\n',
-                  'def _material_from_record(\n    record: _diag._Record,\n    guider: Any,\n    exact_checkpoint_identity: dict[str, Any],\n) -> _ReplayMaterial:\n',
-              ),
-              (
-                  '    exact_checkpoint = _checkpoint_identity(record.state.manifest)\n    tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}\n',
-                  '    tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}\n',
-              ),
-              (
-                  '        "exact_checkpoint_identity": exact_checkpoint,\n',
-                  '        "exact_checkpoint_identity": exact_checkpoint_identity,\n',
-              ),
-              (
-                  '    if isinstance(state, _CaptureState) and record is not None:\n        state.complete.append(_material_from_record(record, guider))\n',
-                  '    if isinstance(state, _CaptureState) and record is not None:\n        state.complete.append(\n            _material_from_record(record, guider, state.exact_checkpoint_identity)\n        )\n',
-              ),
-              (
-                  '    current_checkpoint = _checkpoint_identity(record.state.manifest)\n    if not _dict_equal(current_checkpoint, state.manifest.get("exact_checkpoint_identity")):\n        raise RuntimeError("same-state replay exact checkpoint identity differs from capture")\n',
-                  '    if not _dict_equal(state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")):\n        raise RuntimeError("same-state replay exact checkpoint identity changed after preflight")\n',
-              ),
-              (
-                  '''                "checkpoint_identity_exact": _dict_equal(\n                    current_checkpoint, state.manifest.get("exact_checkpoint_identity")\n                ),\n''',
-                  '''                "checkpoint_identity_exact": _dict_equal(\n                    state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")\n                ),\n''',
-              ),
-              (
-                  '''def patch_same_state_capture(model: Any) -> tuple[Any, _CaptureState]:\n    state = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(state, _diag._State):\n        raise RuntimeError("same-state replay capture must be applied after MiniMax H3 Execution Contract Diagnostics")\n    patched = model.clone()\n''',
-                  '''def patch_same_state_capture(model: Any) -> tuple[Any, _CaptureState]:\n    state = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(state, _diag._State):\n        raise RuntimeError("same-state replay capture must be applied after MiniMax H3 Execution Contract Diagnostics")\n    if not state.strict_provenance or not state.manifest.get("gate_complete"):\n        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")\n    exact_checkpoint_identity = _checkpoint_identity(state.manifest)\n    patched = model.clone()\n''',
-              ),
-              (
-                  '    capture = _CaptureState()\n',
-                  '    capture = _CaptureState(exact_checkpoint_identity=exact_checkpoint_identity)\n',
-              ),
-              (
-                  '''def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _ReplayState]:\n    diagnostic = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(diagnostic, _diag._State):\n        raise RuntimeError("same-state high replay must be applied after MiniMax H3 Execution Contract Diagnostics")\n    resolved, manifest, tensors = _load_bundle(manifest_path)\n    patched = model.clone()\n''',
-                  '''def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _ReplayState]:\n    diagnostic = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(diagnostic, _diag._State):\n        raise RuntimeError("same-state high replay must be applied after MiniMax H3 Execution Contract Diagnostics")\n    if not diagnostic.strict_provenance or not diagnostic.manifest.get("gate_complete"):\n        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")\n    resolved, manifest, tensors = _load_bundle(manifest_path)\n    exact_checkpoint_identity = _checkpoint_identity(diagnostic.manifest)\n    if not _dict_equal(exact_checkpoint_identity, manifest.get("exact_checkpoint_identity")):\n        raise RuntimeError("same-state replay exact checkpoint identity differs from capture")\n    patched = model.clone()\n''',
-              ),
-              (
-                  '    state = _ReplayState(manifest_path=str(resolved), manifest=manifest, tensors=tensors)\n',
-                  '''    state = _ReplayState(\n        manifest_path=str(resolved),\n        manifest=manifest,\n        tensors=tensors,\n        exact_checkpoint_identity=exact_checkpoint_identity,\n    )\n''',
-              ),
-          ]
+          marker = '''    record = _diag._ACTIVE.get()\n    result = executor(\n'''
+          replacement = '''    record = _diag._ACTIVE.get()\n    if isinstance(state, _CaptureState):\n        _assert_checkpoint_identity_unchanged(state.exact_checkpoint_identity)\n    result = executor(\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("capture wrapper guard target was not unique")
+          text = text.replace(marker, replacement, 1)
 
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected exactly one replacement target, found {count}: {old[:100]!r}")
-              text = text.replace(old, new, 1)
-
+          marker = '''    if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):\n        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")\n    if not isinstance(options, dict):\n'''
+          replacement = '''    if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):\n        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")\n    _assert_checkpoint_identity_unchanged(state.exact_checkpoint_identity)\n    if not isinstance(options, dict):\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("replay wrapper guard target was not unique")
+          text = text.replace(marker, replacement, 1)
           path.write_text(text, encoding="utf-8")
 
           test_path = Path("tests/test_same_state_high_replay.py")
           tests = test_path.read_text(encoding="utf-8")
-          marker = '''\ndef test_replay_source_has_no_progressive_or_upscaler_execution_path():\n'''
-          addition = '''\ndef test_checkpoint_identity_is_hashed_only_during_node_preflight():\n    import inspect\n\n    assert "_checkpoint_identity(" in inspect.getsource(replay.patch_same_state_capture)\n    assert "_checkpoint_identity(" in inspect.getsource(replay.patch_same_state_replay)\n    assert "_checkpoint_identity(" not in inspect.getsource(replay._capture_wrapper)\n    assert "_checkpoint_identity(" not in inspect.getsource(replay._replay_wrapper)\n    assert "_checkpoint_identity(" not in inspect.getsource(replay._material_from_record)\n\n\n'''
-          if addition.strip() in tests:
-              raise SystemExit("preflight checkpoint test already present")
+          marker = '''\ndef test_rebuild_trajectory_restores_declarative_guidance_samples():\n'''
+          addition = '''\ndef test_checkpoint_identity_guard_rejects_file_change_after_preflight(tmp_path: Path):\n    checkpoint = tmp_path / "model.safetensors"\n    checkpoint.write_bytes(b"exact-model-bytes")\n    stat = checkpoint.stat()\n    provenance = {\n        "model": {\n            "checkpoint_stat": {\n                "resolved_path": str(checkpoint),\n                "size": stat.st_size,\n                "mtime_ns": stat.st_mtime_ns,\n            }\n        }\n    }\n    identity = replay._checkpoint_identity(provenance)\n    replay._assert_checkpoint_identity_unchanged(identity)\n\n    checkpoint.write_bytes(b"changed-model-bytes-longer")\n    try:\n        replay._assert_checkpoint_identity_unchanged(identity)\n    except RuntimeError as exc:\n        assert "changed after preflight" in str(exc)\n    else:  # pragma: no cover\n        raise AssertionError("checkpoint changed after preflight was accepted")\n\n\n'''
           if tests.count(marker) != 1:
-              raise SystemExit("expected replay source test marker exactly once")
+              raise SystemExit("checkpoint guard test insertion target was not unique")
           tests = tests.replace(marker, addition + marker, 1)
           test_path.write_text(tests, encoding="utf-8")
           PY
       - run: ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
       - run: ruff check h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
+      - run: pytest -q tests/test_same_state_high_replay.py
       - name: Commit patch
         run: |
           git config user.name "xmarre"
           git config user.email "54859656+xmarre@users.noreply.github.com"
           git add h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
           git diff --cached --check
-          git commit -m "Move replay checkpoint identity to preflight"
+          git commit -m "Guard replay checkpoint identity after preflight"
           git push origin HEAD:mirror/same-state-high-replay-20260914
