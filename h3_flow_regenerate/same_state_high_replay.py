@@ -292,16 +292,26 @@ def _provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]
 
 
 def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    full_identity = manifest.get("provenance_identity")
+    if not isinstance(full_identity, dict):
+        raise RuntimeError("same-state replay bundle lacks installed-runtime provenance identity")
+    derived = _provenance_equivalence_identity(full_identity)
+
     persisted = manifest.get("provenance_equivalence_identity")
     persisted_digest = manifest.get("provenance_equivalence_digest")
-    if isinstance(persisted, dict):
-        if not isinstance(persisted_digest, str) or _sha_json(persisted) != persisted_digest:
-            raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
-        return persisted
-    legacy = manifest.get("provenance_identity")
-    if not isinstance(legacy, dict):
-        raise RuntimeError("same-state replay bundle lacks installed-runtime provenance identity")
-    return _provenance_equivalence_identity(legacy)
+    if persisted is None and persisted_digest is None:
+        return derived
+    if not isinstance(persisted, dict) or not isinstance(persisted_digest, str):
+        raise RuntimeError("same-state replay provenance-equivalence identity is incomplete")
+    if _sha_json(persisted) != persisted_digest:
+        raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
+    if _canonical_json(persisted) != _canonical_json(derived):
+        differences = _provenance_diff_paths(derived, persisted)
+        detail = "" if not differences else "; differing fields: " + ", ".join(differences)
+        raise RuntimeError(
+            "same-state replay provenance-equivalence identity is inconsistent with full provenance" + detail
+        )
+    return derived
 
 
 def _provenance_diff_paths(left: Any, right: Any, *, limit: int = 24) -> list[str]:
@@ -860,6 +870,7 @@ def _validate_bundle_manifest(manifest: dict[str, Any]) -> None:
     provenance_identity = manifest.get("provenance_identity")
     if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
         raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
+    _bundle_provenance_equivalence_identity(manifest)
     runtime_policy = manifest.get("first_high_runtime_policy")
     if not isinstance(runtime_policy, dict) or _sha_json(runtime_policy) != manifest.get(
         "first_high_runtime_policy_digest"

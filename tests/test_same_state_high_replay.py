@@ -493,3 +493,45 @@ def test_replay_provenance_equivalence_legacy_bundle_and_diff_paths():
 
     differences = replay._provenance_diff_paths(legacy, current)
     assert differences == ["$.active_runtime_functions.runtime._run_progressive.code_digest"]
+
+
+def test_bundle_equivalence_identity_cannot_override_validated_full_provenance():
+    full_identity = {
+        "loaded_companion_sources": {
+            "flow": [
+                {
+                    "module": "h3_flow_regenerate.runtime",
+                    "file": {
+                        "path": "/custom_nodes/flow/h3_flow_regenerate/runtime.py",
+                        "resolved_path": "/custom_nodes/flow/h3_flow_regenerate/runtime.py",
+                        "sha256": "production-source-a",
+                        "git": {"available": True, "head": "capture-head", "dirty": False},
+                    },
+                }
+            ]
+        },
+        "patcher_is_injected": True,
+    }
+    derived = replay._provenance_equivalence_identity(full_identity)
+    manifest = {
+        "provenance_identity": copy.deepcopy(full_identity),
+        "provenance_digest": replay._sha_json(full_identity),
+        "provenance_equivalence_identity": copy.deepcopy(derived),
+        "provenance_equivalence_digest": replay._sha_json(derived),
+    }
+
+    assert replay._bundle_provenance_equivalence_identity(manifest) == derived
+
+    tampered = copy.deepcopy(manifest)
+    tampered_equivalence = tampered["provenance_equivalence_identity"]
+    tampered_equivalence["loaded_companion_sources"]["flow"][0]["file"]["sha256"] = "production-source-b"
+    tampered["provenance_equivalence_digest"] = replay._sha_json(tampered_equivalence)
+
+    try:
+        replay._bundle_provenance_equivalence_identity(tampered)
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "inconsistent with full provenance" in message
+        assert "sha256" in message
+    else:
+        raise AssertionError("tampered causal provenance identity was accepted")
