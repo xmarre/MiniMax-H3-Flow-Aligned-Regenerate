@@ -224,6 +224,121 @@ def _provenance_digest(manifest: dict[str, Any]) -> str:
     return _sha_json(_normalize_provenance(manifest))
 
 
+_PROVENANCE_EQ_DROP_TOP_LEVEL = frozenset(
+    {
+        "capture_phase",
+        "cwd",
+        "patcher_is_injected",
+        "replay_checkpoint_identity_exact",
+    }
+)
+_DIAGNOSTIC_FLOW_SOURCE_FILES = frozenset(
+    {
+        "execution_contract_diagnostics.py",
+        "execution_contract_provenance.py",
+        "execution_contract_runtime_observation.py",
+        "same_state_high_replay.py",
+    }
+)
+
+
+def _diagnostic_flow_source_entry(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    file_info = value.get("file")
+    if not isinstance(file_info, dict):
+        return False
+    raw_path = file_info.get("resolved_path") or file_info.get("path")
+    if not isinstance(raw_path, str):
+        return False
+    return Path(raw_path).name.lower() in _DIAGNOSTIC_FLOW_SOURCE_FILES
+
+
+def _provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return the causal capture/replay provenance identity for experiment R.
+
+    The full normalized manifest remains stored and hash-checked for audit. R's
+    cross-process equality gate compares executed source bytes and effective
+    production policy, not repository bookkeeping or mutable lifecycle state.
+    Git HEAD/dirty metadata is redundant with each loaded file's SHA-256 and can
+    change after a history-only squash without changing executed code. Likewise,
+    patcher injection state is intentionally allowed to differ between the warm
+    capture process and cold replay process. R/O/C diagnostic implementation
+    files and wrappers are measurement plumbing rather than production runtime.
+    """
+    normalized = _normalize_provenance(manifest)
+    if not isinstance(normalized, dict):
+        raise TypeError("same-state replay provenance identity must be a dictionary")
+
+    def canonicalize(value: Any, path: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, dict):
+            out = {}
+            for raw_key, item in value.items():
+                key = str(raw_key)
+                if not path and key in _PROVENANCE_EQ_DROP_TOP_LEVEL:
+                    continue
+                if key == "git":
+                    continue
+                out[key] = canonicalize(item, (*path, key))
+            return out
+        if isinstance(value, list):
+            items = value
+            if path == ("loaded_companion_sources", "flow"):
+                items = [item for item in value if not _diagnostic_flow_source_entry(item)]
+            return [canonicalize(item, (*path, "[]")) for item in items]
+        return value
+
+    return canonicalize(normalized)
+
+
+def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    persisted = manifest.get("provenance_equivalence_identity")
+    persisted_digest = manifest.get("provenance_equivalence_digest")
+    if isinstance(persisted, dict):
+        if not isinstance(persisted_digest, str) or _sha_json(persisted) != persisted_digest:
+            raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
+        return persisted
+    legacy = manifest.get("provenance_identity")
+    if not isinstance(legacy, dict):
+        raise RuntimeError("same-state replay bundle lacks installed-runtime provenance identity")
+    return _provenance_equivalence_identity(legacy)
+
+
+def _provenance_diff_paths(left: Any, right: Any, *, limit: int = 24) -> list[str]:
+    differences: list[str] = []
+
+    def visit(a: Any, b: Any, path: str) -> None:
+        if len(differences) >= limit:
+            return
+        if isinstance(a, dict) and isinstance(b, dict):
+            for key in sorted(set(a) | set(b)):
+                child = f"{path}.{key}"
+                if key not in a:
+                    differences.append(child + " (capture missing)")
+                elif key not in b:
+                    differences.append(child + " (replay missing)")
+                else:
+                    visit(a[key], b[key], child)
+                if len(differences) >= limit:
+                    return
+            return
+        if isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                differences.append(f"{path}.length ({len(a)} != {len(b)})")
+                if len(differences) >= limit:
+                    return
+            for index, (a_item, b_item) in enumerate(zip(a, b, strict=False)):
+                visit(a_item, b_item, f"{path}[{index}]")
+                if len(differences) >= limit:
+                    return
+            return
+        if _canonical_json(a) != _canonical_json(b):
+            differences.append(path)
+
+    visit(left, right, "$")
+    return differences
+
+
 def _guidance_config_dict(binding: _runtime.FlowBinding | None) -> dict[str, Any] | None:
     if binding is None or binding.guidance is None:
         return None
@@ -611,6 +726,7 @@ def _material_from_record(
 
     tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}
     provenance_identity = _normalize_provenance(record.state.manifest)
+    provenance_equivalence_identity = _provenance_equivalence_identity(record.state.manifest)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "kind": "minimax_h3_same_state_high_replay",
@@ -650,6 +766,8 @@ def _material_from_record(
         "exact_checkpoint_identity": exact_checkpoint_identity,
         "provenance_digest": _sha_json(provenance_identity),
         "provenance_identity": provenance_identity,
+        "provenance_equivalence_digest": _sha_json(provenance_equivalence_identity),
+        "provenance_equivalence_identity": provenance_equivalence_identity,
         "controlled_topology": topology,
         "contract": {
             "separate_diagnostic_job": True,
@@ -953,9 +1071,14 @@ def _replay_wrapper(
         raise RuntimeError("same-state replay caller schedule differs from the captured original schedule")
     if record.pristine_cond_digest != str(state.manifest["pristine_conditioning_digest"]):
         raise RuntimeError("same-state replay pristine target conditioning differs from capture")
-    current_provenance = _normalize_provenance(record.state.manifest)
-    if _sha_json(current_provenance) != str(state.manifest["provenance_digest"]):
-        raise RuntimeError("same-state replay installed runtime provenance differs from capture")
+    capture_provenance = _bundle_provenance_equivalence_identity(state.manifest)
+    current_provenance = _provenance_equivalence_identity(record.state.manifest)
+    provenance_differences = _provenance_diff_paths(capture_provenance, current_provenance)
+    if provenance_differences:
+        raise RuntimeError(
+            "same-state replay production runtime provenance differs from capture; differing fields: "
+            + ", ".join(provenance_differences)
+        )
     if not _dict_equal(state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")):
         raise RuntimeError("same-state replay exact checkpoint identity changed after preflight")
 
@@ -1110,9 +1233,10 @@ def _replay_wrapper(
             "upscaler_calls": 0,
         }
         condition_exact = record.high_pre_core_digest == state.manifest.get("conditioning_digest")
-        provenance_exact = _sha_json(_normalize_provenance(record.state.manifest)) == state.manifest.get(
-            "provenance_digest"
-        )
+        replay_provenance = _provenance_equivalence_identity(record.state.manifest)
+        capture_provenance = _bundle_provenance_equivalence_identity(state.manifest)
+        provenance_differences = _provenance_diff_paths(capture_provenance, replay_provenance)
+        provenance_exact = not provenance_differences
         guidance_exact = _dict_equal(current_guidance, state.manifest.get("guidance_config"))
         spectrum_config_exact = _dict_equal(current_spectrum_config, state.manifest.get("spectrum_config"))
         attribution_valid = bool(
@@ -1151,6 +1275,7 @@ def _replay_wrapper(
                 "topology_exact": topology == expected_topology,
                 "condition_pre_core_equal": condition_exact,
                 "provenance_exact": provenance_exact,
+                "provenance_differences": provenance_differences,
                 "checkpoint_identity_exact": _dict_equal(
                     state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")
                 ),

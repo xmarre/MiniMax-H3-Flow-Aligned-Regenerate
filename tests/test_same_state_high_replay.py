@@ -418,3 +418,78 @@ def test_replay_bundle_selector_rejects_paths_outside_replay_directory(tmp_path,
         assert "must name a saved JSON manifest" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("absolute replay path was accepted")
+
+
+def test_replay_provenance_equivalence_uses_source_bytes_not_git_or_lifecycle_state():
+    capture = {
+        "capture_phase": "outer_sample_runtime",
+        "cwd": "/capture",
+        "patcher_is_injected": True,
+        "imported_sources": {
+            "comfy.samplers": {
+                "resolved_path": "/ComfyUI/comfy/samplers.py",
+                "sha256": "core-source",
+                "git": {"available": True, "head": "capture-head", "dirty": True},
+            }
+        },
+        "loaded_companion_sources": {
+            "flow": [
+                {
+                    "module": "h3_flow_regenerate.same_state_high_replay",
+                    "file": {
+                        "resolved_path": "/custom_nodes/flow/h3_flow_regenerate/same_state_high_replay.py",
+                        "sha256": "diagnostic-capture",
+                        "git": {"available": True, "head": "capture-head", "dirty": True},
+                    },
+                },
+                {
+                    "module": "h3_flow_regenerate.runtime",
+                    "file": {
+                        "resolved_path": "/custom_nodes/flow/h3_flow_regenerate/runtime.py",
+                        "sha256": "production-flow",
+                        "git": {"available": True, "head": "capture-head", "dirty": True},
+                    },
+                },
+            ]
+        },
+        "gate_complete": True,
+        "unresolved": [],
+    }
+    cold = copy.deepcopy(capture)
+    cold["capture_phase"] = "outer_sample_runtime"
+    cold["cwd"] = "/replay"
+    cold["patcher_is_injected"] = False
+    cold["imported_sources"]["comfy.samplers"]["git"] = {
+        "available": True,
+        "head": "history-only-squash",
+        "dirty": False,
+    }
+    cold["loaded_companion_sources"]["flow"][0]["file"]["sha256"] = "diagnostic-replay"
+    cold["loaded_companion_sources"]["flow"][1]["file"]["git"]["head"] = "history-only-squash"
+
+    assert replay._provenance_equivalence_identity(capture) == replay._provenance_equivalence_identity(cold)
+
+    changed = copy.deepcopy(cold)
+    changed["loaded_companion_sources"]["flow"][1]["file"]["sha256"] = "changed-production-flow"
+    assert replay._provenance_equivalence_identity(capture) != replay._provenance_equivalence_identity(changed)
+
+
+def test_replay_provenance_equivalence_legacy_bundle_and_diff_paths():
+    capture = {
+        "schema_version": 3,
+        "gate_complete": True,
+        "active_runtime_functions": {
+            "runtime._run_progressive": {"code_digest": "capture"},
+        },
+    }
+    manifest = {
+        "provenance_identity": capture,
+        "provenance_digest": replay._sha_json(capture),
+    }
+    legacy = replay._bundle_provenance_equivalence_identity(manifest)
+    current = copy.deepcopy(capture)
+    current["active_runtime_functions"]["runtime._run_progressive"]["code_digest"] = "replay"
+    current = replay._provenance_equivalence_identity(current)
+
+    differences = replay._provenance_diff_paths(legacy, current)
+    assert differences == ["$.active_runtime_functions.runtime._run_progressive.code_digest"]
