@@ -1,9 +1,10 @@
 """Installed-runtime provenance for first-high H3 contract diagnostics.
 
-The collector runs inside the active ComfyUI process. It records the imported
+The collector runs inside the active ComfyUI process. It records imported
 source files, git state, effective wrapper/replacement order, hook identities,
-attention provider, and a bounded fingerprint of the actually loaded H3 model.
-It deliberately does not hash multi-gigabyte checkpoint files on the hot path.
+attention/provider callables, compiler/runtime flags, and a bounded fingerprint
+of the actually loaded H3 model. It deliberately does not hash multi-gigabyte
+checkpoint files on the diagnostic hot path.
 """
 
 from __future__ import annotations
@@ -95,11 +96,19 @@ def callable_identity(value: Any) -> dict[str, Any]:
     cls = target if inspect.isclass(target) else type(target)
     module = getattr(target, "__module__", cls.__module__)
     qualname = getattr(target, "__qualname__", getattr(target, "__name__", cls.__qualname__))
+    source_target = target
     try:
-        source_file = inspect.getsourcefile(target) or inspect.getfile(target)
+        source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
     except (OSError, TypeError):
-        source_file = None
+        source_target = cls
+        try:
+            source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
+        except (OSError, TypeError):
+            source_file = None
     code = getattr(target, "__code__", None)
+    if code is None:
+        call_method = getattr(cls, "__call__", None)
+        code = getattr(call_method, "__code__", None)
     code_digest = None
     if code is not None:
         material = code.co_code + repr(code.co_consts).encode() + repr(code.co_names).encode()
@@ -120,7 +129,7 @@ def safe_value(value: Any, *, depth: int = 0) -> Any:
     if torch.is_tensor(value):
         return {
             "tensor": True,
-            "shape": [int(x) for x in value.shape],
+            "shape": [int(dim) for dim in value.shape],
             "dtype": str(value.dtype),
             "device": str(value.device),
             "sample_digest": _runtime._tensor_signature(value, max_values=64).hex(),
@@ -240,17 +249,68 @@ def _hook_manifest(diffusion: Any) -> list[dict[str, Any]]:
     blocks = getattr(diffusion, "blocks", None)
     if blocks is None:
         return []
-    result = []
-    for index, block in enumerate(blocks):
-        result.append(
-            {
-                "block": index,
-                "forward": callable_identity(block.forward),
-                "pre_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_pre_hooks", {}) or {}).values()],
-                "post_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_hooks", {}) or {}).values()],
-            }
-        )
-    return result
+    return [
+        {
+            "block": index,
+            "forward": callable_identity(block.forward),
+            "pre_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_pre_hooks", {}) or {}).values()],
+            "post_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_hooks", {}) or {}).values()],
+        }
+        for index, block in enumerate(blocks)
+    ]
+
+
+def _provider_manifest(provider: Any) -> dict[str, Any] | None:
+    if provider is None:
+        return None
+    methods = {}
+    for name in ("upscale", "execute", "__call__"):
+        method = getattr(provider, name, None)
+        if callable(method):
+            methods[name] = callable_identity(method)
+    fields = {}
+    if hasattr(provider, "__dict__"):
+        for key, value in sorted(vars(provider).items()):
+            if str(key).startswith("_"):
+                continue
+            if callable(value):
+                fields[str(key)] = {"callable": callable_identity(value)}
+            elif isinstance(value, (bool, int, float, str, type(None))):
+                fields[str(key)] = value
+            else:
+                fields[str(key)] = {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+    return {
+        "type": f"{type(provider).__module__}.{type(provider).__qualname__}",
+        "methods": methods,
+        "fields": fields,
+    }
+
+
+def _compiler_manifest() -> dict[str, Any]:
+    dynamo = getattr(torch, "_dynamo", None)
+    dynamo_config = getattr(dynamo, "config", None)
+    cuda_backend = getattr(torch.backends, "cuda", None)
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    return {
+        "torch_version": torch.__version__,
+        "cuda_version": getattr(torch.version, "cuda", None),
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        "matmul_allow_tf32": getattr(getattr(cuda_backend, "matmul", None), "allow_tf32", None),
+        "cudnn_allow_tf32": getattr(cudnn_backend, "allow_tf32", None),
+        "dynamo_dynamic_shapes": getattr(dynamo_config, "dynamic_shapes", None),
+        "dynamo_assume_static_by_default": getattr(dynamo_config, "assume_static_by_default", None),
+        "environment": {
+            key: os.environ.get(key)
+            for key in (
+                "CUDA_MODULE_LOADING",
+                "PYTORCH_CUDA_ALLOC_CONF",
+                "TORCH_LOGS",
+                "TORCHINDUCTOR_CACHE_DIR",
+                "TORCH_CUDNN_V8_API_ENABLED",
+            )
+        },
+    }
 
 
 def collect_manifest(model: Any) -> dict[str, Any]:
@@ -276,6 +336,19 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         if source is None or not source["git"]["available"]:
             unresolved.append(f"runtime:{name}")
 
+    pr35_predict = runtime_functions["comfy_compat.flow_predict_wrapper"]
+    pr36_progressive = runtime_functions["runtime._run_progressive"]
+    validation_stack = {
+        "pr35_predict_active": pr35_predict["module"].endswith("handoff_checkpoint_diagnostic")
+        and pr35_predict["qualname"].endswith("_flow_predict_capture_wrapper"),
+        "pr36_progressive_active": pr36_progressive["module"].endswith("guidance_anchor_transport_validation")
+        and pr36_progressive["qualname"].endswith("_run_progressive_anchor_wrapper"),
+    }
+    if not validation_stack["pr35_predict_active"]:
+        unresolved.append("overlay:pr35_checkpoint_diagnostic")
+    if not validation_stack["pr36_progressive_active"]:
+        unresolved.append("overlay:pr36_guidance_anchor_transport")
+
     base = getattr(model, "model", None)
     diffusion = getattr(base, "diffusion_model", None)
     model_fingerprint = _model_fingerprint(model)
@@ -297,19 +370,16 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         "collected_ns": time.time_ns(),
         "cwd": os.getcwd(),
         "python": sys.version,
-        "torch": {
-            "version": torch.__version__,
-            "cuda": getattr(torch.version, "cuda", None),
-            "cuda_available": torch.cuda.is_available(),
-        },
+        "compiler_runtime": _compiler_manifest(),
         "imported_sources": imported,
         "active_wrapper_order": wrappers,
         "active_runtime_functions": runtime_functions,
+        "validation_stack": validation_stack,
         "replacement_chain_dit": replacement_manifest,
         "optimized_attention_override": callable_identity(attention) if callable(attention) else safe_value(attention),
         "model": model_fingerprint,
         "progressive_config": safe_value(progressive),
-        "learned_provider": callable_identity(provider) if callable(provider) else safe_value(provider),
+        "learned_provider": _provider_manifest(provider),
         "block_hooks": _hook_manifest(diffusion),
         "unresolved": sorted(set(unresolved)),
     }
