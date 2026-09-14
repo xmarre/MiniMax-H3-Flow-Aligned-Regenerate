@@ -18,6 +18,10 @@ jobs:
         with:
           ref: mirror/r-post00450-integration-20260914
           fetch-depth: 0
+      - name: Configure git identity
+        run: |
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
       - name: Integrate validated PR41 delta and preserve R runbook
         run: |
           git fetch origin checkpoint/pr41-post00450-delta-20260914
