@@ -1,0 +1,72 @@
+name: PR41 KJ checkpoint identity fix
+
+on:
+  push:
+    branches:
+      - mirror/pr41-kj-checkpoint-identity-fix-20260914
+    paths:
+      - .github/workflows/pr41-kj-checkpoint-identity-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr41-kj-checkpoint-identity-fix-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[test]' build ruff
+      - name: Patch exact checkpoint provenance
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("h3_flow_regenerate/execution_contract_provenance.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''def _model_fingerprint(model: Any) -> dict[str, Any]:\n'''
+          helper = '''def _explicit_attribute(owner: Any, name: str) -> Any:\n    """Read only attributes actually declared on an object/class.\n\n    Some Comfy model-config objects implement warning-emitting ``__getattr__``\n    fallbacks. Provenance must not manufacture attribute probes just to discover\n    a source path.\n    """\n    if owner is None:\n        return None\n    try:\n        namespace = vars(owner)\n    except TypeError:\n        namespace = {}\n    if name in namespace:\n        return namespace[name]\n    for cls in type(owner).__mro__:\n        if name in vars(cls):\n            try:\n                return getattr(owner, name)\n            except Exception:\n                return None\n    return None\n\n\ndef _cached_patcher_checkpoint(model: Any) -> tuple[str | None, dict[str, Any] | None]:\n    """Resolve a diffusion checkpoint from Comfy's loader reload factory.\n\n    Core ModelPatcher clones preserve ``cached_patcher_init``. KJ's\n    DiffusionModelLoaderKJ stores ``(_load_diffusion_model_kj,\n    (unet_path, model_options, extra_state_dict))`` there, so arg0 is the exact\n    source file even though the loaded MiniMax model/config exposes no pathname.\n    """\n    cached = _explicit_attribute(model, "cached_patcher_init")\n    if not isinstance(cached, tuple) or len(cached) < 2 or not callable(cached[0]):\n        return None, None\n    args = cached[1]\n    if not isinstance(args, tuple) or not args:\n        return None, None\n    candidate = args[0]\n    if not isinstance(candidate, (str, os.PathLike)) or not str(candidate):\n        return None, None\n    try:\n        resolved = Path(candidate).expanduser().resolve(strict=True)\n    except (OSError, RuntimeError):\n        return None, None\n    if not resolved.is_file():\n        return None, None\n    return str(resolved), {\n        "kind": "cached_patcher_init_arg0",\n        "factory": callable_identity(cached[0]),\n        "argument_index": 0,\n    }\n\n\ndef _model_fingerprint(model: Any) -> dict[str, Any]:\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"model fingerprint insertion target count={text.count(old)}")
+          text = text.replace(old, helper, 1)
+
+          old = '''    checkpoint = None\n    for owner in (model, base, getattr(base, "model_config", None), diffusion):\n        if owner is None:\n            continue\n        for attr in ("checkpoint_name", "ckpt_name", "model_path", "model_file", "filename", "source_path"):\n            value = getattr(owner, attr, None)\n            if isinstance(value, (str, os.PathLike)) and str(value):\n                checkpoint = str(value)\n                break\n        if checkpoint:\n            break\n    checkpoint_stat = None\n'''
+          new = '''    checkpoint = None\n    checkpoint_source = None\n    model_config = _explicit_attribute(base, "model_config")\n    for owner_name, owner in (("patcher", model), ("base", base), ("model_config", model_config), ("diffusion", diffusion)):\n        if owner is None:\n            continue\n        for attr in ("checkpoint_name", "ckpt_name", "model_path", "model_file", "filename", "source_path"):\n            value = _explicit_attribute(owner, attr)\n            if isinstance(value, (str, os.PathLike)) and str(value):\n                checkpoint = str(value)\n                checkpoint_source = {"kind": "declared_attribute", "owner": owner_name, "attribute": attr}\n                break\n        if checkpoint:\n            break\n    if checkpoint is None:\n        checkpoint, checkpoint_source = _cached_patcher_checkpoint(model)\n    checkpoint_stat = None\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"checkpoint discovery target count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''        "checkpoint_path": checkpoint,\n        "checkpoint_stat": checkpoint_stat,\n        "exact_checkpoint_file_identity": False,\n'''
+          new = '''        "checkpoint_path": checkpoint,\n        "checkpoint_source": checkpoint_source,\n        "checkpoint_stat": checkpoint_stat,\n        "exact_checkpoint_file_identity": False,\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"checkpoint manifest target count={text.count(old)}")
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+          tests = Path("tests/test_execution_contract_diagnostics.py")
+          t = tests.read_text(encoding="utf-8")
+          marker = '''\ndef test_sampler_condition_compare_observes_processed_conditions_without_replaying_preprocess():\n'''
+          addition = '''\ndef test_model_fingerprint_resolves_kj_cached_loader_checkpoint_without_dynamic_attr_probes(tmp_path):\n    checkpoint = tmp_path / "MiniMax-H3-test.safetensors"\n    checkpoint.write_bytes(b"checkpoint-bytes")\n\n    class WarningConfig:\n        def __getattr__(self, name):\n            raise AssertionError(f"unexpected dynamic model-config probe: {name}")\n\n    diffusion = torch.nn.Linear(4, 4, bias=False)\n    base = SimpleNamespace(diffusion_model=diffusion, model_config=WarningConfig())\n\n    def fake_kj_loader(unet_path, model_options, extra_state_dict):\n        return unet_path, model_options, extra_state_dict\n\n    model = SimpleNamespace(\n        model=base,\n        cached_patcher_init=(fake_kj_loader, (str(checkpoint), {"dtype": "bf16"}, {})),\n    )\n    result = provenance._model_fingerprint(model)\n\n    assert result["checkpoint_path"] == str(checkpoint.resolve())\n    assert result["checkpoint_stat"]["resolved_path"] == str(checkpoint.resolve())\n    assert result["checkpoint_stat"]["size"] == checkpoint.stat().st_size\n    assert result["checkpoint_source"]["kind"] == "cached_patcher_init_arg0"\n    assert result["checkpoint_source"]["argument_index"] == 0\n    assert result["checkpoint_source"]["factory"]["qualname"].endswith("fake_kj_loader")\n\n\n'''
+          if t.count(marker) != 1:
+              raise SystemExit(f"test insertion marker count={t.count(marker)}")
+          t = t.replace(marker, addition + marker, 1)
+          tests.write_text(t, encoding="utf-8")
+          PY
+      - run: ruff format h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py
+      - run: ruff check h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py tests/test_same_state_high_replay.py
+      - run: pytest -q tests/test_execution_contract_diagnostics.py tests/test_same_state_high_replay.py
+      - run: python -m compileall -q h3_flow_regenerate
+      - name: Commit repair and remove one-shot workflow
+        run: |
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
+          git rm .github/workflows/pr41-kj-checkpoint-identity-fix.yml
+          git add h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py
+          git diff --cached --check
+          git commit -m "Resolve KJ loader checkpoint identity for replay"
+          git push origin HEAD:mirror/pr41-kj-checkpoint-identity-fix-20260914
