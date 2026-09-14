@@ -2,9 +2,9 @@
 
 This diagnostic implements experiment R from FIRST_HIGH_STAGE_ARTIFACT_ARCHITECTURE.
 A capture wrapper observes an otherwise unchanged controlled progressive run and
-exports only tensors plus a versioned declarative manifest.  A fresh-process
+exports only tensors plus a versioned declarative manifest. A fresh-process
 replay wrapper then executes exactly the captured high suffix, with the original
-Flow progressive wrapper suppressed for that one invocation.  It does not run
+Flow progressive wrapper suppressed for that one invocation. It does not run
 the low stage, the exact probe, or the learned upscaler.
 """
 
@@ -25,12 +25,12 @@ import torch
 
 from . import comfy_compat as _comfy_compat
 from . import execution_contract_diagnostics as _diag
-from . import execution_contract_provenance as _provenance
+from . import execution_contract_runtime_observation as _runtime_observation
 from . import runtime as _runtime
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import H3Geometry, pack_streams
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CAPTURE_STATE_KEY = "h3_flow_same_state_replay_capture_v1"
 REPLAY_STATE_KEY = "h3_flow_same_state_high_replay_v1"
 _CAPTURE_WRAPPER_KEY = "h3_flow_regenerate.same_state_replay.capture.v1"
@@ -40,6 +40,14 @@ _MAX_REPORTS = 4
 _SAFE_PREFIX = re.compile(r"[^A-Za-z0-9._-]+")
 _RUNTIME_ID_SUFFIX = re.compile(r"_(?:0x)?[0-9a-fA-F]{8,}$")
 _MEMORY_ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
+_RUNTIME_OBSERVATION_KEY = "h3_flow_execution_contract_runtime_observation_v1"
+_VOLATILE_PROVENANCE_TOP_LEVEL = frozenset(
+    {
+        "collected_ns",
+        "model_options_alias_graph",
+        _RUNTIME_OBSERVATION_KEY,
+    }
+)
 
 _REQUIRED_REPLAY_TENSORS = (
     "high_noise_argument",
@@ -76,17 +84,69 @@ def _sha_json(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _tensor_sha256(value: torch.Tensor) -> str:
     work = value.detach().to(device="cpu").contiguous()
     return hashlib.sha256(work.view(torch.uint8).numpy().tobytes()).hexdigest()
 
 
 def _cpu_clone(value: torch.Tensor) -> torch.Tensor:
-    return value.detach().to(device="cpu", copy=True).contiguous()
+    return value.detach().to(device="cpu", copy=True)
 
 
 def _snapshot_hashes(record: _diag._Record) -> dict[str, str]:
     return {name: _tensor_sha256(snapshot.tensor) for name, snapshot in sorted(record.snapshots.items())}
+
+
+def _snapshot_contract(record: _diag._Record, name: str) -> dict[str, Any]:
+    snapshot = record.snapshots.get(name)
+    if snapshot is None:
+        raise RuntimeError(f"same-state replay capture is missing snapshot contract for {name}")
+    value = snapshot.tensor
+    return {
+        "shape": [int(dim) for dim in value.shape],
+        "stride": [int(item) for item in snapshot.original_stride],
+        "dtype": str(value.dtype),
+        "device": str(snapshot.original_device),
+    }
+
+
+def _checkpoint_identity(provenance: dict[str, Any]) -> dict[str, Any]:
+    """Hash the exact checkpoint file for R after the ordinary bounded provenance pass."""
+    model = provenance.get("model") or {}
+    checkpoint_stat = model.get("checkpoint_stat") or {}
+    raw_path = checkpoint_stat.get("resolved_path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise RuntimeError(
+            "same-state replay requires an exact checkpoint file identity, but the active loader did not expose "
+            "a resolvable checkpoint path"
+        )
+    try:
+        path = Path(raw_path).resolve(strict=True)
+        stat = path.stat()
+    except OSError as exc:
+        raise RuntimeError(f"same-state replay checkpoint path is not readable: {raw_path}") from exc
+    if not path.is_file():
+        raise RuntimeError("same-state replay checkpoint identity requires a regular file")
+    expected_size = checkpoint_stat.get("size")
+    expected_mtime = checkpoint_stat.get("mtime_ns")
+    if expected_size is not None and int(expected_size) != int(stat.st_size):
+        raise RuntimeError("same-state replay checkpoint size changed after provenance collection")
+    if expected_mtime is not None and int(expected_mtime) != int(stat.st_mtime_ns):
+        raise RuntimeError("same-state replay checkpoint mtime changed after provenance collection")
+    return {
+        "resolved_path": str(path),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "sha256": _sha256_file(path),
+    }
 
 
 _DROP_PROVENANCE = object()
@@ -98,12 +158,13 @@ def _experiment_wrapper_entry(value: dict[str, Any]) -> bool:
 
 
 def _normalize_provenance(value: Any, *, path: tuple[str, ...] = ()) -> Any:
-    """Build stable installed-runtime identity while excluding R/O-C instrumentation.
+    """Build stable installed-runtime identity while excluding diagnostic execution state.
 
-    Capture and replay intentionally use different outer wrappers, while the O/C
-    recorder is observation-only. Their wrapper entries cannot be part of the
-    source/backend identity tested by R. Runtime object addresses are likewise
-    execution identity rather than source provenance.
+    Capture and replay intentionally use different R wrappers. The O/C wrappers and
+    runtime-observation extension are diagnostic instrumentation, and collected_ns
+    plus invocation-local alias labels are not source identity. Those fields are
+    excluded while source digests, git state, production wrapper order, injections,
+    hooks, compiler flags, model fingerprint and progressive/provider config remain.
     """
     if isinstance(value, dict):
         if _experiment_wrapper_entry(value):
@@ -112,6 +173,8 @@ def _normalize_provenance(value: Any, *, path: tuple[str, ...] = ()) -> Any:
         for raw_key, item in value.items():
             key = str(raw_key)
             lowered = key.lower()
+            if not path and key in _VOLATILE_PROVENANCE_TOP_LEVEL:
+                continue
             if key == "observer_wrapper_keys":
                 continue
             if "same_state_replay" in lowered:
@@ -147,6 +210,20 @@ def _guidance_config_dict(binding: _runtime.FlowBinding | None) -> dict[str, Any
     raise RuntimeError("same-state replay requires a declarative Flow guidance config")
 
 
+def _spectrum_config_dict(guider: Any) -> dict[str, Any] | None:
+    options = getattr(guider, "model_options", None) or {}
+    binding = options.get(_runtime.SPECTRUM_BINDING_KEY)
+    runtime = getattr(binding, "runtime", None)
+    if runtime is None:
+        return None
+    config = getattr(runtime, "config", None)
+    if config is None:
+        return None
+    if dataclasses.is_dataclass(config):
+        return dataclasses.asdict(config)
+    raise RuntimeError("same-state replay requires a declarative Spectrum H3 config")
+
+
 def _guidance_run(binding: _runtime.FlowBinding | None):
     if binding is None or binding.trajectory is None:
         return None
@@ -174,7 +251,7 @@ def _stage_call(record: _diag._Record, stage: str) -> dict[str, Any] | None:
 
 
 def _runtime_policy_identity(runtime_snapshot: dict[str, Any] | None) -> dict[str, Any]:
-    """Keep call policy/configuration while excluding cumulative backend counters."""
+    """Keep first-high call policy/configuration while excluding cumulative counters."""
     source = runtime_snapshot or {}
     out: dict[str, Any] = {}
     refinement = source.get("h3_refinement")
@@ -222,6 +299,14 @@ def _runtime_policy_identity(runtime_snapshot: dict[str, Any] | None) -> dict[st
         lowered = str(key).lower()
         if lowered.startswith("diffaid") or lowered.startswith("spectrum_h3_external_patch"):
             out[str(key)] = source[key]
+        elif lowered in {
+            "spectrum_h3_actual",
+            "spectrum_h3_solver_phase",
+            "spectrum_h3_outer_step_id",
+            "spectrum_h3_coordinate",
+            "spectrum_h3_reason",
+        }:
+            out[str(key)] = source[key]
     sample_sigmas = source.get("sample_sigmas")
     if isinstance(sample_sigmas, dict):
         out["sample_sigmas"] = {
@@ -244,9 +329,134 @@ def _first_high_policy_snapshot(record: _diag._Record) -> dict[str, Any]:
     return merged
 
 
+def _callable_policy(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: value.get(key)
+        for key in ("module", "qualname", "code_digest", "source_sha256", "bound_owner")
+        if key in value
+    }
+
+
+def _vdn_policy(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "capture": item.get("capture"),
+                "state_type": item.get("state_type"),
+                "owner_wrapper": _callable_policy(item.get("owner_wrapper")),
+                "layout_active": item.get("layout_active"),
+                "layout": item.get("layout"),
+                "retain_buffers": item.get("retain_buffers"),
+                "runtime_pool_retain": item.get("runtime_pool_retain"),
+            }
+        )
+    return out
+
+
+def _sol_policy(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    forward = value.get("forward") if isinstance(value.get("forward"), dict) else {}
+    return {
+        "module_loaded": value.get("module_loaded"),
+        "request_active": value.get("request_active"),
+        "forward_active": value.get("forward_active"),
+        "dense_attention_backends": value.get("dense_attention_backends"),
+        "kernel": value.get("kernel"),
+        "forward_routes": forward.get("routes"),
+    }
+
+
+def _spectrum_policy(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    step = value.get("step") if isinstance(value.get("step"), dict) else {}
+    run = value.get("run") if isinstance(value.get("run"), dict) else {}
+    return {
+        "active_policy_step_id": value.get("active_policy_step_id"),
+        "active_stage_index": value.get("active_stage_index"),
+        "active_solver_phase": value.get("active_solver_phase"),
+        "prediction_history_length": value.get("prediction_history_length"),
+        "step": {
+            key: step.get(key)
+            for key in (
+                "policy_step_id",
+                "coordinate",
+                "mode",
+                "reason",
+                "stage_index",
+                "phase",
+                "retain_history",
+                "bootstrap_forecast",
+                "fallback",
+            )
+            if key in step
+        },
+        "run": {
+            key: run.get(key)
+            for key in (
+                "sampler_name",
+                "total_steps",
+                "policy_steps",
+                "stage_count",
+                "separate_stage_histories",
+                "min_actual_prefix_steps",
+                "min_sampler_actual_prefix_steps",
+            )
+            if key in run
+        },
+    }
+
+
+def _companion_snapshot_policy(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "vdn": _vdn_policy(source.get("vdn")),
+        "sol": _sol_policy(source.get("sol")),
+        "spectrum": _spectrum_policy(source.get("spectrum")),
+    }
+
+
+def _high_first_companion_observation(provenance: dict[str, Any]) -> dict[str, Any] | None:
+    extension = provenance.get(_RUNTIME_OBSERVATION_KEY)
+    if not isinstance(extension, dict):
+        return None
+    calls = extension.get("companion_calls")
+    if not isinstance(calls, dict):
+        return None
+    high_first = calls.get("high_first")
+    return high_first if isinstance(high_first, dict) else None
+
+
+def _high_first_companion_policy(provenance: dict[str, Any]) -> dict[str, Any] | None:
+    observation = _high_first_companion_observation(provenance)
+    if observation is None:
+        return None
+    return {
+        "before": _companion_snapshot_policy(observation.get("before")),
+        "after": _companion_snapshot_policy(observation.get("after")),
+    }
+
+
+def _require_capture_runtime_observation(record: _diag._Record) -> dict[str, Any]:
+    gate = _runtime_observation._runtime_observation_gate({"provenance": record.state.manifest})
+    if not gate.get("runtime_contract_complete"):
+        raise RuntimeError(f"same-state replay capture runtime observation is incomplete: {gate}")
+    return gate
+
+
 def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial:
     if record.error is not None:
         raise RuntimeError(f"cannot export a failed controlled run: {record.error}")
+    if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):
+        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")
     high = _stage_call(record, "high")
     if high is None:
         raise RuntimeError("same-state replay capture did not observe a high-stage sampler lifetime")
@@ -260,6 +470,23 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
     if missing:
         raise RuntimeError("same-state replay capture is missing required tensors: " + ", ".join(missing))
 
+    low_audio = record.snapshots.get("low_sampler_state_audio")
+    high_audio = record.snapshots.get("first_high_sampler_input_audio")
+    if low_audio is None or high_audio is None or not torch.equal(low_audio.tensor, high_audio.tensor):
+        raise RuntimeError("same-state replay capture requires exact carried audio at the handoff")
+
+    runtime_gate = _require_capture_runtime_observation(record)
+    companion_policy = _high_first_companion_policy(record.state.manifest)
+    companion_observation = _high_first_companion_observation(record.state.manifest)
+    if companion_policy is None or companion_observation is None:
+        raise RuntimeError("same-state replay capture is missing first-high companion runtime evidence")
+
+    first_high_policy = _runtime_policy_identity(_first_high_policy_snapshot(record))
+    if "minimax_h3_untwist_rope" in first_high_policy:
+        raise RuntimeError(
+            "same-state replay R is intentionally bounded to the already-failing no-Untwist control"
+        )
+
     binding = _runtime._resolve_binding(guider)
     run = _guidance_run(binding)
     if binding is not None and binding.guidance is not None and binding.guidance.mode != "off" and run is None:
@@ -268,10 +495,10 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
     tensors: dict[str, torch.Tensor] = {}
     for name in _REQUIRED_REPLAY_TENSORS:
         tensors[name] = _cpu_clone(record.snapshots[name].tensor)
+    tensor_contracts = {name: _snapshot_contract(record, name) for name in _REQUIRED_REPLAY_TENSORS}
     if "high_denoise_mask" in record.snapshots:
         tensors["high_denoise_mask"] = _cpu_clone(record.snapshots["high_denoise_mask"].tensor)
-    high_sigmas = torch.tensor([float(value) for value in high["sigmas"]], dtype=torch.float32)
-    tensors["high_sigmas"] = high_sigmas
+        tensor_contracts["high_denoise_mask"] = _snapshot_contract(record, "high_denoise_mask")
 
     guidance_samples: list[dict[str, Any]] = []
     trajectory_meta = None
@@ -304,12 +531,16 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
             )
 
     metric_delta = {}
+    events = ()
     if binding is not None:
         metric_delta = _diag._counter_delta(record.metric_start, binding.metrics.counters)
+        events = binding.metrics.events[record.event_start :]
+    upscaler_calls = sum(1 for event in events if event.kind == "handoff_learned_upscale_wall")
     topology = {
         "logical": int(metric_delta.get("sampler_logical_calls", 0)),
         "actual": int(metric_delta.get("transformer_actual_nfe", 0)),
         "forecast": int(metric_delta.get("spectrum_forecast_calls", 0)),
+        "upscaler_calls": int(upscaler_calls),
         "low": {
             "logical": int(metric_delta.get("sampler_logical_calls_low", 0)),
             "actual": int(metric_delta.get("transformer_actual_nfe_low", 0)),
@@ -326,17 +557,32 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
             "forecast": int(metric_delta.get("spectrum_forecast_calls_high", 0)),
         },
     }
-    if topology != {
+    expected_capture_topology = {
         "logical": 9,
         "actual": 7,
         "forecast": 2,
+        "upscaler_calls": 1,
         "low": {"logical": 5, "actual": 4, "forecast": 1},
         "probe": {"logical": 1, "actual": 1, "forecast": 0},
         "high": {"logical": 3, "actual": 2, "forecast": 1},
-    }:
+    }
+    if topology != expected_capture_topology:
         raise RuntimeError(f"same-state replay capture topology diverged from controlled O: {topology}")
 
+    flow_research_activity = {
+        key: value
+        for key, value in metric_delta.items()
+        if value and any(token in key.lower() for token in _diag._RESEARCH_TOKENS)
+    }
+    companion_receipts = _diag._research_receipts(record.first_high_runtime or {})
+    if flow_research_activity or _diag._all_research_receipts_zero(companion_receipts) is not True:
+        raise RuntimeError(
+            "same-state replay capture requires machine-readable proof that weighted/Mixed-Grid research is inactive"
+        )
+
+    exact_checkpoint = _checkpoint_identity(record.state.manifest)
     tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}
+    provenance_identity = _normalize_provenance(record.state.manifest)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "kind": "minimax_h3_same_state_high_replay",
@@ -361,16 +607,21 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
         "conditioning_digest": str(record.high_pre_core_digest),
         "pristine_conditioning_digest": str(record.pristine_cond_digest),
         "guidance_config": _guidance_config_dict(binding),
+        "spectrum_config": _spectrum_config_dict(guider),
         "trajectory": trajectory_meta,
         "guidance_samples": guidance_samples,
         "expected_snapshot_hashes": _snapshot_hashes(record),
         "tensor_hashes": tensor_hashes,
-        "first_high_runtime_policy": _runtime_policy_identity(_first_high_policy_snapshot(record)),
-        "first_high_runtime_policy_digest": _sha_json(
-            _runtime_policy_identity(_first_high_policy_snapshot(record))
-        ),
-        "provenance_digest": _provenance_digest(record.state.manifest),
-        "provenance_identity": _normalize_provenance(record.state.manifest),
+        "tensor_contracts": tensor_contracts,
+        "first_high_runtime_policy": first_high_policy,
+        "first_high_runtime_policy_digest": _sha_json(first_high_policy),
+        "first_high_companion_policy": companion_policy,
+        "first_high_companion_policy_digest": _sha_json(companion_policy),
+        "first_high_companion_observation": companion_observation,
+        "capture_runtime_observation_gate": runtime_gate,
+        "exact_checkpoint_identity": exact_checkpoint,
+        "provenance_digest": _sha_json(provenance_identity),
+        "provenance_identity": provenance_identity,
         "controlled_topology": topology,
         "contract": {
             "separate_diagnostic_job": True,
@@ -378,6 +629,7 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
             "expected_upscaler_calls": 0,
             "stochastic_state_transport": False,
             "weighted_mixed_grid_active": False,
+            "untwist_active": False,
             "sample_sigmas_owned_by_child_sampler": True,
         },
     }
@@ -428,13 +680,17 @@ def _save_material(material: _ReplayMaterial, output_dir: Path, filename_prefix:
     tensors_tmp = output_dir / f".{stem}.pt.tmp"
     manifest_tmp = output_dir / f".{stem}.json.tmp"
 
-    torch.save(material.tensors, tensors_tmp)
-    manifest = dict(material.manifest)
-    manifest["tensors_file"] = tensors_path.name
-    manifest["tensors_file_sha256"] = hashlib.sha256(tensors_tmp.read_bytes()).hexdigest()
-    manifest_tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tensors_tmp, tensors_path)
-    os.replace(manifest_tmp, manifest_path)
+    try:
+        torch.save(material.tensors, tensors_tmp)
+        manifest = dict(material.manifest)
+        manifest["tensors_file"] = tensors_path.name
+        manifest["tensors_file_sha256"] = _sha256_file(tensors_tmp)
+        manifest_tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tensors_tmp, tensors_path)
+        os.replace(manifest_tmp, manifest_path)
+    finally:
+        tensors_tmp.unlink(missing_ok=True)
+        manifest_tmp.unlink(missing_ok=True)
     return manifest_path, tensors_path
 
 
@@ -450,13 +706,42 @@ def _resolve_manifest_path(value: str) -> Path:
         return candidate.resolve()
 
 
+def _validate_bundle_manifest(manifest: dict[str, Any]) -> None:
+    if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("kind") != "minimax_h3_same_state_high_replay":
+        raise RuntimeError("unsupported same-state replay bundle schema")
+    provenance_identity = manifest.get("provenance_identity")
+    if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
+        raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
+    runtime_policy = manifest.get("first_high_runtime_policy")
+    if not isinstance(runtime_policy, dict) or _sha_json(runtime_policy) != manifest.get("first_high_runtime_policy_digest"):
+        raise RuntimeError("same-state replay first-high runtime policy digest is inconsistent")
+    if "minimax_h3_untwist_rope" in runtime_policy:
+        raise RuntimeError("same-state replay bundle is not the required no-Untwist control")
+    companion_policy = manifest.get("first_high_companion_policy")
+    if not isinstance(companion_policy, dict) or _sha_json(companion_policy) != manifest.get(
+        "first_high_companion_policy_digest"
+    ):
+        raise RuntimeError("same-state replay first-high companion policy digest is inconsistent")
+    checkpoint = manifest.get("exact_checkpoint_identity")
+    if not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("sha256"), str):
+        raise RuntimeError("same-state replay bundle lacks exact checkpoint identity")
+    contract = manifest.get("contract") or {}
+    if contract.get("stochastic_state_transport") is not False:
+        raise RuntimeError("same-state replay bundle attempts stochastic-state transport")
+    if contract.get("weighted_mixed_grid_active") is not False:
+        raise RuntimeError("same-state replay bundle has weighted Mixed-Grid research active")
+    if contract.get("untwist_active") is not False:
+        raise RuntimeError("same-state replay bundle is not the no-Untwist control")
+
+
 def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, torch.Tensor]]:
     manifest_path = _resolve_manifest_path(manifest_value)
     if not manifest_path.is_file():
         raise FileNotFoundError(f"same-state replay manifest not found: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("kind") != "minimax_h3_same_state_high_replay":
-        raise RuntimeError("unsupported same-state replay bundle schema")
+    if not isinstance(manifest, dict):
+        raise RuntimeError("same-state replay manifest root must be a dictionary")
+    _validate_bundle_manifest(manifest)
     tensors_name = manifest.get("tensors_file")
     if not isinstance(tensors_name, str) or Path(tensors_name).name != tensors_name:
         raise RuntimeError("same-state replay manifest has an invalid tensor filename")
@@ -464,7 +749,7 @@ def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, t
     if not tensors_path.is_file():
         raise FileNotFoundError(f"same-state replay tensor file not found: {tensors_path}")
     expected_file_hash = manifest.get("tensors_file_sha256")
-    actual_file_hash = hashlib.sha256(tensors_path.read_bytes()).hexdigest()
+    actual_file_hash = _sha256_file(tensors_path)
     if not isinstance(expected_file_hash, str) or actual_file_hash != expected_file_hash:
         raise RuntimeError("same-state replay tensor file hash mismatch")
     try:
@@ -477,10 +762,25 @@ def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, t
         isinstance(key, str) and torch.is_tensor(value) for key, value in tensors.items()
     ):
         raise RuntimeError("same-state replay tensor payload is not a pure tensor dictionary")
-    expected_hashes = manifest.get("tensor_hashes") or {}
+    expected_hashes = manifest.get("tensor_hashes")
+    if not isinstance(expected_hashes, dict) or not expected_hashes or set(tensors) != set(expected_hashes):
+        raise RuntimeError("same-state replay tensor payload keys differ from the manifest")
     for key, expected in expected_hashes.items():
-        if key not in tensors or _tensor_sha256(tensors[key]) != expected:
+        if not isinstance(expected, str) or _tensor_sha256(tensors[key]) != expected:
             raise RuntimeError(f"same-state replay tensor digest mismatch for {key}")
+    contracts = manifest.get("tensor_contracts")
+    if not isinstance(contracts, dict):
+        raise RuntimeError("same-state replay bundle lacks tensor contracts")
+    for key, contract in contracts.items():
+        if key not in tensors or not isinstance(contract, dict):
+            raise RuntimeError(f"same-state replay tensor contract is invalid for {key}")
+        value = tensors[key]
+        if [int(dim) for dim in value.shape] != contract.get("shape"):
+            raise RuntimeError(f"same-state replay tensor shape differs from contract for {key}")
+        if str(value.dtype) != contract.get("dtype"):
+            raise RuntimeError(f"same-state replay tensor dtype differs from contract for {key}")
+        if [int(item) for item in value.stride()] != contract.get("stride"):
+            raise RuntimeError(f"same-state replay tensor stride differs from contract for {key}")
     return manifest_path, manifest, tensors
 
 
@@ -494,7 +794,15 @@ def _rebuild_trajectory(
         if samples:
             raise RuntimeError("same-state replay bundle has guidance samples without trajectory metadata")
         return None, None
-    geometry = H3Geometry(**{key: int(value) for key, value in trajectory_meta["geometry"].items()})
+    if not isinstance(trajectory_meta, dict) or int(trajectory_meta.get("schema_version", -1)) != 1:
+        raise RuntimeError("same-state replay trajectory schema is unsupported")
+    if not isinstance(samples, list):
+        raise RuntimeError("same-state replay guidance samples must be a list")
+    geometry_payload = trajectory_meta.get("geometry")
+    geometry_fields = {field.name for field in dataclasses.fields(H3Geometry)}
+    if not isinstance(geometry_payload, dict) or set(geometry_payload) != geometry_fields:
+        raise RuntimeError("same-state replay trajectory geometry is incomplete")
+    geometry = H3Geometry(**{key: int(value) for key, value in geometry_payload.items()})
     trajectory = H3FlowTrajectory(storage="system_ram", max_runs=1)
     run_id = trajectory.begin(
         session_id=str(trajectory_meta["session_id"]),
@@ -507,9 +815,14 @@ def _rebuild_trajectory(
         conditioning_signature=str(trajectory_meta["conditioning_signature"]),
     )
     for item in samples:
+        if not isinstance(item, dict):
+            raise RuntimeError("same-state replay guidance sample metadata is invalid")
         tensor_key = str(item["tensor_key"])
         if tensor_key not in tensors:
             raise RuntimeError(f"same-state replay bundle is missing trajectory tensor {tensor_key}")
+        provenance = str(item["provenance"])
+        if provenance not in {"actual", "forecast"}:
+            raise RuntimeError("same-state replay trajectory sample has invalid provenance")
         trajectory.append(
             run_id,
             TrajectorySample(
@@ -519,7 +832,7 @@ def _rebuild_trajectory(
                 outer_step=int(item["outer_step"]),
                 call_index=int(item["call_index"]),
                 phase=str(item["phase"]),
-                provenance=str(item["provenance"]),
+                provenance=provenance,
                 video_x0=tensors[tensor_key],
             ),
         )
@@ -534,6 +847,26 @@ def _dict_equal(left: Any, right: Any) -> bool:
 def _live_snapshot_hash(record: _diag._Record, name: str) -> str | None:
     snapshot = record.snapshots.get(name)
     return None if snapshot is None else _tensor_sha256(snapshot.tensor)
+
+
+def _tensor_for_replay(state: _ReplayState, name: str) -> torch.Tensor:
+    value = state.tensors[name]
+    contract = (state.manifest.get("tensor_contracts") or {}).get(name)
+    if not isinstance(contract, dict):
+        raise RuntimeError(f"same-state replay lacks tensor contract for {name}")
+    device_name = contract.get("device")
+    if not isinstance(device_name, str) or not device_name:
+        raise RuntimeError(f"same-state replay tensor device contract is invalid for {name}")
+    try:
+        device = torch.device(device_name)
+    except (RuntimeError, TypeError) as exc:
+        raise RuntimeError(f"same-state replay tensor device is invalid for {name}: {device_name}") from exc
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(f"same-state replay requires captured CUDA device for {name}: {device_name}")
+    restored = value.to(device=device)
+    if [int(item) for item in restored.stride()] != contract.get("stride"):
+        raise RuntimeError(f"same-state replay could not restore captured tensor stride for {name}")
+    return restored
 
 
 def _replay_wrapper(
@@ -566,6 +899,8 @@ def _replay_wrapper(
     record = _diag._ACTIVE.get()
     if record is None:
         raise RuntimeError("same-state replay must run inside MiniMax H3 Execution Contract Diagnostics")
+    if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):
+        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")
     if not isinstance(options, dict):
         raise RuntimeError("same-state replay requires mutable guider model options")
     config = options.get(_runtime.PROGRESSIVE_KEY)
@@ -587,43 +922,46 @@ def _replay_wrapper(
         raise RuntimeError("same-state replay caller schedule differs from the captured original schedule")
     if record.pristine_cond_digest != str(state.manifest["pristine_conditioning_digest"]):
         raise RuntimeError("same-state replay pristine target conditioning differs from capture")
-    if _provenance_digest(record.state.manifest) != str(state.manifest["provenance_digest"]):
+    current_provenance = _normalize_provenance(record.state.manifest)
+    if _sha_json(current_provenance) != str(state.manifest["provenance_digest"]):
         raise RuntimeError("same-state replay installed runtime provenance differs from capture")
+    current_checkpoint = _checkpoint_identity(record.state.manifest)
+    if not _dict_equal(current_checkpoint, state.manifest.get("exact_checkpoint_identity")):
+        raise RuntimeError("same-state replay exact checkpoint identity differs from capture")
 
     binding = _runtime._resolve_binding(guider)
     if binding is None:
         raise RuntimeError("same-state replay requires the active Flow binding")
+    if binding.active_capture is not None or binding.active_guidance_run is not None:
+        raise RuntimeError("same-state replay entered with stale Flow capture/guidance state")
     current_guidance = _guidance_config_dict(binding)
     if not _dict_equal(current_guidance, state.manifest.get("guidance_config")):
         raise RuntimeError("same-state replay Flow guidance config differs from capture")
+    current_spectrum_config = _spectrum_config_dict(guider)
+    if not _dict_equal(current_spectrum_config, state.manifest.get("spectrum_config")):
+        raise RuntimeError("same-state replay Spectrum H3 config differs from capture")
 
     trajectory, run_id = _rebuild_trajectory(state.manifest, state.tensors)
     if current_guidance is not None and current_guidance.get("mode") != "off" and trajectory is None:
         raise RuntimeError("same-state replay guidance is active but bundle has no captured trajectory")
 
-    high_sigmas = state.tensors["high_sigmas"].to(dtype=sigmas.dtype, device=sigmas.device)
-    captured_high = torch.tensor(
-        [float(value) for value in state.manifest["high_sigmas"]],
-        dtype=high_sigmas.dtype,
-        device=high_sigmas.device,
-    )
-    if high_sigmas.shape != captured_high.shape or not torch.equal(high_sigmas, captured_high):
+    handoff_index = int(state.manifest["handoff_index"])
+    high_sigmas = sigmas[handoff_index:]
+    captured_high = [float(value) for value in state.manifest["high_sigmas"]]
+    if [float(value) for value in high_sigmas.detach().to(device="cpu", dtype=torch.float64).tolist()] != captured_high:
         raise RuntimeError("same-state replay high suffix differs from captured high suffix")
 
-    replay_latent = state.tensors["high_latent_image"].to(device=latent_image.device, dtype=latent_image.dtype)
-    replay_mask = state.tensors.get("high_denoise_mask")
-    if replay_mask is not None:
-        replay_mask = replay_mask.to(device=denoise_mask.device if denoise_mask is not None else latent_image.device)
+    replay_latent = _tensor_for_replay(state, "high_latent_image")
+    replay_mask = None
+    if "high_denoise_mask" in state.tensors:
+        replay_mask = _tensor_for_replay(state, "high_denoise_mask")
 
     # R owns the exact high-entry state X. Reconstruct the sampler noise through
     # Flow/Comfy's reviewed inverse rather than trusting a serialized noise
-    # argument. This is the architecture's same-X, same-Linternal replay gate.
-    state_video = state.tensors["first_high_sampler_input_video"].to(
-        device=latent_image.device, dtype=latent_image.dtype
-    )
-    state_audio = state.tensors["first_high_sampler_input_audio"].to(
-        device=latent_image.device, dtype=latent_image.dtype
-    )
+    # argument. Restore X on its captured device and dtype so the inverse follows
+    # the same arithmetic domain as the original progressive handoff.
+    state_video = _tensor_for_replay(state, "first_high_sampler_input_video")
+    state_audio = _tensor_for_replay(state, "first_high_sampler_input_audio")
     replay_state, replay_shapes = pack_streams((state_video, state_audio))
     if [tuple(int(dim) for dim in shape) for shape in replay_shapes] != target_shapes:
         raise RuntimeError("same-state replay packed X geometry differs from captured target geometry")
@@ -635,7 +973,9 @@ def _replay_wrapper(
         float(state.manifest["handoff_sigma"]),
         replay_latent_internal,
     )
-    captured_noise = state.tensors["high_noise_argument"].to(device=replay_noise.device, dtype=replay_noise.dtype)
+    captured_noise = _tensor_for_replay(state, "high_noise_argument").to(
+        device=replay_noise.device, dtype=replay_noise.dtype
+    )
     if not torch.equal(replay_noise, captured_noise):
         raise RuntimeError(
             "same-state replay exact initialization inverse did not reconstruct the captured high noise argument"
@@ -644,7 +984,6 @@ def _replay_wrapper(
     if bool(denoise_mask is not None) != expected_mask:
         raise RuntimeError("same-state replay caller mask presence differs from captured high stage")
 
-    handoff_index = int(state.manifest["handoff_index"])
     original_steps = len(state.manifest["original_sigmas"]) - 1
 
     def replay_callback(step, x0, x, _total):
@@ -715,6 +1054,14 @@ def _replay_wrapper(
                 "equal": current_hash is not None and expected_hash is not None and current_hash == expected_hash,
             }
         runtime_policy = _runtime_policy_identity(_first_high_policy_snapshot(record))
+        runtime_policy_exact = _sha_json(runtime_policy) == state.manifest.get("first_high_runtime_policy_digest")
+        untwist_absent = "minimax_h3_untwist_rope" not in runtime_policy
+        companion_observation = _high_first_companion_observation(record.state.manifest)
+        companion_policy = _high_first_companion_policy(record.state.manifest)
+        companion_policy_exact = (
+            companion_policy is not None
+            and _sha_json(companion_policy) == state.manifest.get("first_high_companion_policy_digest")
+        )
         topology = {
             "logical": int(metric_delta.get("sampler_logical_calls", 0)),
             "actual": int(metric_delta.get("transformer_actual_nfe", 0)),
@@ -733,6 +1080,37 @@ def _replay_wrapper(
             "high_forecast": 1,
             "upscaler_calls": 0,
         }
+        condition_exact = record.high_pre_core_digest == state.manifest.get("conditioning_digest")
+        provenance_exact = _sha_json(_normalize_provenance(record.state.manifest)) == state.manifest.get(
+            "provenance_digest"
+        )
+        guidance_exact = _dict_equal(current_guidance, state.manifest.get("guidance_config"))
+        spectrum_config_exact = _dict_equal(current_spectrum_config, state.manifest.get("spectrum_config"))
+        attribution_valid = bool(
+            replay_error is None
+            and topology == expected_topology
+            and condition_exact
+            and provenance_exact
+            and guidance_exact
+            and spectrum_config_exact
+            and runtime_policy_exact
+            and companion_policy_exact
+            and untwist_absent
+            and equality["first_high_sampler_input_video"]["equal"]
+            and equality["first_high_sampler_input_audio"]["equal"]
+            and equality["first_high_h3_input_video"]["equal"]
+            and equality["first_high_h3_input_audio"]["equal"]
+        )
+        first_high_raw_equal = bool(
+            equality["first_high_model_raw_video"]["equal"]
+            and equality["first_high_model_raw_audio"]["equal"]
+        )
+        if not attribution_valid:
+            decision = "invalid-attribution: replay contract differs from capture"
+        elif first_high_raw_equal:
+            decision = "same-output: retained low/probe/reload lifecycle cause weakened"
+        else:
+            decision = "different-output: retained lifecycle state implicated"
         state.complete.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -743,41 +1121,29 @@ def _replay_wrapper(
                 "cold_process_required": True,
                 "topology": topology,
                 "topology_exact": topology == expected_topology,
-                "condition_pre_core_equal": record.high_pre_core_digest
-                == state.manifest.get("conditioning_digest"),
-                "provenance_exact": _provenance_digest(record.state.manifest)
-                == state.manifest.get("provenance_digest"),
-                "guidance_config_exact": _dict_equal(current_guidance, state.manifest.get("guidance_config")),
+                "condition_pre_core_equal": condition_exact,
+                "provenance_exact": provenance_exact,
+                "checkpoint_identity_exact": _dict_equal(
+                    current_checkpoint, state.manifest.get("exact_checkpoint_identity")
+                ),
+                "guidance_config_exact": guidance_exact,
+                "spectrum_config_exact": spectrum_config_exact,
                 "runtime_policy": runtime_policy,
                 "runtime_policy_digest": _sha_json(runtime_policy),
-                "runtime_policy_exact": _sha_json(runtime_policy)
-                == state.manifest.get("first_high_runtime_policy_digest"),
+                "runtime_policy_exact": runtime_policy_exact,
+                "untwist_absent": untwist_absent,
+                "companion_policy": companion_policy,
+                "companion_policy_exact": companion_policy_exact,
+                "capture_companion_observation": state.manifest.get("first_high_companion_observation"),
+                "replay_companion_observation": companion_observation,
                 "snapshot_equality": equality,
-                "first_high_raw_equal": bool(
-                    equality["first_high_model_raw_video"]["equal"]
-                    and equality["first_high_model_raw_audio"]["equal"]
-                ),
+                "first_high_raw_equal": first_high_raw_equal,
                 "first_high_h3_velocity_equal": bool(
                     equality["first_high_h3_velocity_video"]["equal"]
                     and equality["first_high_h3_velocity_audio"]["equal"]
                 ),
-                "attribution_valid": bool(
-                    replay_error is None
-                    and topology == expected_topology
-                    and record.high_pre_core_digest == state.manifest.get("conditioning_digest")
-                    and _provenance_digest(record.state.manifest) == state.manifest.get("provenance_digest")
-                    and _dict_equal(current_guidance, state.manifest.get("guidance_config"))
-                    and _sha_json(runtime_policy) == state.manifest.get("first_high_runtime_policy_digest")
-                    and equality["first_high_sampler_input_video"]["equal"]
-                    and equality["first_high_sampler_input_audio"]["equal"]
-                    and equality["first_high_h3_input_video"]["equal"]
-                    and equality["first_high_h3_input_audio"]["equal"]
-                ),
-                "decision": (
-                    "same-output: retained lifecycle cause weakened"
-                    if equality["first_high_model_raw_video"]["equal"]
-                    else "different-output: retained lifecycle state implicated if attribution_valid"
-                ),
+                "attribution_valid": attribution_valid,
+                "decision": decision,
             }
         )
 
@@ -837,8 +1203,8 @@ def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _Repla
 class H3SameStateReplayCapture:
     CATEGORY = "MiniMax H3/flow regenerate/diagnostic"
     DESCRIPTION = (
-        "Experiment R capture. Apply after MiniMax H3 Execution Contract Diagnostics for one unchanged controlled "
-        "progressive run. It records exact high-entry tensors plus the low/probe guidance trajectory; it changes no "
+        "Experiment R capture for the no-Untwist controlled reproduction. Apply after MiniMax H3 Execution Contract "
+        "Diagnostics. It records exact high-entry tensors plus the low/probe guidance trajectory; it changes no "
         "sampler/model state and adds no H3 or upscaler call."
     )
     RETURN_TYPES = ("MODEL", "H3_FLOW_HIGH_REPLAY_CAPTURE")
@@ -893,9 +1259,9 @@ class H3SameStateReplayBundleSave:
 class H3SameStateHighReplay:
     CATEGORY = "MiniMax H3/flow regenerate/diagnostic"
     DESCRIPTION = (
-        "Experiment R cold high-only replay. Apply after MiniMax H3 Execution Contract Diagnostics in a fresh Comfy "
-        "process. It executes only the captured high suffix with the captured entry state and guidance anchors; low, "
-        "probe and learned upscaler are not executed."
+        "Experiment R cold high-only replay for the no-Untwist control. Apply after MiniMax H3 Execution Contract "
+        "Diagnostics in a fresh Comfy process. It executes only the captured high suffix with the captured entry "
+        "state and guidance anchors; low, probe and learned upscaler are not executed."
     )
     RETURN_TYPES = ("MODEL", "H3_FLOW_HIGH_REPLAY")
     RETURN_NAMES = ("model", "replay")
