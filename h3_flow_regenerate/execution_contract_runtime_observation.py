@@ -30,16 +30,33 @@ _PREPARE_KEY = "h3_flow_regenerate.exec_contract.prepare_lifecycle.v1"
 _DIFFUSION_KEY = "h3_flow_regenerate.exec_contract.companion_runtime.v1"
 _REQUIRED_STAGES = ("low", "probe", "high")
 _REQUIRED_COMPANION_SLOTS = ("low_last", "probe", "high_first", "high_last")
+_MAX_MODIFIED_MODULES = 1024
 
 
 def _runtime_callable_signature(value: Any) -> dict[str, Any]:
     identity = _provenance.callable_identity(value)
     source = identity.get("file") or {}
+    material = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str).encode()
+    owner = getattr(value, "__self__", None)
+    owner_summary = None
+    if owner is not None:
+        owner_summary = {"type": f"{type(owner).__module__}.{type(owner).__qualname__}"}
+        multiplier = getattr(owner, "multiplier", None)
+        if isinstance(multiplier, (bool, int, float, str, type(None))):
+            owner_summary["multiplier"] = multiplier
+        adapter = getattr(owner, "adapter", None)
+        if adapter is not None:
+            owner_summary["adapter_type"] = f"{type(adapter).__module__}.{type(adapter).__qualname__}"
+        module = getattr(owner, "module", None)
+        if module is not None:
+            owner_summary["module_type"] = f"{type(module).__module__}.{type(module).__qualname__}"
     return {
         "module": identity.get("module"),
         "qualname": identity.get("qualname"),
         "code_digest": identity.get("code_digest"),
+        "identity_digest": hashlib.sha256(material).hexdigest(),
         "source_sha256": source.get("sha256"),
+        "bound_owner": owner_summary,
     }
 
 
@@ -103,6 +120,51 @@ def _object_patch_manifest(model: Any) -> dict[str, Any]:
     }
 
 
+def _modified_module_manifest(diffusion: Any) -> dict[str, Any]:
+    """Capture loaded instance-forward replacements and native forward hooks.
+
+    VDN object patches and Comfy bypass adapters replace nested module ``forward``
+    methods at runtime. Looking only at transformer blocks would miss those paths.
+    The list is explicitly bounded; truncation fails the structural observation gate.
+    """
+
+    named_modules = getattr(diffusion, "named_modules", None)
+    if not callable(named_modules):
+        return {"count": 0, "limit": _MAX_MODIFIED_MODULES, "truncated": False, "digest": None, "modules": []}
+
+    entries = []
+    observed = 0
+    for path, module in named_modules():
+        namespace = getattr(module, "__dict__", None)
+        instance_forward = isinstance(namespace, dict) and "forward" in namespace
+        pre_hooks = getattr(module, "_forward_pre_hooks", {}) or {}
+        post_hooks = getattr(module, "_forward_hooks", {}) or {}
+        if not instance_forward and not pre_hooks and not post_hooks:
+            continue
+        observed += 1
+        if len(entries) >= _MAX_MODIFIED_MODULES:
+            continue
+        state = _module_hook_state(module)
+        if state is None:
+            continue
+        entries.append(
+            {
+                "path": str(path or "$"),
+                "instance_forward_override": bool(instance_forward),
+                **state,
+            }
+        )
+
+    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return {
+        "count": observed,
+        "limit": _MAX_MODIFIED_MODULES,
+        "truncated": observed > _MAX_MODIFIED_MODULES,
+        "digest": hashlib.sha256(encoded).hexdigest(),
+        "modules": entries,
+    }
+
+
 def model_lifecycle_manifest(
     model: Any,
     *,
@@ -129,7 +191,18 @@ def model_lifecycle_manifest(
         post_count += len(state["post_hooks"])
         block_state.append({"block": index, **state})
 
-    encoded = json.dumps(block_state, sort_keys=True, separators=(",", ":"), default=str).encode()
+    block_encoded = json.dumps(block_state, sort_keys=True, separators=(",", ":"), default=str).encode()
+    modified_modules = _modified_module_manifest(diffusion)
+    lifecycle_material = {
+        "blocks": block_state,
+        "modified_modules": modified_modules["modules"],
+    }
+    lifecycle_encoded = json.dumps(
+        lifecycle_material,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode()
     return {
         "patcher_is_injected": bool(getattr(model, "is_injected", False)),
         "load_device": str(getattr(model, "load_device", None)),
@@ -142,16 +215,18 @@ def model_lifecycle_manifest(
         "block_count": len(block_state),
         "block_pre_hook_count": pre_count,
         "block_post_hook_count": post_count,
-        "block_runtime_digest": hashlib.sha256(encoded).hexdigest(),
+        "block_runtime_digest": hashlib.sha256(block_encoded).hexdigest(),
+        "runtime_lifecycle_digest": hashlib.sha256(lifecycle_encoded).hexdigest(),
+        "modified_modules": modified_modules,
         "blocks": block_state,
     }
 
 
 def _extension_manifest(state: Any) -> dict[str, Any]:
-    manifest = state.manifest.setdefault(
+    return state.manifest.setdefault(
         _EXTENSION_KEY,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "observer_wrapper_keys": {
                 "prepare_sampling": [_PREPARE_KEY],
                 "diffusion_model": [_DIFFUSION_KEY],
@@ -159,9 +234,17 @@ def _extension_manifest(state: Any) -> dict[str, Any]:
             "stage_lifecycles": [],
             "diffusion_actual_counts": {},
             "companion_calls": {},
+            "observation_errors": [],
         },
     )
-    return manifest
+
+
+def _record_observation_error(state: Any, scope: str, exc: Exception) -> str:
+    message = f"{scope}: {type(exc).__name__}: {exc}"
+    extension = _extension_manifest(state)
+    if message not in extension["observation_errors"]:
+        extension["observation_errors"].append(message)
+    return message
 
 
 def _stage_name(model_options: dict[str, Any] | None) -> str:
@@ -202,15 +285,17 @@ def _prepare_sampling_wrapper(
                 }
             )
 
-    extension = _extension_manifest(record.state)
-    extension["stage_lifecycles"].append(
-        {
-            "stage": _stage_name(model_options),
-            "capture_phase": "post_prepare_sampling_load",
-            "model": model_lifecycle_manifest(model, model_options=model_options),
-            "additional_models": additional_models,
-        }
-    )
+    entry = {
+        "stage": _stage_name(model_options),
+        "capture_phase": "post_prepare_sampling_load",
+        "additional_models": additional_models,
+    }
+    try:
+        entry["model"] = model_lifecycle_manifest(model, model_options=model_options)
+    except Exception as exc:
+        entry["model"] = {}
+        entry["observation_error"] = _record_observation_error(record.state, "post_prepare_sampling_load", exc)
+    _extension_manifest(record.state)["stage_lifecycles"].append(entry)
     return result
 
 
@@ -276,9 +361,7 @@ def _vdn_runtime_snapshot(executor: Any) -> list[dict[str, Any]]:
                     "layout": layout_fields,
                     "retain_buffers": bool(getattr(captured, "retain_buffers", False)),
                     "runtime_pool_active": resources is not None,
-                    "runtime_pool_retain": (
-                        None if resources is None else bool(getattr(resources, "retain", False))
-                    ),
+                    "runtime_pool_retain": None if resources is None else bool(getattr(resources, "retain", False)),
                     "runtime_pool_generation": _provenance.safe_value(generation),
                     "retained_counts": retained_counts() if callable(retained_counts) else None,
                 }
@@ -445,17 +528,37 @@ def _active_companion_snapshot(
     }
 
 
+def _guarded_companion_snapshot(
+    state: Any,
+    scope: str,
+    executor: Any,
+    transformer: dict[str, Any] | None,
+    root_model_options: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str | None]:
+    try:
+        return _active_companion_snapshot(executor, transformer, root_model_options), None
+    except Exception as exc:
+        return {}, _record_observation_error(state, scope, exc)
+
+
 def _store_companion_call(
     state: Any,
     stage: str,
     before: dict[str, Any],
     after: dict[str, Any],
+    errors: list[str],
 ) -> None:
     extension = _extension_manifest(state)
     counts = extension["diffusion_actual_counts"]
     count = int(counts.get(stage, 0)) + 1
     counts[stage] = count
-    entry = {"stage": stage, "actual_index": count, "before": before, "after": after}
+    entry = {
+        "stage": stage,
+        "actual_index": count,
+        "before": before,
+        "after": after,
+        "observation_errors": errors,
+    }
     slots = extension["companion_calls"]
     if stage == "low":
         slots["low_last"] = entry
@@ -481,10 +584,23 @@ def _make_diffusion_wrapper(root_model_options: dict[str, Any]):
                     transformer = candidate
                     break
 
-        before = _active_companion_snapshot(executor, transformer, root_model_options)
+        before, before_error = _guarded_companion_snapshot(
+            record.state,
+            f"{stage}:before_diffusion_model",
+            executor,
+            transformer,
+            root_model_options,
+        )
         result = executor(*args, **kwargs)
-        after = _active_companion_snapshot(executor, transformer, root_model_options)
-        _store_companion_call(record.state, str(stage), before, after)
+        after, after_error = _guarded_companion_snapshot(
+            record.state,
+            f"{stage}:after_diffusion_model",
+            executor,
+            transformer,
+            root_model_options,
+        )
+        errors = [item for item in (before_error, after_error) if item is not None]
+        _store_companion_call(record.state, str(stage), before, after, errors)
         return result
 
     return wrapper
@@ -495,6 +611,7 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
     extension = provenance.get(_EXTENSION_KEY) or {}
     lifecycles = extension.get("stage_lifecycles") or []
     companion_calls = extension.get("companion_calls") or {}
+    observation_errors = extension.get("observation_errors") or []
 
     by_stage: dict[str, list[dict[str, Any]]] = {}
     for entry in lifecycles:
@@ -503,18 +620,25 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
 
     stage_lifecycle_complete = all(by_stage.get(stage) for stage in _REQUIRED_STAGES)
     injection_state_consistent = stage_lifecycle_complete and all(
-        not entry.get("model", {}).get("active_injections")
-        or bool(entry.get("model", {}).get("patcher_is_injected"))
+        not entry.get("model", {}).get("active_injections") or bool(entry.get("model", {}).get("patcher_is_injected"))
         for stage in _REQUIRED_STAGES
         for entry in by_stage.get(stage, [])
     )
-    digests = [
-        entry.get("model", {}).get("block_runtime_digest")
+    lifecycle_digests = [
+        entry.get("model", {}).get("runtime_lifecycle_digest")
         for stage in _REQUIRED_STAGES
         for entry in by_stage.get(stage, [])
-        if entry.get("model", {}).get("block_runtime_digest")
+        if entry.get("model", {}).get("runtime_lifecycle_digest")
     ]
-    hook_runtime_stable = bool(digests) and len(set(digests)) == 1
+    hook_runtime_stable = bool(lifecycle_digests) and len(set(lifecycle_digests)) == 1
+    modified_states = [
+        entry.get("model", {}).get("modified_modules") or {}
+        for stage in _REQUIRED_STAGES
+        for entry in by_stage.get(stage, [])
+    ]
+    modified_runtime_visible = bool(modified_states) and all(
+        int(state.get("count", 0)) > 0 and not bool(state.get("truncated")) for state in modified_states
+    )
     companion_slots_complete = all(slot in companion_calls for slot in _REQUIRED_COMPANION_SLOTS)
 
     high_first = companion_calls.get("high_first") or {}
@@ -537,27 +661,35 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         for snapshot in (before, after)
         if isinstance(snapshot, dict) and isinstance(snapshot.get("spectrum"), dict)
     )
+    observation_error_free = not observation_errors
 
     runtime_contract_complete = all(
         (
             stage_lifecycle_complete,
             injection_state_consistent,
             hook_runtime_stable,
+            modified_runtime_visible,
             companion_slots_complete,
             sol_visible,
             vdn_visible,
             spectrum_visible,
+            observation_error_free,
         )
     )
     return {
         "stage_lifecycle_complete": stage_lifecycle_complete,
         "injection_state_consistent": injection_state_consistent,
         "hook_runtime_stable": hook_runtime_stable,
-        "block_runtime_digests": digests,
+        "runtime_lifecycle_digests": lifecycle_digests,
+        "modified_runtime_visible": modified_runtime_visible,
+        "modified_module_counts": [int(state.get("count", 0)) for state in modified_states],
+        "modified_module_truncated": [bool(state.get("truncated")) for state in modified_states],
         "companion_slots_complete": companion_slots_complete,
         "sol_active_high_first_visible": sol_visible,
         "vdn_active_high_first_visible": vdn_visible,
         "spectrum_active_high_first_visible": spectrum_visible,
+        "observation_error_free": observation_error_free,
+        "observation_errors": observation_errors,
         "runtime_contract_complete": runtime_contract_complete,
     }
 
@@ -606,9 +738,7 @@ class H3ExecutionContractReport(_diag.H3ExecutionContractReport):
         base_structural = bool(observation_gate.get("structural_candidate"))
         observation_gate["base_structural_candidate"] = base_structural
         observation_gate["runtime_contract"] = runtime_gate
-        observation_gate["structural_candidate"] = bool(
-            base_structural and runtime_gate["runtime_contract_complete"]
-        )
+        observation_gate["structural_candidate"] = bool(base_structural and runtime_gate["runtime_contract_complete"])
         return (json.dumps(report, indent=2, sort_keys=True, default=str),)
 
 
