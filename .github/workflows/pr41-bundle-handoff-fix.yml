@@ -58,7 +58,7 @@ jobs:
               ds = ds.replace('pointing to the Job-1 bundle manifest', 'with `bundle=[latest]` (default), or select a specific saved manifest from its bundle dropdown')
               ds = ds.replace('bundle manifest path', 'saved bundle selector')
               d.write_text(ds)
-      - run: ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py docs/FIRST_HIGH_STAGE_SAME_STATE_REPLAY.md
+      - run: ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
       - run: ruff check h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
       - run: pytest -q tests/test_same_state_high_replay.py
       - run: python -m compileall -q h3_flow_regenerate
