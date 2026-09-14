@@ -3,13 +3,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from h3_flow_regenerate import execution_contract_diagnostics as diag, runtime
+from h3_flow_regenerate import execution_contract_diagnostics as diag
+from h3_flow_regenerate import runtime
 from h3_flow_regenerate.untwist_clock_trial import (
     FLOW_SAMPLING_CONTEXT_KEY,
     _build_sampling_context,
     _trial_stage_wrapper,
 )
-
 
 CONTROLLED_SIGMAS = (
     1.0,
