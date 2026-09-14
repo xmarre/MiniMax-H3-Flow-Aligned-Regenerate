@@ -297,15 +297,18 @@ def _runtime_policy_identity(runtime_snapshot: dict[str, Any] | None) -> dict[st
         out["sol_h3_runtime_v1"] = {key: sol.get(key) for key in keys if key in sol}
     for key in sorted(source):
         lowered = str(key).lower()
-        if lowered.startswith("diffaid") or lowered.startswith("spectrum_h3_external_patch"):
-            out[str(key)] = source[key]
-        elif lowered in {
-            "spectrum_h3_actual",
-            "spectrum_h3_solver_phase",
-            "spectrum_h3_outer_step_id",
-            "spectrum_h3_coordinate",
-            "spectrum_h3_reason",
-        }:
+        if (
+            lowered.startswith("diffaid")
+            or lowered.startswith("spectrum_h3_external_patch")
+            or lowered
+            in {
+                "spectrum_h3_actual",
+                "spectrum_h3_solver_phase",
+                "spectrum_h3_outer_step_id",
+                "spectrum_h3_coordinate",
+                "spectrum_h3_reason",
+            }
+        ):
             out[str(key)] = source[key]
     sample_sigmas = source.get("sample_sigmas")
     if isinstance(sample_sigmas, dict):
@@ -713,7 +716,10 @@ def _validate_bundle_manifest(manifest: dict[str, Any]) -> None:
     if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
         raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
     runtime_policy = manifest.get("first_high_runtime_policy")
-    if not isinstance(runtime_policy, dict) or _sha_json(runtime_policy) != manifest.get("first_high_runtime_policy_digest"):
+    if (
+        not isinstance(runtime_policy, dict)
+        or _sha_json(runtime_policy) != manifest.get("first_high_runtime_policy_digest")
+    ):
         raise RuntimeError("same-state replay first-high runtime policy digest is inconsistent")
     if "minimax_h3_untwist_rope" in runtime_policy:
         raise RuntimeError("same-state replay bundle is not the required no-Untwist control")
