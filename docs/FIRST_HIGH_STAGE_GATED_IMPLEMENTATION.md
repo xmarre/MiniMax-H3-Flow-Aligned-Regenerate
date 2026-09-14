@@ -7,15 +7,20 @@ the authoritative specification.
 
 ## Scope implemented in this branch
 
-This branch implements the **O (observation)** and **C (conditioning comparison)**
-prerequisites only. It does **not** implement a production sampling change and it
-does not select or activate U, R, B, or A. Selection of a controlled experiment
-remains gated on the captured O/C evidence and the missing external artifacts
-listed below.
+This branch contains the **O (observation)** and **C (conditioning comparison)**
+prerequisites plus the bounded **R (same-state cold high replay)** diagnostic.
+It does **not** implement a production sampling change and does not activate U,
+B, or A. R is an attribution experiment only; a production change remains gated
+on valid CUDA/media evidence.
 
-The diagnostic is deliberately stacked on PR #36's branch. It does not modify
-PR #33, PR #35, or PR #36 source files. PR #37 remains a separate diagnostic
-branch. Closed PRs #39 and #40 are not incorporated.
+The artifact has been reproduced with Untwist absent from the workflow. Untwist
+is therefore outside R's attribution surface. The rejected full-trajectory
+Untwist clock trial remains uninstalled.
+
+The O/C diagnostic is deliberately stacked on PR #36's branch. It does not
+modify PR #33, PR #35, or PR #36 source files. PR #37 remains a separate
+diagnostic branch. Closed PRs #39 and #40 are not incorporated. R composes the
+existing O/C recorder rather than replacing those contracts.
 
 ### Native execution-contract recorder
 
@@ -123,9 +128,11 @@ so runtime-selected providers such as a KJ attention closure are distinguishable
 even when they share one source file and outer code object.
 
 The loaded-model fingerprint is intentionally bounded. Hashing a 20+ GiB model
-file during every diagnostic run is unacceptable. Therefore an exact checkpoint
-file SHA remains an explicit **replay/promotion gate** and is not claimed by the
-runtime fingerprint.
+file during every O/C observation would be unacceptable. Experiment R therefore
+adds an exact checkpoint file SHA-256 gate once per process at its diagnostic-node
+preflight, then uses a cheap path/size/mtime check immediately before sampling to
+reject ordinary post-preflight file changes without rehashing the model on the
+hot path.
 
 ### Post-load lifecycle and active-companion observation
 
@@ -183,41 +190,71 @@ O run must report all of the following before its media is interpreted:
 The observer itself is not evidence of transparency until those conditions and
 paired decoded media agree with the uninstrumented baseline.
 
+## Experiment R implementation
+
+R is documented operationally in `SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md`. It uses
+two separate ComfyUI processes and keeps Untwist absent in both jobs.
+
+The capture job runs the normal failing progressive path and exports a JSON
+manifest plus pure-tensor payload only after the controlled `9L/7A/2F` topology,
+one-upscaler accounting, O/C structural gate, exact carried audio and first-high
+runtime evidence pass. The bundle contains the exact high-entry tensors, high
+suffix, guidance trajectory and declarative configuration/provenance identities.
+
+The replay job validates the original schedule, target geometry, seed,
+conditioning, Flow guidance configuration, Spectrum configuration, exact
+checkpoint identity, installed runtime provenance and first-high companion policy.
+It suppresses the progressive split for that invocation and runs only the captured
+high suffix. It must produce exactly `3L/2A/1F` with zero learned-upscaler calls.
+No low stage, exact probe, stochastic-state transport or weighted Mixed-Grid path
+is executed by R.
+
+`attribution_valid=true` additionally requires exact first-high sampler and H3
+video/audio input hashes. Only then is the first-high raw/pre-guidance comparison
+causally interpretable:
+
+- same broken first-high output weakens retained low/probe/reload lifecycle state
+  as the cause;
+- clean/different first-high output implicates retained lifecycle state and
+  requires locating the first diverging owner before any reset/buffer experiment.
+
+R remains a diagnostic. Neither branch structure nor passing CPU CI is evidence
+of visual correctness.
+
 ## Production workflow for the next evidence round
 
 1. Keep the existing PR #35 checkpoint diagnostic and PR #36 learned-anchor
    validation in the workflow.
-2. Apply `MiniMax H3 Execution Contract Diagnostics` **after all MODEL patching
-   nodes** so its provenance manifest sees the effective wrapper/replacement
-   stack. Leave `strict_provenance=true` and `capture_mib=256` initially.
-3. Feed that node's MODEL output to the production sampler. Do not change the
-   seed, reference inputs, prompt, geometry, sampler, scheduler, Spectrum/Sol/VDN
-   settings, guidance, or handoff settings.
-4. Feed the diagnostic handle and the sampler's output LATENT into
-   `MiniMax H3 Execution Contract Report`. Save the preflight provenance string
-   for setup diagnostics and the final report next to the normal Flow metrics JSON.
-   The report's embedded `provenance` object is the authoritative runtime manifest;
-   its runtime-observation extension must also pass before O is considered a valid
-   structural candidate.
-5. Save the existing PR #35/#36 checkpoint videos/reports from the same run.
-6. Provide the matching original-baseline media and the backend route log for
-   run 00442 before selecting U or R.
+2. Keep Untwist absent. Apply `MiniMax H3 Execution Contract Diagnostics` **after
+   all MODEL patching nodes** with `strict_provenance=true` and `capture_mib=256`,
+   then apply `MiniMax H3 Same-State Replay Capture`.
+3. Feed that MODEL to the unchanged failing progressive sampler. Do not change
+   the seed, reference inputs, prompt, geometry, sampler, scheduler,
+   Spectrum/Sol/VDN/DiffAid settings, guidance, or handoff settings.
+4. Save the R bundle only if the run visibly reproduces the artifact and the
+   controlled topology/provenance/runtime gates pass.
+5. Exit ComfyUI completely. Start a fresh process, rebuild the same stack with
+   Untwist still absent, apply `MiniMax H3 Execution Contract Diagnostics`, then
+   `MiniMax H3 Same-State Cold High Replay` using the saved manifest.
+6. Run the normal sampler node with the original full schedule and seed and save
+   the `MiniMax H3 Same-State Replay Report` plus matching decoded media.
 
-If `strict_provenance` blocks execution, do not disable it for the controlled
-run. The manifest/error identifies the unresolved source owner that must be
-reconciled first.
+If strict provenance, checkpoint identity, topology or any replay contract blocks
+execution, do not weaken the gate. The reported mismatch identifies evidence that
+must be reconciled before R can be interpreted.
 
 ## External evidence still missing
 
-The repository does not contain enough evidence to pass the architecture's
-promotion gate. The following remain required:
+The repository does not contain enough production-CUDA evidence to pass the
+architecture's promotion gate. The following remain required:
 
-- installed source manifest from the actual production process (the new node
-  produces it);
-- paired **ORIGINAL** baseline media for the controlled first-high artifact run;
-- the matching 00442 Sol/backend route receipts;
-- a newly captured O/C report bundle from the production CUDA process;
-- exact checkpoint file identity for any later fresh-process replay experiment.
+- installed source/runtime manifest from the actual production process;
+- paired baseline/capture media demonstrating that instrumentation preserves the
+  failing artifact;
+- the matching Sol/backend route receipts for the controlled run;
+- a successful no-Untwist R capture bundle with exact checkpoint identity;
+- a fresh-process no-Untwist R report with `attribution_valid=true` and matching
+  decoded media.
 
 Consequently this branch intentionally contains **no production fix**. CPU unit
 tests, source reconstruction and algebra can validate the diagnostic machinery,
