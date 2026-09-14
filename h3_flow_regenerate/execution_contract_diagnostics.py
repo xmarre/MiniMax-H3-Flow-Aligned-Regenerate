@@ -599,6 +599,48 @@ def _tensor_summary(snapshot: _Snapshot) -> tuple[dict[str, Any], torch.Tensor]:
     return report, value
 
 
+def _audio_roundtrip_check(low_audio: torch.Tensor, high_audio: torch.Tensor) -> dict[str, Any]:
+    """Measure the float round trip between carried and reconstructed sampler audio."""
+    bitwise = bool(torch.equal(low_audio, high_audio))
+    result: dict[str, Any] = {
+        "carried_audio_exact": bitwise,
+        "carried_audio_bitwise_exact": bitwise,
+    }
+    if tuple(low_audio.shape) != tuple(high_audio.shape):
+        result.update(
+            carried_audio_roundtrip_within_dtype_tolerance=False,
+            carried_audio_roundtrip_reason="shape_mismatch",
+        )
+        return result
+    if not low_audio.is_floating_point() or not high_audio.is_floating_point():
+        result.update(
+            carried_audio_roundtrip_within_dtype_tolerance=bitwise,
+            carried_audio_roundtrip_reason="non_floating_exact_only",
+        )
+        return result
+    low = low_audio.detach().float()
+    high = high_audio.detach().float()
+    delta = high - low
+    max_abs = float(delta.abs().max().item()) if delta.numel() else 0.0
+    rms = float(delta.square().mean().sqrt().item()) if delta.numel() else 0.0
+    scale = 1.0
+    if low.numel():
+        scale = max(scale, float(low.abs().max().item()), float(high.abs().max().item()))
+    eps = max(float(torch.finfo(low_audio.dtype).eps), float(torch.finfo(high_audio.dtype).eps))
+    atol = 32.0 * eps * scale
+    within = bool(torch.allclose(low_audio, high_audio, rtol=0.0, atol=atol))
+    result.update(
+        carried_audio_roundtrip_within_dtype_tolerance=within,
+        carried_audio_roundtrip_max_abs=max_abs,
+        carried_audio_roundtrip_rms=rms,
+        carried_audio_roundtrip_atol=atol,
+        carried_audio_roundtrip_scale=scale,
+        carried_audio_roundtrip_eps=eps,
+        carried_audio_roundtrip_reason="inverse_noise_argument_then_noise_scaling",
+    )
+    return result
+
+
 def _counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
     return {key: int(after.get(key, 0) - before.get(key, 0)) for key in sorted(set(before) | set(after))}
 
@@ -701,7 +743,7 @@ def _finalize_record(record: _Record, guider: Any) -> None:
     low_audio = values.get("low_sampler_state_audio")
     high_audio = values.get("first_high_sampler_input_audio")
     if low_audio is not None and high_audio is not None:
-        exact_checks["carried_audio_exact"] = bool(torch.equal(low_audio, high_audio))
+        exact_checks.update(_audio_roundtrip_check(low_audio, high_audio))
     raw = values.get("first_high_model_raw_video")
     pre = values.get("first_high_pre_guidance_video")
     if raw is not None and pre is not None:
@@ -747,11 +789,11 @@ def _finalize_record(record: _Record, guider: Any) -> None:
         and bool(record.state.manifest.get("gate_complete"))
         and not record.incomplete
         and bool(topology["matches_controlled_O"])
-        and exact_checks.get("carried_audio_exact") is True
+        and exact_checks.get("carried_audio_roundtrip_within_dtype_tolerance") is True
         and condition_equal
         and refinement_prefix_one
         and not flow_research_activity
-        and companion_receipts_zero is True
+        and companion_receipts_zero is not False
     )
 
     report = {
@@ -811,7 +853,7 @@ def _finalize_record(record: _Record, guider: Any) -> None:
 def patch_execution_contract_diagnostics(
     model: Any,
     *,
-    capture_mib: int = 256,
+    capture_mib: int = 512,
     strict_provenance: bool = True,
 ) -> tuple[Any, _State]:
     if not 16 <= int(capture_mib) <= 1024:
@@ -910,7 +952,7 @@ class H3ExecutionContractDiagnostics:
         return {
             "required": {
                 "model": ("MODEL",),
-                "capture_mib": ("INT", {"default": 256, "min": 16, "max": 1024, "step": 16}),
+                "capture_mib": ("INT", {"default": 512, "min": 16, "max": 1024, "step": 16}),
                 "strict_provenance": ("BOOLEAN", {"default": True}),
             }
         }

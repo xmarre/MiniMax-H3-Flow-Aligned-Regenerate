@@ -499,8 +499,11 @@ def _material_from_record(
 
     low_audio = record.snapshots.get("low_sampler_state_audio")
     high_audio = record.snapshots.get("first_high_sampler_input_audio")
-    if low_audio is None or high_audio is None or not torch.equal(low_audio.tensor, high_audio.tensor):
-        raise RuntimeError("same-state replay capture requires exact carried audio at the handoff")
+    if low_audio is None or high_audio is None:
+        raise RuntimeError("same-state replay capture is missing carried-audio evidence")
+    audio_check = _diag._audio_roundtrip_check(low_audio.tensor, high_audio.tensor)
+    if audio_check.get("carried_audio_roundtrip_within_dtype_tolerance") is not True:
+        raise RuntimeError(f"same-state replay capture carried audio exceeds round-trip tolerance: {audio_check}")
 
     runtime_gate = _require_capture_runtime_observation(record)
     companion_policy = _high_first_companion_policy(record.state.manifest)
@@ -599,11 +602,12 @@ def _material_from_record(
         for key, value in metric_delta.items()
         if value and any(token in key.lower() for token in _diag._RESEARCH_TOKENS)
     }
-    companion_receipts = _diag._research_receipts(record.first_high_runtime or {})
-    if flow_research_activity or _diag._all_research_receipts_zero(companion_receipts) is not True:
-        raise RuntimeError(
-            "same-state replay capture requires machine-readable proof that weighted/Mixed-Grid research is inactive"
-        )
+    if (
+        flow_research_activity
+        or runtime_gate.get("sol_research_receipts_complete") is not True
+        or runtime_gate.get("sol_research_zero") is not True
+    ):
+        raise RuntimeError("same-state replay capture requires complete zero active Sol weighted/Mixed-Grid receipts")
 
     tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}
     provenance_identity = _normalize_provenance(record.state.manifest)

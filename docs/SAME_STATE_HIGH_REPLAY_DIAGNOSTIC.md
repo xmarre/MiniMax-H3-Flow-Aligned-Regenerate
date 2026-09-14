@@ -33,7 +33,7 @@ Start a clean ComfyUI process on the R implementation branch. Use the normal fai
 Apply the diagnostic model nodes in this order:
 
 1. normal production model/companion patches;
-2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true`;
+2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true` and `capture_mib=512`;
 3. `MiniMax H3 Same-State Replay Capture`;
 4. the normal sampler path.
 
@@ -57,7 +57,7 @@ Exit ComfyUI completely and start a new process. Rebuild the same model/companio
 Apply:
 
 1. normal production model/companion patches;
-2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true`;
+2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true` and `capture_mib=512`;
 3. `MiniMax H3 Same-State Cold High Replay`, pointing `bundle_manifest` to the JSON file from job 1;
 4. the normal sampler node with the original full schedule and seed.
 

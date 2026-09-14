@@ -487,6 +487,9 @@ def _sol_runtime_snapshot() -> dict[str, Any] | None:
             "external_mixed_measure_kv_rows_before",
             "external_mixed_measure_kv_rows_after",
             "external_mixed_measure_removed_rows",
+            "external_mixed_weighted_measure_calls",
+            "external_mixed_weighted_measure_q_rows",
+            "external_mixed_weighted_measure_kv_rows",
             "vdn_local_sol_calls",
             "vdn_rectangular_sol_calls",
             "vdn_requested_q_rows",
@@ -753,6 +756,41 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
     )
     observation_error_free = not observation_errors
 
+    research_fields = (
+        "external_mixed_sol_calls",
+        "external_mixed_q_rows",
+        "external_mixed_kernel_q_rows",
+        "external_mixed_measure_calls",
+        "external_mixed_measure_q_rows",
+        "external_mixed_measure_kv_rows_before",
+        "external_mixed_measure_kv_rows_after",
+        "external_mixed_measure_removed_rows",
+        "external_mixed_weighted_measure_calls",
+        "external_mixed_weighted_measure_q_rows",
+        "external_mixed_weighted_measure_kv_rows",
+    )
+    research_receipts: dict[str, Any] = {}
+    missing_research_receipts: list[str] = []
+    nonzero_research_receipts: dict[str, Any] = {}
+    for slot in _REQUIRED_COMPANION_SLOTS:
+        call = companion_calls.get(slot) or {}
+        for phase in ("before", "after"):
+            sol = (call.get(phase) or {}).get("sol")
+            if not isinstance(sol, dict):
+                missing_research_receipts.append(f"{slot}.{phase}.sol")
+                continue
+            for field in research_fields:
+                key = f"{slot}.{phase}.{field}"
+                if field not in sol:
+                    missing_research_receipts.append(key)
+                    continue
+                value = sol[field]
+                research_receipts[key] = value
+                if not isinstance(value, (bool, int, float)) or float(value) != 0.0:
+                    nonzero_research_receipts[key] = value
+    sol_research_receipts_complete = not missing_research_receipts
+    sol_research_zero = sol_research_receipts_complete and not nonzero_research_receipts
+
     runtime_contract_complete = all(
         (
             stage_lifecycle_complete,
@@ -765,6 +803,8 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
             vdn_visible,
             spectrum_visible,
             observation_error_free,
+            sol_research_receipts_complete,
+            sol_research_zero,
         )
     )
     return {
@@ -785,6 +825,11 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         "spectrum_active_high_first_visible": spectrum_visible,
         "observation_error_free": observation_error_free,
         "observation_errors": observation_errors,
+        "sol_research_receipts_complete": sol_research_receipts_complete,
+        "sol_research_zero": sol_research_zero,
+        "sol_research_receipts": research_receipts,
+        "missing_sol_research_receipts": missing_research_receipts,
+        "nonzero_sol_research_receipts": nonzero_research_receipts,
         "runtime_contract_complete": runtime_contract_complete,
     }
 
