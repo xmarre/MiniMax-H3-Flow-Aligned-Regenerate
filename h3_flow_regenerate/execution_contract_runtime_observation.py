@@ -436,14 +436,40 @@ def _contextvar_value(module: Any, name: str) -> Any:
         return None
 
 
+def _loaded_sol_runtime_module() -> tuple[str | None, Any | None]:
+    """Resolve the unique already-loaded Sol runtime without importing another copy."""
+
+    candidates: dict[int, tuple[str, Any]] = {}
+    for name, module in tuple(sys.modules.items()):
+        if module is None:
+            continue
+        normalized_name = str(name).replace("\\", "/").lower()
+        normalized_file = str(getattr(module, "__file__", "") or "").replace("\\", "/").lower()
+        name_match = normalized_name == "sol_h3.runtime" or normalized_name.endswith(".sol_h3.runtime")
+        file_match = normalized_file.endswith("/sol_h3/runtime.py")
+        if not (name_match or file_match):
+            continue
+        if not hasattr(module, "_REQUEST") or not hasattr(module, "_FORWARD"):
+            continue
+        candidates[id(module)] = (str(name), module)
+    if not candidates:
+        return None, None
+    if len(candidates) != 1:
+        names = sorted(name for name, _module in candidates.values())
+        raise RuntimeError(f"multiple loaded Sol-H3 runtime modules: {names}")
+    return next(iter(candidates.values()))
+
+
 def _sol_runtime_snapshot() -> dict[str, Any] | None:
-    module = sys.modules.get("sol_h3.runtime")
+    module_name, module = _loaded_sol_runtime_module()
     if module is None:
         return None
     request = _contextvar_value(module, "_REQUEST")
     forward = _contextvar_value(module, "_FORWARD")
     result: dict[str, Any] = {
         "module_loaded": True,
+        "module_name": module_name,
+        "module_file": str(getattr(module, "__file__", None)),
         "request_active": request is not None,
         "forward_active": forward is not None,
     }
@@ -626,7 +652,7 @@ def _store_companion_call(
         slots["high_last"] = entry
 
 
-def _make_diffusion_wrapper(root_model_options: dict[str, Any]):
+def _make_diffusion_wrapper(root_model_options: dict[str, Any] | None = None):
     def wrapper(executor, *args, **kwargs):
         record = _diag._ACTIVE.get()
         stage = _diag._STAGE.get()
@@ -640,12 +666,15 @@ def _make_diffusion_wrapper(root_model_options: dict[str, Any]):
                     transformer = candidate
                     break
 
+        active_model_options = getattr(record, "active_model_options", None)
+        if not isinstance(active_model_options, dict):
+            active_model_options = root_model_options if isinstance(root_model_options, dict) else None
         before, before_error = _guarded_companion_snapshot(
             record.state,
             f"{stage}:before_diffusion_model",
             executor,
             transformer,
-            root_model_options,
+            active_model_options,
         )
         result = executor(*args, **kwargs)
         after, after_error = _guarded_companion_snapshot(
@@ -653,7 +682,7 @@ def _make_diffusion_wrapper(root_model_options: dict[str, Any]):
             f"{stage}:after_diffusion_model",
             executor,
             transformer,
-            root_model_options,
+            active_model_options,
         )
         errors = [item for item in (before_error, after_error) if item is not None]
         _store_companion_call(record.state, str(stage), before, after, errors)
@@ -780,12 +809,11 @@ class H3ExecutionContractDiagnostics(_diag.H3ExecutionContractDiagnostics):
             _PREPARE_KEY,
             _prepare_sampling_wrapper,
         )
-        root_model_options = patched.model_options
         _diag._append_wrapper(
             patched,
             comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,
             _DIFFUSION_KEY,
-            _make_diffusion_wrapper(root_model_options),
+            _make_diffusion_wrapper(),
         )
         _extension_manifest(state)
         return patched, state, json.dumps(state.manifest, indent=2, sort_keys=True, default=str)

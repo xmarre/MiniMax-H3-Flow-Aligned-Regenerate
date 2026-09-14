@@ -221,7 +221,7 @@ def test_prepare_sampling_observation_failure_does_not_mask_loaded_result(monkey
 
 def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch):
     state = _state()
-    record = diag._Record(state=state)
+    record = diag._Record(state=state, active_model_options={"source": "active"})
     active_token = diag._ACTIVE.set(record)
     stage_token = diag._STAGE.set("high")
     calls = 0
@@ -234,11 +234,11 @@ def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch
             calls += 1
             return "result"
 
-    def companion(_executor, _transformer, _root_model_options):
-        return {"executor_calls": calls}
+    def companion(_executor, _transformer, root_model_options):
+        return {"executor_calls": calls, "source": root_model_options["source"]}
 
     monkeypatch.setattr(observation, "_active_companion_snapshot", companion)
-    wrapper = observation._make_diffusion_wrapper({})
+    wrapper = observation._make_diffusion_wrapper({"source": "stale"})
     try:
         result = wrapper(
             Executor(),
@@ -256,8 +256,8 @@ def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch
     extension = state.manifest[observation._EXTENSION_KEY]
     first = extension["companion_calls"]["high_first"]
     assert first["actual_index"] == 1
-    assert first["before"] == {"executor_calls": 0}
-    assert first["after"] == {"executor_calls": 1}
+    assert first["before"] == {"executor_calls": 0, "source": "active"}
+    assert first["after"] == {"executor_calls": 1, "source": "active"}
     assert first["observation_errors"] == []
     assert extension["companion_calls"]["high_last"] == first
 
@@ -374,10 +374,17 @@ def test_sol_runtime_snapshot_reads_active_request_without_import(monkeypatch):
         "forward",
         default=(object(), request, 1, {0, 1}, [(0, "sol")]),
     )
-    module = SimpleNamespace(_REQUEST=request_var, _FORWARD=forward_var)
-    monkeypatch.setitem(sys.modules, "sol_h3.runtime", module)
+    dynamic_name = "/home/toor/ComfyUI/custom_nodes/comfyui-sol-h3.sol_h3.runtime"
+    module = SimpleNamespace(
+        _REQUEST=request_var,
+        _FORWARD=forward_var,
+        __file__="/home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3/sol_h3/runtime.py",
+    )
+    monkeypatch.delitem(sys.modules, "sol_h3.runtime", raising=False)
+    monkeypatch.setitem(sys.modules, dynamic_name, module)
 
     snapshot = observation._sol_runtime_snapshot()
+    assert snapshot["module_name"] == dynamic_name
     assert snapshot["request_active"] is True
     assert snapshot["forward_active"] is True
     assert snapshot["evaluations"] == 2

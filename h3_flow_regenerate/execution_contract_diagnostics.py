@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import json
+import math
 import time
 import uuid
 from collections import deque
@@ -66,6 +67,7 @@ class _Record:
     completed_ns: int | None = None
     seed: int = 0
     config: ProgressiveTargetInputConfig | None = None
+    active_model_options: dict[str, Any] | None = field(default=None, repr=False)
     original_sigmas: tuple[float, ...] = ()
     original_schedule_digest: str = ""
     pristine_conds: dict[str, list[Any]] | None = None
@@ -237,6 +239,7 @@ def _invocation_wrapper(
         state=state,
         seed=int(seed or 0),
         config=config,
+        active_model_options=getattr(guider, "model_options", None),
         original_sigmas=schedule,
         original_schedule_digest=_runtime._schedule_signature(sigmas),
         pristine_conds=pristine,
@@ -359,6 +362,49 @@ def _stage_wrapper(
     return result
 
 
+def _capture_first_high_sampler_state(
+    record: _Record,
+    model_wrap: Any,
+    sigmas: torch.Tensor,
+    noise: torch.Tensor,
+    latent_image: torch.Tensor | None,
+) -> None:
+    """Capture raw H3 sampler X before KSamplerX0Inpaint can rewrite model input."""
+
+    inner = getattr(model_wrap, "inner_model", None)
+    shapes = getattr(inner, "latent_shapes", None)
+    if not isinstance(shapes, list) or len(shapes) != 2:
+        record.mark_incomplete("first_high_sampler_input: packed AV shapes unavailable at SAMPLER_SAMPLE")
+        return
+    if not torch.is_tensor(noise) or not torch.is_tensor(latent_image):
+        record.mark_incomplete("first_high_sampler_input: noise/latent_image unavailable at SAMPLER_SAMPLE")
+        return
+    if tuple(noise.shape) != tuple(latent_image.shape):
+        record.mark_incomplete("first_high_sampler_input: noise/latent_image shapes differ")
+        return
+    if sigmas.numel() == 0:
+        record.mark_incomplete("first_high_sampler_input: high sigma suffix is empty")
+        return
+    model_sampling = getattr(inner, "model_sampling", None)
+    if model_sampling is None:
+        record.mark_incomplete("first_high_sampler_input: H3 model_sampling unavailable")
+        return
+    noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
+    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
+        record.mark_incomplete("first_high_sampler_input: invalid H3 noise_scale")
+        return
+    sigma = sigmas[0].detach().to(device=noise.device, dtype=noise.dtype)
+    if sigma.numel() != 1 or not bool(torch.isfinite(sigma).all().item()):
+        record.mark_incomplete("first_high_sampler_input: invalid first high sigma")
+        return
+    latent = latent_image.to(device=noise.device, dtype=noise.dtype)
+    raw_state = sigma * (noise_scale * noise) + (1.0 - sigma) * latent
+    normalized_shapes = [tuple(int(dim) for dim in shape) for shape in shapes]
+    video, audio = unpack_streams(raw_state, normalized_shapes)
+    record.capture("first_high_sampler_input_video", video)
+    record.capture("first_high_sampler_input_audio", audio)
+
+
 def _sampler_wrapper(
     executor,
     model_wrap,
@@ -377,6 +423,7 @@ def _sampler_wrapper(
         and record.condition_compare is None
     )
     if is_first_high:
+        _capture_first_high_sampler_state(record, model_wrap, sigmas, noise, latent_image)
         actual_conds = getattr(model_wrap, "conds", {})
         actual_digest, actual_summary = fingerprint(actual_conds)
         record.condition_compare = {
@@ -424,16 +471,20 @@ def _predict_raw_wrapper(executor, x, timestep, model_options=None, seed=None):
         record.target_shapes = shapes
         sigma = float(timestep.detach().reshape(-1)[0].item())
         record.handoff_sigma = sigma
-        state_video, state_audio = unpack_streams(x, shapes)
-        record.capture("first_high_sampler_input_video", state_video)
-        record.capture("first_high_sampler_input_audio", state_audio)
+        model_input_video, model_input_audio = unpack_streams(x, shapes)
+        record.capture("first_high_model_input_video", model_input_video)
+        record.capture("first_high_model_input_audio", model_input_audio)
         record.capture("first_high_model_raw_video", video)
         record.capture("first_high_model_raw_audio", audio)
         if bridge_present:
             record.mark_incomplete("first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid")
         else:
             record.capture("first_high_pre_guidance_video", video)
-        if record.config is not None:
+        sampler_state = record.snapshots.get("first_high_sampler_input_video")
+        if sampler_state is None:
+            record.mark_incomplete("first_high_sampler_input: missing raw SAMPLER_SAMPLE capture")
+        elif record.config is not None:
+            state_video = sampler_state.tensor
             fresh = deterministic_video_noise(
                 tuple(int(dim) for dim in state_video.shape),
                 seed=record.seed + int(record.config.seed_offset),

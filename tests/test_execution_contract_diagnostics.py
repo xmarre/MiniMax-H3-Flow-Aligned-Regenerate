@@ -109,6 +109,44 @@ def test_sampler_condition_compare_observes_processed_conditions_without_replayi
     assert record.condition_compare["actual_processed_alias_graph"]
 
 
+def test_sampler_wrapper_captures_raw_high_state_before_inpaint_rewrite():
+    video = torch.randn(1, 24, 5, 4, 4)
+    audio = torch.randn(1, 32, 2, 9)
+    noise_video = torch.randn_like(video)
+    noise_audio = torch.randn_like(audio)
+    latent_video = torch.randn_like(video)
+    latent_audio = torch.randn_like(audio)
+    noise, shapes = pack_streams((noise_video, noise_audio))
+    latent, _ = pack_streams((latent_video, latent_audio))
+    sigmas = torch.tensor([0.4, 0.0])
+    noise_scale = 1.25
+    record = diag._Record(state=_state(8 << 20))
+    token = diag._ACTIVE.set(record)
+
+    class Executor:
+        def __call__(self, *_args, **_kwargs):
+            return "sentinel"
+
+    model_wrap = SimpleNamespace(
+        conds={},
+        inner_model=SimpleNamespace(
+            latent_shapes=shapes,
+            model_sampling=SimpleNamespace(noise_scale=noise_scale),
+        ),
+    )
+    extra_args = {"model_options": {"transformer_options": {diag._runtime.FLOW_STAGE_KEY: "high"}}}
+    try:
+        result = diag._sampler_wrapper(Executor(), model_wrap, sigmas, extra_args, None, noise, latent)
+    finally:
+        diag._ACTIVE.reset(token)
+
+    expected = sigmas[0] * (noise_scale * noise) + (1.0 - sigmas[0]) * latent
+    expected_video, expected_audio = diag.unpack_streams(expected, shapes)
+    assert result == "sentinel"
+    assert torch.equal(record.snapshots["first_high_sampler_input_video"].tensor, expected_video)
+    assert torch.equal(record.snapshots["first_high_sampler_input_audio"].tensor, expected_audio)
+
+
 def _first_high_fixture(*, exact_bridge: bool = False):
     video = torch.randn(1, 24, 5, 4, 4)
     audio = torch.randn(1, 32, 2, 9)
@@ -124,7 +162,10 @@ def _first_high_fixture(*, exact_bridge: bool = False):
     )
     clean = torch.randn_like(video)
     state_video = (1.0 - sigma) * clean + sigma * noise
-    state_packed, _ = pack_streams((state_video, audio))
+    _state_packed, _ = pack_streams((state_video, audio))
+    model_input_video = torch.randn_like(video)
+    model_input_audio = torch.randn_like(audio)
+    model_input_packed, _ = pack_streams((model_input_video, model_input_audio))
     raw_video = torch.randn_like(video)
     raw_packed, _ = pack_streams((raw_video, audio))
 
@@ -133,6 +174,8 @@ def _first_high_fixture(*, exact_bridge: bool = False):
         seed=seed,
         config=SimpleNamespace(seed_offset=seed_offset),
     )
+    record.capture("first_high_sampler_input_video", state_video)
+    record.capture("first_high_sampler_input_audio", audio)
     token = diag._ACTIVE.set(record)
 
     class Executor:
@@ -159,16 +202,17 @@ def _first_high_fixture(*, exact_bridge: bool = False):
         }
     model_options = {"transformer_options": transformer}
     try:
-        result = diag._predict_raw_wrapper(Executor(), state_packed, torch.tensor([sigma]), model_options, seed)
+        result = diag._predict_raw_wrapper(Executor(), model_input_packed, torch.tensor([sigma]), model_options, seed)
     finally:
         diag._ACTIVE.reset(token)
-    return record, result, raw_packed, raw_video, clean
+    return record, result, raw_packed, raw_video, model_input_video, clean
 
 
 def test_first_high_raw_capture_recovers_existing_learned_clean_without_upscaler_call():
-    record, result, raw_packed, raw_video, clean = _first_high_fixture()
+    record, result, raw_packed, raw_video, model_input_video, clean = _first_high_fixture()
 
     assert torch.equal(result, raw_packed)
+    assert torch.equal(record.snapshots["first_high_model_input_video"].tensor, model_input_video)
     assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)
     assert torch.equal(record.snapshots["first_high_pre_guidance_video"].tensor, raw_video)
     assert torch.equal(record.snapshots["last_high_pre_guidance_video"].tensor, raw_video)
@@ -177,7 +221,7 @@ def test_first_high_raw_capture_recovers_existing_learned_clean_without_upscaler
 
 
 def test_exact_prefix_bridge_does_not_mislabel_raw_output_as_pre_guidance():
-    record, _result, _raw_packed, raw_video, _clean = _first_high_fixture(exact_bridge=True)
+    record, _result, _raw_packed, raw_video, _model_input_video, _clean = _first_high_fixture(exact_bridge=True)
 
     assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)
     assert torch.equal(record.snapshots["last_high_model_raw_video"].tensor, raw_video)
