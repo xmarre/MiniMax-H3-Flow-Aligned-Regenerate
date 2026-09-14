@@ -1,0 +1,55 @@
+name: R raw-entry boundary contract
+
+on:
+  push:
+    branches:
+      - mirror/r-raw-boundary-integration-20260914
+    paths:
+      - .github/workflows/r-raw-boundary-contract-autopatch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/r-raw-boundary-integration-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[test]' ruff
+      - name: Document and lock raw replay-entry semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          tests = Path("tests/test_same_state_high_replay.py")
+          text = tests.read_text(encoding="utf-8")
+          marker = "def test_provenance_identity_ignores_only_diagnostic_execution_state():\n"
+          addition = '''def test_raw_high_entry_state_roundtrips_flow_noise_inverse():\n    sigma = 0.4\n    noise_scale = 1.25\n    noise = torch.randn(1, 19)\n    latent = torch.randn_like(noise)\n    raw_state = sigma * (noise_scale * noise) + (1.0 - sigma) * latent\n    base_model = type("BaseModel", (), {"model_sampling": type("Sampling", (), {"noise_scale": noise_scale})()})()\n\n    recovered = replay._runtime._noise_argument(base_model, raw_state, sigma, latent)\n\n    assert torch.allclose(recovered, noise, atol=1e-6, rtol=1e-6)\n\n\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("R test insertion marker is not unique")
+          tests.write_text(text.replace(marker, addition + marker, 1), encoding="utf-8")
+
+          docs = Path("docs/SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md")
+          text = docs.read_text(encoding="utf-8")
+          marker = "The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, Flow guidance configuration, Spectrum configuration and the committed low/probe guidance trajectory. It also records exact checkpoint identity, installed-runtime provenance, first-high execution policy, first-high Sol/VDN/Spectrum companion policy and the corresponding runtime observation evidence.\n"
+          addition = marker + "\n`first_high_sampler_input_*` specifically means the raw high-entry sampler state **before** `KSamplerX0Inpaint` may rewrite masked model input. `first_high_model_input_*` is the separate downstream post-inpaint boundary. R serializes the raw sampler state and applies Flow/Core's exact noise-initialization inverse to that raw state; it must never use the post-inpaint model input as replay X.\n"
+          if text.count(marker) != 1:
+              raise SystemExit("R documentation insertion marker is not unique")
+          docs.write_text(text.replace(marker, addition, 1), encoding="utf-8")
+          PY
+      - run: ruff format tests/test_same_state_high_replay.py
+      - run: ruff check tests/test_same_state_high_replay.py
+      - run: pytest -q tests/test_same_state_high_replay.py
+      - name: Commit contract lock and remove one-shot workflow
+        run: |
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
+          git rm .github/workflows/r-raw-boundary-contract-autopatch.yml
+          git add tests/test_same_state_high_replay.py docs/SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md
+          git commit -m "Lock R to raw first-high sampler state"
+          git push origin HEAD:mirror/r-raw-boundary-integration-20260914
