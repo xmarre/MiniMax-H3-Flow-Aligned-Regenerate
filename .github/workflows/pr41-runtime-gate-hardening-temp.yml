@@ -1,0 +1,262 @@
+name: PR41 runtime gate hardening temporary
+
+on:
+  push:
+    branches:
+      - mirror/first-high-contract-implementation-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/first-high-contract-implementation-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Harden runtime lifecycle gate and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime_path = Path('h3_flow_regenerate/execution_contract_runtime_observation.py')
+          text = runtime_path.read_text()
+          old = '''    block_encoded = json.dumps(block_state, sort_keys=True, separators=(",", ":"), default=str).encode()
+    modified_modules = _modified_module_manifest(diffusion)
+    lifecycle_material = {
+        "blocks": block_state,
+        "modified_modules": modified_modules["modules"],
+    }
+'''
+          new = '''    block_encoded = json.dumps(block_state, sort_keys=True, separators=(",", ":"), default=str).encode()
+    modified_modules = _modified_module_manifest(diffusion)
+    active_injections = _injection_manifest(model)
+    active_object_patches = _object_patch_manifest(model)
+    effective_wrapper_order = _keyed_callable_manifest(transformer.get("wrappers", {}))
+    effective_callbacks = _keyed_callable_manifest(transformer.get("callbacks", {}))
+    lifecycle_material = {
+        "blocks": block_state,
+        "modified_modules": modified_modules["modules"],
+        "active_injections": active_injections,
+        "active_object_patches": active_object_patches,
+        "effective_wrapper_order": effective_wrapper_order,
+        "effective_callbacks": effective_callbacks,
+    }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('runtime lifecycle material anchor mismatch')
+          text = text.replace(old, new)
+          old = '''        "active_injections": _injection_manifest(model),
+        "active_object_patches": _object_patch_manifest(model),
+        "effective_wrapper_order": _keyed_callable_manifest(transformer.get("wrappers", {})),
+        "effective_callbacks": _keyed_callable_manifest(transformer.get("callbacks", {})),
+'''
+          new = '''        "active_injections": active_injections,
+        "active_object_patches": active_object_patches,
+        "effective_wrapper_order": effective_wrapper_order,
+        "effective_callbacks": effective_callbacks,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('runtime lifecycle return anchor mismatch')
+          text = text.replace(old, new)
+          old = '''    stage_lifecycle_complete = all(by_stage.get(stage) for stage in _REQUIRED_STAGES)
+    injection_state_consistent = stage_lifecycle_complete and all(
+'''
+          new = '''    stage_lifecycle_counts = {stage: len(by_stage.get(stage, [])) for stage in _REQUIRED_STAGES}
+    stage_lifecycle_complete = all(stage_lifecycle_counts[stage] == 1 for stage in _REQUIRED_STAGES)
+    injection_state_consistent = stage_lifecycle_complete and all(
+'''
+          if text.count(old) != 1:
+              raise SystemExit('stage lifecycle gate anchor mismatch')
+          text = text.replace(old, new)
+          old = '''    hook_runtime_stable = bool(lifecycle_digests) and len(set(lifecycle_digests)) == 1
+    modified_states = [
+'''
+          new = '''    hook_runtime_stable = len(lifecycle_digests) == len(_REQUIRED_STAGES) and len(set(lifecycle_digests)) == 1
+    modified_states = [
+'''
+          if text.count(old) != 1:
+              raise SystemExit('lifecycle digest gate anchor mismatch')
+          text = text.replace(old, new)
+          old = '''    companion_slots_complete = all(slot in companion_calls for slot in _REQUIRED_COMPANION_SLOTS)
+
+    high_first = companion_calls.get("high_first") or {}
+'''
+          new = '''    companion_slots_complete = all(slot in companion_calls for slot in _REQUIRED_COMPANION_SLOTS)
+    expected_actual_counts = {"low": 4, "probe": 1, "high": 2}
+    actual_counts = extension.get("diffusion_actual_counts") or {}
+    observed_actual_counts = {
+        stage: int(actual_counts.get(stage, 0)) for stage in _REQUIRED_STAGES
+    }
+    actual_call_counts_exact = observed_actual_counts == expected_actual_counts
+
+    high_first = companion_calls.get("high_first") or {}
+'''
+          if text.count(old) != 1:
+              raise SystemExit('actual call count gate anchor mismatch')
+          text = text.replace(old, new)
+          old = '''            modified_runtime_visible,
+            companion_slots_complete,
+            sol_visible,
+'''
+          new = '''            modified_runtime_visible,
+            companion_slots_complete,
+            actual_call_counts_exact,
+            sol_visible,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('runtime contract tuple anchor mismatch')
+          text = text.replace(old, new)
+          old = '''        "stage_lifecycle_complete": stage_lifecycle_complete,
+        "injection_state_consistent": injection_state_consistent,
+'''
+          new = '''        "stage_lifecycle_complete": stage_lifecycle_complete,
+        "stage_lifecycle_counts": stage_lifecycle_counts,
+        "injection_state_consistent": injection_state_consistent,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('runtime gate report lifecycle anchor mismatch')
+          text = text.replace(old, new)
+          old = '''        "companion_slots_complete": companion_slots_complete,
+        "sol_active_high_first_visible": sol_visible,
+'''
+          new = '''        "companion_slots_complete": companion_slots_complete,
+        "actual_call_counts_exact": actual_call_counts_exact,
+        "expected_actual_call_counts": expected_actual_counts,
+        "observed_actual_call_counts": observed_actual_counts,
+        "sol_active_high_first_visible": sol_visible,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('runtime gate report counts anchor mismatch')
+          text = text.replace(old, new)
+          runtime_path.write_text(text)
+
+          test_path = Path('tests/test_execution_contract_runtime_observation.py')
+          text = test_path.read_text()
+          old = 'from __future__ import annotations\n\nimport contextvars\n'
+          new = 'from __future__ import annotations\n\nimport contextvars\nimport copy\n'
+          if text.count(old) != 1:
+              raise SystemExit('test import anchor mismatch')
+          text = text.replace(old, new)
+          old = '''        "schema_version": 2,
+        "stage_lifecycles": [
+            {"stage": "low", **lifecycle},
+            {"stage": "probe", **lifecycle},
+            {"stage": "high", **lifecycle},
+        ],
+        "companion_calls": {
+            "low_last": {"stage": "low", "actual_index": 4, **companion},
+            "probe": {"stage": "probe", "actual_index": 1, **companion},
+            "high_first": {"stage": "high", "actual_index": 1, **companion},
+            "high_last": {"stage": "high", "actual_index": 2, **companion},
+        },
+        "observation_errors": [],
+'''
+          new = '''        "schema_version": 2,
+        "stage_lifecycles": [
+            {"stage": "low", **copy.deepcopy(lifecycle)},
+            {"stage": "probe", **copy.deepcopy(lifecycle)},
+            {"stage": "high", **copy.deepcopy(lifecycle)},
+        ],
+        "diffusion_actual_counts": {"low": 4, "probe": 1, "high": 2},
+        "companion_calls": {
+            "low_last": {"stage": "low", "actual_index": 4, **copy.deepcopy(companion)},
+            "probe": {"stage": "probe", "actual_index": 1, **copy.deepcopy(companion)},
+            "high_first": {"stage": "high", "actual_index": 1, **copy.deepcopy(companion)},
+            "high_last": {"stage": "high", "actual_index": 2, **copy.deepcopy(companion)},
+        },
+        "observation_errors": [],
+'''
+          if text.count(old) != 1:
+              raise SystemExit('complete observation helper anchor mismatch')
+          text = text.replace(old, new)
+          old = '''    assert runtime["stage_lifecycle_complete"] is True
+    assert runtime["injection_state_consistent"] is True
+'''
+          new = '''    assert runtime["stage_lifecycle_complete"] is True
+    assert runtime["stage_lifecycle_counts"] == {"low": 1, "probe": 1, "high": 1}
+    assert runtime["injection_state_consistent"] is True
+'''
+          if text.count(old) != 1:
+              raise SystemExit('complete gate lifecycle assertion anchor mismatch')
+          text = text.replace(old, new)
+          old = '''    assert runtime["modified_runtime_visible"] is True
+    assert runtime["observation_error_free"] is True
+'''
+          new = '''    assert runtime["modified_runtime_visible"] is True
+    assert runtime["actual_call_counts_exact"] is True
+    assert runtime["observed_actual_call_counts"] == {"low": 4, "probe": 1, "high": 2}
+    assert runtime["observation_error_free"] is True
+'''
+          if text.count(old) != 1:
+              raise SystemExit('complete gate count assertion anchor mismatch')
+          text = text.replace(old, new)
+          append = '''
+
+
+def test_report_rejects_duplicate_stage_lifecycle_capture():
+    runtime_observation = _complete_runtime_observation()
+    duplicate = copy.deepcopy(runtime_observation["stage_lifecycles"][2])
+    runtime_observation["stage_lifecycles"].append(duplicate)
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["stage_lifecycle_counts"] == {"low": 1, "probe": 1, "high": 2}
+    assert runtime["stage_lifecycle_complete"] is False
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
+
+
+def test_report_rejects_unexpected_actual_diffusion_call_count():
+    runtime_observation = _complete_runtime_observation()
+    runtime_observation["diffusion_actual_counts"]["high"] = 3
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["actual_call_counts_exact"] is False
+    assert runtime["observed_actual_call_counts"] == {"low": 4, "probe": 1, "high": 3}
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
+'''
+          text += append
+          test_path.write_text(text)
+          PY
+      - run: python -m pip install 'ruff==0.16.7'
+      - run: ruff format h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_runtime_observation.py
+      - run: ruff check h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_runtime_observation.py
+      - name: Commit hardening and remove temporary workflow
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_runtime_observation.py
+          git rm .github/workflows/pr41-runtime-gate-hardening-temp.yml
+          git commit -m 'Tighten runtime observation evidence gate'
+          git push origin HEAD:mirror/first-high-contract-implementation-20260914
