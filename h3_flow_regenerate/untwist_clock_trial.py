@@ -10,6 +10,7 @@ from the already-audited O/C recorder.
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import Any
 
 import torch
@@ -38,7 +39,7 @@ def _validated_nonzero_schedule(record: _diag._Record) -> tuple[float, ...]:
     nonzero = values[:-1]
     if any(value <= 0.0 for value in nonzero):
         raise RuntimeError("Untwist clock trial requires positive denoiser coordinates before the terminal zero")
-    if any(left <= right for left, right in zip(nonzero, nonzero[1:])):
+    if any(left <= right for left, right in pairwise(nonzero)):
         raise RuntimeError("Untwist clock trial requires a strictly descending controlled Euler schedule")
     return nonzero
 
