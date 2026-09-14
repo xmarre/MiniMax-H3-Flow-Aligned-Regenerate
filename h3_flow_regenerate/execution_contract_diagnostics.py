@@ -40,9 +40,7 @@ _RESEARCH_TOKENS = ("weighted", "mixed_grid", "attention_measure")
 _ACTIVE: contextvars.ContextVar[_Record | None] = contextvars.ContextVar(
     "h3_flow_execution_contract_record", default=None
 )
-_STAGE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "h3_flow_execution_contract_stage", default=None
-)
+_STAGE: contextvars.ContextVar[str | None] = contextvars.ContextVar("h3_flow_execution_contract_stage", default=None)
 
 
 @dataclass(slots=True)
@@ -128,10 +126,7 @@ def _eligible(config: Any) -> bool:
 
 
 def _clone_conds(conds: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    return {
-        key: [entry.copy() if isinstance(entry, dict) else entry for entry in entries]
-        for key, entries in conds.items()
-    }
+    return {key: [entry.copy() if isinstance(entry, dict) else entry for entry in entries] for key, entries in conds.items()}
 
 
 def _runtime_snapshot(model_options: dict[str, Any] | None) -> dict[str, Any]:
@@ -222,10 +217,7 @@ def _invocation_wrapper(
     if _ACTIVE.get() is not None:
         raise RuntimeError("nested execution-contract diagnostic invocation is unsupported")
     if state.strict_provenance and not state.manifest.get("gate_complete", False):
-        raise RuntimeError(
-            "execution-contract provenance gate is incomplete: "
-            + ", ".join(state.manifest.get("unresolved", []))
-        )
+        raise RuntimeError("execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", [])))
     conds = getattr(guider, "conds", None)
     if not isinstance(conds, dict):
         raise RuntimeError("execution-contract diagnostic requires active CFGGuider conditioning")
@@ -427,9 +419,7 @@ def _predict_raw_wrapper(executor, x, timestep, model_options=None, seed=None):
         record.capture("first_high_model_raw_video", video)
         record.capture("first_high_model_raw_audio", audio)
         if bridge_present:
-            record.mark_incomplete(
-                "first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid"
-            )
+            record.mark_incomplete("first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid")
         else:
             record.capture("first_high_pre_guidance_video", video)
         if record.config is not None:
@@ -473,11 +463,7 @@ def _predict_post_wrapper(executor, x, timestep, model_options=None, seed=None):
 
 def _apply_wrapper(executor, *args, **kwargs):
     record = _ACTIVE.get()
-    capture = (
-        record is not None
-        and _STAGE.get() == "high"
-        and "first_high_core_denoised" not in record.snapshots
-    )
+    capture = record is not None and _STAGE.get() == "high" and "first_high_core_denoised" not in record.snapshots
     result = executor(*args, **kwargs)
     if capture and torch.is_tensor(result):
         record.capture("first_high_core_denoised", result)
@@ -488,12 +474,7 @@ def _capture_h3_streams(record: _Record, prefix: str, value: Any) -> None:
     if torch.is_tensor(value):
         record.capture(prefix, value)
         return
-    if (
-        isinstance(value, (list, tuple))
-        and len(value) >= 2
-        and torch.is_tensor(value[0])
-        and torch.is_tensor(value[1])
-    ):
+    if isinstance(value, (list, tuple)) and len(value) >= 2 and torch.is_tensor(value[0]) and torch.is_tensor(value[1]):
         record.capture(f"{prefix}_video", value[0])
         record.capture(f"{prefix}_audio", value[1])
 
@@ -557,10 +538,7 @@ def _tensor_summary(snapshot: _Snapshot) -> tuple[dict[str, Any], torch.Tensor]:
 
 
 def _counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
-    return {
-        key: int(after.get(key, 0) - before.get(key, 0))
-        for key in sorted(set(before) | set(after))
-    }
+    return {key: int(after.get(key, 0) - before.get(key, 0)) for key in sorted(set(before) | set(after))}
 
 
 def _matches_controlled_o(topology: dict[str, Any]) -> bool:
