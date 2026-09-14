@@ -38,7 +38,7 @@ Wrapper placement is intentional:
 
 The recorder captures bounded detached tensor clones and defers CPU summaries and
 SHA-256 calculation until the outer sampling invocation has finished. The byte
-budget is explicit (`capture_mib`, 256 MiB by default); an over-budget capture is
+budget is explicit (`capture_mib`, 512 MiB by default); an over-budget capture is
 reported as incomplete rather than silently dropping the condition.
 
 The report includes:
@@ -51,7 +51,7 @@ The report includes:
   already-constructed first-high state;
 - first-high sampler input, pre-Flow model result, post-Flow result, core result,
   native H3 input and native H3 velocity when observable;
-- exact carried-audio equality;
+- byte-exact handoff audio ownership in source plus reconstructed high-entry audio within the declared dtype tolerance; bitwise equality remains reported separately;
 - per-channel mean/RMS, finite counts, bounded spatial/temporal correlations,
   shapes/strides/dtypes/devices, and full SHA-256 for captured snapshots;
 - Flow/Spectrum logical/actual/forecast accounting and one-upscaler accounting;
@@ -165,6 +165,26 @@ companion-call slots are present, active Sol/VDN/Spectrum state is visible at th
 first high actual, and no observation error occurred. This remains a structural
 evidence gate; it is not visual approval.
 
+## CUDA O/C gate repair after run 00450
+
+Run 00450 reached 254,660,608 captured bytes under the 256 MiB budget and
+dropped four target-grid high-stage snapshots, so the controlled default is
+now 512 MiB. Capture truncation remains a hard failure.
+
+The same run exposed a diagnostic boundary distinction: `build_handoff_state`
+copies carried sampler audio byte-for-byte into `target_raw`, while the
+`SAMPLER_SAMPLE` boundary observed later is reconstructed through Flow's
+`_noise_argument` inverse and Core floating-point `noise_scaling`. The report
+therefore retains bitwise equality as evidence but gates that reconstructed
+boundary using an explicit dtype-scaled round-trip tolerance. Material audio
+changes still fail. This changes no production sampler behavior and does not
+weaken exact protected-output requirements.
+
+Active Sol runtime snapshots also carried the relevant weighted/Mixed-Grid
+counters while the base recorder searched a static model-options snapshot.
+The runtime gate now requires every selected Sol receipt to be present and
+zero, including weighted-measure counters; missing is not treated as zero.
+
 ## Controlled O acceptance criteria
 
 Use the exact baseline workflow/settings from the architecture document. A valid
@@ -174,7 +194,7 @@ O run must report all of the following before its media is interpreted:
 - low 5L/4A/1F, probe 1L/1A/0F, high 3L/2A/1F;
 - exactly one learned-3D upscaler event;
 - no nonzero weighted/Mixed-Grid counters;
-- exact carried-audio equality;
+- byte-exact handoff audio ownership in source plus reconstructed high-entry audio within the declared dtype tolerance; bitwise equality remains reported separately;
 - first-high `h3_refinement.min_actual_prefix_steps == 1`;
 - complete installed provenance;
 - complete post-load runtime observation with no observer error or truncation;
@@ -189,7 +209,7 @@ paired decoded media agree with the uninstrumented baseline.
    validation in the workflow.
 2. Apply `MiniMax H3 Execution Contract Diagnostics` **after all MODEL patching
    nodes** so its provenance manifest sees the effective wrapper/replacement
-   stack. Leave `strict_provenance=true` and `capture_mib=256` initially.
+   stack. Leave `strict_provenance=true` and `capture_mib=512` for the controlled 44→64 run.
 3. Feed that node's MODEL output to the production sampler. Do not change the
    seed, reference inputs, prompt, geometry, sampler, scheduler, Spectrum/Sol/VDN
    settings, guidance, or handoff settings.

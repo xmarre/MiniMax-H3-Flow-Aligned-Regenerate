@@ -344,6 +344,17 @@ def test_sol_runtime_snapshot_reads_active_request_without_import(monkeypatch):
         eligible_calls=7,
         sparse_calls=3,
         dense_calls=1,
+        external_mixed_sol_calls=0,
+        external_mixed_q_rows=0,
+        external_mixed_kernel_q_rows=0,
+        external_mixed_measure_calls=0,
+        external_mixed_measure_q_rows=0,
+        external_mixed_measure_kv_rows_before=0,
+        external_mixed_measure_kv_rows_after=0,
+        external_mixed_measure_removed_rows=0,
+        external_mixed_weighted_measure_calls=0,
+        external_mixed_weighted_measure_q_rows=0,
+        external_mixed_weighted_measure_kv_rows=0,
         backend_transitions=0,
         last_routes=((0, "sol"),),
         gates=[{"block": 0}],
@@ -371,11 +382,30 @@ def test_sol_runtime_snapshot_reads_active_request_without_import(monkeypatch):
     assert snapshot["request_active"] is True
     assert snapshot["forward_active"] is True
     assert snapshot["evaluations"] == 2
+    assert snapshot["external_mixed_weighted_measure_calls"] == 0
     assert snapshot["dense_attention_backends"] == ["sage"]
     assert snapshot["forward"]["seen_blocks"] == [0, 1]
     assert snapshot["kernel"] == {
         "backend_name": "sol-attn",
         "source_tree_verified": True,
+    }
+
+
+def _zero_research_sol_snapshot():
+    return {
+        "request_active": True,
+        "forward_active": True,
+        "external_mixed_sol_calls": 0,
+        "external_mixed_q_rows": 0,
+        "external_mixed_kernel_q_rows": 0,
+        "external_mixed_measure_calls": 0,
+        "external_mixed_measure_q_rows": 0,
+        "external_mixed_measure_kv_rows_before": 0,
+        "external_mixed_measure_kv_rows_after": 0,
+        "external_mixed_measure_removed_rows": 0,
+        "external_mixed_weighted_measure_calls": 0,
+        "external_mixed_weighted_measure_q_rows": 0,
+        "external_mixed_weighted_measure_kv_rows": 0,
     }
 
 
@@ -392,12 +422,12 @@ def _complete_runtime_observation():
     }
     companion = {
         "before": {
-            "sol": {"request_active": True, "forward_active": True},
+            "sol": _zero_research_sol_snapshot(),
             "vdn": [{"layout_active": True, "runtime_pool_active": True}],
             "spectrum": {"active_run_id": 3, "active_step_id": 0},
         },
         "after": {
-            "sol": {"request_active": True, "forward_active": True},
+            "sol": _zero_research_sol_snapshot(),
             "vdn": [{"layout_active": True, "runtime_pool_active": True}],
             "spectrum": {"active_run_id": 3, "active_step_id": 0},
         },
@@ -567,3 +597,21 @@ def test_report_rejects_unexpected_actual_diffusion_call_count():
     assert runtime["observed_actual_call_counts"] == {"low": 4, "probe": 1, "high": 3}
     assert runtime["runtime_contract_complete"] is False
     assert report["observation_gate"]["structural_candidate"] is False
+
+
+def test_runtime_gate_rejects_nonzero_weighted_mixed_receipt():
+    runtime_observation = _complete_runtime_observation()
+    runtime_observation["companion_calls"]["high_first"]["after"]["sol"]["external_mixed_weighted_measure_calls"] = 1
+    gate = observation._runtime_observation_gate({"provenance": {observation._EXTENSION_KEY: runtime_observation}})
+    assert gate["sol_research_receipts_complete"] is True
+    assert gate["sol_research_zero"] is False
+    assert gate["runtime_contract_complete"] is False
+
+
+def test_runtime_gate_rejects_missing_weighted_mixed_receipt():
+    runtime_observation = _complete_runtime_observation()
+    del runtime_observation["companion_calls"]["probe"]["before"]["sol"]["external_mixed_weighted_measure_calls"]
+    gate = observation._runtime_observation_gate({"provenance": {observation._EXTENSION_KEY: runtime_observation}})
+    assert gate["sol_research_receipts_complete"] is False
+    assert gate["sol_research_zero"] is False
+    assert gate["runtime_contract_complete"] is False
