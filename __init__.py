@@ -4,7 +4,9 @@
 # diagnostics observe the transported target-grid guidance representation. The
 # execution-contract recorder is imported after both; its runtime-observation
 # extension is imported immediately after the base recorder and only composes
-# additional ModelPatcher wrappers around that diagnostic.
+# additional ModelPatcher wrappers around that diagnostic. The bounded Untwist
+# clock trial is registered last because it requires the execution-contract
+# recorder upstream and adds only its opt-in child-stage observer.
 try:
     from .h3_flow_regenerate.decode_context import (
         NODE_CLASS_MAPPINGS as DECODE_NODE_CLASS_MAPPINGS,
@@ -35,6 +37,12 @@ try:
     )
     from .h3_flow_regenerate.execution_contract_runtime_observation import (
         NODE_DISPLAY_NAME_MAPPINGS as EXECUTION_CONTRACT_RUNTIME_NODE_DISPLAY_NAME_MAPPINGS,
+    )
+    from .h3_flow_regenerate.untwist_clock_trial import (
+        NODE_CLASS_MAPPINGS as UNTWIST_CLOCK_TRIAL_NODE_CLASS_MAPPINGS,
+    )
+    from .h3_flow_regenerate.untwist_clock_trial import (
+        NODE_DISPLAY_NAME_MAPPINGS as UNTWIST_CLOCK_TRIAL_NODE_DISPLAY_NAME_MAPPINGS,
     )
     from .h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
     from .h3_flow_regenerate.target_sparse_node import (
@@ -74,6 +82,12 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.execution_contract_runtime_observation import (
         NODE_DISPLAY_NAME_MAPPINGS as EXECUTION_CONTRACT_RUNTIME_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from h3_flow_regenerate.untwist_clock_trial import (
+        NODE_CLASS_MAPPINGS as UNTWIST_CLOCK_TRIAL_NODE_CLASS_MAPPINGS,
+    )
+    from h3_flow_regenerate.untwist_clock_trial import (
+        NODE_DISPLAY_NAME_MAPPINGS as UNTWIST_CLOCK_TRIAL_NODE_DISPLAY_NAME_MAPPINGS,
+    )
     from h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
     from h3_flow_regenerate.target_sparse_node import (
         NODE_CLASS_MAPPINGS as TARGET_SPARSE_NODE_CLASS_MAPPINGS,
@@ -90,6 +104,7 @@ NODE_CLASS_MAPPINGS = {
     **GUIDANCE_ANCHOR_VALIDATION_NODE_CLASS_MAPPINGS,
     **EXECUTION_CONTRACT_NODE_CLASS_MAPPINGS,
     **EXECUTION_CONTRACT_RUNTIME_NODE_CLASS_MAPPINGS,
+    **UNTWIST_CLOCK_TRIAL_NODE_CLASS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **NODE_DISPLAY_NAME_MAPPINGS,
@@ -99,6 +114,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **GUIDANCE_ANCHOR_VALIDATION_NODE_DISPLAY_NAME_MAPPINGS,
     **EXECUTION_CONTRACT_NODE_DISPLAY_NAME_MAPPINGS,
     **EXECUTION_CONTRACT_RUNTIME_NODE_DISPLAY_NAME_MAPPINGS,
+    **UNTWIST_CLOCK_TRIAL_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
