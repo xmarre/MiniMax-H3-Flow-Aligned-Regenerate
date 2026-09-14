@@ -211,9 +211,7 @@ def test_prepare_sampling_observation_failure_does_not_mask_loaded_result(monkey
 
     assert result[0] == "real"
     extension = state.manifest[observation._EXTENSION_KEY]
-    assert extension["observation_errors"] == [
-        "post_prepare_sampling_load: RuntimeError: observer failed"
-    ]
+    assert extension["observation_errors"] == ["post_prepare_sampling_load: RuntimeError: observer failed"]
     lifecycle = extension["stage_lifecycles"][0]
     assert lifecycle["stage"] == "probe"
     assert lifecycle["model"] == {}

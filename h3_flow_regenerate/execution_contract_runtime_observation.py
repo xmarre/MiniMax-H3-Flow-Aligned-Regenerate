@@ -112,9 +112,7 @@ def _object_patch_manifest(model: Any) -> dict[str, Any]:
         return {}
     return {
         str(key): (
-            {"callable": _runtime_callable_signature(value)}
-            if callable(value)
-            else _provenance.safe_value(value)
+            {"callable": _runtime_callable_signature(value)} if callable(value) else _provenance.safe_value(value)
         )
         for key, value in sorted(patches.items(), key=lambda pair: str(pair[0]))
     }
