@@ -348,7 +348,12 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
         "handoff_sigma": float(record.handoff_sigma),
         "handoff_index": int(record.original_sigmas.index(record.handoff_sigma))
         if record.handoff_sigma in record.original_sigmas
-        else int(min(range(len(record.original_sigmas)), key=lambda i: abs(record.original_sigmas[i] - record.handoff_sigma))),
+        else int(
+            min(
+                range(len(record.original_sigmas)),
+                key=lambda i: abs(record.original_sigmas[i] - record.handoff_sigma),
+            )
+        ),
         "source_shapes": [[int(dim) for dim in shape] for shape in (record.source_shapes or [])],
         "target_shapes": [[int(dim) for dim in shape] for shape in record.target_shapes],
         "sampler": str(high["sampler"]),
@@ -459,7 +464,8 @@ def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, t
     if not tensors_path.is_file():
         raise FileNotFoundError(f"same-state replay tensor file not found: {tensors_path}")
     expected_file_hash = manifest.get("tensors_file_sha256")
-    if not isinstance(expected_file_hash, str) or hashlib.sha256(tensors_path.read_bytes()).hexdigest() != expected_file_hash:
+    actual_file_hash = hashlib.sha256(tensors_path.read_bytes()).hexdigest()
+    if not isinstance(expected_file_hash, str) or actual_file_hash != expected_file_hash:
         raise RuntimeError("same-state replay tensor file hash mismatch")
     try:
         tensors = torch.load(tensors_path, map_location="cpu", weights_only=True)
@@ -478,7 +484,10 @@ def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, t
     return manifest_path, manifest, tensors
 
 
-def _rebuild_trajectory(manifest: dict[str, Any], tensors: dict[str, torch.Tensor]) -> tuple[H3FlowTrajectory | None, str | None]:
+def _rebuild_trajectory(
+    manifest: dict[str, Any],
+    tensors: dict[str, torch.Tensor],
+) -> tuple[H3FlowTrajectory | None, str | None]:
     trajectory_meta = manifest.get("trajectory")
     samples = manifest.get("guidance_samples") or []
     if trajectory_meta is None:
@@ -571,7 +580,9 @@ def _replay_wrapper(
     target_shapes = [tuple(int(dim) for dim in shape) for shape in state.manifest["target_shapes"]]
     current_shapes = [tuple(int(dim) for dim in shape) for shape in latent_shapes]
     if current_shapes != target_shapes:
-        raise RuntimeError(f"same-state replay target geometry mismatch: current={current_shapes} captured={target_shapes}")
+        raise RuntimeError(
+            f"same-state replay target geometry mismatch: current={current_shapes} captured={target_shapes}"
+        )
     if _runtime._schedule_signature(sigmas) != str(state.manifest["original_schedule_digest"]):
         raise RuntimeError("same-state replay caller schedule differs from the captured original schedule")
     if record.pristine_cond_digest != str(state.manifest["pristine_conditioning_digest"]):
