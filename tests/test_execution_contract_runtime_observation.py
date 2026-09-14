@@ -62,6 +62,63 @@ def test_model_lifecycle_manifest_tracks_block_hook_identity():
     assert manifest["block_post_hook_count"] == 1
     assert manifest["blocks"][1]["post_hooks"][0]["qualname"].endswith("post_hook")
     assert len(manifest["block_runtime_digest"]) == 64
+    assert manifest["modified_modules"]["count"] == 1
+    assert manifest["modified_modules"]["truncated"] is False
+    assert manifest["runtime_lifecycle_digest"]
+
+
+def test_model_lifecycle_manifest_tracks_nested_forward_replacement_owner():
+    class Leaf(torch.nn.Module):
+        def forward(self, value):
+            return value
+
+    class Diffusion(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.blocks = torch.nn.ModuleList([Leaf()])
+            self.proj = Leaf()
+
+        def forward(self, value):
+            return self.proj(value)
+
+    class FakeAdapter:
+        pass
+
+    class ForwardHook:
+        def __init__(self, module):
+            self.module = module
+            self.adapter = FakeAdapter()
+            self.multiplier = 0.75
+            self.original_forward = module.forward
+
+        def bypass(self, value):
+            return self.original_forward(value)
+
+    diffusion = Diffusion()
+    hook = ForwardHook(diffusion.proj)
+    diffusion.proj.forward = hook.bypass
+    patcher = SimpleNamespace(
+        model=SimpleNamespace(diffusion_model=diffusion),
+        is_injected=True,
+        load_device="cuda:0",
+        offload_device="cpu",
+        injections={},
+        object_patches={},
+        model_options={},
+    )
+
+    manifest = observation.model_lifecycle_manifest(patcher)
+    modified = manifest["modified_modules"]
+    assert modified["count"] == 1
+    assert modified["truncated"] is False
+    entry = modified["modules"][0]
+    assert entry["path"] == "proj"
+    assert entry["instance_forward_override"] is True
+    owner = entry["forward"]["bound_owner"]
+    assert owner["type"].endswith("ForwardHook")
+    assert owner["adapter_type"].endswith("FakeAdapter")
+    assert owner["module_type"].endswith("Leaf")
+    assert owner["multiplier"] == 0.75
 
 
 def test_prepare_sampling_observer_records_post_load_state(monkeypatch):
@@ -77,6 +134,8 @@ def test_prepare_sampling_observer_records_post_load_state(monkeypatch):
             "patcher_is_injected": value.is_injected,
             "active_injections": {"adapter": [{}]} if value.is_injected else {},
             "block_runtime_digest": "digest",
+            "runtime_lifecycle_digest": "runtime-digest",
+            "modified_modules": {"count": 1, "truncated": False},
             "marker": (model_options or {}).get("marker"),
         }
 
@@ -113,13 +172,52 @@ def test_prepare_sampling_observer_records_post_load_state(monkeypatch):
                 "patcher_is_injected": True,
                 "active_injections": {"adapter": [{}]},
                 "block_runtime_digest": "digest",
+                "runtime_lifecycle_digest": "runtime-digest",
+                "modified_modules": {"count": 1, "truncated": False},
                 "marker": "effective",
             },
-            "additional_models": [
-                {"type": "types.SimpleNamespace", "patcher_is_injected": True}
-            ],
+            "additional_models": [{"type": "types.SimpleNamespace", "patcher_is_injected": True}],
         }
     ]
+
+
+def test_prepare_sampling_observation_failure_does_not_mask_loaded_result(monkeypatch):
+    state = _state()
+    record = diag._Record(state=state)
+    active_token = diag._ACTIVE.set(record)
+    stage_token = diag._STAGE.set("probe")
+    model = SimpleNamespace(is_injected=False)
+
+    def fail_lifecycle(*_args, **_kwargs):
+        raise RuntimeError("observer failed")
+
+    monkeypatch.setattr(observation, "model_lifecycle_manifest", fail_lifecycle)
+
+    class Executor:
+        def __call__(self, value, _noise_shape, conds, **_kwargs):
+            value.is_injected = True
+            return "real", conds, []
+
+    try:
+        result = observation._prepare_sampling_wrapper(
+            Executor(),
+            model,
+            (1, 2, 3),
+            {"positive": []},
+        )
+    finally:
+        diag._STAGE.reset(stage_token)
+        diag._ACTIVE.reset(active_token)
+
+    assert result[0] == "real"
+    extension = state.manifest[observation._EXTENSION_KEY]
+    assert extension["observation_errors"] == [
+        "post_prepare_sampling_load: RuntimeError: observer failed"
+    ]
+    lifecycle = extension["stage_lifecycles"][0]
+    assert lifecycle["stage"] == "probe"
+    assert lifecycle["model"] == {}
+    assert lifecycle["observation_error"] == extension["observation_errors"][0]
 
 
 def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch):
@@ -161,7 +259,51 @@ def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch
     assert first["actual_index"] == 1
     assert first["before"] == {"executor_calls": 0}
     assert first["after"] == {"executor_calls": 1}
+    assert first["observation_errors"] == []
     assert extension["companion_calls"]["high_last"] == first
+
+
+def test_diffusion_observation_failure_does_not_add_or_replace_model_call(monkeypatch):
+    state = _state()
+    record = diag._Record(state=state)
+    active_token = diag._ACTIVE.set(record)
+    stage_token = diag._STAGE.set("high")
+    calls = 0
+
+    class Executor:
+        wrappers = ()
+
+        def __call__(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return "model-result"
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(observation, "_active_companion_snapshot", fail_snapshot)
+    wrapper = observation._make_diffusion_wrapper({})
+    try:
+        result = wrapper(
+            Executor(),
+            object(),
+            torch.tensor([0.4]),
+            None,
+            {diag._runtime.FLOW_STAGE_KEY: "high"},
+        )
+    finally:
+        diag._STAGE.reset(stage_token)
+        diag._ACTIVE.reset(active_token)
+
+    assert result == "model-result"
+    assert calls == 1
+    extension = state.manifest[observation._EXTENSION_KEY]
+    assert len(extension["observation_errors"]) == 2
+    assert all("RuntimeError: snapshot failed" in item for item in extension["observation_errors"])
+    first = extension["companion_calls"]["high_first"]
+    assert first["before"] == {}
+    assert first["after"] == {}
+    assert len(first["observation_errors"]) == 2
 
 
 def test_vdn_runtime_snapshot_reads_closure_owned_layout_and_pool():
@@ -237,7 +379,8 @@ def _complete_runtime_observation():
         "model": {
             "patcher_is_injected": True,
             "active_injections": {"adapter": [{}]},
-            "block_runtime_digest": "same",
+            "runtime_lifecycle_digest": "same",
+            "modified_modules": {"count": 2, "truncated": False},
         },
         "additional_models": [],
     }
@@ -252,9 +395,10 @@ def _complete_runtime_observation():
             "vdn": [{"layout_active": True, "runtime_pool_active": True}],
             "spectrum": {"active_run_id": 3, "active_step_id": 0},
         },
+        "observation_errors": [],
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "stage_lifecycles": [
             {"stage": "low", **lifecycle},
             {"stage": "probe", **lifecycle},
@@ -266,6 +410,7 @@ def _complete_runtime_observation():
             "high_first": {"stage": "high", "actual_index": 1, **companion},
             "high_last": {"stage": "high", "actual_index": 2, **companion},
         },
+        "observation_errors": [],
     }
 
 
@@ -306,8 +451,60 @@ def test_report_keeps_structural_candidate_only_with_complete_runtime_contract()
     report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
     report = json.loads(report_text)
     gate = report["observation_gate"]
-    assert gate["runtime_contract"]["stage_lifecycle_complete"] is True
-    assert gate["runtime_contract"]["injection_state_consistent"] is True
-    assert gate["runtime_contract"]["hook_runtime_stable"] is True
-    assert gate["runtime_contract"]["runtime_contract_complete"] is True
+    runtime = gate["runtime_contract"]
+    assert runtime["stage_lifecycle_complete"] is True
+    assert runtime["injection_state_consistent"] is True
+    assert runtime["hook_runtime_stable"] is True
+    assert runtime["modified_runtime_visible"] is True
+    assert runtime["observation_error_free"] is True
+    assert runtime["runtime_contract_complete"] is True
     assert gate["structural_candidate"] is True
+
+
+def test_report_rejects_observation_errors_even_when_other_runtime_evidence_is_complete():
+    runtime_observation = _complete_runtime_observation()
+    runtime_observation["observation_errors"] = ["high:before_diffusion_model: RuntimeError: failed"]
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["observation_error_free"] is False
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
+
+
+def test_report_rejects_truncated_modified_module_observation():
+    runtime_observation = _complete_runtime_observation()
+    runtime_observation["stage_lifecycles"][1]["model"]["modified_modules"] = {
+        "count": observation._MAX_MODIFIED_MODULES + 1,
+        "truncated": True,
+    }
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["modified_runtime_visible"] is False
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
