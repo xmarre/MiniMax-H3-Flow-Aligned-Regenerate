@@ -1,0 +1,155 @@
+name: Repair PR41 provenance equivalence integrity
+
+on:
+  push:
+    branches:
+      - driver/pr41-provenance-integrity-fix-20260915
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr41-provenance-integrity-fix-20260915
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply fail-closed equivalence repair and tamper test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('h3_flow_regenerate/same_state_high_replay.py')
+          source = source_path.read_text()
+          old = '''def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+              persisted = manifest.get("provenance_equivalence_identity")
+              persisted_digest = manifest.get("provenance_equivalence_digest")
+              if isinstance(persisted, dict):
+                  if not isinstance(persisted_digest, str) or _sha_json(persisted) != persisted_digest:
+                      raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
+                  return persisted
+              legacy = manifest.get("provenance_identity")
+              if not isinstance(legacy, dict):
+                  raise RuntimeError("same-state replay bundle lacks installed-runtime provenance identity")
+              return _provenance_equivalence_identity(legacy)
+          '''.replace('              ', '')
+          new = '''def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+              full_identity = manifest.get("provenance_identity")
+              if not isinstance(full_identity, dict):
+                  raise RuntimeError("same-state replay bundle lacks installed-runtime provenance identity")
+              derived = _provenance_equivalence_identity(full_identity)
+
+              persisted = manifest.get("provenance_equivalence_identity")
+              persisted_digest = manifest.get("provenance_equivalence_digest")
+              if persisted is None and persisted_digest is None:
+                  return derived
+              if not isinstance(persisted, dict) or not isinstance(persisted_digest, str):
+                  raise RuntimeError("same-state replay provenance-equivalence identity is incomplete")
+              if _sha_json(persisted) != persisted_digest:
+                  raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
+              if _canonical_json(persisted) != _canonical_json(derived):
+                  differences = _provenance_diff_paths(derived, persisted)
+                  detail = "" if not differences else "; differing fields: " + ", ".join(differences)
+                  raise RuntimeError(
+                      "same-state replay provenance-equivalence identity is inconsistent with full provenance" + detail
+                  )
+              return derived
+          '''.replace('              ', '')
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one provenance-equivalence helper anchor, found {source.count(old)}')
+          source = source.replace(old, new, 1)
+
+          old_validate = '''    provenance_identity = manifest.get("provenance_identity")
+              if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
+                  raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
+              runtime_policy = manifest.get("first_high_runtime_policy")
+          '''.replace('              ', '    ')
+          new_validate = '''    provenance_identity = manifest.get("provenance_identity")
+              if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
+                  raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
+              _bundle_provenance_equivalence_identity(manifest)
+              runtime_policy = manifest.get("first_high_runtime_policy")
+          '''.replace('              ', '    ')
+          if source.count(old_validate) != 1:
+              raise SystemExit(f'expected one bundle validation anchor, found {source.count(old_validate)}')
+          source_path.write_text(source.replace(old_validate, new_validate, 1))
+
+          tests_path = Path('tests/test_same_state_high_replay.py')
+          tests = tests_path.read_text()
+          test_name = 'test_bundle_equivalence_identity_cannot_override_validated_full_provenance'
+          if test_name in tests:
+              raise SystemExit('tamper test already present unexpectedly')
+          addition = r'''
+
+
+def test_bundle_equivalence_identity_cannot_override_validated_full_provenance():
+    full_identity = {
+        "loaded_companion_sources": {
+            "flow": [
+                {
+                    "module": "h3_flow_regenerate.runtime",
+                    "file": {
+                        "path": "/custom_nodes/flow/h3_flow_regenerate/runtime.py",
+                        "resolved_path": "/custom_nodes/flow/h3_flow_regenerate/runtime.py",
+                        "sha256": "production-source-a",
+                        "git": {"available": True, "head": "capture-head", "dirty": False},
+                    },
+                }
+            ]
+        },
+        "patcher_is_injected": True,
+    }
+    derived = replay._provenance_equivalence_identity(full_identity)
+    manifest = {
+        "provenance_identity": copy.deepcopy(full_identity),
+        "provenance_digest": replay._sha_json(full_identity),
+        "provenance_equivalence_identity": copy.deepcopy(derived),
+        "provenance_equivalence_digest": replay._sha_json(derived),
+    }
+
+    assert replay._bundle_provenance_equivalence_identity(manifest) == derived
+
+    tampered = copy.deepcopy(manifest)
+    tampered_equivalence = tampered["provenance_equivalence_identity"]
+    tampered_equivalence["loaded_companion_sources"]["flow"][0]["file"]["sha256"] = "production-source-b"
+    tampered["provenance_equivalence_digest"] = replay._sha_json(tampered_equivalence)
+
+    try:
+        replay._bundle_provenance_equivalence_identity(tampered)
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "inconsistent with full provenance" in message
+        assert "sha256" in message
+    else:
+        raise AssertionError("tampered causal provenance identity was accepted")
+'''
+          tests_path.write_text(tests + addition)
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]' build
+
+      - name: Format and validate focused repair
+        run: |
+          ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
+          ruff check h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
+          pytest -q tests/test_same_state_high_replay.py
+          python -m compileall -q h3_flow_regenerate/same_state_high_replay.py
+
+      - name: Commit source-only repair
+        run: |
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
+          git diff --cached --check
+          git commit -m 'Harden replay provenance bundle integrity'
+          git push origin HEAD:mirror/pr41-provenance-integrity-fix-20260915
