@@ -50,7 +50,9 @@ Model order:
 3. `MiniMax H3 Untwist Full-Trajectory Clock Trial`;
 4. production sampler.
 
-Continue to save the execution-contract report, Flow metrics, `first_high_pre_guidance`, `last_high_pre_guidance`, and ordinary final output. The run is valid only if accounting remains truthful and any changed Spectrum actual/forecast decisions are reported rather than hidden.
+Save the execution-contract report and Flow metrics. Because this intervention deliberately corrects the trajectory clock across **low, probe and high**, decode the same checkpoint set needed to see where any difference first appears: `low_last_model_clean`, `exact_probe_clean`, `learned_transfer_clean`, `first_high_model_raw`, `first_high_pre_guidance`, `last_high_pre_guidance`, and the ordinary final output. Use the same decoder settings and comparison frame times as 00446. Do not judge U only from the final video.
+
+The run is valid only if accounting remains truthful and any changed Spectrum actual/forecast decisions are reported rather than hidden. The expected controlled accounting remains `9L/7A/2F` with one learned-upscaler call; a different route/NFE outcome must be recorded and treated as an attribution limitation rather than forced back to the expected count.
 
 Decision rule:
 
