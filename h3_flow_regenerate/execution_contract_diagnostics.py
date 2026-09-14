@@ -21,7 +21,7 @@ import torch
 
 from . import comfy_compat as _comfy_compat
 from . import runtime as _runtime
-from .execution_contract_provenance import collect_manifest, fingerprint, safe_value
+from .execution_contract_provenance import alias_graph, collect_manifest, fingerprint, safe_value
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig, deterministic_video_noise
 from .seam_diagnostics import recover_conditional_clean_for_diagnostics
@@ -35,8 +35,9 @@ _SAMPLER_KEY = "h3_flow_regenerate.exec_contract.sampler.v1"
 _APPLY_KEY = "h3_flow_regenerate.exec_contract.apply.v1"
 _DIFFUSION_KEY = "h3_flow_regenerate.exec_contract.diffusion.v1"
 _MAX_REPORTS = 4
+_RESEARCH_TOKENS = ("weighted", "mixed_grid", "attention_measure")
 
-_ACTIVE: contextvars.ContextVar["_Record | None"] = contextvars.ContextVar(
+_ACTIVE: contextvars.ContextVar[_Record | None] = contextvars.ContextVar(
     "h3_flow_execution_contract_record", default=None
 )
 _STAGE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -72,8 +73,10 @@ class _Record:
     pristine_conds: dict[str, list[Any]] | None = None
     pristine_cond_digest: str | None = None
     pristine_cond_summary: Any = None
+    pristine_cond_alias_graph: list[dict[str, Any]] = field(default_factory=list)
     high_pre_core_digest: str | None = None
     high_pre_core_summary: Any = None
+    high_pre_core_alias_graph: list[dict[str, Any]] = field(default_factory=list)
     condition_compare: dict[str, Any] | None = None
     metric_start: dict[str, int] = field(default_factory=dict)
     event_start: int = 0
@@ -100,7 +103,9 @@ class _Record:
         previous_size = 0 if previous is None else int(previous.tensor.numel()) * int(previous.tensor.element_size())
         next_total = self.byte_count - previous_size + size
         if next_total > self.state.max_bytes:
-            self.incomplete.append(f"{label}: capture budget exceeded ({size} bytes)")
+            message = f"{label}: capture budget exceeded ({size} bytes)"
+            if message not in self.incomplete:
+                self.incomplete.append(message)
             return
         self.snapshots[label] = _Snapshot(
             tensor=value.detach().clone(),
@@ -108,6 +113,10 @@ class _Record:
             original_stride=tuple(int(item) for item in value.stride()),
         )
         self.byte_count = next_total
+
+    def mark_incomplete(self, message: str) -> None:
+        if message not in self.incomplete:
+            self.incomplete.append(message)
 
 
 def _eligible(config: Any) -> bool:
@@ -127,15 +136,33 @@ def _clone_conds(conds: dict[str, list[Any]]) -> dict[str, list[Any]]:
 
 def _runtime_snapshot(model_options: dict[str, Any] | None) -> dict[str, Any]:
     transformer = (model_options or {}).get("transformer_options") or {}
+    interesting = (
+        "h3_",
+        "minimax",
+        "spectrum",
+        "sol",
+        "vdn",
+        "untwist",
+        "diffaid",
+        "sample_sigmas",
+    )
     out = {}
     for key, value in transformer.items():
         name = str(key).lower()
-        if any(token in name for token in ("h3_", "minimax", "spectrum", "sol", "vdn", "untwist", "diffaid", "sample_sigmas")):
+        if any(token in name for token in interesting):
             out[str(key)] = safe_value(value)
     return out
 
 
-def _insert_relative(model: Any, wrapper_type: str, anchor: str, key: str, wrapper: Any, *, before: bool) -> None:
+def _insert_relative(
+    model: Any,
+    wrapper_type: str,
+    anchor: str,
+    key: str,
+    wrapper: Any,
+    *,
+    before: bool,
+) -> None:
     model.remove_wrappers_with_key(wrapper_type, key)
     existing = model.wrappers.get(wrapper_type, {})
     if anchor not in existing:
@@ -214,6 +241,7 @@ def _invocation_wrapper(
         pristine_conds=pristine,
         pristine_cond_digest=pristine_digest,
         pristine_cond_summary=pristine_summary,
+        pristine_cond_alias_graph=alias_graph(pristine),
     )
     binding = _runtime._resolve_binding(guider)
     if binding is not None:
@@ -285,6 +313,7 @@ def _stage_wrapper(
             current_conds = getattr(guider, "conds", None)
             if isinstance(current_conds, dict):
                 record.high_pre_core_digest, record.high_pre_core_summary = fingerprint(current_conds)
+                record.high_pre_core_alias_graph = alias_graph(current_conds)
         if sigmas.numel():
             record.handoff_sigma = float(sigmas[0].item())
         record.capture("high_noise_argument", noise)
@@ -339,18 +368,27 @@ def _sampler_wrapper(
     disable_pbar=False,
 ):
     record = _ACTIVE.get()
-    if record is not None and _stage_name(extra_args.get("model_options")) == "high" and record.condition_compare is None:
-        actual_digest, actual_summary = fingerprint(getattr(model_wrap, "conds", {}))
+    is_first_high = (
+        record is not None
+        and _stage_name(extra_args.get("model_options")) == "high"
+        and record.condition_compare is None
+    )
+    if is_first_high:
+        actual_conds = getattr(model_wrap, "conds", {})
+        actual_digest, actual_summary = fingerprint(actual_conds)
         record.condition_compare = {
             "scope": (
                 "exact pristine-target vs Flow high pre-core comparison plus observation of the already-processed "
                 "MiniMaxH3 conditioning; extra_conds is not replayed because it executes H3 text preprocessing"
             ),
             "pristine_target_digest": record.pristine_cond_digest,
+            "pristine_target_alias_graph": record.pristine_cond_alias_graph,
             "high_pre_core_digest": record.high_pre_core_digest,
+            "high_pre_core_alias_graph": record.high_pre_core_alias_graph,
             "pre_core_equal": record.pristine_cond_digest == record.high_pre_core_digest,
             "actual_processed_digest": actual_digest,
             "actual_processed": actual_summary,
+            "actual_processed_alias_graph": alias_graph(actual_conds),
             "no_extra_condition_preprocess": True,
             "no_extra_h3_evaluation": True,
             "no_extra_upscaler_call": True,
@@ -376,6 +414,8 @@ def _predict_raw_wrapper(executor, x, timestep, model_options=None, seed=None):
     if stage != "high":
         return result
 
+    transformer = (model_options or {}).get("transformer_options") or {}
+    bridge_present = _runtime.EXACT_PREFIX_BRIDGE_KEY in transformer
     record.high_predict_count += 1
     if record.high_predict_count == 1:
         record.target_shapes = shapes
@@ -386,9 +426,10 @@ def _predict_raw_wrapper(executor, x, timestep, model_options=None, seed=None):
         record.capture("first_high_sampler_input_audio", state_audio)
         record.capture("first_high_model_raw_video", video)
         record.capture("first_high_model_raw_audio", audio)
-        transformer = (model_options or {}).get("transformer_options") or {}
-        if _runtime.EXACT_PREFIX_BRIDGE_KEY in transformer:
-            record.incomplete.append("first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid")
+        if bridge_present:
+            record.mark_incomplete(
+                "first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid"
+            )
         else:
             record.capture("first_high_pre_guidance_video", video)
         if record.config is not None:
@@ -405,10 +446,14 @@ def _predict_raw_wrapper(executor, x, timestep, model_options=None, seed=None):
         record.first_high_contract = {
             "coordinate": float(_runtime.normalized_coordinate(sigma, video_shift=video_shift)),
             "refinement": safe_value(transformer.get("h3_refinement")),
+            "model_options_alias_graph": alias_graph(model_options or {}),
+            "exact_prefix_bridge_present": bridge_present,
             "guidance_split_owned_by_pr35_pr36": True,
         }
         record.first_high_runtime = _runtime_snapshot(model_options)
-    record.capture("last_high_pre_guidance_video", video, replace=True)
+    record.capture("last_high_model_raw_video", video, replace=True)
+    if not bridge_present:
+        record.capture("last_high_pre_guidance_video", video, replace=True)
     return result
 
 
@@ -428,7 +473,11 @@ def _predict_post_wrapper(executor, x, timestep, model_options=None, seed=None):
 
 def _apply_wrapper(executor, *args, **kwargs):
     record = _ACTIVE.get()
-    capture = record is not None and _STAGE.get() == "high" and "first_high_core_denoised" not in record.snapshots
+    capture = (
+        record is not None
+        and _STAGE.get() == "high"
+        and "first_high_core_denoised" not in record.snapshots
+    )
     result = executor(*args, **kwargs)
     if capture and torch.is_tensor(result):
         record.capture("first_high_core_denoised", result)
@@ -439,7 +488,12 @@ def _capture_h3_streams(record: _Record, prefix: str, value: Any) -> None:
     if torch.is_tensor(value):
         record.capture(prefix, value)
         return
-    if isinstance(value, (list, tuple)) and len(value) >= 2 and torch.is_tensor(value[0]) and torch.is_tensor(value[1]):
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) >= 2
+        and torch.is_tensor(value[0])
+        and torch.is_tensor(value[1])
+    ):
         record.capture(f"{prefix}_video", value[0])
         record.capture(f"{prefix}_audio", value[1])
 
@@ -460,6 +514,7 @@ def _diffusion_wrapper(executor, *args, **kwargs):
         record.first_high_h3_contract = {
             "timestep": safe_value(timestep),
             "runtime": _runtime_snapshot({"transformer_options": transformer or {}}),
+            "transformer_options_alias_graph": alias_graph(transformer or {}),
         }
     result = executor(*args, **kwargs)
     if capture:
@@ -508,6 +563,61 @@ def _counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, i
     }
 
 
+def _matches_controlled_o(topology: dict[str, Any]) -> bool:
+    expected = {
+        "low": {"logical": 5, "actual": 4, "forecast": 1},
+        "probe": {"logical": 1, "actual": 1, "forecast": 0},
+        "high": {"logical": 3, "actual": 2, "forecast": 1},
+    }
+    return (
+        topology.get("logical") == 9
+        and topology.get("actual") == 7
+        and topology.get("forecast") == 2
+        and topology.get("learned_upscale_events") == 1
+        and topology.get("per_stage") == expected
+    )
+
+
+def _research_receipts(value: Any, *, path: str = "$") -> list[dict[str, Any]]:
+    receipts: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = str(key)
+            child = f"{path}.{name}"
+            if any(token in name.lower() for token in _RESEARCH_TOKENS):
+                receipts.append({"path": child, "value": safe_value(item)})
+            receipts.extend(_research_receipts(item, path=child))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            receipts.extend(_research_receipts(item, path=f"{path}[{index}]"))
+    return receipts
+
+
+def _receipt_zero(value: Any) -> bool | None:
+    primitives: list[bool] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, bool):
+            primitives.append(not item)
+        elif isinstance(item, (int, float)):
+            primitives.append(float(item) == 0.0)
+        elif isinstance(item, dict):
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return all(primitives) if primitives else None
+
+
+def _all_research_receipts_zero(receipts: list[dict[str, Any]]) -> bool | None:
+    states = [_receipt_zero(receipt["value"]) for receipt in receipts]
+    observed = [state for state in states if state is not None]
+    return all(observed) if observed else None
+
+
 def _finalize_record(record: _Record, guider: Any) -> None:
     record.completed_ns = time.time_ns()
     summaries: dict[str, Any] = {}
@@ -549,16 +659,33 @@ def _finalize_record(record: _Record, guider: Any) -> None:
             }
             for stage in ("low", "probe", "high")
         },
-        "matches_controlled_O": logical == 9 and actual == 7 and forecast == 2 and upscale_events == 1,
     }
-    weighted_nonzero = {
+    topology["matches_controlled_O"] = _matches_controlled_o(topology)
+
+    flow_research_activity = {
         key: value
         for key, value in metric_delta.items()
-        if value and ("weighted" in key.lower() or "mixed_grid" in key.lower())
+        if value and any(token in key.lower() for token in _RESEARCH_TOKENS)
     }
+    companion_receipts = _research_receipts(record.first_high_runtime or {})
+    companion_receipts_zero = _all_research_receipts_zero(companion_receipts)
+    refinement = (record.first_high_contract or {}).get("refinement")
+    refinement_prefix_one = isinstance(refinement, dict) and refinement.get("min_actual_prefix_steps") == 1
+    condition_equal = bool((record.condition_compare or {}).get("pre_core_equal"))
+    structural_o_candidate = (
+        record.error is None
+        and bool(record.state.manifest.get("gate_complete"))
+        and not record.incomplete
+        and bool(topology["matches_controlled_O"])
+        and exact_checks.get("carried_audio_exact") is True
+        and condition_equal
+        and refinement_prefix_one
+        and not flow_research_activity
+        and companion_receipts_zero is True
+    )
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "capture_id": record.capture_id,
         "started_ns": record.started_ns,
         "completed_ns": record.completed_ns,
@@ -572,7 +699,15 @@ def _finalize_record(record: _Record, guider: Any) -> None:
         "metric_delta": metric_delta,
         "model_calls": model_calls,
         "topology": topology,
-        "weighted_or_mixed_grid_activity": weighted_nonzero,
+        "research_activity": {
+            "flow_metric_nonzero": flow_research_activity,
+            "companion_receipts": companion_receipts,
+            "companion_receipts_zero": companion_receipts_zero,
+            "receipt_gate_note": (
+                "None means the active runtime exposed no machine-readable weighted/Mixed-Grid receipt at this boundary; "
+                "absence is not treated as zero activity."
+            ),
+        },
         "condition_rebuild_compare": record.condition_compare,
         "first_high_contract": record.first_high_contract,
         "first_high_runtime": record.first_high_runtime,
@@ -584,11 +719,17 @@ def _finalize_record(record: _Record, guider: Any) -> None:
         "capture_budget_bytes": record.state.max_bytes,
         "incomplete": record.incomplete,
         "provenance": record.state.manifest,
+        "observation_gate": {
+            "structural_candidate": structural_o_candidate,
+            "paired_output_transparency_still_required": True,
+            "cuda_execution_still_required": True,
+            "media_comparison_still_required": True,
+        },
         "promotion": {
             "cpu_or_algebra_sufficient": False,
             "cuda_media_required": True,
             "original_baseline_media_required": True,
-            "00442_backend_receipts_required": True,
+            "00442_backend_receipt_must_be_verified_separately": True,
             "replay_checkpoint_identity_exact_required": True,
             "production_fix_authorized": False,
         },
@@ -624,13 +765,63 @@ def patch_execution_contract_diagnostics(
 
     outer = comfy.patcher_extension.WrappersMP.OUTER_SAMPLE
     predict = comfy.patcher_extension.WrappersMP.PREDICT_NOISE
-    _insert_relative(patched, outer, _runtime.OUTER_WRAPPER_KEY, _INVOCATION_KEY, _invocation_wrapper, before=True)
-    _insert_relative(patched, outer, _runtime.OUTER_WRAPPER_KEY, _STAGE_KEY, _stage_wrapper, before=False)
-    _insert_relative(patched, predict, _runtime.PREDICT_WRAPPER_KEY, _PREDICT_POST_KEY, _predict_post_wrapper, before=True)
-    _insert_relative(patched, predict, _runtime.PREDICT_WRAPPER_KEY, _PREDICT_RAW_KEY, _predict_raw_wrapper, before=False)
-    _append_wrapper(patched, comfy.patcher_extension.WrappersMP.SAMPLER_SAMPLE, _SAMPLER_KEY, _sampler_wrapper)
-    _append_wrapper(patched, comfy.patcher_extension.WrappersMP.APPLY_MODEL, _APPLY_KEY, _apply_wrapper)
-    _append_wrapper(patched, comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, _DIFFUSION_KEY, _diffusion_wrapper)
+    _insert_relative(
+        patched,
+        outer,
+        _runtime.OUTER_WRAPPER_KEY,
+        _INVOCATION_KEY,
+        _invocation_wrapper,
+        before=True,
+    )
+    _insert_relative(
+        patched,
+        outer,
+        _runtime.OUTER_WRAPPER_KEY,
+        _STAGE_KEY,
+        _stage_wrapper,
+        before=False,
+    )
+    _insert_relative(
+        patched,
+        predict,
+        _runtime.PREDICT_WRAPPER_KEY,
+        _PREDICT_POST_KEY,
+        _predict_post_wrapper,
+        before=True,
+    )
+    _insert_relative(
+        patched,
+        predict,
+        _runtime.PREDICT_WRAPPER_KEY,
+        _PREDICT_RAW_KEY,
+        _predict_raw_wrapper,
+        before=False,
+    )
+    _append_wrapper(
+        patched,
+        comfy.patcher_extension.WrappersMP.SAMPLER_SAMPLE,
+        _SAMPLER_KEY,
+        _sampler_wrapper,
+    )
+    _append_wrapper(
+        patched,
+        comfy.patcher_extension.WrappersMP.APPLY_MODEL,
+        _APPLY_KEY,
+        _apply_wrapper,
+    )
+    _append_wrapper(
+        patched,
+        comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,
+        _DIFFUSION_KEY,
+        _diffusion_wrapper,
+    )
+    state.manifest["observer_wrapper_keys"] = {
+        "outer": [_INVOCATION_KEY, _STAGE_KEY],
+        "predict": [_PREDICT_POST_KEY, _PREDICT_RAW_KEY],
+        "sampler": [_SAMPLER_KEY],
+        "apply": [_APPLY_KEY],
+        "diffusion": [_DIFFUSION_KEY],
+    }
     return patched, state
 
 
