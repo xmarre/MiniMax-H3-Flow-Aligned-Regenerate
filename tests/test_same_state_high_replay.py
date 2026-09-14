@@ -9,6 +9,19 @@ import torch
 from h3_flow_regenerate import same_state_high_replay as replay
 
 
+def test_raw_high_entry_state_roundtrips_flow_noise_inverse():
+    sigma = 0.4
+    noise_scale = 1.25
+    noise = torch.randn(1, 19)
+    latent = torch.randn_like(noise)
+    raw_state = sigma * (noise_scale * noise) + (1.0 - sigma) * latent
+    base_model = type("BaseModel", (), {"model_sampling": type("Sampling", (), {"noise_scale": noise_scale})()})()
+
+    recovered = replay._runtime._noise_argument(base_model, raw_state, sigma, latent)
+
+    assert torch.allclose(recovered, noise, atol=1e-6, rtol=1e-6)
+
+
 def test_provenance_identity_ignores_only_diagnostic_execution_state():
     source = {
         "capture_phase": "outer_sample_runtime",

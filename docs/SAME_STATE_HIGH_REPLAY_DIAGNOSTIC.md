@@ -44,6 +44,8 @@ Connect the sampled LATENT to `Save MiniMax H3 Same-State Replay Bundle` as its 
 
 The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, Flow guidance configuration, Spectrum configuration and the committed low/probe guidance trajectory. It also records exact checkpoint identity, installed-runtime provenance, first-high execution policy, first-high Sol/VDN/Spectrum companion policy and the corresponding runtime observation evidence.
 
+`first_high_sampler_input_*` specifically means the raw high-entry sampler state **before** `KSamplerX0Inpaint` may rewrite masked model input. `first_high_model_input_*` is the separate downstream post-inpaint boundary. R serializes the raw sampler state and applies Flow/Core's exact noise-initialization inverse to that raw state; it must never use the post-inpaint model input as replay X.
+
 The raw VDN observation additionally records bounded retained cache-key topology and the one-block async prefetch lifecycle (generation, target, pending/completed status). These fields are evidence, not equality policy: retained counts, cache contents/keys and prefetch state are intentionally allowed to differ between progressive capture and the cold process. VDN configuration, layout, wrapper identity and whether retention is enabled remain attribution gates.
 
 Do not reuse a bundle if the capture run did not visibly reproduce the artifact.
