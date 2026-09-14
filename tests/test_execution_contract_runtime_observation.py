@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import copy
 import json
 import sys
 from collections import deque
@@ -398,15 +399,16 @@ def _complete_runtime_observation():
     return {
         "schema_version": 2,
         "stage_lifecycles": [
-            {"stage": "low", **lifecycle},
-            {"stage": "probe", **lifecycle},
-            {"stage": "high", **lifecycle},
+            {"stage": "low", **copy.deepcopy(lifecycle)},
+            {"stage": "probe", **copy.deepcopy(lifecycle)},
+            {"stage": "high", **copy.deepcopy(lifecycle)},
         ],
+        "diffusion_actual_counts": {"low": 4, "probe": 1, "high": 2},
         "companion_calls": {
-            "low_last": {"stage": "low", "actual_index": 4, **companion},
-            "probe": {"stage": "probe", "actual_index": 1, **companion},
-            "high_first": {"stage": "high", "actual_index": 1, **companion},
-            "high_last": {"stage": "high", "actual_index": 2, **companion},
+            "low_last": {"stage": "low", "actual_index": 4, **copy.deepcopy(companion)},
+            "probe": {"stage": "probe", "actual_index": 1, **copy.deepcopy(companion)},
+            "high_first": {"stage": "high", "actual_index": 1, **copy.deepcopy(companion)},
+            "high_last": {"stage": "high", "actual_index": 2, **copy.deepcopy(companion)},
         },
         "observation_errors": [],
     }
@@ -451,9 +453,12 @@ def test_report_keeps_structural_candidate_only_with_complete_runtime_contract()
     gate = report["observation_gate"]
     runtime = gate["runtime_contract"]
     assert runtime["stage_lifecycle_complete"] is True
+    assert runtime["stage_lifecycle_counts"] == {"low": 1, "probe": 1, "high": 1}
     assert runtime["injection_state_consistent"] is True
     assert runtime["hook_runtime_stable"] is True
     assert runtime["modified_runtime_visible"] is True
+    assert runtime["actual_call_counts_exact"] is True
+    assert runtime["observed_actual_call_counts"] == {"low": 4, "probe": 1, "high": 2}
     assert runtime["observation_error_free"] is True
     assert runtime["runtime_contract_complete"] is True
     assert gate["structural_candidate"] is True
@@ -504,5 +509,54 @@ def test_report_rejects_truncated_modified_module_observation():
     report = json.loads(report_text)
     runtime = report["observation_gate"]["runtime_contract"]
     assert runtime["modified_runtime_visible"] is False
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
+
+
+def test_report_rejects_duplicate_stage_lifecycle_capture():
+    runtime_observation = _complete_runtime_observation()
+    duplicate = copy.deepcopy(runtime_observation["stage_lifecycles"][2])
+    runtime_observation["stage_lifecycles"].append(duplicate)
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["stage_lifecycle_counts"] == {"low": 1, "probe": 1, "high": 2}
+    assert runtime["stage_lifecycle_complete"] is False
+    assert runtime["runtime_contract_complete"] is False
+    assert report["observation_gate"]["structural_candidate"] is False
+
+
+def test_report_rejects_unexpected_actual_diffusion_call_count():
+    runtime_observation = _complete_runtime_observation()
+    runtime_observation["diffusion_actual_counts"]["high"] = 3
+    state = _state()
+    state.complete = deque(
+        [
+            {
+                "provenance": {observation._EXTENSION_KEY: runtime_observation},
+                "observation_gate": {"structural_candidate": True},
+                "promotion": {"production_fix_authorized": False},
+            }
+        ],
+        maxlen=4,
+    )
+
+    report_text = observation.H3ExecutionContractReport().extract(state, None)[0]
+    report = json.loads(report_text)
+    runtime = report["observation_gate"]["runtime_contract"]
+    assert runtime["actual_call_counts_exact"] is False
+    assert runtime["observed_actual_call_counts"] == {"low": 4, "probe": 1, "high": 3}
     assert runtime["runtime_contract_complete"] is False
     assert report["observation_gate"]["structural_candidate"] is False

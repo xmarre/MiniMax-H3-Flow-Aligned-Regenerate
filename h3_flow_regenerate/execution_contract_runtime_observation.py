@@ -191,9 +191,17 @@ def model_lifecycle_manifest(
 
     block_encoded = json.dumps(block_state, sort_keys=True, separators=(",", ":"), default=str).encode()
     modified_modules = _modified_module_manifest(diffusion)
+    active_injections = _injection_manifest(model)
+    active_object_patches = _object_patch_manifest(model)
+    effective_wrapper_order = _keyed_callable_manifest(transformer.get("wrappers", {}))
+    effective_callbacks = _keyed_callable_manifest(transformer.get("callbacks", {}))
     lifecycle_material = {
         "blocks": block_state,
         "modified_modules": modified_modules["modules"],
+        "active_injections": active_injections,
+        "active_object_patches": active_object_patches,
+        "effective_wrapper_order": effective_wrapper_order,
+        "effective_callbacks": effective_callbacks,
     }
     lifecycle_encoded = json.dumps(
         lifecycle_material,
@@ -205,10 +213,10 @@ def model_lifecycle_manifest(
         "patcher_is_injected": bool(getattr(model, "is_injected", False)),
         "load_device": str(getattr(model, "load_device", None)),
         "offload_device": str(getattr(model, "offload_device", None)),
-        "active_injections": _injection_manifest(model),
-        "active_object_patches": _object_patch_manifest(model),
-        "effective_wrapper_order": _keyed_callable_manifest(transformer.get("wrappers", {})),
-        "effective_callbacks": _keyed_callable_manifest(transformer.get("callbacks", {})),
+        "active_injections": active_injections,
+        "active_object_patches": active_object_patches,
+        "effective_wrapper_order": effective_wrapper_order,
+        "effective_callbacks": effective_callbacks,
         "diffusion_root": _module_hook_state(diffusion),
         "block_count": len(block_state),
         "block_pre_hook_count": pre_count,
@@ -616,7 +624,8 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(entry, dict):
             by_stage.setdefault(str(entry.get("stage")), []).append(entry)
 
-    stage_lifecycle_complete = all(by_stage.get(stage) for stage in _REQUIRED_STAGES)
+    stage_lifecycle_counts = {stage: len(by_stage.get(stage, [])) for stage in _REQUIRED_STAGES}
+    stage_lifecycle_complete = all(stage_lifecycle_counts[stage] == 1 for stage in _REQUIRED_STAGES)
     injection_state_consistent = stage_lifecycle_complete and all(
         not entry.get("model", {}).get("active_injections") or bool(entry.get("model", {}).get("patcher_is_injected"))
         for stage in _REQUIRED_STAGES
@@ -628,7 +637,7 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         for entry in by_stage.get(stage, [])
         if entry.get("model", {}).get("runtime_lifecycle_digest")
     ]
-    hook_runtime_stable = bool(lifecycle_digests) and len(set(lifecycle_digests)) == 1
+    hook_runtime_stable = len(lifecycle_digests) == len(_REQUIRED_STAGES) and len(set(lifecycle_digests)) == 1
     modified_states = [
         entry.get("model", {}).get("modified_modules") or {}
         for stage in _REQUIRED_STAGES
@@ -638,6 +647,10 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         int(state.get("count", 0)) > 0 and not bool(state.get("truncated")) for state in modified_states
     )
     companion_slots_complete = all(slot in companion_calls for slot in _REQUIRED_COMPANION_SLOTS)
+    expected_actual_counts = {"low": 4, "probe": 1, "high": 2}
+    actual_counts = extension.get("diffusion_actual_counts") or {}
+    observed_actual_counts = {stage: int(actual_counts.get(stage, 0)) for stage in _REQUIRED_STAGES}
+    actual_call_counts_exact = observed_actual_counts == expected_actual_counts
 
     high_first = companion_calls.get("high_first") or {}
     before = high_first.get("before") or {}
@@ -668,6 +681,7 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
             hook_runtime_stable,
             modified_runtime_visible,
             companion_slots_complete,
+            actual_call_counts_exact,
             sol_visible,
             vdn_visible,
             spectrum_visible,
@@ -676,6 +690,7 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "stage_lifecycle_complete": stage_lifecycle_complete,
+        "stage_lifecycle_counts": stage_lifecycle_counts,
         "injection_state_consistent": injection_state_consistent,
         "hook_runtime_stable": hook_runtime_stable,
         "runtime_lifecycle_digests": lifecycle_digests,
@@ -683,6 +698,9 @@ def _runtime_observation_gate(report: dict[str, Any]) -> dict[str, Any]:
         "modified_module_counts": [int(state.get("count", 0)) for state in modified_states],
         "modified_module_truncated": [bool(state.get("truncated")) for state in modified_states],
         "companion_slots_complete": companion_slots_complete,
+        "actual_call_counts_exact": actual_call_counts_exact,
+        "expected_actual_call_counts": expected_actual_counts,
+        "observed_actual_call_counts": observed_actual_counts,
         "sol_active_high_first_visible": sol_visible,
         "vdn_active_high_first_visible": vdn_visible,
         "spectrum_active_high_first_visible": spectrum_visible,
