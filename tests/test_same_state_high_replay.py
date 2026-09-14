@@ -383,3 +383,38 @@ def test_replay_source_has_no_progressive_or_upscaler_execution_path():
     assert "build_handoff_state" not in source
     assert "_run_progressive" not in source
     assert "learned_upscaler" not in source
+
+
+def test_bundle_save_is_terminal_output_node_without_handoff_socket():
+    assert replay.H3SameStateReplayBundleSave.OUTPUT_NODE is True
+    assert replay.H3SameStateReplayBundleSave.RETURN_TYPES == ()
+
+
+def test_replay_bundle_selector_defaults_to_latest_and_resolves_saved_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "_replay_bundle_output_dir", lambda: tmp_path)
+    older = tmp_path / "older.json"
+    newer = tmp_path / "newer.json"
+    older.write_text("{}", encoding="utf-8")
+    newer.write_text("{}", encoding="utf-8")
+    import os
+
+    os.utime(older, ns=(1, 1))
+    os.utime(newer, ns=(2, 2))
+
+    choices = replay.H3SameStateHighReplay.INPUT_TYPES()["required"]["bundle"][0]
+    assert choices[0] == "[latest]"
+    assert choices[1:] == ["newer.json", "older.json"]
+    assert replay._resolve_replay_bundle_selector("[latest]") == newer.resolve()
+    assert replay._resolve_replay_bundle_selector("older.json") == older.resolve()
+
+
+def test_replay_bundle_selector_rejects_paths_outside_replay_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "_replay_bundle_output_dir", lambda: tmp_path)
+    outside = tmp_path.parent / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    try:
+        replay._resolve_replay_bundle_selector(str(outside))
+    except RuntimeError as exc:
+        assert "must name a saved JSON manifest" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("absolute replay path was accepted")

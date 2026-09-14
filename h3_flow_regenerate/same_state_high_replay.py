@@ -1260,15 +1260,64 @@ class H3SameStateReplayCapture:
         return patch_same_state_capture(model)
 
 
+def _replay_bundle_output_dir() -> Path:
+    try:
+        import folder_paths  # type: ignore
+
+        return Path(folder_paths.get_output_directory()) / "h3_flow_replay"
+    except Exception:
+        return Path.cwd() / "output" / "h3_flow_replay"
+
+
+def _saved_replay_manifests() -> list[str]:
+    output_dir = _replay_bundle_output_dir()
+    if not output_dir.is_dir():
+        return []
+    manifests = []
+    for path in output_dir.glob("*.json"):
+        if not path.is_file():
+            continue
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        manifests.append((mtime_ns, path.name))
+    manifests.sort(reverse=True)
+    return [name for _, name in manifests]
+
+
+def _resolve_replay_bundle_selector(selector: str) -> Path:
+    output_dir = _replay_bundle_output_dir().resolve()
+    value = str(selector).strip()
+    if value in {"", "[latest]"}:
+        manifests = _saved_replay_manifests()
+        if not manifests:
+            raise RuntimeError(
+                "no saved same-state replay bundle exists; run Save MiniMax H3 Same-State Replay Bundle first"
+            )
+        value = manifests[0]
+    candidate = Path(value)
+    if candidate.name != value or candidate.suffix.lower() != ".json":
+        raise RuntimeError("same-state replay bundle selector must name a saved JSON manifest")
+    try:
+        resolved = (output_dir / candidate).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"selected same-state replay bundle does not exist: {value}") from exc
+    if resolved.parent != output_dir or not resolved.is_file():
+        raise RuntimeError("selected same-state replay bundle is outside the replay output directory")
+    return resolved
+
+
 class H3SameStateReplayBundleSave:
     CATEGORY = "MiniMax H3/flow regenerate/diagnostic"
     DESCRIPTION = (
-        "Save the latest experiment-R capture as a JSON manifest plus pure-tensor .pt payload. Connect the sampled "
-        "LATENT as trigger so the capture is complete before writing."
+        "Terminal output node for experiment R. It always executes when queued and saves the completed capture as a "
+        "JSON manifest plus pure-tensor .pt payload under output/h3_flow_replay. The cold-replay node discovers these "
+        "bundles automatically; no filesystem path copy/paste is required."
     )
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("bundle_manifest",)
+    RETURN_TYPES = ()
     FUNCTION = "save"
+    OUTPUT_NODE = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1287,14 +1336,8 @@ class H3SameStateReplayBundleSave:
         if not capture.complete:
             raise RuntimeError("no completed same-state replay capture is available")
         material = capture.complete.pop()
-        try:
-            import folder_paths  # type: ignore
-
-            output_dir = Path(folder_paths.get_output_directory()) / "h3_flow_replay"
-        except Exception:
-            output_dir = Path.cwd() / "output" / "h3_flow_replay"
-        manifest_path, _ = _save_material(material, output_dir, str(filename_prefix))
-        return (str(manifest_path),)
+        manifest_path, _ = _save_material(material, _replay_bundle_output_dir(), str(filename_prefix))
+        return {"ui": {"text": [f"Saved replay bundle: {manifest_path.name}"]}}
 
 
 class H3SameStateHighReplay:
@@ -1310,15 +1353,17 @@ class H3SameStateHighReplay:
 
     @classmethod
     def INPUT_TYPES(cls):
+        choices = ["[latest]", *_saved_replay_manifests()]
         return {
             "required": {
                 "model": ("MODEL",),
-                "bundle_manifest": ("STRING", {"multiline": False}),
+                "bundle": (choices, {"default": "[latest]"}),
             }
         }
 
-    def apply(self, model, bundle_manifest):
-        return patch_same_state_replay(model, str(bundle_manifest))
+    def apply(self, model, bundle):
+        manifest_path = _resolve_replay_bundle_selector(str(bundle))
+        return patch_same_state_replay(model, str(manifest_path))
 
 
 class H3SameStateHighReplayReport:
