@@ -58,7 +58,7 @@ Apply:
 
 1. normal production model/companion patches;
 2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true` and `capture_mib=512`;
-3. `MiniMax H3 Same-State Cold High Replay`, pointing `bundle_manifest` to the JSON file from job 1;
+3. `MiniMax H3 Same-State Cold High Replay`, selecting the job-1 manifest in `bundle` (`[latest]` picks the most recent saved bundle);
 4. the normal sampler node with the original full schedule and seed.
 
 The replay node validates the caller schedule, target geometry, seed, pristine target conditioning, Flow guidance configuration, Spectrum configuration, exact checkpoint identity and installed provenance. It then suppresses Flow's progressive split for that invocation, restores the captured high-stage continuation contract, reconstructs sampler noise through Flow/Core's exact initialization inverse, installs the captured guidance trajectory, and executes only the captured high suffix.
