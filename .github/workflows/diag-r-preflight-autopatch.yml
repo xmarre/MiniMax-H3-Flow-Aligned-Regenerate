@@ -55,6 +55,10 @@ jobs:
                   '    if not _dict_equal(state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")):\n        raise RuntimeError("same-state replay exact checkpoint identity changed after preflight")\n',
               ),
               (
+                  '''                "checkpoint_identity_exact": _dict_equal(\n                    current_checkpoint, state.manifest.get("exact_checkpoint_identity")\n                ),\n''',
+                  '''                "checkpoint_identity_exact": _dict_equal(\n                    state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")\n                ),\n''',
+              ),
+              (
                   '''def patch_same_state_capture(model: Any) -> tuple[Any, _CaptureState]:\n    state = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(state, _diag._State):\n        raise RuntimeError("same-state replay capture must be applied after MiniMax H3 Execution Contract Diagnostics")\n    patched = model.clone()\n''',
                   '''def patch_same_state_capture(model: Any) -> tuple[Any, _CaptureState]:\n    state = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)\n    if not isinstance(state, _diag._State):\n        raise RuntimeError("same-state replay capture must be applied after MiniMax H3 Execution Contract Diagnostics")\n    if not state.strict_provenance or not state.manifest.get("gate_complete"):\n        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")\n    exact_checkpoint_identity = _checkpoint_identity(state.manifest)\n    patched = model.clone()\n''',
               ),
