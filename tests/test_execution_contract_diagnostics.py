@@ -159,9 +159,7 @@ def _first_high_fixture(*, exact_bridge: bool = False):
         }
     model_options = {"transformer_options": transformer}
     try:
-        result = diag._predict_raw_wrapper(
-            Executor(), state_packed, torch.tensor([sigma]), model_options, seed
-        )
+        result = diag._predict_raw_wrapper(Executor(), state_packed, torch.tensor([sigma]), model_options, seed)
     finally:
         diag._ACTIVE.reset(token)
     return record, result, raw_packed, raw_video, clean
@@ -252,9 +250,7 @@ def test_controlled_o_requires_exact_per_stage_topology_not_only_matching_totals
 
 def test_research_receipt_absence_is_not_treated_as_zero_activity():
     assert diag._all_research_receipts_zero([]) is None
-    receipts = diag._research_receipts(
-        {"sol": {"weighted_calls": 0, "mixed_grid_calls": 0}, "unrelated": 4}
-    )
+    receipts = diag._research_receipts({"sol": {"weighted_calls": 0, "mixed_grid_calls": 0}, "unrelated": 4})
     assert receipts
     assert diag._all_research_receipts_zero(receipts) is True
     nonzero = diag._research_receipts({"sol": {"weighted_calls": 1}})
