@@ -160,6 +160,8 @@ def _trial_stage_wrapper(
             no_extra_h3_evaluation=True,
             no_extra_upscaler_call=True,
         )
+    child_error: BaseException | None = None
+    ownership_changed = False
     try:
         return executor(
             noise,
@@ -172,10 +174,20 @@ def _trial_stage_wrapper(
             seed,
             latent_shapes=latent_shapes,
         )
+    except BaseException as exc:
+        child_error = exc
+        raise
     finally:
-        if transformer.get(FLOW_SAMPLING_CONTEXT_KEY) is not context:
-            raise RuntimeError("Untwist clock trial Flow sampling context ownership changed during the child sampler")
+        ownership_changed = transformer.get(FLOW_SAMPLING_CONTEXT_KEY) is not context
         transformer.pop(FLOW_SAMPLING_CONTEXT_KEY, None)
+        if ownership_changed and binding is not None:
+            binding.metrics.event(
+                "untwist_full_trajectory_clock_trial_cleanup_error",
+                stage=stage,
+                child_error=type(child_error).__name__ if child_error is not None else None,
+            )
+        if ownership_changed and child_error is None:
+            raise RuntimeError("Untwist clock trial Flow sampling context ownership changed during the child sampler")
 
 
 class H3UntwistFullTrajectoryClockTrial:
