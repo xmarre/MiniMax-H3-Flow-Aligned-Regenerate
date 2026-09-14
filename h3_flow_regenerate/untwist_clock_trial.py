@@ -236,6 +236,4 @@ class H3UntwistFullTrajectoryClockTrial:
 
 
 NODE_CLASS_MAPPINGS = {"H3UntwistFullTrajectoryClockTrial": H3UntwistFullTrajectoryClockTrial}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3UntwistFullTrajectoryClockTrial": "MiniMax H3 Untwist Full-Trajectory Clock Trial"
-}
+NODE_DISPLAY_NAME_MAPPINGS = {"H3UntwistFullTrajectoryClockTrial": "MiniMax H3 Untwist Full-Trajectory Clock Trial"}
