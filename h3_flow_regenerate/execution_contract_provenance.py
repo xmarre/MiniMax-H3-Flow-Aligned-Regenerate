@@ -33,6 +33,24 @@ _REQUIRED_MODULES = (
     "comfy.ldm.minimax.model",
 )
 
+_COMPANION_PATH_MARKERS: dict[str, tuple[str, ...]] = {
+    "flow": ("minimax-h3-flow-aligned-regenerate",),
+    "sol_h3": ("comfyui-sol-h3",),
+    "vdn_h3": ("comfyui-vdn-h3-plus",),
+    "spectrum_h3": ("comfyui-spectrum-minimax-h3",),
+    "diffaid": ("comfyui-diffaid-patches",),
+    "untwist": ("comfyui-untwisting-rope", "comfyui-flux2-untwisting-rope"),
+    "kj": ("comfyui-kjnodes",),
+    "latent_upscaler": (
+        "comfyui_minimax_h3_latent_upscaler-plus",
+        "comfyui-minimax-h3-latent-upscaler-plus",
+    ),
+}
+_OPTIONAL_COMPANION_PATH_MARKERS: dict[str, tuple[str, ...]] = {
+    "dora_loader": ("comfyui-dora-dynamic-lora-loader",),
+}
+_MAX_COMPANION_FILES = 64
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -106,8 +124,8 @@ def callable_identity(value: Any) -> dict[str, Any]:
         except (OSError, TypeError):
             source_file = None
     code = getattr(target, "__code__", None)
-    if code is None:
-        call_method = getattr(cls, "__call__", None)
+    if code is None and callable(target):
+        call_method = target.__call__
         code = getattr(call_method, "__code__", None)
     code_digest = None
     if code is not None:
@@ -154,7 +172,7 @@ def safe_value(value: Any, *, depth: int = 0) -> Any:
     if hasattr(value, "cond"):
         return {
             "type": f"{type(value).__module__}.{type(value).__qualname__}",
-            "cond": safe_value(getattr(value, "cond"), depth=depth + 1),
+            "cond": safe_value(value.cond, depth=depth + 1),
         }
     if type(value).__module__.startswith("comfy.ldm.minimax") and hasattr(value, "__dict__"):
         return {
@@ -176,15 +194,109 @@ def fingerprint(value: Any) -> tuple[str, Any]:
     return hashlib.sha256(encoded).hexdigest(), normalized
 
 
-def _wrapper_manifest(model: Any) -> dict[str, Any]:
+def alias_graph(value: Any, *, max_depth: int = 8, max_nodes: int = 4096) -> list[dict[str, Any]]:
+    """Return stable labels for repeated runtime object aliases.
+
+    Raw object ids are deliberately not serialized. They are only used while
+    building invocation-local equivalence classes; reports contain deterministic
+    alias labels and structural paths, which are meaningful only within a run.
+    """
+
+    seen: dict[int, list[str]] = {}
+    types: dict[int, str] = {}
+    expanded: set[int] = set()
+    node_count = 0
+
+    def visit(item: Any, path: str, depth: int) -> None:
+        nonlocal node_count
+        if depth > max_depth or node_count >= max_nodes:
+            return
+        if item is None or isinstance(item, (bool, int, float, str, bytes)):
+            return
+        node_count += 1
+        ident = id(item)
+        seen.setdefault(ident, []).append(path)
+        types.setdefault(ident, f"{type(item).__module__}.{type(item).__qualname__}")
+        if ident in expanded:
+            return
+        expanded.add(ident)
+        if torch.is_tensor(item) or callable(item):
+            return
+        if isinstance(item, dict):
+            for key, child in sorted(item.items(), key=lambda pair: str(pair[0])):
+                if str(key) != "uuid":
+                    visit(child, f"{path}.{key}", depth + 1)
+            return
+        if isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, f"{path}[{index}]", depth + 1)
+            return
+        if dataclasses.is_dataclass(item):
+            for field in dataclasses.fields(item):
+                if field.name != "learned_upscaler":
+                    visit(getattr(item, field.name), f"{path}.{field.name}", depth + 1)
+
+    visit(value, "$", 0)
+    groups = [
+        (ident, paths)
+        for ident, paths in seen.items()
+        if len(paths) > 1
+    ]
+    groups.sort(key=lambda pair: pair[1])
+    return [
+        {"alias": f"alias_{index + 1}", "type": types[ident], "paths": paths}
+        for index, (ident, paths) in enumerate(groups)
+    ]
+
+
+def _keyed_callable_manifest(mapping: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for wrapper_type, keyed in getattr(model, "wrappers", {}).items():
+    if not isinstance(mapping, dict):
+        return result
+    for call_type, keyed in mapping.items():
         ordered = []
-        for key, wrappers in keyed.items():
-            for wrapper in wrappers:
-                ordered.append({"key": str(key), "callable": callable_identity(wrapper)})
-        result[str(wrapper_type)] = ordered
+        if not isinstance(keyed, dict):
+            continue
+        for key, callables in keyed.items():
+            for value in callables:
+                ordered.append({"key": str(key), "callable": callable_identity(value)})
+        result[str(call_type)] = ordered
     return result
+
+
+def _wrapper_manifest(model: Any) -> dict[str, Any]:
+    return _keyed_callable_manifest(getattr(model, "wrappers", {}))
+
+
+def _callback_manifest(model: Any) -> dict[str, Any]:
+    return _keyed_callable_manifest(getattr(model, "callbacks", {}))
+
+
+def _injection_manifest(model: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    injections = getattr(model, "injections", {})
+    if not isinstance(injections, dict):
+        return result
+    for key, entries in injections.items():
+        result[str(key)] = [
+            {
+                "inject": callable_identity(entry.inject),
+                "eject": callable_identity(entry.eject),
+            }
+            for entry in entries
+            if hasattr(entry, "inject") and hasattr(entry, "eject")
+        ]
+    return result
+
+
+def _object_patch_manifest(model: Any) -> dict[str, Any]:
+    patches = getattr(model, "object_patches", {})
+    if not isinstance(patches, dict):
+        return {}
+    return {
+        str(key): callable_identity(value) if callable(value) else safe_value(value)
+        for key, value in sorted(patches.items(), key=lambda pair: str(pair[0]))
+    }
 
 
 def _runtime_function_manifest() -> dict[str, Any]:
@@ -229,7 +341,11 @@ def _model_fingerprint(model: Any) -> dict[str, Any]:
         try:
             resolved = Path(checkpoint).resolve(strict=True)
             stat = resolved.stat()
-            checkpoint_stat = {"resolved_path": str(resolved), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+            checkpoint_stat = {
+                "resolved_path": str(resolved),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
         except OSError:
             checkpoint_stat = {"resolved_path": None, "size": None, "mtime_ns": None}
 
@@ -249,15 +365,19 @@ def _hook_manifest(diffusion: Any) -> list[dict[str, Any]]:
     blocks = getattr(diffusion, "blocks", None)
     if blocks is None:
         return []
-    return [
-        {
-            "block": index,
-            "forward": callable_identity(block.forward),
-            "pre_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_pre_hooks", {}) or {}).values()],
-            "post_hooks": [callable_identity(hook) for hook in (getattr(block, "_forward_hooks", {}) or {}).values()],
-        }
-        for index, block in enumerate(blocks)
-    ]
+    result = []
+    for index, block in enumerate(blocks):
+        pre_hooks = (getattr(block, "_forward_pre_hooks", {}) or {}).values()
+        post_hooks = (getattr(block, "_forward_hooks", {}) or {}).values()
+        result.append(
+            {
+                "block": index,
+                "forward": callable_identity(block.forward),
+                "pre_hooks": [callable_identity(hook) for hook in pre_hooks],
+                "post_hooks": [callable_identity(hook) for hook in post_hooks],
+            }
+        )
+    return result
 
 
 def _provider_manifest(provider: Any) -> dict[str, Any] | None:
@@ -313,6 +433,58 @@ def _compiler_manifest() -> dict[str, Any]:
     }
 
 
+def _path_matches(path: str, markers: tuple[str, ...]) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    return any(marker in normalized for marker in markers)
+
+
+def _loaded_source_group(markers: tuple[str, ...]) -> list[dict[str, Any]]:
+    matches: list[tuple[str, str]] = []
+    for module_name, module in tuple(sys.modules.items()):
+        path = getattr(module, "__file__", None) if module is not None else None
+        if not isinstance(path, str) or not path.lower().endswith((".py", ".pyw")):
+            continue
+        if _path_matches(path, markers):
+            matches.append((str(module_name), path))
+    result = []
+    seen_paths: set[str] = set()
+    for module_name, path in sorted(matches):
+        identity = file_identity(path)
+        resolved = None if identity is None else identity.get("resolved_path")
+        dedupe = str(resolved or path)
+        if dedupe in seen_paths:
+            continue
+        seen_paths.add(dedupe)
+        result.append({"module": module_name, "file": identity})
+        if len(result) >= _MAX_COMPANION_FILES:
+            break
+    return result
+
+
+def _loaded_companion_manifest() -> dict[str, Any]:
+    groups = {
+        label: _loaded_source_group(markers)
+        for label, markers in _COMPANION_PATH_MARKERS.items()
+    }
+    groups.update(
+        {
+            label: _loaded_source_group(markers)
+            for label, markers in _OPTIONAL_COMPANION_PATH_MARKERS.items()
+        }
+    )
+    return groups
+
+
+def _source_group_complete(entries: list[dict[str, Any]]) -> bool:
+    if not entries:
+        return False
+    return all(
+        isinstance(entry.get("file"), dict)
+        and bool(entry["file"].get("git", {}).get("available"))
+        for entry in entries
+    )
+
+
 def collect_manifest(model: Any) -> dict[str, Any]:
     imported: dict[str, Any] = {}
     unresolved: list[str] = []
@@ -323,12 +495,24 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         if identity is None or not identity["git"]["available"]:
             unresolved.append(f"source:{module_name}")
 
+    companions = _loaded_companion_manifest()
+    for label in _COMPANION_PATH_MARKERS:
+        if not _source_group_complete(companions.get(label, [])):
+            unresolved.append(f"companion:{label}")
+
     wrappers = _wrapper_manifest(model)
     for wrapper_type, entries in wrappers.items():
         for position, entry in enumerate(entries):
             source = entry["callable"].get("file")
             if source is None or not source["git"]["available"]:
                 unresolved.append(f"wrapper:{wrapper_type}:{position}:{entry['key']}")
+
+    callbacks = _callback_manifest(model)
+    for callback_type, entries in callbacks.items():
+        for position, entry in enumerate(entries):
+            source = entry["callable"].get("file")
+            if source is None or not source["git"]["available"]:
+                unresolved.append(f"callback:{callback_type}:{position}:{entry['key']}")
 
     runtime_functions = _runtime_function_manifest()
     for name, identity in runtime_functions.items():
@@ -366,13 +550,17 @@ def collect_manifest(model: Any) -> dict[str, Any]:
     provider = getattr(progressive, "learned_upscaler", None)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "collected_ns": time.time_ns(),
         "cwd": os.getcwd(),
         "python": sys.version,
         "compiler_runtime": _compiler_manifest(),
         "imported_sources": imported,
+        "loaded_companion_sources": companions,
         "active_wrapper_order": wrappers,
+        "active_callbacks": callbacks,
+        "active_injections": _injection_manifest(model),
+        "active_object_patches": _object_patch_manifest(model),
         "active_runtime_functions": runtime_functions,
         "validation_stack": validation_stack,
         "replacement_chain_dit": replacement_manifest,
@@ -381,6 +569,7 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         "progressive_config": safe_value(progressive),
         "learned_provider": _provider_manifest(provider),
         "block_hooks": _hook_manifest(diffusion),
+        "model_options_alias_graph": alias_graph(getattr(model, "model_options", {})),
         "unresolved": sorted(set(unresolved)),
     }
     manifest["gate_complete"] = not manifest["unresolved"]
