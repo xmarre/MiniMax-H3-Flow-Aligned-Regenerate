@@ -204,6 +204,32 @@ def test_bundle_rejects_corrupt_tensor_file_before_deserialization(tmp_path: Pat
         raise AssertionError("corrupt replay payload was accepted")
 
 
+def test_vdn_policy_excludes_retained_pool_contents_from_attribution_equality():
+    policy = replay._vdn_policy(
+        [
+            {
+                "capture": "state",
+                "state_type": "vdn_h3.hybrid.VDNState",
+                "owner_wrapper": {"module": "vdn_h3.hybrid", "qualname": "wrap"},
+                "layout_active": True,
+                "layout": {"num_frames": 52},
+                "retain_buffers": True,
+                "runtime_pool_retain": True,
+                "runtime_pool_generation": 7,
+                "retained_counts": {"plans": 3, "kv": 1},
+                "retained_cache_keys": {"plans": {"count": 3}},
+                "prefetch": {"present": True, "generation": 7, "target": [0, "cuda:0"]},
+            }
+        ]
+    )
+    assert policy[0]["retain_buffers"] is True
+    assert policy[0]["runtime_pool_retain"] is True
+    assert "runtime_pool_generation" not in policy[0]
+    assert "retained_counts" not in policy[0]
+    assert "retained_cache_keys" not in policy[0]
+    assert "prefetch" not in policy[0]
+
+
 def test_checkpoint_identity_hashes_exact_file_and_rejects_changed_stat(tmp_path: Path):
     checkpoint = tmp_path / "model.safetensors"
     checkpoint.write_bytes(b"exact-model-bytes")

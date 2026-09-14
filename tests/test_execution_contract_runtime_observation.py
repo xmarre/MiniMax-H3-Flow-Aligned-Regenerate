@@ -323,7 +323,18 @@ def test_vdn_runtime_snapshot_reads_closure_owned_layout_and_pool():
         seq_len=42,
         anchor_frames=1,
     )
-    resources = SimpleNamespace(retain=True, retained_counts=lambda: {"kv": 1})
+    future = SimpleNamespace(done=lambda: False)
+    prefetcher = SimpleNamespace(_generation=4, _index=(0, "cuda:0", torch.bfloat16), _future=future)
+    resources = SimpleNamespace(
+        retain=True,
+        retained_counts=lambda: {"kv": 1},
+        _scan={},
+        _delta={},
+        _plans={(10, 42, 2, 16): object()},
+        _kv={("cuda:0", torch.bfloat16, 56, 128): object()},
+        _activations={},
+        _prefetcher=prefetcher,
+    )
     state.runtime = SimpleNamespace(current=lambda: resources)
     state.retain_buffers = True
 
@@ -336,6 +347,12 @@ def test_vdn_runtime_snapshot_reads_closure_owned_layout_and_pool():
     assert snapshot[0]["layout"]["tokens_per_frame"] == 16
     assert snapshot[0]["runtime_pool_active"] is True
     assert snapshot[0]["retained_counts"] == {"kv": 1}
+    assert snapshot[0]["retained_cache_keys"]["plans"]["count"] == 1
+    assert snapshot[0]["retained_cache_keys"]["kv"]["count"] == 1
+    assert snapshot[0]["prefetch"]["present"] is True
+    assert snapshot[0]["prefetch"]["generation"] == 4
+    assert snapshot[0]["prefetch"]["future_present"] is True
+    assert snapshot[0]["prefetch"]["future_done"] is False
 
 
 def test_sol_runtime_snapshot_reads_active_request_without_import(monkeypatch):

@@ -321,6 +321,54 @@ def _closure_values(value: Any) -> list[tuple[str, Any]]:
     return result
 
 
+_MAX_VDN_CACHE_KEYS = 16
+_VDN_CACHE_FIELDS = (
+    ("scan", "_scan"),
+    ("delta", "_delta"),
+    ("plans", "_plans"),
+    ("kv", "_kv"),
+    ("activations", "_activations"),
+)
+
+
+def _vdn_retained_cache_snapshot(resources: Any) -> dict[str, Any]:
+    """Describe bounded cache topology without reading or hashing scratch tensors."""
+    if resources is None:
+        return {}
+    result: dict[str, Any] = {}
+    for label, attribute in _VDN_CACHE_FIELDS:
+        mapping = getattr(resources, attribute, None)
+        keys = getattr(mapping, "keys", None)
+        if not callable(keys):
+            continue
+        values = list(keys())
+        result[label] = {
+            "count": len(values),
+            "limit": _MAX_VDN_CACHE_KEYS,
+            "truncated": len(values) > _MAX_VDN_CACHE_KEYS,
+            "keys": [_provenance.safe_value(value) for value in values[:_MAX_VDN_CACHE_KEYS]],
+        }
+    return result
+
+
+def _vdn_prefetch_snapshot(resources: Any) -> dict[str, Any] | None:
+    """Observe VDN's retained one-block prefetch lifecycle without consuming it."""
+    if resources is None:
+        return None
+    prefetcher = getattr(resources, "_prefetcher", None)
+    if prefetcher is None:
+        return {"present": False}
+    future = getattr(prefetcher, "_future", None)
+    done = getattr(future, "done", None)
+    return {
+        "present": True,
+        "generation": _provenance.safe_value(getattr(prefetcher, "_generation", None)),
+        "target": _provenance.safe_value(getattr(prefetcher, "_index", None)),
+        "future_present": future is not None,
+        "future_done": bool(done()) if callable(done) else None,
+    }
+
+
 def _vdn_runtime_snapshot(executor: Any) -> list[dict[str, Any]]:
     found = []
     seen: set[int] = set()
@@ -370,6 +418,8 @@ def _vdn_runtime_snapshot(executor: Any) -> list[dict[str, Any]]:
                     "runtime_pool_retain": None if resources is None else bool(getattr(resources, "retain", False)),
                     "runtime_pool_generation": _provenance.safe_value(generation),
                     "retained_counts": retained_counts() if callable(retained_counts) else None,
+                    "retained_cache_keys": _vdn_retained_cache_snapshot(resources),
+                    "prefetch": _vdn_prefetch_snapshot(resources),
                 }
             )
     return found
