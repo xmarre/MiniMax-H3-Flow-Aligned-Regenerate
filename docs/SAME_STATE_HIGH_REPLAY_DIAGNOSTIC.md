@@ -14,6 +14,8 @@ The artifact has also been reproduced with Untwist absent from the workflow. Unt
 
 Use the same checkpoint, model loader and model precision, adapters, prompt and references, seed, original full sigma schedule, source/target geometry, masks, Flow configuration, Spectrum configuration, Sol/VDN/DiffAid stack, decoder settings and output ordering in both jobs. The execution-contract diagnostic must keep strict installed-runtime provenance enabled.
 
+R requires a resolvable checkpoint file. Each process computes the checkpoint's full SHA-256 during diagnostic-node preflight and compares capture with replay before sampling. A cheap path/size/mtime guard immediately before sampling rejects ordinary file changes that occur after preflight without hashing a multi-gigabyte checkpoint again on the hot path.
+
 The controlled progressive capture must reproduce the expected topology before a bundle is accepted:
 
 - low: `5L / 4A / 1F`
@@ -40,7 +42,7 @@ Connect the sampled LATENT to `Save MiniMax H3 Same-State Replay Bundle` as its 
 - a JSON declarative manifest;
 - a `.pt` payload containing tensors only.
 
-The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, guidance configuration and the committed low/probe guidance trajectory. It also records installed-runtime provenance and the first-high execution-policy identity.
+The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, Flow guidance configuration, Spectrum configuration and the committed low/probe guidance trajectory. It also records exact checkpoint identity, installed-runtime provenance, first-high execution policy, first-high Sol/VDN/Spectrum companion policy and the corresponding runtime observation evidence.
 
 Do not reuse a bundle if the capture run did not visibly reproduce the artifact.
 
@@ -55,7 +57,7 @@ Apply:
 3. `MiniMax H3 Same-State Cold High Replay`, pointing `bundle_manifest` to the JSON file from job 1;
 4. the normal sampler node with the original full schedule and seed.
 
-The replay node validates the caller schedule, target geometry, seed, pristine target conditioning, Flow guidance configuration and installed provenance. It then suppresses Flow's progressive split for that invocation, restores the captured high-stage continuation contract, reconstructs sampler noise through Flow/Core's exact initialization inverse, installs the captured guidance trajectory, and executes only the captured high suffix.
+The replay node validates the caller schedule, target geometry, seed, pristine target conditioning, Flow guidance configuration, Spectrum configuration, exact checkpoint identity and installed provenance. It then suppresses Flow's progressive split for that invocation, restores the captured high-stage continuation contract, reconstructs sampler noise through Flow/Core's exact initialization inverse, installs the captured guidance trajectory, and executes only the captured high suffix.
 
 Connect the replayed LATENT to `MiniMax H3 Same-State Replay Report` as its trigger.
 
@@ -68,8 +70,12 @@ Connect the replayed LATENT to `MiniMax H3 Same-State Replay Report` as its trig
 - zero learned-upscaler calls;
 - target conditioning identity matches the capture;
 - installed-runtime provenance matches after excluding only O/C and R instrumentation identity;
+- exact checkpoint identity matched at replay preflight and remained unchanged through the pre-sampling stat guard;
 - Flow guidance configuration matches;
+- Spectrum configuration matches;
 - first-high runtime policy matches;
+- first-high Sol/VDN/Spectrum companion policy matches;
+- Untwist remains absent;
 - first-high sampler video/audio input hashes match;
 - first-high H3 video/audio input hashes match.
 
