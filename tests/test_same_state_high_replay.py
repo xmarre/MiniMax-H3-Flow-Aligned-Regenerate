@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import torch
@@ -8,8 +9,10 @@ import torch
 from h3_flow_regenerate import same_state_high_replay as replay
 
 
-def test_provenance_identity_ignores_only_oc_and_replay_instrumentation():
+def test_provenance_identity_ignores_only_diagnostic_execution_state():
     source = {
+        "capture_phase": "outer_sample_runtime",
+        "collected_ns": 100,
         "active_wrapper_order": {
             "outer_sample": [
                 {"key": "h3_flow_regenerate.exec_contract.invocation.v1", "callable": {"module": "diag"}},
@@ -25,12 +28,23 @@ def test_provenance_identity_ignores_only_oc_and_replay_instrumentation():
             }
         },
         "observer_wrapper_keys": {"outer": ["diagnostic-only"]},
+        "model_options_alias_graph": [{"alias": "alias_1", "paths": ["$.capture"]}],
+        replay._RUNTIME_OBSERVATION_KEY: {
+            "stage_lifecycles": [{"stage": "low"}],
+            "companion_calls": {"high_first": {"before": {"counter": 1}}},
+        },
     }
     capture = copy.deepcopy(source)
     capture["active_wrapper_order"]["outer_sample"].append(
         {"key": "h3_flow_regenerate.same_state_replay.capture.v1", "callable": {"module": "capture"}}
     )
     replay_job = copy.deepcopy(source)
+    replay_job["collected_ns"] = 999
+    replay_job["model_options_alias_graph"] = [{"alias": "alias_9", "paths": ["$.replay"]}]
+    replay_job[replay._RUNTIME_OBSERVATION_KEY] = {
+        "stage_lifecycles": [{"stage": "high"}],
+        "companion_calls": {"high_first": {"before": {"counter": 99}}},
+    }
     replay_job["active_wrapper_order"]["outer_sample"].append(
         {"key": "h3_flow_regenerate.same_state_replay.execute.v1", "callable": {"module": "replay"}}
     )
@@ -77,6 +91,9 @@ def test_runtime_policy_identity_tracks_execution_policy_not_counters():
             "actual_evaluations": 17,
             "sparse_calls": 1234,
         },
+        "spectrum_h3_actual": True,
+        "spectrum_h3_solver_phase": "single",
+        "spectrum_h3_outer_step_id": 0,
         "spectrum_h3_external_patch_runtime": [
             {"provider": "comfyui-diffaid-patches", "instance_id": "diffaid-h3-1", "normalized_sigma": 0.878}
         ],
@@ -92,21 +109,63 @@ def test_runtime_policy_identity_tracks_execution_policy_not_counters():
     changed["minimax_h3_untwist_rope"]["progress"] = 5.0 / 7.0
     assert replay._runtime_policy_identity(baseline) != replay._runtime_policy_identity(changed)
 
+    spectrum_changed = copy.deepcopy(baseline)
+    spectrum_changed["spectrum_h3_actual"] = False
+    assert replay._runtime_policy_identity(baseline) != replay._runtime_policy_identity(spectrum_changed)
 
-def test_bundle_roundtrip_is_hash_checked_and_tensor_only(tmp_path: Path):
-    tensors = {
-        "high_noise_argument": torch.arange(12, dtype=torch.float32).reshape(3, 4),
-        "high_sigmas": torch.tensor([0.8, 0.6, 0.0], dtype=torch.float32),
-    }
-    material = replay._ReplayMaterial(
-        manifest={
-            "schema_version": replay.SCHEMA_VERSION,
-            "kind": "minimax_h3_same_state_high_replay",
-            "capture_id": "capture-test",
-            "tensor_hashes": {key: replay._tensor_sha256(value) for key, value in tensors.items()},
+
+def _minimal_manifest(tensors: dict[str, torch.Tensor]) -> dict:
+    provenance = {"schema_version": 3, "gate_complete": True, "model": {"runtime_fingerprint": "model"}}
+    runtime_policy = {"h3_refinement": {"active": True}}
+    companion_policy = {"before": {"vdn": [], "sol": {}, "spectrum": {}}, "after": {}}
+    return {
+        "schema_version": replay.SCHEMA_VERSION,
+        "kind": "minimax_h3_same_state_high_replay",
+        "capture_id": "capture-test",
+        "tensor_hashes": {key: replay._tensor_sha256(value) for key, value in tensors.items()},
+        "tensor_contracts": {
+            key: {
+                "shape": [int(dim) for dim in value.shape],
+                "stride": [int(item) for item in value.stride()],
+                "dtype": str(value.dtype),
+                "device": "cpu",
+            }
+            for key, value in tensors.items()
         },
-        tensors=tensors,
-    )
+        "provenance_identity": provenance,
+        "provenance_digest": replay._sha_json(provenance),
+        "first_high_runtime_policy": runtime_policy,
+        "first_high_runtime_policy_digest": replay._sha_json(runtime_policy),
+        "first_high_companion_policy": companion_policy,
+        "first_high_companion_policy_digest": replay._sha_json(companion_policy),
+        "exact_checkpoint_identity": {
+            "resolved_path": "/model.safetensors",
+            "size": 1,
+            "mtime_ns": 1,
+            "sha256": "a" * 64,
+        },
+        "contract": {
+            "stochastic_state_transport": False,
+            "weighted_mixed_grid_active": False,
+            "untwist_active": False,
+        },
+    }
+
+
+def test_cpu_clone_preserves_noncontiguous_stride():
+    value = torch.arange(24, dtype=torch.float32).reshape(4, 6).transpose(0, 1)
+    assert not value.is_contiguous()
+    cloned = replay._cpu_clone(value)
+    assert cloned.stride() == value.stride()
+    assert torch.equal(cloned, value)
+
+
+def test_bundle_roundtrip_is_hash_checked_tensor_only_and_exact_keyed(tmp_path: Path):
+    tensors = {
+        "entry": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+        "strided": torch.arange(24, dtype=torch.float32).reshape(4, 6).transpose(0, 1),
+    }
+    material = replay._ReplayMaterial(manifest=_minimal_manifest(tensors), tensors=tensors)
     manifest_path, tensor_path = replay._save_material(material, tmp_path, "replay-test")
     resolved, manifest, loaded = replay._load_bundle(str(manifest_path))
 
@@ -115,14 +174,59 @@ def test_bundle_roundtrip_is_hash_checked_and_tensor_only(tmp_path: Path):
     assert set(loaded) == set(tensors)
     for key in tensors:
         assert torch.equal(loaded[key], tensors[key])
+        assert loaded[key].stride() == tensors[key].stride()
 
+    payload = torch.load(tensor_path, map_location="cpu", weights_only=True)
+    payload["unlisted"] = torch.ones(1)
+    torch.save(payload, tensor_path)
+    edited = json.loads(manifest_path.read_text(encoding="utf-8"))
+    edited["tensors_file_sha256"] = replay._sha256_file(tensor_path)
+    manifest_path.write_text(json.dumps(edited), encoding="utf-8")
+    try:
+        replay._load_bundle(str(manifest_path))
+    except RuntimeError as exc:
+        assert "payload keys differ" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("unlisted replay tensor was accepted")
+
+
+def test_bundle_rejects_corrupt_tensor_file_before_deserialization(tmp_path: Path):
+    tensors = {"entry": torch.arange(4, dtype=torch.float32)}
+    material = replay._ReplayMaterial(manifest=_minimal_manifest(tensors), tensors=tensors)
+    manifest_path, tensor_path = replay._save_material(material, tmp_path, "replay-test")
     tensor_path.write_bytes(tensor_path.read_bytes() + b"corrupt")
+
     try:
         replay._load_bundle(str(manifest_path))
     except RuntimeError as exc:
         assert "tensor file hash mismatch" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("corrupt replay payload was accepted")
+
+
+def test_checkpoint_identity_hashes_exact_file_and_rejects_changed_stat(tmp_path: Path):
+    checkpoint = tmp_path / "model.safetensors"
+    checkpoint.write_bytes(b"exact-model-bytes")
+    stat = checkpoint.stat()
+    provenance = {
+        "model": {
+            "checkpoint_stat": {
+                "resolved_path": str(checkpoint),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        }
+    }
+    identity = replay._checkpoint_identity(provenance)
+    assert identity["sha256"] == replay._sha256_file(checkpoint)
+
+    provenance["model"]["checkpoint_stat"]["size"] += 1
+    try:
+        replay._checkpoint_identity(provenance)
+    except RuntimeError as exc:
+        assert "size changed" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("changed checkpoint stat was accepted")
 
 
 def test_rebuild_trajectory_restores_declarative_guidance_samples():
@@ -175,6 +279,16 @@ def test_rebuild_trajectory_restores_declarative_guidance_samples():
     assert sample.outer_step == 2
     assert sample.provenance == "actual"
     assert torch.equal(sample.video_x0, video_x0)
+
+
+def test_rebuild_trajectory_rejects_unknown_schema():
+    manifest = {"trajectory": {"schema_version": 99}, "guidance_samples": []}
+    try:
+        replay._rebuild_trajectory(manifest, {})
+    except RuntimeError as exc:
+        assert "trajectory schema is unsupported" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("unknown trajectory schema was accepted")
 
 
 def test_replay_source_has_no_progressive_or_upscaler_execution_path():
