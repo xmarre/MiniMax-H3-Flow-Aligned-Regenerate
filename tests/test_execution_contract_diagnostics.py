@@ -64,15 +64,18 @@ def test_relative_wrapper_insertion_preserves_existing_order_and_anchor():
 
 
 def test_sampler_condition_compare_observes_processed_conditions_without_replaying_preprocess():
-    pristine = {"positive": [{"model_conds": {}, "cross_attn": torch.arange(4.0)}]}
+    shared = torch.arange(4.0)
+    pristine = {"positive": [{"model_conds": {"shared": shared}, "cross_attn": shared}]}
     digest, summary = provenance.fingerprint(pristine)
     record = diag._Record(
         state=_state(),
         pristine_conds=pristine,
         pristine_cond_digest=digest,
         pristine_cond_summary=summary,
+        pristine_cond_alias_graph=provenance.alias_graph(pristine),
         high_pre_core_digest=digest,
         high_pre_core_summary=summary,
+        high_pre_core_alias_graph=provenance.alias_graph(pristine),
     )
     token = diag._ACTIVE.set(record)
     calls = []
@@ -102,12 +105,14 @@ def test_sampler_condition_compare_observes_processed_conditions_without_replayi
     assert record.condition_compare["no_extra_condition_preprocess"] is True
     assert record.condition_compare["no_extra_h3_evaluation"] is True
     assert record.condition_compare["no_extra_upscaler_call"] is True
+    assert record.condition_compare["pristine_target_alias_graph"]
+    assert record.condition_compare["actual_processed_alias_graph"]
 
 
-def test_first_high_raw_capture_recovers_existing_learned_clean_without_upscaler_call():
+def _first_high_fixture(*, exact_bridge: bool = False):
     video = torch.randn(1, 24, 5, 4, 4)
     audio = torch.randn(1, 32, 2, 9)
-    packed, shapes = pack_streams((video, audio))
+    _packed, shapes = pack_streams((video, audio))
     sigma = 0.4
     seed = 17
     seed_offset = 1000
@@ -136,30 +141,51 @@ def test_first_high_raw_capture_recovers_existing_learned_clean_without_upscaler
         def __call__(self, *_args, **_kwargs):
             return raw_packed
 
-    model_options = {
-        "transformer_options": {
-            diag._runtime.FLOW_STAGE_KEY: "high",
-            "h3_refinement": {
-                "api": 1,
-                "active": True,
-                "min_actual_prefix_steps": 1,
-                "sigma_reference": 1.0,
-                "source": "h3_flow_progressive_handoff",
-            },
-        }
+    transformer = {
+        diag._runtime.FLOW_STAGE_KEY: "high",
+        "h3_refinement": {
+            "api": 1,
+            "active": True,
+            "min_actual_prefix_steps": 1,
+            "sigma_reference": 1.0,
+            "source": "h3_flow_progressive_handoff",
+        },
     }
+    if exact_bridge:
+        transformer[diag._runtime.EXACT_PREFIX_BRIDGE_KEY] = {
+            "exact_prefix": torch.zeros_like(video[:, :, :1]),
+            "source": "test",
+            "applied": False,
+        }
+    model_options = {"transformer_options": transformer}
     try:
         result = diag._predict_raw_wrapper(
             Executor(), state_packed, torch.tensor([sigma]), model_options, seed
         )
     finally:
         diag._ACTIVE.reset(token)
+    return record, result, raw_packed, raw_video, clean
+
+
+def test_first_high_raw_capture_recovers_existing_learned_clean_without_upscaler_call():
+    record, result, raw_packed, raw_video, clean = _first_high_fixture()
 
     assert torch.equal(result, raw_packed)
     assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)
     assert torch.equal(record.snapshots["first_high_pre_guidance_video"].tensor, raw_video)
+    assert torch.equal(record.snapshots["last_high_pre_guidance_video"].tensor, raw_video)
     assert torch.allclose(record.snapshots["learned_transfer_clean_video"].tensor, clean, atol=1e-5, rtol=1e-5)
     assert record.first_high_contract["refinement"]["min_actual_prefix_steps"] == 1
+
+
+def test_exact_prefix_bridge_does_not_mislabel_raw_output_as_pre_guidance():
+    record, _result, _raw_packed, raw_video, _clean = _first_high_fixture(exact_bridge=True)
+
+    assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)
+    assert torch.equal(record.snapshots["last_high_model_raw_video"].tensor, raw_video)
+    assert "first_high_pre_guidance_video" not in record.snapshots
+    assert "last_high_pre_guidance_video" not in record.snapshots
+    assert any("raw equivalence is invalid" in item for item in record.incomplete)
 
 
 def test_diffusion_observer_captures_native_av_streams_once_without_changing_result():
@@ -197,6 +223,63 @@ def test_diffusion_observer_captures_native_av_streams_once_without_changing_res
     assert torch.equal(record.snapshots["first_high_h3_input_audio"].tensor, audio)
     assert torch.equal(record.snapshots["first_high_h3_velocity_video"].tensor, out_video)
     assert torch.equal(record.snapshots["first_high_h3_velocity_audio"].tensor, out_audio)
+
+
+def test_controlled_o_requires_exact_per_stage_topology_not_only_matching_totals():
+    exact = {
+        "logical": 9,
+        "actual": 7,
+        "forecast": 2,
+        "learned_upscale_events": 1,
+        "per_stage": {
+            "low": {"logical": 5, "actual": 4, "forecast": 1},
+            "probe": {"logical": 1, "actual": 1, "forecast": 0},
+            "high": {"logical": 3, "actual": 2, "forecast": 1},
+        },
+    }
+    shifted = {
+        **exact,
+        "per_stage": {
+            "low": {"logical": 5, "actual": 3, "forecast": 2},
+            "probe": {"logical": 1, "actual": 1, "forecast": 0},
+            "high": {"logical": 3, "actual": 3, "forecast": 0},
+        },
+    }
+
+    assert diag._matches_controlled_o(exact) is True
+    assert diag._matches_controlled_o(shifted) is False
+
+
+def test_research_receipt_absence_is_not_treated_as_zero_activity():
+    assert diag._all_research_receipts_zero([]) is None
+    receipts = diag._research_receipts(
+        {"sol": {"weighted_calls": 0, "mixed_grid_calls": 0}, "unrelated": 4}
+    )
+    assert receipts
+    assert diag._all_research_receipts_zero(receipts) is True
+    nonzero = diag._research_receipts({"sol": {"weighted_calls": 1}})
+    assert diag._all_research_receipts_zero(nonzero) is False
+
+
+def test_alias_graph_uses_stable_labels_not_raw_object_ids():
+    shared = torch.tensor([1.0])
+    graph = provenance.alias_graph({"left": shared, "right": [shared]})
+
+    assert graph == [
+        {
+            "alias": "alias_1",
+            "type": "torch.Tensor",
+            "paths": ["$.left", "$.right[0]"],
+        }
+    ]
+
+
+def test_path_marker_matching_is_case_and_separator_insensitive():
+    assert provenance._path_matches(
+        r"C:\ComfyUI\custom_nodes\ComfyUI-Sol-H3\sol_h3\runtime.py",
+        ("comfyui-sol-h3",),
+    )
+    assert not provenance._path_matches("/tmp/unrelated/runtime.py", ("comfyui-sol-h3",))
 
 
 def test_fingerprint_ignores_execution_only_uuid():
