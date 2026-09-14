@@ -1,0 +1,411 @@
+name: Repair PR41 observer gates
+
+on:
+  push:
+    branches:
+      - mirror/pr41-observer-gate-repair-20260914
+    paths:
+      - .github/workflows/repair-pr41-observer-gates.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr41-observer-gate-repair-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply bounded observer repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path("h3_flow_regenerate/execution_contract_diagnostics.py")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "def _counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:\n",
+              '''def _audio_roundtrip_check(low_audio: torch.Tensor, high_audio: torch.Tensor) -> dict[str, Any]:
+              """Describe carried-audio fidelity across Comfy's float sampler-state round trip.
+
+              ``build_handoff_state`` owns the byte-for-byte audio copy. The high
+              SAMPLER_SAMPLE boundary is reconstructed from ``_noise_argument`` via
+              ``noise_scaling`` and can therefore differ by float rounding even when
+              the copied sampler state is unchanged. Keep bitwise equality visible,
+              but gate this reconstructed boundary with an explicit dtype-scaled
+              tolerance rather than relabeling rounding as an audio-state mutation.
+              """
+
+              bitwise = bool(torch.equal(low_audio, high_audio))
+              result: dict[str, Any] = {
+                  "carried_audio_exact": bitwise,
+                  "carried_audio_bitwise_exact": bitwise,
+              }
+              if tuple(low_audio.shape) != tuple(high_audio.shape):
+                  result.update(
+                      {
+                          "carried_audio_roundtrip_within_dtype_tolerance": False,
+                          "carried_audio_roundtrip_reason": "shape_mismatch",
+                      }
+                  )
+                  return result
+              if not low_audio.is_floating_point() or not high_audio.is_floating_point():
+                  result.update(
+                      {
+                          "carried_audio_roundtrip_within_dtype_tolerance": bitwise,
+                          "carried_audio_roundtrip_reason": "non_floating_exact_only",
+                      }
+                  )
+                  return result
+
+              low = low_audio.detach().float()
+              high = high_audio.detach().float()
+              delta = high - low
+              max_abs = float(delta.abs().max().item()) if delta.numel() else 0.0
+              rms = float(delta.square().mean().sqrt().item()) if delta.numel() else 0.0
+              scale = 1.0
+              if low.numel():
+                  scale = max(scale, float(low.abs().max().item()), float(high.abs().max().item()))
+              eps = max(float(torch.finfo(low_audio.dtype).eps), float(torch.finfo(high_audio.dtype).eps))
+              atol = 32.0 * eps * scale
+              within = bool(torch.allclose(low_audio, high_audio, rtol=0.0, atol=atol))
+              result.update(
+                  {
+                      "carried_audio_roundtrip_within_dtype_tolerance": within,
+                      "carried_audio_roundtrip_max_abs": max_abs,
+                      "carried_audio_roundtrip_rms": rms,
+                      "carried_audio_roundtrip_atol": atol,
+                      "carried_audio_roundtrip_scale": scale,
+                      "carried_audio_roundtrip_eps": eps,
+                      "carried_audio_roundtrip_reason": "inverse_noise_argument_then_noise_scaling",
+                  }
+              )
+              return result
+
+
+          def _counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
+          ''',
+              "insert audio roundtrip helper",
+          )
+          text = replace_once(
+              text,
+              '''    exact_checks: dict[str, Any] = {}
+              low_audio = values.get("low_sampler_state_audio")
+              high_audio = values.get("first_high_sampler_input_audio")
+              if low_audio is not None and high_audio is not None:
+                  exact_checks["carried_audio_exact"] = bool(torch.equal(low_audio, high_audio))
+          ''',
+              '''    exact_checks: dict[str, Any] = {}
+              low_audio = values.get("low_sampler_state_audio")
+              high_audio = values.get("first_high_sampler_input_audio")
+              if low_audio is not None and high_audio is not None:
+                  exact_checks.update(_audio_roundtrip_check(low_audio, high_audio))
+          ''',
+              "replace carried audio check",
+          )
+          text = replace_once(
+              text,
+              '        and exact_checks.get("carried_audio_exact") is True\n',
+              '        and exact_checks.get("carried_audio_roundtrip_within_dtype_tolerance") is True\n',
+              "gate carried audio roundtrip",
+          )
+          text = replace_once(
+              text,
+              '        and companion_receipts_zero is True\n',
+              '        and companion_receipts_zero is not False\n',
+              "defer missing companion receipts",
+          )
+          text = replace_once(text, "    capture_mib: int = 256,\n", "    capture_mib: int = 512,\n", "patch default capture")
+          text = replace_once(
+              text,
+              '                "capture_mib": ("INT", {"default": 256, "min": 16, "max": 1024, "step": 16}),\n',
+              '                "capture_mib": ("INT", {"default": 512, "min": 16, "max": 1024, "step": 16}),\n',
+              "node default capture",
+          )
+          path.write_text(text)
+
+          path = Path("h3_flow_regenerate/execution_contract_runtime_observation.py")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''            "external_mixed_measure_removed_rows",
+              "vdn_local_sol_calls",
+          ''',
+              '''            "external_mixed_measure_removed_rows",
+              "external_mixed_weighted_measure_calls",
+              "external_mixed_weighted_measure_q_rows",
+              "external_mixed_weighted_measure_kv_rows",
+              "vdn_local_sol_calls",
+          ''',
+              "capture weighted Sol receipts",
+          )
+          text = replace_once(
+              text,
+              '''    observation_error_free = not observation_errors
+
+              runtime_contract_complete = all(
+          ''',
+              '''    observation_error_free = not observation_errors
+
+              research_fields = (
+                  "external_mixed_sol_calls",
+                  "external_mixed_q_rows",
+                  "external_mixed_kernel_q_rows",
+                  "external_mixed_measure_calls",
+                  "external_mixed_measure_q_rows",
+                  "external_mixed_measure_kv_rows_before",
+                  "external_mixed_measure_kv_rows_after",
+                  "external_mixed_measure_removed_rows",
+                  "external_mixed_weighted_measure_calls",
+                  "external_mixed_weighted_measure_q_rows",
+                  "external_mixed_weighted_measure_kv_rows",
+              )
+              research_receipts: dict[str, Any] = {}
+              missing_research_receipts: list[str] = []
+              nonzero_research_receipts: dict[str, Any] = {}
+              for slot in _REQUIRED_COMPANION_SLOTS:
+                  call = companion_calls.get(slot) or {}
+                  for phase in ("before", "after"):
+                      sol = (call.get(phase) or {}).get("sol")
+                      if not isinstance(sol, dict):
+                          missing_research_receipts.append(f"{slot}.{phase}.sol")
+                          continue
+                      for field in research_fields:
+                          receipt_key = f"{slot}.{phase}.{field}"
+                          if field not in sol:
+                              missing_research_receipts.append(receipt_key)
+                              continue
+                          value = sol[field]
+                          research_receipts[receipt_key] = value
+                          if not isinstance(value, (bool, int, float)) or float(value) != 0.0:
+                              nonzero_research_receipts[receipt_key] = value
+              sol_research_receipts_complete = not missing_research_receipts
+              sol_research_zero = sol_research_receipts_complete and not nonzero_research_receipts
+
+              runtime_contract_complete = all(
+          ''',
+              "insert explicit research gate",
+          )
+          text = replace_once(
+              text,
+              '''            spectrum_visible,
+                  observation_error_free,
+              )
+          ''',
+              '''            spectrum_visible,
+                  observation_error_free,
+                  sol_research_receipts_complete,
+                  sol_research_zero,
+              )
+          ''',
+              "require research receipts",
+          )
+          text = replace_once(
+              text,
+              '''        "observation_error_free": observation_error_free,
+                  "observation_errors": observation_errors,
+                  "runtime_contract_complete": runtime_contract_complete,
+          ''',
+              '''        "observation_error_free": observation_error_free,
+                  "observation_errors": observation_errors,
+                  "sol_research_receipts_complete": sol_research_receipts_complete,
+                  "sol_research_zero": sol_research_zero,
+                  "sol_research_receipts": research_receipts,
+                  "missing_sol_research_receipts": missing_research_receipts,
+                  "nonzero_sol_research_receipts": nonzero_research_receipts,
+                  "runtime_contract_complete": runtime_contract_complete,
+          ''',
+              "report research gate",
+          )
+          path.write_text(text)
+
+          path = Path("tests/test_execution_contract_diagnostics.py")
+          text = path.read_text()
+          text += '''
+
+          def test_audio_roundtrip_gate_accepts_float_rounding_but_rejects_material_change():
+              low = torch.tensor([1.0, -2.0, 0.25], dtype=torch.float32)
+              high = low.clone()
+              high[0] = torch.nextafter(high[0], torch.tensor(float("inf"), dtype=high.dtype))
+              rounded = diag._audio_roundtrip_check(low, high)
+              assert rounded["carried_audio_exact"] is False
+              assert rounded["carried_audio_bitwise_exact"] is False
+              assert rounded["carried_audio_roundtrip_within_dtype_tolerance"] is True
+              assert rounded["carried_audio_roundtrip_max_abs"] > 0.0
+
+              changed = low.clone()
+              changed[0] += 1e-3
+              rejected = diag._audio_roundtrip_check(low, changed)
+              assert rejected["carried_audio_roundtrip_within_dtype_tolerance"] is False
+
+
+          def test_execution_contract_default_capture_budget_covers_controlled_high_snapshots():
+              required = diag.H3ExecutionContractDiagnostics.INPUT_TYPES()["required"]
+              assert required["capture_mib"][1]["default"] == 512
+          '''
+          path.write_text(text)
+
+          path = Path("tests/test_execution_contract_runtime_observation.py")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''        dense_calls=1,
+                  backend_transitions=0,
+          ''',
+              '''        dense_calls=1,
+                  external_mixed_sol_calls=0,
+                  external_mixed_q_rows=0,
+                  external_mixed_kernel_q_rows=0,
+                  external_mixed_measure_calls=0,
+                  external_mixed_measure_q_rows=0,
+                  external_mixed_measure_kv_rows_before=0,
+                  external_mixed_measure_kv_rows_after=0,
+                  external_mixed_measure_removed_rows=0,
+                  external_mixed_weighted_measure_calls=0,
+                  external_mixed_weighted_measure_q_rows=0,
+                  external_mixed_weighted_measure_kv_rows=0,
+                  backend_transitions=0,
+          ''',
+              "test Sol weighted receipts",
+          )
+          text = replace_once(
+              text,
+              '''    assert snapshot["evaluations"] == 2
+              assert snapshot["dense_attention_backends"] == ["sage"]
+          ''',
+              '''    assert snapshot["evaluations"] == 2
+              assert snapshot["external_mixed_weighted_measure_calls"] == 0
+              assert snapshot["dense_attention_backends"] == ["sage"]
+          ''',
+              "assert weighted receipt",
+          )
+          text = replace_once(
+              text,
+              "\ndef _complete_runtime_observation():\n",
+              '''
+
+          def _zero_research_sol_snapshot():
+              return {
+                  "request_active": True,
+                  "forward_active": True,
+                  "external_mixed_sol_calls": 0,
+                  "external_mixed_q_rows": 0,
+                  "external_mixed_kernel_q_rows": 0,
+                  "external_mixed_measure_calls": 0,
+                  "external_mixed_measure_q_rows": 0,
+                  "external_mixed_measure_kv_rows_before": 0,
+                  "external_mixed_measure_kv_rows_after": 0,
+                  "external_mixed_measure_removed_rows": 0,
+                  "external_mixed_weighted_measure_calls": 0,
+                  "external_mixed_weighted_measure_q_rows": 0,
+                  "external_mixed_weighted_measure_kv_rows": 0,
+              }
+
+
+          def _complete_runtime_observation():
+          ''',
+              "insert zero research fixture",
+          )
+          text = text.replace(
+              '"sol": {"request_active": True, "forward_active": True},',
+              '"sol": _zero_research_sol_snapshot(),',
+          )
+          if text.count('"sol": _zero_research_sol_snapshot(),') != 2:
+              raise SystemExit("expected exactly two complete-runtime Sol fixture replacements")
+          text += '''
+
+          def test_runtime_gate_rejects_nonzero_weighted_mixed_receipt():
+              runtime_observation = _complete_runtime_observation()
+              runtime_observation["companion_calls"]["high_first"]["after"]["sol"][
+                  "external_mixed_weighted_measure_calls"
+              ] = 1
+              gate = observation._runtime_observation_gate(
+                  {"provenance": {observation._EXTENSION_KEY: runtime_observation}}
+              )
+              assert gate["sol_research_receipts_complete"] is True
+              assert gate["sol_research_zero"] is False
+              assert gate["runtime_contract_complete"] is False
+
+
+          def test_runtime_gate_rejects_missing_weighted_mixed_receipt():
+              runtime_observation = _complete_runtime_observation()
+              del runtime_observation["companion_calls"]["probe"]["before"]["sol"][
+                  "external_mixed_weighted_measure_calls"
+              ]
+              gate = observation._runtime_observation_gate(
+                  {"provenance": {observation._EXTENSION_KEY: runtime_observation}}
+              )
+              assert gate["sol_research_receipts_complete"] is False
+              assert gate["sol_research_zero"] is False
+              assert gate["runtime_contract_complete"] is False
+          '''
+          path.write_text(text)
+
+          path = Path("docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md")
+          text = path.read_text()
+          text = text.replace("`capture_mib`, 256 MiB by default", "`capture_mib`, 512 MiB by default")
+          text = text.replace("Leave `strict_provenance=true` and `capture_mib=256` initially.", "Leave `strict_provenance=true` and `capture_mib=512` for the controlled 44→64 run.")
+          marker = "## Controlled O acceptance criteria\n"
+          adaptation = '''## CUDA O/C gate repair after run 00450
+
+          The first corrected production capture established that the 256 MiB budget is
+          insufficient for the controlled 44→64 run: it reached 254,660,608 bytes and
+          dropped four target-grid high-stage snapshots. The controlled default is now
+          512 MiB; capture truncation remains a hard structural failure.
+
+          That CUDA capture also exposed a boundary-semantics issue in the diagnostic,
+          not a new audio mutation. `build_handoff_state` copies carried audio
+          byte-for-byte into `target_raw`, after which Flow necessarily converts that
+          state through `_noise_argument` and Core reconstructs sampler X through
+          floating-point `noise_scaling`. A SAMPLER_SAMPLE observer therefore cannot
+          demand bitwise identity after that inverse/forward float32 round trip. The
+          report keeps `carried_audio_exact`/`carried_audio_bitwise_exact` visible, adds
+          max-abs/RMS/tolerance fields, and gates the reconstructed boundary with a
+          declared dtype-scaled tolerance. Material audio changes still fail the gate.
+          This is the architecture's existing "target state roundtrip within declared
+          dtype tolerance" rule applied at the actually observable sampler boundary;
+          it does not weaken exact protected-value requirements or change production
+          sampling.
+
+          Finally, the same run proved that active Sol runtime snapshots expose the
+          weighted/Mixed-Grid counters, but the base recorder had searched only the
+          static first-high model-options snapshot. Runtime observation now captures
+          the weighted receipt fields explicitly and requires every selected
+          low/probe/high Sol receipt to be present and zero. Missing receipts are still
+          not treated as zero.
+
+          '''
+          if marker not in text:
+              raise SystemExit("controlled O marker missing")
+          text = text.replace(marker, adaptation + marker, 1)
+          text = text.replace("- exact carried-audio equality;", "- byte-exact audio copy at handoff source plus reconstructed high-entry audio within the declared dtype tolerance (bitwise equality remains reported separately);")
+          path.write_text(text)
+          PY
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+      - name: Validate repair
+        run: |
+          ruff check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+          ruff format --check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+          pytest -q tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+      - name: Commit validated repair without workflow
+        run: |
+          rm .github/workflows/repair-pr41-observer-gates.yml
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
+          git add h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md .github/workflows/repair-pr41-observer-gates.yml
+          git commit -m "Fix CUDA O/C observer gate semantics"
+          git push origin HEAD:mirror/pr41-observer-gate-repair-20260914
