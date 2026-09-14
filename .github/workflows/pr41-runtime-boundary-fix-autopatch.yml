@@ -1,0 +1,178 @@
+name: PR41 runtime-boundary diagnostic fix
+
+on:
+  push:
+    branches:
+      - mirror/pr41-runtime-boundary-fix-20260914
+    paths:
+      - .github/workflows/pr41-runtime-boundary-fix-autopatch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr41-runtime-boundary-fix-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[test]' ruff
+      - name: Apply boundary and companion-observer fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str):
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          diag = Path("h3_flow_regenerate/execution_contract_diagnostics.py")
+          replace_once(
+              diag,
+              "import json\nimport time\n",
+              "import json\nimport math\nimport time\n",
+              "diagnostic math import",
+          )
+          replace_once(
+              diag,
+              '''    seed: int = 0\n    config: ProgressiveTargetInputConfig | None = None\n    original_sigmas: tuple[float, ...] = ()\n''',
+              '''    seed: int = 0\n    config: ProgressiveTargetInputConfig | None = None\n    active_model_options: dict[str, Any] | None = field(default=None, repr=False)\n    original_sigmas: tuple[float, ...] = ()\n''',
+              "active model-options field",
+          )
+          replace_once(
+              diag,
+              '''        seed=int(seed or 0),\n        config=config,\n        original_sigmas=schedule,\n''',
+              '''        seed=int(seed or 0),\n        config=config,\n        active_model_options=getattr(guider, "model_options", None),\n        original_sigmas=schedule,\n''',
+              "active model-options capture",
+          )
+          marker = '''def _sampler_wrapper(\n'''
+          helper = '''def _capture_first_high_sampler_state(\n    record: _Record,\n    model_wrap: Any,\n    sigmas: torch.Tensor,\n    noise: torch.Tensor,\n    latent_image: torch.Tensor | None,\n) -> None:\n    """Capture the raw H3 sampler state before KSamplerX0Inpaint rewrites model input.\n\n    MiniMax H3 uses ModelSamplingAV + CONST. Comfy's CONST noise_scaling is\n    ``sigma * (noise_scale * noise) + (1 - sigma) * latent_image``. Flow's\n    `_noise_argument` is the exact inverse of this expression, so reproducing it\n    here is observation-only and does not execute model/sampler code.\n    """\n\n    shapes = getattr(getattr(model_wrap, "inner_model", None), "latent_shapes", None)\n    if not isinstance(shapes, list) or len(shapes) != 2:\n        record.mark_incomplete("first_high_sampler_input: packed AV shapes unavailable at SAMPLER_SAMPLE")\n        return\n    if not torch.is_tensor(noise) or not torch.is_tensor(latent_image):\n        record.mark_incomplete("first_high_sampler_input: noise/latent_image unavailable at SAMPLER_SAMPLE")\n        return\n    if tuple(noise.shape) != tuple(latent_image.shape):\n        record.mark_incomplete("first_high_sampler_input: noise/latent_image shapes differ")\n        return\n    if sigmas.numel() == 0:\n        record.mark_incomplete("first_high_sampler_input: high sigma suffix is empty")\n        return\n    model_sampling = getattr(getattr(model_wrap, "inner_model", None), "model_sampling", None)\n    if model_sampling is None:\n        record.mark_incomplete("first_high_sampler_input: H3 model_sampling unavailable")\n        return\n    noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))\n    if not math.isfinite(noise_scale) or noise_scale <= 0.0:\n        record.mark_incomplete("first_high_sampler_input: invalid H3 noise_scale")\n        return\n    sigma = sigmas[0].detach().to(device=noise.device, dtype=noise.dtype)\n    if sigma.numel() != 1 or not bool(torch.isfinite(sigma).all().item()):\n        record.mark_incomplete("first_high_sampler_input: invalid first high sigma")\n        return\n    latent = latent_image.to(device=noise.device, dtype=noise.dtype)\n    raw_state = sigma * (noise_scale * noise) + (1.0 - sigma) * latent\n    normalized_shapes = [tuple(int(dim) for dim in shape) for shape in shapes]\n    video, audio = unpack_streams(raw_state, normalized_shapes)\n    record.capture("first_high_sampler_input_video", video)\n    record.capture("first_high_sampler_input_audio", audio)\n\n\n'''
+          text = diag.read_text(encoding="utf-8")
+          if text.count(marker) != 1:
+              raise SystemExit("sampler helper insertion target not unique")
+          diag.write_text(text.replace(marker, helper + marker, 1), encoding="utf-8")
+          replace_once(
+              diag,
+              '''    if is_first_high:\n        actual_conds = getattr(model_wrap, "conds", {})\n''',
+              '''    if is_first_high:\n        _capture_first_high_sampler_state(record, model_wrap, sigmas, noise, latent_image)\n        actual_conds = getattr(model_wrap, "conds", {})\n''',
+              "raw sampler-state capture",
+          )
+          replace_once(
+              diag,
+              '''        state_video, state_audio = unpack_streams(x, shapes)\n        record.capture("first_high_sampler_input_video", state_video)\n        record.capture("first_high_sampler_input_audio", state_audio)\n        record.capture("first_high_model_raw_video", video)\n        record.capture("first_high_model_raw_audio", audio)\n        if bridge_present:\n            record.mark_incomplete("first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid")\n        else:\n            record.capture("first_high_pre_guidance_video", video)\n        if record.config is not None:\n            fresh = deterministic_video_noise(\n                tuple(state_video.shape),\n                seed=record.seed + int(record.config.seed_offset),\n                device=state_video.device,\n                dtype=state_video.dtype,\n            )\n            record.capture("fresh_target_video_noise", fresh)\n            clean = recover_conditional_clean_for_diagnostics(state_video, fresh, sigma=sigma)\n            record.capture("learned_transfer_clean_video", clean)\n''',
+              '''        model_input_video, model_input_audio = unpack_streams(x, shapes)\n        record.capture("first_high_model_input_video", model_input_video)\n        record.capture("first_high_model_input_audio", model_input_audio)\n        record.capture("first_high_model_raw_video", video)\n        record.capture("first_high_model_raw_audio", audio)\n        if bridge_present:\n            record.mark_incomplete("first_high_pre_guidance: exact-prefix bridge present; raw equivalence is invalid")\n        else:\n            record.capture("first_high_pre_guidance_video", video)\n        sampler_state = record.snapshots.get("first_high_sampler_input_video")\n        if sampler_state is None:\n            record.mark_incomplete("first_high_sampler_input: missing raw SAMPLER_SAMPLE capture")\n        elif record.config is not None:\n            state_video = sampler_state.tensor\n            fresh = deterministic_video_noise(\n                tuple(state_video.shape),\n                seed=record.seed + int(record.config.seed_offset),\n                device=state_video.device,\n                dtype=state_video.dtype,\n            )\n            record.capture("fresh_target_video_noise", fresh)\n            clean = recover_conditional_clean_for_diagnostics(state_video, fresh, sigma=sigma)\n            record.capture("learned_transfer_clean_video", clean)\n''',
+              "post-inpaint model-input separation",
+          )
+
+          observation = Path("h3_flow_regenerate/execution_contract_runtime_observation.py")
+          sol_old = '''def _sol_runtime_snapshot() -> dict[str, Any] | None:\n    module = sys.modules.get("sol_h3.runtime")\n    if module is None:\n        return None\n    request = _contextvar_value(module, "_REQUEST")\n    forward = _contextvar_value(module, "_FORWARD")\n    result: dict[str, Any] = {\n        "module_loaded": True,\n        "request_active": request is not None,\n        "forward_active": forward is not None,\n    }\n'''
+          sol_new = '''def _loaded_sol_runtime_module() -> tuple[str | None, Any | None]:\n    """Resolve the already-loaded Sol runtime without importing a second module copy."""\n\n    candidates: dict[int, tuple[str, Any]] = {}\n    for name, module in tuple(sys.modules.items()):\n        if module is None:\n            continue\n        normalized_name = str(name).replace("\\\\", "/").lower()\n        normalized_file = str(getattr(module, "__file__", "") or "").replace("\\\\", "/").lower()\n        name_match = normalized_name == "sol_h3.runtime" or normalized_name.endswith(".sol_h3.runtime")\n        file_match = normalized_file.endswith("/sol_h3/runtime.py")\n        if not (name_match or file_match):\n            continue\n        if not hasattr(module, "_REQUEST") or not hasattr(module, "_FORWARD"):\n            continue\n        candidates[id(module)] = (str(name), module)\n    if not candidates:\n        return None, None\n    if len(candidates) != 1:\n        names = sorted(name for name, _module in candidates.values())\n        raise RuntimeError(f"multiple loaded Sol-H3 runtime modules: {names}")\n    return next(iter(candidates.values()))\n\n\ndef _sol_runtime_snapshot() -> dict[str, Any] | None:\n    module_name, module = _loaded_sol_runtime_module()\n    if module is None:\n        return None\n    request = _contextvar_value(module, "_REQUEST")\n    forward = _contextvar_value(module, "_FORWARD")\n    result: dict[str, Any] = {\n        "module_loaded": True,\n        "module_name": module_name,\n        "module_file": str(getattr(module, "__file__", None)),\n        "request_active": request is not None,\n        "forward_active": forward is not None,\n    }\n'''
+          replace_once(observation, sol_old, sol_new, "dynamic Sol runtime resolution")
+          replace_once(
+              observation,
+              '''def _make_diffusion_wrapper(root_model_options: dict[str, Any]):\n    def wrapper(executor, *args, **kwargs):\n''',
+              '''def _make_diffusion_wrapper(root_model_options: dict[str, Any] | None = None):\n    def wrapper(executor, *args, **kwargs):\n''',
+              "optional stale-root fallback",
+          )
+          replace_once(
+              observation,
+              '''        before, before_error = _guarded_companion_snapshot(\n            record.state,\n            f"{stage}:before_diffusion_model",\n            executor,\n            transformer,\n            root_model_options,\n        )\n        result = executor(*args, **kwargs)\n        after, after_error = _guarded_companion_snapshot(\n            record.state,\n            f"{stage}:after_diffusion_model",\n            executor,\n            transformer,\n            root_model_options,\n        )\n''',
+              '''        active_model_options = getattr(record, "active_model_options", None)\n        if not isinstance(active_model_options, dict):\n            active_model_options = root_model_options if isinstance(root_model_options, dict) else None\n\n        before, before_error = _guarded_companion_snapshot(\n            record.state,\n            f"{stage}:before_diffusion_model",\n            executor,\n            transformer,\n            active_model_options,\n        )\n        result = executor(*args, **kwargs)\n        after, after_error = _guarded_companion_snapshot(\n            record.state,\n            f"{stage}:after_diffusion_model",\n            executor,\n            transformer,\n            active_model_options,\n        )\n''',
+              "active Spectrum binding observation",
+          )
+          replace_once(
+              observation,
+              '''        root_model_options = patched.model_options\n        _diag._append_wrapper(\n            patched,\n            comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,\n            _DIFFUSION_KEY,\n            _make_diffusion_wrapper(root_model_options),\n        )\n''',
+              '''        _diag._append_wrapper(\n            patched,\n            comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,\n            _DIFFUSION_KEY,\n            _make_diffusion_wrapper(),\n        )\n''',
+              "remove patch-time Spectrum closure",
+          )
+
+          tests = Path("tests/test_execution_contract_diagnostics.py")
+          marker = '''def _first_high_fixture(*, exact_bridge: bool = False):\n'''
+          addition = '''def test_sampler_wrapper_captures_raw_high_state_before_inpaint_rewrite():\n    video = torch.randn(1, 24, 5, 4, 4)\n    audio = torch.randn(1, 32, 2, 9)\n    noise_video = torch.randn_like(video)\n    noise_audio = torch.randn_like(audio)\n    latent_video = torch.randn_like(video)\n    latent_audio = torch.randn_like(audio)\n    noise, shapes = pack_streams((noise_video, noise_audio))\n    latent, _ = pack_streams((latent_video, latent_audio))\n    sigma = torch.tensor([0.4, 0.0])\n    noise_scale = 1.25\n    record = diag._Record(state=_state(8 << 20))\n    token = diag._ACTIVE.set(record)\n\n    class Executor:\n        def __call__(self, *_args, **_kwargs):\n            return "sentinel"\n\n    model_wrap = SimpleNamespace(\n        conds={},\n        inner_model=SimpleNamespace(\n            latent_shapes=shapes,\n            model_sampling=SimpleNamespace(noise_scale=noise_scale),\n        ),\n    )\n    extra_args = {"model_options": {"transformer_options": {diag._runtime.FLOW_STAGE_KEY: "high"}}}\n    try:\n        result = diag._sampler_wrapper(\n            Executor(),\n            model_wrap,\n            sigma,\n            extra_args,\n            None,\n            noise,\n            latent,\n        )\n    finally:\n        diag._ACTIVE.reset(token)\n\n    expected = sigma[0] * (noise_scale * noise) + (1.0 - sigma[0]) * latent\n    expected_video, expected_audio = diag.unpack_streams(expected, shapes)\n    assert result == "sentinel"\n    assert torch.equal(record.snapshots["first_high_sampler_input_video"].tensor, expected_video)\n    assert torch.equal(record.snapshots["first_high_sampler_input_audio"].tensor, expected_audio)\n\n\n'''
+          text = tests.read_text(encoding="utf-8")
+          if text.count(marker) != 1:
+              raise SystemExit("diagnostic sampler test insertion target not unique")
+          tests.write_text(text.replace(marker, addition + marker, 1), encoding="utf-8")
+          replace_once(
+              tests,
+              '''    state_packed, _ = pack_streams((state_video, audio))\n    raw_video = torch.randn_like(video)\n    raw_packed, _ = pack_streams((raw_video, audio))\n\n    record = diag._Record(\n''',
+              '''    state_packed, _ = pack_streams((state_video, audio))\n    model_input_video = torch.randn_like(video)\n    model_input_audio = torch.randn_like(audio)\n    model_input_packed, _ = pack_streams((model_input_video, model_input_audio))\n    raw_video = torch.randn_like(video)\n    raw_packed, _ = pack_streams((raw_video, audio))\n\n    record = diag._Record(\n''',
+              "first-high distinct model input fixture",
+          )
+          replace_once(
+              tests,
+              '''    token = diag._ACTIVE.set(record)\n\n    class Executor:\n''',
+              '''    record.capture("first_high_sampler_input_video", state_video)\n    record.capture("first_high_sampler_input_audio", audio)\n    token = diag._ACTIVE.set(record)\n\n    class Executor:\n''',
+              "fixture raw sampler snapshot",
+          )
+          replace_once(
+              tests,
+              '''        result = diag._predict_raw_wrapper(Executor(), state_packed, torch.tensor([sigma]), model_options, seed)\n    finally:\n        diag._ACTIVE.reset(token)\n    return record, result, raw_packed, raw_video, clean\n''',
+              '''        result = diag._predict_raw_wrapper(\n            Executor(), model_input_packed, torch.tensor([sigma]), model_options, seed\n        )\n    finally:\n        diag._ACTIVE.reset(token)\n    return record, result, raw_packed, raw_video, model_input_video, clean\n''',
+              "fixture post-inpaint input",
+          )
+          replace_once(
+              tests,
+              '''    record, result, raw_packed, raw_video, clean = _first_high_fixture()\n\n    assert torch.equal(result, raw_packed)\n    assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)\n''',
+              '''    record, result, raw_packed, raw_video, model_input_video, clean = _first_high_fixture()\n\n    assert torch.equal(result, raw_packed)\n    assert torch.equal(record.snapshots["first_high_model_input_video"].tensor, model_input_video)\n    assert torch.equal(record.snapshots["first_high_model_raw_video"].tensor, raw_video)\n''',
+              "first-high model input assertion",
+          )
+          replace_once(
+              tests,
+              '''    record, _result, _raw_packed, raw_video, _clean = _first_high_fixture(exact_bridge=True)\n''',
+              '''    record, _result, _raw_packed, raw_video, _model_input_video, _clean = _first_high_fixture(\n        exact_bridge=True\n    )\n''',
+              "exact bridge fixture tuple",
+          )
+
+          obs_tests = Path("tests/test_execution_contract_runtime_observation.py")
+          replace_once(
+              obs_tests,
+              '''    record = diag._Record(state=state)\n    active_token = diag._ACTIVE.set(record)\n    stage_token = diag._STAGE.set("high")\n    calls = 0\n\n    class Executor:\n''',
+              '''    record = diag._Record(state=state, active_model_options={"source": "active"})\n    active_token = diag._ACTIVE.set(record)\n    stage_token = diag._STAGE.set("high")\n    calls = 0\n\n    class Executor:\n''',
+              "active model options companion test",
+          )
+          replace_once(
+              obs_tests,
+              '''    def companion(_executor, _transformer, _root_model_options):\n        return {"executor_calls": calls}\n\n    monkeypatch.setattr(observation, "_active_companion_snapshot", companion)\n    wrapper = observation._make_diffusion_wrapper({})\n''',
+              '''    def companion(_executor, _transformer, root_model_options):\n        return {"executor_calls": calls, "source": root_model_options["source"]}\n\n    monkeypatch.setattr(observation, "_active_companion_snapshot", companion)\n    wrapper = observation._make_diffusion_wrapper({"source": "stale"})\n''',
+              "active options observer assertion setup",
+          )
+          replace_once(
+              obs_tests,
+              '''    assert first["before"] == {"executor_calls": 0}\n    assert first["after"] == {"executor_calls": 1}\n''',
+              '''    assert first["before"] == {"executor_calls": 0, "source": "active"}\n    assert first["after"] == {"executor_calls": 1, "source": "active"}\n''',
+              "active options observer assertions",
+          )
+          # The next high-stage observation-failure test has the same short constructor; replace the next occurrence only.
+          text = obs_tests.read_text(encoding="utf-8")
+          old = '''def test_diffusion_observation_failure_does_not_add_or_replace_model_call(monkeypatch):\n    state = _state()\n    record = diag._Record(state=state)\n'''
+          new = '''def test_diffusion_observation_failure_does_not_add_or_replace_model_call(monkeypatch):\n    state = _state()\n    record = diag._Record(state=state, active_model_options={})\n'''
+          if text.count(old) != 1:
+              raise SystemExit("observation failure constructor target not unique")
+          obs_tests.write_text(text.replace(old, new, 1), encoding="utf-8")
+          replace_once(
+              obs_tests,
+              '''    module = SimpleNamespace(_REQUEST=request_var, _FORWARD=forward_var)\n    monkeypatch.setitem(sys.modules, "sol_h3.runtime", module)\n\n    snapshot = observation._sol_runtime_snapshot()\n''',
+              '''    dynamic_name = "/home/toor/ComfyUI/custom_nodes/comfyui-sol-h3.sol_h3.runtime"\n    module = SimpleNamespace(\n        _REQUEST=request_var,\n        _FORWARD=forward_var,\n        __file__="/home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3/sol_h3/runtime.py",\n    )\n    monkeypatch.delitem(sys.modules, "sol_h3.runtime", raising=False)\n    monkeypatch.setitem(sys.modules, dynamic_name, module)\n\n    snapshot = observation._sol_runtime_snapshot()\n    assert snapshot["module_name"] == dynamic_name\n''',
+              "dynamic Sol module test",
+          )
+          PY
+      - run: ruff format h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+      - run: ruff check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+      - run: pytest -q tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+      - name: Commit validated fix and remove one-shot workflow
+        run: |
+          git config user.name "xmarre"
+          git config user.email "54859656+xmarre@users.noreply.github.com"
+          git rm .github/workflows/pr41-runtime-boundary-fix-autopatch.yml
+          git add h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py
+          git commit -m "Fix first-high diagnostic runtime boundaries"
+          git push origin HEAD:mirror/pr41-runtime-boundary-fix-20260914
