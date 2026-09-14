@@ -57,6 +57,8 @@ The report includes:
 - Flow/Spectrum logical/actual/forecast accounting and one-upscaler accounting;
 - runtime contract fields exposed in `transformer_options` for the active
   companions;
+- post-load injection/forward-hook lifecycle evidence for low, probe, and high,
+  plus active VDN/Sol/Spectrum state at selected actual transformer calls;
 - a promotion block that remains false until CUDA/media gates are satisfied.
 
 PR #35 remains the owner of the existing decode checkpoint output names/order,
@@ -125,6 +127,44 @@ file during every diagnostic run is unacceptable. Therefore an exact checkpoint
 file SHA remains an explicit **replay/promotion gate** and is not claimed by the
 runtime fingerprint.
 
+### Post-load lifecycle and active-companion observation
+
+A preflight or pre-sampling manifest cannot prove the state of the shared H3
+modules after Core has loaded and injected a particular child sampler lifetime.
+The diagnostic therefore adds read-only observations at the actual runtime
+boundaries rather than inferring them from node placement.
+
+After Core `prepare_sampling` returns for each low/probe/high child, the report
+records the loaded patcher's injection state, object patches, effective wrappers
+and callbacks, native block hooks, and nested modules whose `forward` is replaced
+on the instance or that own native forward hooks. Nested-module inspection is
+bounded to 1024 modified modules; truncation invalidates the structural gate.
+The resulting lifecycle digest is compared across low, probe, and high so an
+adapter/hook path change is not silently treated as stable.
+
+At actual `DIFFUSION_MODEL` execution, the recorder retains only the selected
+low-last, probe, high-first, and high-last observations. It records:
+
+- VDN closure-owned layout and runtime-pool state when present;
+- Sol request/forward context, route counters, kernel identity and available
+  backend receipts without importing another Sol copy;
+- Spectrum active run/step/solver/history state from the already-shared runtime
+  binding.
+
+These observers call their executor exactly once. They do not reset VDN pools,
+change Sol routes, touch Spectrum history, invoke the learned upscaler, or add an
+H3 evaluation. An observation failure is recorded and makes the runtime evidence
+gate fail, but it does not replace an otherwise successful model call with a
+diagnostic exception.
+
+The report preserves `observation_gate.structural_candidate=true` only when the
+base O/C structural checks pass **and** all low/probe/high lifecycle observations
+are present, injection state is coherent, the lifecycle digest is stable, nested
+runtime modifications were observed without truncation, all four selected
+companion-call slots are present, active Sol/VDN/Spectrum state is visible at the
+first high actual, and no observation error occurred. This remains a structural
+evidence gate; it is not visual approval.
+
 ## Controlled O acceptance criteria
 
 Use the exact baseline workflow/settings from the architecture document. A valid
@@ -137,6 +177,7 @@ O run must report all of the following before its media is interpreted:
 - exact carried-audio equality;
 - first-high `h3_refinement.min_actual_prefix_steps == 1`;
 - complete installed provenance;
+- complete post-load runtime observation with no observer error or truncation;
 - no capture-budget truncation affecting the compared boundary.
 
 The observer itself is not evidence of transparency until those conditions and
@@ -155,7 +196,9 @@ paired decoded media agree with the uninstrumented baseline.
 4. Feed the diagnostic handle and the sampler's output LATENT into
    `MiniMax H3 Execution Contract Report`. Save the preflight provenance string
    for setup diagnostics and the final report next to the normal Flow metrics JSON.
-   The report's embedded `provenance` object is the authoritative runtime manifest.
+   The report's embedded `provenance` object is the authoritative runtime manifest;
+   its runtime-observation extension must also pass before O is considered a valid
+   structural candidate.
 5. Save the existing PR #35/#36 checkpoint videos/reports from the same run.
 6. Provide the matching original-baseline media and the backend route log for
    run 00442 before selecting U or R.
