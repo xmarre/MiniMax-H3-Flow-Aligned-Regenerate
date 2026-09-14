@@ -1,0 +1,39 @@
+name: Fix PR41 provenance repair driver
+
+on:
+  push:
+    branches:
+      - mirror/pr41-replay-provenance-equivalence-20260915
+
+permissions:
+  contents: write
+
+jobs:
+  fix-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/pr41-replay-provenance-equivalence-20260915
+      - name: Fix generated-test quoting and remove broken v2 driver
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/pr41-provenance-equivalence-repair.yml')
+          text = path.read_text()
+          old = "addition = r'''\\n\\ndef test_replay_provenance_equivalence_uses_source_bytes_not_git_or_lifecycle_state():"
+          new = "addition = '''\\n\\ndef test_replay_provenance_equivalence_uses_source_bytes_not_git_or_lifecycle_state():"
+          if old not in text:
+              raise SystemExit('repair-driver quoting anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/pr41-provenance-equivalence-repair-v2.yml
+          rm -f .github/workflows/fix-pr41-repair-driver.yml
+      - name: Commit corrected driver
+        run: |
+          git config user.name xmarre
+          git config user.email 54859656+xmarre@users.noreply.github.com
+          git add -A .github/workflows
+          git commit -m 'Fix replay provenance repair driver'
+          git push origin HEAD:mirror/pr41-replay-provenance-equivalence-20260915
