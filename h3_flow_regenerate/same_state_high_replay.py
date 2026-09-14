@@ -151,6 +151,26 @@ def _checkpoint_identity(provenance: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assert_checkpoint_identity_unchanged(identity: dict[str, Any]) -> None:
+    """Fail before sampling if the checkpoint file changed after the preflight hash."""
+    raw_path = identity.get("resolved_path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise RuntimeError("same-state replay preflight checkpoint identity has no path")
+    try:
+        path = Path(raw_path).resolve(strict=True)
+        stat = path.stat()
+    except OSError as exc:
+        raise RuntimeError(f"same-state replay checkpoint path is not readable after preflight: {raw_path}") from exc
+    if not path.is_file():
+        raise RuntimeError("same-state replay checkpoint identity requires a regular file")
+    if str(path) != raw_path:
+        raise RuntimeError("same-state replay checkpoint path changed after preflight")
+    if int(stat.st_size) != int(identity.get("size", -1)):
+        raise RuntimeError("same-state replay checkpoint size changed after preflight")
+    if int(stat.st_mtime_ns) != int(identity.get("mtime_ns", -1)):
+        raise RuntimeError("same-state replay checkpoint mtime changed after preflight")
+
+
 _DROP_PROVENANCE = object()
 
 
@@ -655,6 +675,8 @@ def _capture_wrapper(
     guider = executor.class_obj
     state = (getattr(guider, "model_options", None) or {}).get(CAPTURE_STATE_KEY)
     record = _diag._ACTIVE.get()
+    if isinstance(state, _CaptureState):
+        _assert_checkpoint_identity_unchanged(state.exact_checkpoint_identity)
     result = executor(
         noise,
         latent_image,
@@ -905,6 +927,7 @@ def _replay_wrapper(
         raise RuntimeError("same-state replay must run inside MiniMax H3 Execution Contract Diagnostics")
     if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):
         raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")
+    _assert_checkpoint_identity_unchanged(state.exact_checkpoint_identity)
     if not isinstance(options, dict):
         raise RuntimeError("same-state replay requires mutable guider model options")
     config = options.get(_runtime.PROGRESSIVE_KEY)

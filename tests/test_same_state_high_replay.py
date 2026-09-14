@@ -229,6 +229,31 @@ def test_checkpoint_identity_hashes_exact_file_and_rejects_changed_stat(tmp_path
         raise AssertionError("changed checkpoint stat was accepted")
 
 
+def test_checkpoint_identity_guard_rejects_file_change_after_preflight(tmp_path: Path):
+    checkpoint = tmp_path / "model.safetensors"
+    checkpoint.write_bytes(b"exact-model-bytes")
+    stat = checkpoint.stat()
+    provenance = {
+        "model": {
+            "checkpoint_stat": {
+                "resolved_path": str(checkpoint),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        }
+    }
+    identity = replay._checkpoint_identity(provenance)
+    replay._assert_checkpoint_identity_unchanged(identity)
+
+    checkpoint.write_bytes(b"changed-model-bytes-longer")
+    try:
+        replay._assert_checkpoint_identity_unchanged(identity)
+    except RuntimeError as exc:
+        assert "changed after preflight" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("checkpoint changed after preflight was accepted")
+
+
 def test_rebuild_trajectory_restores_declarative_guidance_samples():
     video_x0 = torch.arange(1 * 24 * 2 * 4 * 4, dtype=torch.float32).reshape(1, 24, 2, 4, 4)
     manifest = {
@@ -307,4 +332,4 @@ def test_replay_source_has_no_progressive_or_upscaler_execution_path():
     source = inspect.getsource(replay._replay_wrapper)
     assert "build_handoff_state" not in source
     assert "_run_progressive" not in source
-    assert "handoff_learned_upscale" not in source
+    assert "learned_upscaler" not in source
