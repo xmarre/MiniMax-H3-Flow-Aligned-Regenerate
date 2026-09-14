@@ -44,6 +44,8 @@ Connect the sampled LATENT to `Save MiniMax H3 Same-State Replay Bundle` as its 
 
 The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, Flow guidance configuration, Spectrum configuration and the committed low/probe guidance trajectory. It also records exact checkpoint identity, installed-runtime provenance, first-high execution policy, first-high Sol/VDN/Spectrum companion policy and the corresponding runtime observation evidence.
 
+The raw VDN observation additionally records bounded retained cache-key topology and the one-block async prefetch lifecycle (generation, target, pending/completed status). These fields are evidence, not equality policy: retained counts, cache contents/keys and prefetch state are intentionally allowed to differ between progressive capture and the cold process. VDN configuration, layout, wrapper identity and whether retention is enabled remain attribution gates.
+
 Do not reuse a bundle if the capture run did not visibly reproduce the artifact.
 
 ## Job 2: cold high replay
