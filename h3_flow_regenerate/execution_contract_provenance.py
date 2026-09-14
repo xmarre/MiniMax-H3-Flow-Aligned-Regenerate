@@ -109,7 +109,27 @@ def file_identity(path: str | None) -> dict[str, Any] | None:
     }
 
 
-def callable_identity(value: Any) -> dict[str, Any]:
+def _captured_value_identity(value: Any, *, depth: int, seen: set[int]) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if torch.is_tensor(value):
+        return {
+            "tensor": True,
+            "shape": [int(dim) for dim in value.shape],
+            "dtype": str(value.dtype),
+            "device": str(value.device),
+        }
+    if callable(value):
+        return {"callable": callable_identity(value, _depth=depth + 1, _seen=seen)}
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def callable_identity(
+    value: Any,
+    *,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+) -> dict[str, Any]:
     target = getattr(value, "__func__", value)
     cls = target if inspect.isclass(target) else type(target)
     module = getattr(target, "__module__", cls.__module__)
@@ -124,19 +144,55 @@ def callable_identity(value: Any) -> dict[str, Any]:
         except (OSError, TypeError):
             source_file = None
     code = getattr(target, "__code__", None)
+    closure = getattr(target, "__closure__", None)
+    defaults = getattr(target, "__defaults__", None)
+    kwdefaults = getattr(target, "__kwdefaults__", None)
     if code is None and callable(target):
         call_method = target.__call__
         code = getattr(call_method, "__code__", None)
+        closure = getattr(call_method, "__closure__", None)
+        defaults = getattr(call_method, "__defaults__", None)
+        kwdefaults = getattr(call_method, "__kwdefaults__", None)
     code_digest = None
     if code is not None:
         material = code.co_code + repr(code.co_consts).encode() + repr(code.co_names).encode()
         code_digest = hashlib.sha256(material).hexdigest()
-    return {
+    result = {
         "module": str(module),
         "qualname": str(qualname),
         "code_digest": code_digest,
         "file": file_identity(source_file),
     }
+    if _depth >= 2 or code is None:
+        return result
+    seen = set() if _seen is None else _seen
+    ident = id(target)
+    if ident in seen:
+        result["recursive_capture"] = True
+        return result
+    seen.add(ident)
+    try:
+        captures = {}
+        if closure is not None:
+            for name, cell in zip(code.co_freevars, closure, strict=True):
+                try:
+                    captured = cell.cell_contents
+                except ValueError:
+                    captures[name] = {"empty_cell": True}
+                else:
+                    captures[name] = _captured_value_identity(captured, depth=_depth, seen=seen)
+        if captures:
+            result["closure"] = captures
+        if defaults:
+            result["defaults"] = [_captured_value_identity(item, depth=_depth, seen=seen) for item in defaults]
+        if kwdefaults:
+            result["kwdefaults"] = {
+                str(key): _captured_value_identity(item, depth=_depth, seen=seen)
+                for key, item in sorted(kwdefaults.items())
+            }
+    finally:
+        seen.remove(ident)
+    return result
 
 
 def safe_value(value: Any, *, depth: int = 0) -> Any:
@@ -471,7 +527,23 @@ def _source_group_complete(entries: list[dict[str, Any]]) -> bool:
     )
 
 
-def collect_manifest(model: Any) -> dict[str, Any]:
+def collect_manifest(
+    model: Any,
+    *,
+    model_options: dict[str, Any] | None = None,
+    phase: str = "node_apply_preflight",
+) -> dict[str, Any]:
+    # Provenance must describe the files and git state that exist for this
+    # invocation, not whatever happened to be cached earlier in a long-lived
+    # Comfy process.
+    file_identity.cache_clear()
+    _repo_state.cache_clear()
+
+    effective_options = (
+        model_options if isinstance(model_options, dict) else (getattr(model, "model_options", None) or {})
+    )
+    effective_transformer = effective_options.get("transformer_options") or {}
+
     imported: dict[str, Any] = {}
     unresolved: list[str] = []
     for module_name in _REQUIRED_MODULES:
@@ -486,14 +558,18 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         if not _source_group_complete(companions.get(label, [])):
             unresolved.append(f"companion:{label}")
 
-    wrappers = _wrapper_manifest(model)
+    patcher_wrappers = _wrapper_manifest(model)
+    effective_wrappers = _keyed_callable_manifest(effective_transformer.get("wrappers", {}))
+    wrappers = effective_wrappers or patcher_wrappers
     for wrapper_type, entries in wrappers.items():
         for position, entry in enumerate(entries):
             source = entry["callable"].get("file")
             if source is None or not source["git"]["available"]:
                 unresolved.append(f"wrapper:{wrapper_type}:{position}:{entry['key']}")
 
-    callbacks = _callback_manifest(model)
+    patcher_callbacks = _callback_manifest(model)
+    effective_callbacks = _keyed_callable_manifest(effective_transformer.get("callbacks", {}))
+    callbacks = effective_callbacks or patcher_callbacks
     for callback_type, entries in callbacks.items():
         for position, entry in enumerate(entries):
             source = entry["callable"].get("file")
@@ -525,18 +601,18 @@ def collect_manifest(model: Any) -> dict[str, Any]:
     if not model_fingerprint.get("available"):
         unresolved.append("model:runtime_fingerprint")
 
-    transformer = (getattr(model, "model_options", None) or {}).get("transformer_options") or {}
-    replacement = (transformer.get("patches_replace") or {}).get("dit") or {}
+    replacement = (effective_transformer.get("patches_replace") or {}).get("dit") or {}
     replacement_manifest = {
         str(key): callable_identity(value) if callable(value) else safe_value(value)
         for key, value in replacement.items()
     }
-    attention = transformer.get("optimized_attention_override")
-    progressive = (getattr(model, "model_options", None) or {}).get(_runtime.PROGRESSIVE_KEY)
+    attention = effective_transformer.get("optimized_attention_override")
+    progressive = effective_options.get(_runtime.PROGRESSIVE_KEY)
     provider = getattr(progressive, "learned_upscaler", None)
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
+        "capture_phase": str(phase),
         "collected_ns": time.time_ns(),
         "cwd": os.getcwd(),
         "python": sys.version,
@@ -544,18 +620,23 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         "imported_sources": imported,
         "loaded_companion_sources": companions,
         "active_wrapper_order": wrappers,
+        "patcher_wrapper_order": patcher_wrappers,
         "active_callbacks": callbacks,
+        "patcher_callbacks": patcher_callbacks,
         "active_injections": _injection_manifest(model),
+        "patcher_is_injected": bool(getattr(model, "is_injected", False)),
         "active_object_patches": _object_patch_manifest(model),
         "active_runtime_functions": runtime_functions,
         "validation_stack": validation_stack,
         "replacement_chain_dit": replacement_manifest,
-        "optimized_attention_override": callable_identity(attention) if callable(attention) else safe_value(attention),
+        "optimized_attention_override": (
+            callable_identity(attention) if callable(attention) else safe_value(attention)
+        ),
         "model": model_fingerprint,
         "progressive_config": safe_value(progressive),
         "learned_provider": _provider_manifest(provider),
         "block_hooks": _hook_manifest(diffusion),
-        "model_options_alias_graph": alias_graph(getattr(model, "model_options", {})),
+        "model_options_alias_graph": alias_graph(effective_options),
         "unresolved": sorted(set(unresolved)),
     }
     manifest["gate_complete"] = not manifest["unresolved"]

@@ -293,3 +293,53 @@ def test_callable_identity_resolves_callable_instance_source_file():
     assert identity["module"] == __name__
     assert identity["file"] is not None
     assert identity["file"]["sha256"]
+
+
+def test_callable_identity_records_nested_closure_choice():
+    def make_outer(choice):
+        def selected(value):
+            return value + choice
+
+        def outer(value):
+            return selected(value)
+
+        return outer
+
+    left = provenance.callable_identity(make_outer(1))
+    right = provenance.callable_identity(make_outer(2))
+
+    assert left["closure"]["selected"]["callable"]["closure"]["choice"] == 1
+    assert right["closure"]["selected"]["callable"]["closure"]["choice"] == 2
+
+
+def test_finalize_guard_does_not_mask_sampling_error(monkeypatch):
+    state = _state()
+    record = diag._Record(state=state, error="RuntimeError: sampler failed")
+    original = RuntimeError("sampler failed")
+
+    def fail_finalize(_record, _guider):
+        raise ValueError("diagnostic failed")
+
+    monkeypatch.setattr(diag, "_finalize_record", fail_finalize)
+    diag._finalize_record_guarded(record, object(), sampling_error=original)
+
+    report = state.complete[-1]
+    assert report["error"] == "RuntimeError: sampler failed"
+    assert report["diagnostic_finalize_error"] == "ValueError: diagnostic failed"
+    assert report["promotion"]["production_fix_authorized"] is False
+
+
+def test_finalize_guard_raises_diagnostic_failure_when_sampling_succeeded(monkeypatch):
+    state = _state()
+    record = diag._Record(state=state)
+
+    def fail_finalize(_record, _guider):
+        raise ValueError("diagnostic failed")
+
+    monkeypatch.setattr(diag, "_finalize_record", fail_finalize)
+    try:
+        diag._finalize_record_guarded(record, object(), sampling_error=None)
+    except ValueError as exc:
+        assert str(exc) == "diagnostic failed"
+    else:
+        raise AssertionError("diagnostic finalization failure was swallowed")

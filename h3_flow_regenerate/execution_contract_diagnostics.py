@@ -218,6 +218,11 @@ def _invocation_wrapper(
         )
     if _ACTIVE.get() is not None:
         raise RuntimeError("nested execution-contract diagnostic invocation is unsupported")
+    state.manifest = collect_manifest(
+        guider.model_patcher,
+        model_options=getattr(guider, "model_options", None),
+        phase="outer_sample_runtime",
+    )
     if state.strict_provenance and not state.manifest.get("gate_complete", False):
         raise RuntimeError(
             "execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", []))
@@ -244,6 +249,7 @@ def _invocation_wrapper(
         record.metric_start = binding.metrics.counters
         record.event_start = len(binding.metrics.events)
     token = _ACTIVE.set(record)
+    sampling_error: BaseException | None = None
     try:
         return executor(
             noise,
@@ -257,11 +263,12 @@ def _invocation_wrapper(
             latent_shapes=latent_shapes,
         )
     except BaseException as exc:
+        sampling_error = exc
         record.error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
         _ACTIVE.reset(token)
-        _finalize_record(record, guider)
+        _finalize_record_guarded(record, guider, sampling_error=sampling_error)
 
 
 def _stage_wrapper(
@@ -600,6 +607,36 @@ def _all_research_receipts_zero(receipts: list[dict[str, Any]]) -> bool | None:
     return all(observed) if observed else None
 
 
+def _append_finalize_failure(record: _Record, exc: BaseException) -> None:
+    record.state.complete.append(
+        {
+            "schema_version": 2,
+            "capture_id": record.capture_id,
+            "started_ns": record.started_ns,
+            "completed_ns": time.time_ns(),
+            "error": record.error,
+            "diagnostic_finalize_error": f"{type(exc).__name__}: {exc}",
+            "incomplete": [*record.incomplete, "diagnostic finalization failed"],
+            "provenance": record.state.manifest,
+            "promotion": {"production_fix_authorized": False},
+        }
+    )
+
+
+def _finalize_record_guarded(
+    record: _Record,
+    guider: Any,
+    *,
+    sampling_error: BaseException | None,
+) -> None:
+    try:
+        _finalize_record(record, guider)
+    except BaseException as exc:
+        _append_finalize_failure(record, exc)
+        if sampling_error is None:
+            raise
+
+
 def _finalize_record(record: _Record, guider: Any) -> None:
     record.completed_ns = time.time_ns()
     summaries: dict[str, Any] = {}
@@ -735,7 +772,7 @@ def patch_execution_contract_diagnostics(
         raise ValueError(
             "execution-contract diagnostic requires learned_3d Target Input with exact_prefix_mode=fallback"
         )
-    manifest = collect_manifest(patched)
+    manifest = collect_manifest(patched, phase="node_apply_preflight")
     state = _State(
         max_bytes=int(capture_mib) * 1024 * 1024,
         strict_provenance=bool(strict_provenance),
@@ -814,7 +851,7 @@ class H3ExecutionContractDiagnostics:
         "call and can fail before sampling when installed-source provenance is incomplete."
     )
     RETURN_TYPES = ("MODEL", "H3_FLOW_EXECUTION_CONTRACT", "STRING")
-    RETURN_NAMES = ("model", "diagnostic", "provenance_manifest")
+    RETURN_NAMES = ("model", "diagnostic", "preflight_provenance_manifest")
     FUNCTION = "apply"
 
     @classmethod

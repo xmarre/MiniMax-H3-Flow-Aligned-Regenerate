@@ -105,11 +105,20 @@ The provenance collector runs inside the actual ComfyUI process and records:
 - checkpoint path/stat metadata when exposed by the loader;
 - Torch/CUDA and relevant compiler/runtime flags.
 
-`strict_provenance=true` fails before the sampling executor is entered when a
+The node's third string output is explicitly a **preflight** manifest captured
+when the graph applies the diagnostic patch. At the outer sampling boundary, after
+ComfyUI has registered conditioning hooks and merged effective wrappers/callbacks,
+the recorder invalidates its source/git caches and replaces that preflight snapshot
+with an authoritative runtime manifest. The completed report embeds this refreshed
+manifest and is the provenance artifact used by the O/C gate.
+
+`strict_provenance=true` fails before the Flow sampling executor is entered when a
 participating imported/wrapper source cannot be tied to a file and git HEAD, or
 when the expected PR #35/#36 validation overlays are not active. Dirty trees are
 recorded, not silently rejected, because exact source-file SHA-256 is also
-recorded.
+recorded. Callable provenance also records bounded nested closure/default captures
+so runtime-selected providers such as a KJ attention closure are distinguishable
+even when they share one source file and outer code object.
 
 The loaded-model fingerprint is intentionally bounded. Hashing a 20+ GiB model
 file during every diagnostic run is unacceptable. Therefore an exact checkpoint
@@ -144,8 +153,9 @@ paired decoded media agree with the uninstrumented baseline.
    seed, reference inputs, prompt, geometry, sampler, scheduler, Spectrum/Sol/VDN
    settings, guidance, or handoff settings.
 4. Feed the diagnostic handle and the sampler's output LATENT into
-   `MiniMax H3 Execution Contract Report`. Save both the provenance-manifest
-   string and the final report next to the normal Flow metrics JSON.
+   `MiniMax H3 Execution Contract Report`. Save the preflight provenance string
+   for setup diagnostics and the final report next to the normal Flow metrics JSON.
+   The report's embedded `provenance` object is the authoritative runtime manifest.
 5. Save the existing PR #35/#36 checkpoint videos/reports from the same run.
 6. Provide the matching original-baseline media and the backend route log for
    run 00442 before selecting U or R.
