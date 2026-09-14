@@ -387,3 +387,22 @@ def test_finalize_guard_raises_diagnostic_failure_when_sampling_succeeded(monkey
         assert str(exc) == "diagnostic failed"
     else:
         raise AssertionError("diagnostic finalization failure was swallowed")
+
+
+def test_audio_roundtrip_gate_accepts_float_rounding_but_rejects_material_change():
+    low = torch.tensor([1.0, -2.0, 0.25], dtype=torch.float32)
+    high = low.clone()
+    high[0] = torch.nextafter(high[0], torch.tensor(float("inf"), dtype=high.dtype))
+    rounded = diag._audio_roundtrip_check(low, high)
+    assert rounded["carried_audio_exact"] is False
+    assert rounded["carried_audio_bitwise_exact"] is False
+    assert rounded["carried_audio_roundtrip_within_dtype_tolerance"] is True
+    assert rounded["carried_audio_roundtrip_max_abs"] > 0.0
+    changed = low.clone()
+    changed[0] += 1e-3
+    assert diag._audio_roundtrip_check(low, changed)["carried_audio_roundtrip_within_dtype_tolerance"] is False
+
+
+def test_execution_contract_default_capture_budget_is_512_mib():
+    required = diag.H3ExecutionContractDiagnostics.INPUT_TYPES()["required"]
+    assert required["capture_mib"][1]["default"] == 512
