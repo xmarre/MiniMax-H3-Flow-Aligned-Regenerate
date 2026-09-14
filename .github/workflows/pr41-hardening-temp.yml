@@ -1,0 +1,503 @@
+name: PR41 hardening temporary
+
+on:
+  push:
+    branches:
+      - mirror/first-high-contract-implementation-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/first-high-contract-implementation-20260914
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Apply bounded hardening patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, got {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          provenance = "h3_flow_regenerate/execution_contract_provenance.py"
+          diagnostics = "h3_flow_regenerate/execution_contract_diagnostics.py"
+          tests = "tests/test_execution_contract_diagnostics.py"
+          docs = "docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md"
+
+          replace_once(
+              provenance,
+              '''def callable_identity(value: Any) -> dict[str, Any]:
+              target = getattr(value, "__func__", value)
+              cls = target if inspect.isclass(target) else type(target)
+              module = getattr(target, "__module__", cls.__module__)
+              qualname = getattr(target, "__qualname__", getattr(target, "__name__", cls.__qualname__))
+              source_target = target
+              try:
+                  source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
+              except (OSError, TypeError):
+                  source_target = cls
+                  try:
+                      source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
+                  except (OSError, TypeError):
+                      source_file = None
+              code = getattr(target, "__code__", None)
+              if code is None and callable(target):
+                  call_method = target.__call__
+                  code = getattr(call_method, "__code__", None)
+              code_digest = None
+              if code is not None:
+                  material = code.co_code + repr(code.co_consts).encode() + repr(code.co_names).encode()
+                  code_digest = hashlib.sha256(material).hexdigest()
+              return {
+                  "module": str(module),
+                  "qualname": str(qualname),
+                  "code_digest": code_digest,
+                  "file": file_identity(source_file),
+              }
+          ''',
+              '''def _captured_value_identity(value: Any, *, depth: int, seen: set[int]) -> Any:
+              if value is None or isinstance(value, (bool, int, float, str)):
+                  return value
+              if torch.is_tensor(value):
+                  return {
+                      "tensor": True,
+                      "shape": [int(dim) for dim in value.shape],
+                      "dtype": str(value.dtype),
+                      "device": str(value.device),
+                  }
+              if callable(value):
+                  return {"callable": callable_identity(value, _depth=depth + 1, _seen=seen)}
+              return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+          def callable_identity(
+              value: Any,
+              *,
+              _depth: int = 0,
+              _seen: set[int] | None = None,
+          ) -> dict[str, Any]:
+              target = getattr(value, "__func__", value)
+              cls = target if inspect.isclass(target) else type(target)
+              module = getattr(target, "__module__", cls.__module__)
+              qualname = getattr(target, "__qualname__", getattr(target, "__name__", cls.__qualname__))
+              source_target = target
+              try:
+                  source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
+              except (OSError, TypeError):
+                  source_target = cls
+                  try:
+                      source_file = inspect.getsourcefile(source_target) or inspect.getfile(source_target)
+                  except (OSError, TypeError):
+                      source_file = None
+              code = getattr(target, "__code__", None)
+              closure = getattr(target, "__closure__", None)
+              defaults = getattr(target, "__defaults__", None)
+              kwdefaults = getattr(target, "__kwdefaults__", None)
+              if code is None and callable(target):
+                  call_method = target.__call__
+                  code = getattr(call_method, "__code__", None)
+                  closure = getattr(call_method, "__closure__", None)
+                  defaults = getattr(call_method, "__defaults__", None)
+                  kwdefaults = getattr(call_method, "__kwdefaults__", None)
+              code_digest = None
+              if code is not None:
+                  material = code.co_code + repr(code.co_consts).encode() + repr(code.co_names).encode()
+                  code_digest = hashlib.sha256(material).hexdigest()
+              result = {
+                  "module": str(module),
+                  "qualname": str(qualname),
+                  "code_digest": code_digest,
+                  "file": file_identity(source_file),
+              }
+              if _depth >= 2 or code is None:
+                  return result
+              seen = set() if _seen is None else _seen
+              ident = id(target)
+              if ident in seen:
+                  result["recursive_capture"] = True
+                  return result
+              seen.add(ident)
+              try:
+                  captures = {}
+                  if closure is not None:
+                      for name, cell in zip(code.co_freevars, closure):
+                          try:
+                              captured = cell.cell_contents
+                          except ValueError:
+                              captures[name] = {"empty_cell": True}
+                          else:
+                              captures[name] = _captured_value_identity(captured, depth=_depth, seen=seen)
+                  if captures:
+                      result["closure"] = captures
+                  if defaults:
+                      result["defaults"] = [
+                          _captured_value_identity(item, depth=_depth, seen=seen) for item in defaults
+                      ]
+                  if kwdefaults:
+                      result["kwdefaults"] = {
+                          str(key): _captured_value_identity(item, depth=_depth, seen=seen)
+                          for key, item in sorted(kwdefaults.items())
+                      }
+              finally:
+                  seen.remove(ident)
+              return result
+          ''',
+          )
+
+          start = Path(provenance).read_text().index("def collect_manifest(model: Any) -> dict[str, Any]:")
+          old_tail = Path(provenance).read_text()[start:]
+          new_tail = '''def collect_manifest(
+              model: Any,
+              *,
+              model_options: dict[str, Any] | None = None,
+              phase: str = "node_apply_preflight",
+          ) -> dict[str, Any]:
+              # Provenance must describe the files and git state that exist for this
+              # invocation, not whatever happened to be cached earlier in a long-lived
+              # Comfy process.
+              file_identity.cache_clear()
+              _repo_state.cache_clear()
+
+              effective_options = (
+                  model_options
+                  if isinstance(model_options, dict)
+                  else (getattr(model, "model_options", None) or {})
+              )
+              effective_transformer = effective_options.get("transformer_options") or {}
+
+              imported: dict[str, Any] = {}
+              unresolved: list[str] = []
+              for module_name in _REQUIRED_MODULES:
+                  module = sys.modules.get(module_name)
+                  identity = file_identity(getattr(module, "__file__", None)) if module is not None else None
+                  imported[module_name] = identity
+                  if identity is None or not identity["git"]["available"]:
+                      unresolved.append(f"source:{module_name}")
+
+              companions = _loaded_companion_manifest()
+              for label in _COMPANION_PATH_MARKERS:
+                  if not _source_group_complete(companions.get(label, [])):
+                      unresolved.append(f"companion:{label}")
+
+              patcher_wrappers = _wrapper_manifest(model)
+              effective_wrappers = _keyed_callable_manifest(effective_transformer.get("wrappers", {}))
+              wrappers = effective_wrappers or patcher_wrappers
+              for wrapper_type, entries in wrappers.items():
+                  for position, entry in enumerate(entries):
+                      source = entry["callable"].get("file")
+                      if source is None or not source["git"]["available"]:
+                          unresolved.append(f"wrapper:{wrapper_type}:{position}:{entry['key']}")
+
+              patcher_callbacks = _callback_manifest(model)
+              effective_callbacks = _keyed_callable_manifest(effective_transformer.get("callbacks", {}))
+              callbacks = effective_callbacks or patcher_callbacks
+              for callback_type, entries in callbacks.items():
+                  for position, entry in enumerate(entries):
+                      source = entry["callable"].get("file")
+                      if source is None or not source["git"]["available"]:
+                          unresolved.append(f"callback:{callback_type}:{position}:{entry['key']}")
+
+              runtime_functions = _runtime_function_manifest()
+              for name, identity in runtime_functions.items():
+                  source = identity.get("file")
+                  if source is None or not source["git"]["available"]:
+                      unresolved.append(f"runtime:{name}")
+
+              pr35_predict = runtime_functions["comfy_compat.flow_predict_wrapper"]
+              pr36_progressive = runtime_functions["runtime._run_progressive"]
+              validation_stack = {
+                  "pr35_predict_active": pr35_predict["module"].endswith("handoff_checkpoint_diagnostic")
+                  and pr35_predict["qualname"].endswith("_flow_predict_capture_wrapper"),
+                  "pr36_progressive_active": pr36_progressive["module"].endswith("guidance_anchor_transport_validation")
+                  and pr36_progressive["qualname"].endswith("_run_progressive_anchor_wrapper"),
+              }
+              if not validation_stack["pr35_predict_active"]:
+                  unresolved.append("overlay:pr35_checkpoint_diagnostic")
+              if not validation_stack["pr36_progressive_active"]:
+                  unresolved.append("overlay:pr36_guidance_anchor_transport")
+
+              base = getattr(model, "model", None)
+              diffusion = getattr(base, "diffusion_model", None)
+              model_fingerprint = _model_fingerprint(model)
+              if not model_fingerprint.get("available"):
+                  unresolved.append("model:runtime_fingerprint")
+
+              replacement = (effective_transformer.get("patches_replace") or {}).get("dit") or {}
+              replacement_manifest = {
+                  str(key): callable_identity(value) if callable(value) else safe_value(value)
+                  for key, value in replacement.items()
+              }
+              attention = effective_transformer.get("optimized_attention_override")
+              progressive = effective_options.get(_runtime.PROGRESSIVE_KEY)
+              provider = getattr(progressive, "learned_upscaler", None)
+
+              manifest = {
+                  "schema_version": 3,
+                  "capture_phase": str(phase),
+                  "collected_ns": time.time_ns(),
+                  "cwd": os.getcwd(),
+                  "python": sys.version,
+                  "compiler_runtime": _compiler_manifest(),
+                  "imported_sources": imported,
+                  "loaded_companion_sources": companions,
+                  "active_wrapper_order": wrappers,
+                  "patcher_wrapper_order": patcher_wrappers,
+                  "active_callbacks": callbacks,
+                  "patcher_callbacks": patcher_callbacks,
+                  "active_injections": _injection_manifest(model),
+                  "patcher_is_injected": bool(getattr(model, "is_injected", False)),
+                  "active_object_patches": _object_patch_manifest(model),
+                  "active_runtime_functions": runtime_functions,
+                  "validation_stack": validation_stack,
+                  "replacement_chain_dit": replacement_manifest,
+                  "optimized_attention_override": (
+                      callable_identity(attention) if callable(attention) else safe_value(attention)
+                  ),
+                  "model": model_fingerprint,
+                  "progressive_config": safe_value(progressive),
+                  "learned_provider": _provider_manifest(provider),
+                  "block_hooks": _hook_manifest(diffusion),
+                  "model_options_alias_graph": alias_graph(effective_options),
+                  "unresolved": sorted(set(unresolved)),
+              }
+              manifest["gate_complete"] = not manifest["unresolved"]
+              manifest["replay_checkpoint_identity_exact"] = bool(
+                  model_fingerprint.get("exact_checkpoint_file_identity")
+              )
+              return manifest
+          '''
+          Path(provenance).write_text(Path(provenance).read_text()[:start] + new_tail)
+
+          replace_once(
+              diagnostics,
+              '''    if _ACTIVE.get() is not None:
+                  raise RuntimeError("nested execution-contract diagnostic invocation is unsupported")
+              if state.strict_provenance and not state.manifest.get("gate_complete", False):
+                  raise RuntimeError(
+                      "execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", []))
+                  )
+          ''',
+              '''    if _ACTIVE.get() is not None:
+                  raise RuntimeError("nested execution-contract diagnostic invocation is unsupported")
+              state.manifest = collect_manifest(
+                  guider.model_patcher,
+                  model_options=getattr(guider, "model_options", None),
+                  phase="outer_sample_runtime",
+              )
+              if state.strict_provenance and not state.manifest.get("gate_complete", False):
+                  raise RuntimeError(
+                      "execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", []))
+                  )
+          ''',
+          )
+
+          replace_once(
+              diagnostics,
+              '''    token = _ACTIVE.set(record)
+              try:
+                  return executor(
+                      noise,
+                      latent_image,
+                      sampler,
+                      sigmas,
+                      denoise_mask,
+                      callback,
+                      disable_pbar,
+                      seed,
+                      latent_shapes=latent_shapes,
+                  )
+              except BaseException as exc:
+                  record.error = f"{type(exc).__name__}: {exc}"
+                  raise
+              finally:
+                  _ACTIVE.reset(token)
+                  _finalize_record(record, guider)
+          ''',
+              '''    token = _ACTIVE.set(record)
+              sampling_error: BaseException | None = None
+              try:
+                  return executor(
+                      noise,
+                      latent_image,
+                      sampler,
+                      sigmas,
+                      denoise_mask,
+                      callback,
+                      disable_pbar,
+                      seed,
+                      latent_shapes=latent_shapes,
+                  )
+              except BaseException as exc:
+                  sampling_error = exc
+                  record.error = f"{type(exc).__name__}: {exc}"
+                  raise
+              finally:
+                  _ACTIVE.reset(token)
+                  _finalize_record_guarded(record, guider, sampling_error=sampling_error)
+          ''',
+          )
+
+          marker = '''def _finalize_record(record: _Record, guider: Any) -> None:
+          '''
+          guarded = '''def _append_finalize_failure(record: _Record, exc: BaseException) -> None:
+              record.state.complete.append(
+                  {
+                      "schema_version": 2,
+                      "capture_id": record.capture_id,
+                      "started_ns": record.started_ns,
+                      "completed_ns": time.time_ns(),
+                      "error": record.error,
+                      "diagnostic_finalize_error": f"{type(exc).__name__}: {exc}",
+                      "incomplete": [*record.incomplete, "diagnostic finalization failed"],
+                      "provenance": record.state.manifest,
+                      "promotion": {"production_fix_authorized": False},
+                  }
+              )
+
+
+          def _finalize_record_guarded(
+              record: _Record,
+              guider: Any,
+              *,
+              sampling_error: BaseException | None,
+          ) -> None:
+              try:
+                  _finalize_record(record, guider)
+              except BaseException as exc:
+                  _append_finalize_failure(record, exc)
+                  if sampling_error is None:
+                      raise
+
+
+          def _finalize_record(record: _Record, guider: Any) -> None:
+          '''
+          replace_once(diagnostics, marker, guarded)
+
+          replace_once(
+              diagnostics,
+              '''    manifest = collect_manifest(patched)
+          ''',
+              '''    manifest = collect_manifest(patched, phase="node_apply_preflight")
+          ''',
+          )
+          replace_once(
+              diagnostics,
+              '''    RETURN_NAMES = ("model", "diagnostic", "provenance_manifest")
+          ''',
+              '''    RETURN_NAMES = ("model", "diagnostic", "preflight_provenance_manifest")
+          ''',
+          )
+
+          test_append = '''
+
+          def test_callable_identity_records_nested_closure_choice():
+              def make_outer(choice):
+                  def selected(value):
+                      return value + choice
+
+                  def outer(value):
+                      return selected(value)
+
+                  return outer
+
+              left = provenance.callable_identity(make_outer(1))
+              right = provenance.callable_identity(make_outer(2))
+
+              assert left["closure"]["selected"]["callable"]["closure"]["choice"] == 1
+              assert right["closure"]["selected"]["callable"]["closure"]["choice"] == 2
+
+
+          def test_finalize_guard_does_not_mask_sampling_error(monkeypatch):
+              state = _state()
+              record = diag._Record(state=state, error="RuntimeError: sampler failed")
+              original = RuntimeError("sampler failed")
+
+              def fail_finalize(_record, _guider):
+                  raise ValueError("diagnostic failed")
+
+              monkeypatch.setattr(diag, "_finalize_record", fail_finalize)
+              diag._finalize_record_guarded(record, object(), sampling_error=original)
+
+              report = state.complete[-1]
+              assert report["error"] == "RuntimeError: sampler failed"
+              assert report["diagnostic_finalize_error"] == "ValueError: diagnostic failed"
+              assert report["promotion"]["production_fix_authorized"] is False
+
+
+          def test_finalize_guard_raises_diagnostic_failure_when_sampling_succeeded(monkeypatch):
+              state = _state()
+              record = diag._Record(state=state)
+
+              def fail_finalize(_record, _guider):
+                  raise ValueError("diagnostic failed")
+
+              monkeypatch.setattr(diag, "_finalize_record", fail_finalize)
+              try:
+                  diag._finalize_record_guarded(record, object(), sampling_error=None)
+              except ValueError as exc:
+                  assert str(exc) == "diagnostic failed"
+              else:
+                  raise AssertionError("diagnostic finalization failure was swallowed")
+          '''
+          Path(tests).write_text(Path(tests).read_text().rstrip() + test_append + "\n")
+
+          replace_once(
+              docs,
+              '''`strict_provenance=true` fails before the sampling executor is entered when a
+          participating imported/wrapper source cannot be tied to a file and git HEAD, or
+          when the expected PR #35/#36 validation overlays are not active. Dirty trees are
+          recorded, not silently rejected, because exact source-file SHA-256 is also
+          recorded.
+          ''',
+              '''The node's third string output is explicitly a **preflight** manifest captured
+          when the graph applies the diagnostic patch. At the outer sampling boundary, after
+          ComfyUI has registered conditioning hooks and merged effective wrappers/callbacks,
+          the recorder invalidates its source/git caches and replaces that preflight snapshot
+          with an authoritative runtime manifest. The completed report embeds this refreshed
+          manifest and is the provenance artifact used by the O/C gate.
+
+          `strict_provenance=true` fails before the Flow sampling executor is entered when a
+          participating imported/wrapper source cannot be tied to a file and git HEAD, or
+          when the expected PR #35/#36 validation overlays are not active. Dirty trees are
+          recorded, not silently rejected, because exact source-file SHA-256 is also
+          recorded. Callable provenance also records bounded nested closure/default captures
+          so runtime-selected providers such as a KJ attention closure are distinguishable
+          even when they share one source file and outer code object.
+          ''',
+          )
+          replace_once(
+              docs,
+              '''4. Feed the diagnostic handle and the sampler's output LATENT into
+             `MiniMax H3 Execution Contract Report`. Save both the provenance-manifest
+             string and the final report next to the normal Flow metrics JSON.
+          ''',
+              '''4. Feed the diagnostic handle and the sampler's output LATENT into
+             `MiniMax H3 Execution Contract Report`. Save the preflight provenance string
+             for setup diagnostics and the final report next to the normal Flow metrics JSON.
+             The report's embedded `provenance` object is the authoritative runtime manifest.
+          ''',
+          )
+          PY
+      - run: python -m pip install 'ruff==0.16.7'
+      - run: ruff format h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py
+      - run: ruff check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py
+      - run: python -m compileall -q h3_flow_regenerate tests
+      - name: Commit hardening patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_provenance.py tests/test_execution_contract_diagnostics.py docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md
+          git commit -m 'Harden active runtime provenance capture'
+          git push origin HEAD:mirror/first-high-contract-implementation-20260914
