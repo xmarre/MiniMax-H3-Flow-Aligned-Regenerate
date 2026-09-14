@@ -54,6 +54,12 @@ jobs:
           if tests.count(marker) != 1:
               raise SystemExit("checkpoint guard test insertion target was not unique")
           tests = tests.replace(marker, addition + marker, 1)
+
+          old_assertion = '    assert "handoff_learned_upscale" not in source\n'
+          new_assertion = '    assert "learned_upscaler" not in source\n'
+          if tests.count(old_assertion) != 1:
+              raise SystemExit("replay upscaler source assertion target was not unique")
+          tests = tests.replace(old_assertion, new_assertion, 1)
           test_path.write_text(tests, encoding="utf-8")
           PY
       - run: ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
