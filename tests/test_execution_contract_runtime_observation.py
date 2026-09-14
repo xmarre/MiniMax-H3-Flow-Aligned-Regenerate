@@ -130,7 +130,7 @@ def test_diffusion_observer_records_companion_state_before_and_after(monkeypatch
     calls = 0
 
     class Executor:
-        wrappers = []
+        wrappers = ()
 
         def __call__(self, *_args, **_kwargs):
             nonlocal calls
