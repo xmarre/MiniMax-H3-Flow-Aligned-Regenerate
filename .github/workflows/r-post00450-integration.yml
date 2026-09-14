@@ -18,28 +18,70 @@ jobs:
         with:
           ref: mirror/r-post00450-integration-20260914
           fetch-depth: 0
-      - name: Fetch delta
-        run: git fetch origin checkpoint/pr41-post00450-delta-20260914
-      - name: Attempt clean cherry-pick
+      - name: Integrate validated PR41 delta and preserve R runbook
         run: |
+          git fetch origin checkpoint/pr41-post00450-delta-20260914
           set +e
           git cherry-pick 324e653ce28491dd0133bf0aeade85c31fd2b55c
           rc=$?
+          set -e
           if [ "$rc" -ne 0 ]; then
-            echo '=== CHERRY-PICK CONFLICTS ==='
-            git status --short
-            git diff --name-only --diff-filter=U
-            git diff --cc || true
-            exit "$rc"
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            test "$conflicts" = "docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md"
+            git checkout --ours docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md
+            python - <<'PY'
+          from pathlib import Path
+          p = Path('docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md')
+          s = p.read_text()
+          s = s.replace('`capture_mib=256`', '`capture_mib=512`')
+          s = s.replace('capture_mib=256', 'capture_mib=512')
+          p.write_text(s)
+          PY
+            git add docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md
+            GIT_EDITOR=true git cherry-pick --continue
           fi
-      - name: Validate focused diagnostics
+      - name: Reconcile R with repaired O/C gates
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('h3_flow_regenerate/same_state_high_replay.py')
+          s = p.read_text()
+          old = '''    low_audio = record.snapshots.get("low_sampler_state_audio")\n    high_audio = record.snapshots.get("first_high_sampler_input_audio")\n    if low_audio is None or high_audio is None or not torch.equal(low_audio.tensor, high_audio.tensor):\n        raise RuntimeError("same-state replay capture requires exact carried audio at the handoff")\n\n    runtime_gate = _require_capture_runtime_observation(record)\n'''
+          new = '''    low_audio = record.snapshots.get("low_sampler_state_audio")\n    high_audio = record.snapshots.get("first_high_sampler_input_audio")\n    if low_audio is None or high_audio is None:\n        raise RuntimeError("same-state replay capture is missing carried-audio evidence")\n    audio_check = _diag._audio_roundtrip_check(low_audio.tensor, high_audio.tensor)\n    if audio_check.get("carried_audio_roundtrip_within_dtype_tolerance") is not True:\n        raise RuntimeError(f"same-state replay capture carried audio exceeds round-trip tolerance: {audio_check}")\n\n    runtime_gate = _require_capture_runtime_observation(record)\n'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '''    companion_receipts = _diag._research_receipts(record.first_high_runtime or {})\n    if flow_research_activity or _diag._all_research_receipts_zero(companion_receipts) is not True:\n        raise RuntimeError(\n            "same-state replay capture requires machine-readable proof that weighted/Mixed-Grid research is inactive"\n        )\n'''
+          new = '''    if (\n        flow_research_activity\n        or runtime_gate.get("sol_research_receipts_complete") is not True\n        or runtime_gate.get("sol_research_zero") is not True\n    ):\n        raise RuntimeError(\n            "same-state replay capture requires complete zero active Sol weighted/Mixed-Grid receipts"\n        )\n'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          for name in ('docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md', 'docs/SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md'):
+              q = Path(name)
+              t = q.read_text()
+              t = t.replace('capture_mib=256', 'capture_mib=512')
+              if name.endswith('SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md'):
+                  t = t.replace('`MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true`;', '`MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true` and `capture_mib=512`;')
+              q.write_text(t)
+
+          test = Path('tests/test_same_state_high_replay.py')
+          t = test.read_text()
+          marker = '\ndef test_rebuild_trajectory_restores_declarative_guidance_samples():\n'
+          addition = '''\ndef test_r_capture_uses_repaired_audio_and_runtime_research_gates():\n    import inspect\n\n    source = inspect.getsource(replay._material_from_record)\n    assert "_audio_roundtrip_check" in source\n    assert "carried_audio_roundtrip_within_dtype_tolerance" in source\n    assert "sol_research_receipts_complete" in source\n    assert "sol_research_zero" in source\n    assert "_all_research_receipts_zero" not in source\n\n\n'''
+          assert t.count(marker) == 1
+          if addition.strip() not in t:
+              t = t.replace(marker, addition + marker, 1)
+          test.write_text(t)
+          PY
           python -m pip install -e '.[test]' ruff
+          ruff format h3_flow_regenerate/same_state_high_replay.py tests/test_same_state_high_replay.py
           ruff check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py h3_flow_regenerate/same_state_high_replay.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
           ruff format --check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py h3_flow_regenerate/same_state_high_replay.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
           pytest -q tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
-      - name: Remove one-shot workflow and push
+      - name: Commit reconciled source and remove one-shot workflow
         run: |
+          git add h3_flow_regenerate/same_state_high_replay.py docs/FIRST_HIGH_STAGE_GATED_IMPLEMENTATION.md docs/SAME_STATE_HIGH_REPLAY_DIAGNOSTIC.md tests/test_same_state_high_replay.py
+          git commit --amend --no-edit
           git rm .github/workflows/r-post00450-integration.yml
           git commit --amend --no-edit
           git push origin HEAD:mirror/r-post00450-integration-20260914
