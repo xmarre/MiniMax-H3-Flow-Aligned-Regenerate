@@ -226,7 +226,7 @@ of visual correctness.
 1. Keep the existing PR #35 checkpoint diagnostic and PR #36 learned-anchor
    validation in the workflow.
 2. Keep Untwist absent. Apply `MiniMax H3 Execution Contract Diagnostics` **after
-   all MODEL patching nodes** with `strict_provenance=true` and `capture_mib=256`,
+   all MODEL patching nodes** with `strict_provenance=true` and `capture_mib=512`,
    then apply `MiniMax H3 Same-State Replay Capture`.
 3. Feed that MODEL to the unchanged failing progressive sampler. Do not change
    the seed, reference inputs, prompt, geometry, sampler, scheduler,

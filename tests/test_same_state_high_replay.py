@@ -293,6 +293,17 @@ def test_checkpoint_identity_guard_rejects_file_change_after_preflight(tmp_path:
         raise AssertionError("checkpoint changed after preflight was accepted")
 
 
+def test_r_capture_uses_repaired_audio_and_runtime_research_gates():
+    import inspect
+
+    source = inspect.getsource(replay._material_from_record)
+    assert "_audio_roundtrip_check" in source
+    assert "carried_audio_roundtrip_within_dtype_tolerance" in source
+    assert "sol_research_receipts_complete" in source
+    assert "sol_research_zero" in source
+    assert "_all_research_receipts_zero" not in source
+
+
 def test_rebuild_trajectory_restores_declarative_guidance_samples():
     video_x0 = torch.arange(1 * 24 * 2 * 4 * 4, dtype=torch.float32).reshape(1, 24, 2, 4, 4)
     manifest = {
