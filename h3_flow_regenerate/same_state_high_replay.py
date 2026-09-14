@@ -65,6 +65,7 @@ class _ReplayMaterial:
 
 @dataclass(slots=True)
 class _CaptureState:
+    exact_checkpoint_identity: dict[str, Any]
     complete: deque[_ReplayMaterial] = field(default_factory=lambda: deque(maxlen=_MAX_BUNDLES))
 
 
@@ -73,6 +74,7 @@ class _ReplayState:
     manifest_path: str
     manifest: dict[str, Any]
     tensors: dict[str, torch.Tensor]
+    exact_checkpoint_identity: dict[str, Any]
     complete: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_REPORTS))
 
 
@@ -313,9 +315,7 @@ def _runtime_policy_identity(runtime_snapshot: dict[str, Any] | None) -> dict[st
     sample_sigmas = source.get("sample_sigmas")
     if isinstance(sample_sigmas, dict):
         out["sample_sigmas"] = {
-            key: sample_sigmas.get(key)
-            for key in ("shape", "dtype", "sample_digest")
-            if key in sample_sigmas
+            key: sample_sigmas.get(key) for key in ("shape", "dtype", "sample_digest") if key in sample_sigmas
         }
     return out
 
@@ -455,7 +455,11 @@ def _require_capture_runtime_observation(record: _diag._Record) -> dict[str, Any
     return gate
 
 
-def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial:
+def _material_from_record(
+    record: _diag._Record,
+    guider: Any,
+    exact_checkpoint_identity: dict[str, Any],
+) -> _ReplayMaterial:
     if record.error is not None:
         raise RuntimeError(f"cannot export a failed controlled run: {record.error}")
     if not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):
@@ -486,9 +490,7 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
 
     first_high_policy = _runtime_policy_identity(_first_high_policy_snapshot(record))
     if "minimax_h3_untwist_rope" in first_high_policy:
-        raise RuntimeError(
-            "same-state replay R is intentionally bounded to the already-failing no-Untwist control"
-        )
+        raise RuntimeError("same-state replay R is intentionally bounded to the already-failing no-Untwist control")
 
     binding = _runtime._resolve_binding(guider)
     run = _guidance_run(binding)
@@ -583,7 +585,6 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
             "same-state replay capture requires machine-readable proof that weighted/Mixed-Grid research is inactive"
         )
 
-    exact_checkpoint = _checkpoint_identity(record.state.manifest)
     tensor_hashes = {name: _tensor_sha256(value) for name, value in tensors.items()}
     provenance_identity = _normalize_provenance(record.state.manifest)
     manifest = {
@@ -622,7 +623,7 @@ def _material_from_record(record: _diag._Record, guider: Any) -> _ReplayMaterial
         "first_high_companion_policy_digest": _sha_json(companion_policy),
         "first_high_companion_observation": companion_observation,
         "capture_runtime_observation_gate": runtime_gate,
-        "exact_checkpoint_identity": exact_checkpoint,
+        "exact_checkpoint_identity": exact_checkpoint_identity,
         "provenance_digest": _sha_json(provenance_identity),
         "provenance_identity": provenance_identity,
         "controlled_topology": topology,
@@ -666,7 +667,7 @@ def _capture_wrapper(
         latent_shapes=latent_shapes,
     )
     if isinstance(state, _CaptureState) and record is not None:
-        state.complete.append(_material_from_record(record, guider))
+        state.complete.append(_material_from_record(record, guider, state.exact_checkpoint_identity))
     return result
 
 
@@ -716,9 +717,8 @@ def _validate_bundle_manifest(manifest: dict[str, Any]) -> None:
     if not isinstance(provenance_identity, dict) or _sha_json(provenance_identity) != manifest.get("provenance_digest"):
         raise RuntimeError("same-state replay provenance manifest digest is inconsistent")
     runtime_policy = manifest.get("first_high_runtime_policy")
-    if (
-        not isinstance(runtime_policy, dict)
-        or _sha_json(runtime_policy) != manifest.get("first_high_runtime_policy_digest")
+    if not isinstance(runtime_policy, dict) or _sha_json(runtime_policy) != manifest.get(
+        "first_high_runtime_policy_digest"
     ):
         raise RuntimeError("same-state replay first-high runtime policy digest is inconsistent")
     if "minimax_h3_untwist_rope" in runtime_policy:
@@ -761,9 +761,7 @@ def _load_bundle(manifest_value: str) -> tuple[Path, dict[str, Any], dict[str, t
     try:
         tensors = torch.load(tensors_path, map_location="cpu", weights_only=True)
     except TypeError as exc:
-        raise RuntimeError(
-            "same-state replay requires a PyTorch build with safe weights_only tensor loading"
-        ) from exc
+        raise RuntimeError("same-state replay requires a PyTorch build with safe weights_only tensor loading") from exc
     if not isinstance(tensors, dict) or not all(
         isinstance(key, str) and torch.is_tensor(value) for key, value in tensors.items()
     ):
@@ -931,9 +929,8 @@ def _replay_wrapper(
     current_provenance = _normalize_provenance(record.state.manifest)
     if _sha_json(current_provenance) != str(state.manifest["provenance_digest"]):
         raise RuntimeError("same-state replay installed runtime provenance differs from capture")
-    current_checkpoint = _checkpoint_identity(record.state.manifest)
-    if not _dict_equal(current_checkpoint, state.manifest.get("exact_checkpoint_identity")):
-        raise RuntimeError("same-state replay exact checkpoint identity differs from capture")
+    if not _dict_equal(state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")):
+        raise RuntimeError("same-state replay exact checkpoint identity changed after preflight")
 
     binding = _runtime._resolve_binding(guider)
     if binding is None:
@@ -1064,9 +1061,8 @@ def _replay_wrapper(
         untwist_absent = "minimax_h3_untwist_rope" not in runtime_policy
         companion_observation = _high_first_companion_observation(record.state.manifest)
         companion_policy = _high_first_companion_policy(record.state.manifest)
-        companion_policy_exact = (
-            companion_policy is not None
-            and _sha_json(companion_policy) == state.manifest.get("first_high_companion_policy_digest")
+        companion_policy_exact = companion_policy is not None and _sha_json(companion_policy) == state.manifest.get(
+            "first_high_companion_policy_digest"
         )
         topology = {
             "logical": int(metric_delta.get("sampler_logical_calls", 0)),
@@ -1108,8 +1104,7 @@ def _replay_wrapper(
             and equality["first_high_h3_input_audio"]["equal"]
         )
         first_high_raw_equal = bool(
-            equality["first_high_model_raw_video"]["equal"]
-            and equality["first_high_model_raw_audio"]["equal"]
+            equality["first_high_model_raw_video"]["equal"] and equality["first_high_model_raw_audio"]["equal"]
         )
         if not attribution_valid:
             decision = "invalid-attribution: replay contract differs from capture"
@@ -1130,7 +1125,7 @@ def _replay_wrapper(
                 "condition_pre_core_equal": condition_exact,
                 "provenance_exact": provenance_exact,
                 "checkpoint_identity_exact": _dict_equal(
-                    current_checkpoint, state.manifest.get("exact_checkpoint_identity")
+                    state.exact_checkpoint_identity, state.manifest.get("exact_checkpoint_identity")
                 ),
                 "guidance_config_exact": guidance_exact,
                 "spectrum_config_exact": spectrum_config_exact,
@@ -1158,11 +1153,14 @@ def patch_same_state_capture(model: Any) -> tuple[Any, _CaptureState]:
     state = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)
     if not isinstance(state, _diag._State):
         raise RuntimeError("same-state replay capture must be applied after MiniMax H3 Execution Contract Diagnostics")
+    if not state.strict_provenance or not state.manifest.get("gate_complete"):
+        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")
+    exact_checkpoint_identity = _checkpoint_identity(state.manifest)
     patched = model.clone()
     _comfy_compat._copy_model_options(patched)
     if CAPTURE_STATE_KEY in patched.model_options or REPLAY_STATE_KEY in patched.model_options:
         raise RuntimeError("same-state replay diagnostic is already installed")
-    capture = _CaptureState()
+    capture = _CaptureState(exact_checkpoint_identity=exact_checkpoint_identity)
     patched.model_options[CAPTURE_STATE_KEY] = capture
 
     import comfy.patcher_extension
@@ -1182,7 +1180,12 @@ def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _Repla
     diagnostic = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)
     if not isinstance(diagnostic, _diag._State):
         raise RuntimeError("same-state high replay must be applied after MiniMax H3 Execution Contract Diagnostics")
+    if not diagnostic.strict_provenance or not diagnostic.manifest.get("gate_complete"):
+        raise RuntimeError("same-state replay requires strict, complete installed-runtime provenance")
     resolved, manifest, tensors = _load_bundle(manifest_path)
+    exact_checkpoint_identity = _checkpoint_identity(diagnostic.manifest)
+    if not _dict_equal(exact_checkpoint_identity, manifest.get("exact_checkpoint_identity")):
+        raise RuntimeError("same-state replay exact checkpoint identity differs from capture")
     patched = model.clone()
     _comfy_compat._copy_model_options(patched)
     transformer = patched.model_options.setdefault("transformer_options", {})
@@ -1190,7 +1193,12 @@ def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _Repla
         raise RuntimeError("same-state replay R must not carry the rejected Untwist clock trial U")
     if CAPTURE_STATE_KEY in patched.model_options or REPLAY_STATE_KEY in patched.model_options:
         raise RuntimeError("same-state replay diagnostic is already installed")
-    state = _ReplayState(manifest_path=str(resolved), manifest=manifest, tensors=tensors)
+    state = _ReplayState(
+        manifest_path=str(resolved),
+        manifest=manifest,
+        tensors=tensors,
+        exact_checkpoint_identity=exact_checkpoint_identity,
+    )
     patched.model_options[REPLAY_STATE_KEY] = state
 
     import comfy.patcher_extension

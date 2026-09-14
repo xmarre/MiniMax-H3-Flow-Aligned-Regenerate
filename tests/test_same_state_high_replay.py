@@ -291,6 +291,16 @@ def test_rebuild_trajectory_rejects_unknown_schema():
         raise AssertionError("unknown trajectory schema was accepted")
 
 
+def test_checkpoint_identity_is_hashed_only_during_node_preflight():
+    import inspect
+
+    assert "_checkpoint_identity(" in inspect.getsource(replay.patch_same_state_capture)
+    assert "_checkpoint_identity(" in inspect.getsource(replay.patch_same_state_replay)
+    assert "_checkpoint_identity(" not in inspect.getsource(replay._capture_wrapper)
+    assert "_checkpoint_identity(" not in inspect.getsource(replay._replay_wrapper)
+    assert "_checkpoint_identity(" not in inspect.getsource(replay._material_from_record)
+
+
 def test_replay_source_has_no_progressive_or_upscaler_execution_path():
     import inspect
 
