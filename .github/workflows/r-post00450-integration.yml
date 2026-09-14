@@ -1,0 +1,45 @@
+name: R post-00450 integration
+
+on:
+  push:
+    branches:
+      - mirror/r-post00450-integration-20260914
+    paths:
+      - .github/workflows/r-post00450-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror/r-post00450-integration-20260914
+          fetch-depth: 0
+      - name: Fetch delta
+        run: git fetch origin checkpoint/pr41-post00450-delta-20260914
+      - name: Attempt clean cherry-pick
+        run: |
+          set +e
+          git cherry-pick 324e653ce28491dd0133bf0aeade85c31fd2b55c
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo '=== CHERRY-PICK CONFLICTS ==='
+            git status --short
+            git diff --name-only --diff-filter=U
+            git diff --cc || true
+            exit "$rc"
+          fi
+      - name: Validate focused diagnostics
+        run: |
+          python -m pip install -e '.[test]' ruff
+          ruff check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py h3_flow_regenerate/same_state_high_replay.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
+          ruff format --check h3_flow_regenerate/execution_contract_diagnostics.py h3_flow_regenerate/execution_contract_runtime_observation.py h3_flow_regenerate/same_state_high_replay.py tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
+          pytest -q tests/test_execution_contract_diagnostics.py tests/test_execution_contract_runtime_observation.py tests/test_same_state_high_replay.py
+      - name: Remove one-shot workflow and push
+        run: |
+          git rm .github/workflows/r-post00450-integration.yml
+          git commit --amend --no-edit
+          git push origin HEAD:mirror/r-post00450-integration-20260914
