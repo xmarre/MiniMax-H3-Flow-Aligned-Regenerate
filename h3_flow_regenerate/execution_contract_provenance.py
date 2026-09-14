@@ -237,11 +237,7 @@ def alias_graph(value: Any, *, max_depth: int = 8, max_nodes: int = 4096) -> lis
                     visit(getattr(item, field.name), f"{path}.{field.name}", depth + 1)
 
     visit(value, "$", 0)
-    groups = [
-        (ident, paths)
-        for ident, paths in seen.items()
-        if len(paths) > 1
-    ]
+    groups = [(ident, paths) for ident, paths in seen.items() if len(paths) > 1]
     groups.sort(key=lambda pair: pair[1])
     return [
         {"alias": f"alias_{index + 1}", "type": types[ident], "paths": paths}
@@ -462,16 +458,8 @@ def _loaded_source_group(markers: tuple[str, ...]) -> list[dict[str, Any]]:
 
 
 def _loaded_companion_manifest() -> dict[str, Any]:
-    groups = {
-        label: _loaded_source_group(markers)
-        for label, markers in _COMPANION_PATH_MARKERS.items()
-    }
-    groups.update(
-        {
-            label: _loaded_source_group(markers)
-            for label, markers in _OPTIONAL_COMPANION_PATH_MARKERS.items()
-        }
-    )
+    groups = {label: _loaded_source_group(markers) for label, markers in _COMPANION_PATH_MARKERS.items()}
+    groups.update({label: _loaded_source_group(markers) for label, markers in _OPTIONAL_COMPANION_PATH_MARKERS.items()})
     return groups
 
 
@@ -479,9 +467,7 @@ def _source_group_complete(entries: list[dict[str, Any]]) -> bool:
     if not entries:
         return False
     return all(
-        isinstance(entry.get("file"), dict)
-        and bool(entry["file"].get("git", {}).get("available"))
-        for entry in entries
+        isinstance(entry.get("file"), dict) and bool(entry["file"].get("git", {}).get("available")) for entry in entries
     )
 
 
@@ -540,7 +526,7 @@ def collect_manifest(model: Any) -> dict[str, Any]:
         unresolved.append("model:runtime_fingerprint")
 
     transformer = (getattr(model, "model_options", None) or {}).get("transformer_options") or {}
-    replacement = ((transformer.get("patches_replace") or {}).get("dit") or {})
+    replacement = (transformer.get("patches_replace") or {}).get("dit") or {}
     replacement_manifest = {
         str(key): callable_identity(value) if callable(value) else safe_value(value)
         for key, value in replacement.items()

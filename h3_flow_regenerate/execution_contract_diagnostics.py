@@ -126,7 +126,9 @@ def _eligible(config: Any) -> bool:
 
 
 def _clone_conds(conds: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    return {key: [entry.copy() if isinstance(entry, dict) else entry for entry in entries] for key, entries in conds.items()}
+    return {
+        key: [entry.copy() if isinstance(entry, dict) else entry for entry in entries] for key, entries in conds.items()
+    }
 
 
 def _runtime_snapshot(model_options: dict[str, Any] | None) -> dict[str, Any]:
@@ -217,7 +219,9 @@ def _invocation_wrapper(
     if _ACTIVE.get() is not None:
         raise RuntimeError("nested execution-contract diagnostic invocation is unsupported")
     if state.strict_provenance and not state.manifest.get("gate_complete", False):
-        raise RuntimeError("execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", [])))
+        raise RuntimeError(
+            "execution-contract provenance gate is incomplete: " + ", ".join(state.manifest.get("unresolved", []))
+        )
     conds = getattr(guider, "conds", None)
     if not isinstance(conds, dict):
         raise RuntimeError("execution-contract diagnostic requires active CFGGuider conditioning")
