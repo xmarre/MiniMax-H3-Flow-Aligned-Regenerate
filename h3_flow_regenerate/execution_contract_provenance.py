@@ -360,6 +360,60 @@ def _runtime_function_manifest() -> dict[str, Any]:
     }
 
 
+def _explicit_attribute(owner: Any, name: str) -> Any:
+    """Read only attributes actually declared on an object/class.
+
+    Some Comfy model-config objects implement warning-emitting ``__getattr__``
+    fallbacks. Provenance must not manufacture attribute probes just to discover
+    a source path.
+    """
+    if owner is None:
+        return None
+    try:
+        namespace = vars(owner)
+    except TypeError:
+        namespace = {}
+    if name in namespace:
+        return namespace[name]
+    for cls in type(owner).__mro__:
+        if name in vars(cls):
+            try:
+                return getattr(owner, name)
+            except Exception:
+                return None
+    return None
+
+
+def _cached_patcher_checkpoint(model: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """Resolve a diffusion checkpoint from Comfy's loader reload factory.
+
+    Core ModelPatcher clones preserve ``cached_patcher_init``. KJ's
+    DiffusionModelLoaderKJ stores ``(_load_diffusion_model_kj,
+    (unet_path, model_options, extra_state_dict))`` there, so arg0 is the exact
+    source file even though the loaded MiniMax model/config exposes no pathname.
+    """
+    cached = _explicit_attribute(model, "cached_patcher_init")
+    if not isinstance(cached, tuple) or len(cached) < 2 or not callable(cached[0]):
+        return None, None
+    args = cached[1]
+    if not isinstance(args, tuple) or not args:
+        return None, None
+    candidate = args[0]
+    if not isinstance(candidate, (str, os.PathLike)) or not str(candidate):
+        return None, None
+    try:
+        resolved = Path(candidate).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, None
+    if not resolved.is_file():
+        return None, None
+    return str(resolved), {
+        "kind": "cached_patcher_init_arg0",
+        "factory": callable_identity(cached[0]),
+        "argument_index": 0,
+    }
+
+
 def _model_fingerprint(model: Any) -> dict[str, Any]:
     base = getattr(model, "model", None)
     diffusion = getattr(base, "diffusion_model", None)
@@ -378,16 +432,26 @@ def _model_fingerprint(model: Any) -> dict[str, Any]:
             digest.update(_runtime._tensor_signature(parameter, max_values=16))
 
     checkpoint = None
-    for owner in (model, base, getattr(base, "model_config", None), diffusion):
+    checkpoint_source = None
+    model_config = _explicit_attribute(base, "model_config")
+    for owner_name, owner in (
+        ("patcher", model),
+        ("base", base),
+        ("model_config", model_config),
+        ("diffusion", diffusion),
+    ):
         if owner is None:
             continue
         for attr in ("checkpoint_name", "ckpt_name", "model_path", "model_file", "filename", "source_path"):
-            value = getattr(owner, attr, None)
+            value = _explicit_attribute(owner, attr)
             if isinstance(value, (str, os.PathLike)) and str(value):
                 checkpoint = str(value)
+                checkpoint_source = {"kind": "declared_attribute", "owner": owner_name, "attribute": attr}
                 break
         if checkpoint:
             break
+    if checkpoint is None:
+        checkpoint, checkpoint_source = _cached_patcher_checkpoint(model)
     checkpoint_stat = None
     if checkpoint:
         try:
@@ -407,6 +471,7 @@ def _model_fingerprint(model: Any) -> dict[str, Any]:
         "parameter_count": len(parameters),
         "runtime_fingerprint": digest.hexdigest(),
         "checkpoint_path": checkpoint,
+        "checkpoint_source": checkpoint_source,
         "checkpoint_stat": checkpoint_stat,
         "exact_checkpoint_file_identity": False,
         "checkpoint_note": "bounded loaded-model fingerprint only; exact checkpoint SHA remains a replay gate",

@@ -63,6 +63,34 @@ def test_relative_wrapper_insertion_preserves_existing_order_and_anchor():
     assert model.wrappers["outer"][flow_key] == [flow]
 
 
+def test_model_fingerprint_resolves_kj_cached_loader_checkpoint_without_dynamic_attr_probes(tmp_path):
+    checkpoint = tmp_path / "MiniMax-H3-test.safetensors"
+    checkpoint.write_bytes(b"checkpoint-bytes")
+
+    class WarningConfig:
+        def __getattr__(self, name):
+            raise AssertionError(f"unexpected dynamic model-config probe: {name}")
+
+    diffusion = torch.nn.Linear(4, 4, bias=False)
+    base = SimpleNamespace(diffusion_model=diffusion, model_config=WarningConfig())
+
+    def fake_kj_loader(unet_path, model_options, extra_state_dict):
+        return unet_path, model_options, extra_state_dict
+
+    model = SimpleNamespace(
+        model=base,
+        cached_patcher_init=(fake_kj_loader, (str(checkpoint), {"dtype": "bf16"}, {})),
+    )
+    result = provenance._model_fingerprint(model)
+
+    assert result["checkpoint_path"] == str(checkpoint.resolve())
+    assert result["checkpoint_stat"]["resolved_path"] == str(checkpoint.resolve())
+    assert result["checkpoint_stat"]["size"] == checkpoint.stat().st_size
+    assert result["checkpoint_source"]["kind"] == "cached_patcher_init_arg0"
+    assert result["checkpoint_source"]["argument_index"] == 0
+    assert result["checkpoint_source"]["factory"]["qualname"].endswith("fake_kj_loader")
+
+
 def test_sampler_condition_compare_observes_processed_conditions_without_replaying_preprocess():
     shared = torch.arange(4.0)
     pristine = {"positive": [{"model_conds": {"shared": shared}, "cross_attn": shared}]}
