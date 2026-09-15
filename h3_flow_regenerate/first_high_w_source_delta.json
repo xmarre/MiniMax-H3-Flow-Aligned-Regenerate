@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "design_commit": "41b54405867a31e1a9e3261d4d79469a640682c4",
+  "purpose": "Exact byte allowlist for the diagnostic-only first-high operator comparison W deployment and the previously unresolved Core source prerequisites.",
+  "entries": [
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "00a412b571ae2342230a66c225d7bd2adc9fa706",
+      "reason": "W replay, clone-stable bounded receipt ownership across Core model-option copies, SAMPLER_SAMPLE-bounded one-call termination with normal Core externalization/cleanup completion, fail-closed R-base/current-candidate provenance normalization, exact grouped receipt invariants, and decode-ready raw/pre-guidance media retention without an extra H3/upscale call"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
+      "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
+      "candidate_git_blob_sha": "aa18388d95f5bb817d6fb675ab4fcf63486a5417",
+      "reason": "register W diagnostic nodes without changing PR #41; R capture bytes are pinned independently of the deployed candidate"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8cb694f4acf872f477b8b7f3f424dfa4454e8a6e",
+      "reason": "publish W mode in Sol backend history, preserve the underlying ordinary VDN history identity, reject non-R Untwist state before Spectrum/model execution, and bind native-local receipts to the live BlockPatch owner"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3",
+      "relative_path": ".",
+      "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
+      "base_sha256": "b7dc4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
+      "candidate_git_blob_sha": "1bbbbbb867604591b4d02903b6ab730906e4b72b",
+      "reason": "install Sol W history contract at package import; R capture bytes are pinned independently of the deployed candidate"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "14efc851eb1ca52ed46d7a2e5362748ae4676bae",
+      "reason": "VDN-owned native-window/full-support operator switch and bounded receipts"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_sol_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "3fe57c04a0e7142f1a22869edca7ff9d6b3dd073",
+      "reason": "forward completed VDN-native local routes to the live Sol BlockPatch receipt owner"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
+      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
+      "candidate_git_blob_sha": "36c0d8a7ac7c3e75ef49748eabd9142fa4fb878d",
+      "reason": "install VDN W diagnostic overlay and Sol owner bridge before ApplyVDN node construction; R capture bytes are pinned independently of the deployed candidate"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "candidate_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "reason": "close installed model-sampling source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.latent_formats",
+      "relative_path": ".",
+      "base_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "candidate_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "reason": "close installed latent-format source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_patcher",
+      "relative_path": ".",
+      "base_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "candidate_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "reason": "close installed model-patcher source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.k_diffusion.sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "candidate_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "reason": "close installed Euler/callback source prerequisite by exact bytes"
+    }
+  ]
+}
