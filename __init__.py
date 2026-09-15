@@ -241,9 +241,9 @@ def _normalize_w_wrapper_order(current, guider):
                 )
             index, entry = matches[0]
             expected_identity = _FIRST_HIGH_OPERATOR_MODULE._callable_equivalence_identity(expected_callable)
-            if _FIRST_HIGH_OPERATOR_MODULE._canonical_json(entry.get("callable")) != _FIRST_HIGH_OPERATOR_MODULE._canonical_json(
-                expected_identity
-            ):
+            observed_identity_json = _FIRST_HIGH_OPERATOR_MODULE._canonical_json(entry.get("callable"))
+            expected_identity_json = _FIRST_HIGH_OPERATOR_MODULE._canonical_json(expected_identity)
+            if observed_identity_json != expected_identity_json:
                 raise RuntimeError(
                     f"first-high W provenance wrapper callable identity changed for {field_name}:{key}"
                 )
