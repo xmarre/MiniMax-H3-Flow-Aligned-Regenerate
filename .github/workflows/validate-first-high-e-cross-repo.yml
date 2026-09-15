@@ -157,7 +157,7 @@ jobs:
           vdn = load("custom_nodes.synthetic_vdn_e", "_deps/VDNE")
           flow = load("custom_nodes.synthetic_flow_e", ".")
 
-          assert "ApplySolH3" in sol.NODE_CLASS_MAPPINGS
+          assert {"SolH3Exact", "SolH3Experimental"} <= set(sol.NODE_CLASS_MAPPINGS)
           assert "ApplyVDNH3" in vdn.NODE_CLASS_MAPPINGS
           assert "H3FirstHighSolLocalDiagnostic" in flow.NODE_CLASS_MAPPINGS
 
