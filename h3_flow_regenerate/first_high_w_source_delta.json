@@ -24,8 +24,8 @@
       "module": "sol_h3.first_high_operator_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "6367db3a7dc05d5553770de76c4e890b9d57ecf6",
-      "reason": "publish W mode in Sol backend history and bind native-local receipts to the live BlockPatch owner"
+      "candidate_git_blob_sha": "6abb36a8ad63b8d967a4d5c0b578c6359369085a",
+      "reason": "publish W mode in Sol backend history, preserve the underlying ordinary VDN history identity, and bind native-local receipts to the live BlockPatch owner"
     },
     {
       "owner": "sol",
