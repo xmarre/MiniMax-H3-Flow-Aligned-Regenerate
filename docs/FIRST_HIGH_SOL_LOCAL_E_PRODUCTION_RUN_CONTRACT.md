@@ -68,7 +68,7 @@ After Patcher has applied the overlays, verify the critical loaded-source bytes:
 ```bash
 cd /home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3
 test "$(git hash-object sol_h3/first_high_sol_local_diagnostic.py)" = \
-  79b3013aa936a836fc92702996c07e1702edb7
+  79b3013aa936a836fc4e5c5cf3e80f8ac06a49ac
 test "$(git hash-object sol_h3/__init__.py)" = \
   c4184d48f53a1b0703816c371f616e538acde5a7
 test "$(git hash-object sol_h3/sparse.py)" = \
