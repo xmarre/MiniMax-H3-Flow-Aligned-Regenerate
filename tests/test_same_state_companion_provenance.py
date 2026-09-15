@@ -36,7 +36,7 @@ def test_cross_process_companion_provenance_accepts_exact_55_to_10_lazy_import_s
         paths.append(path)
 
     capture_sources = [_source_entry(path, module=f"sol_h3.module_{index:02d}") for index, path in enumerate(paths)]
-    replay_sources = capture_sources[:10]
+    replay_sources = [capture_sources[index] for index in (0, 1, 4, 9, 14, 21, 28, 35, 42, 54)]
     capture = _identity(capture_sources)
     cold = _identity(replay_sources)
 
@@ -44,6 +44,7 @@ def test_cross_process_companion_provenance_accepts_exact_55_to_10_lazy_import_s
 
     strict = replay._provenance_diff_paths(capture, cold)
     assert "$.loaded_companion_sources.sol_h3.length (55 != 10)" in strict
+    assert any(item.startswith("$.loaded_companion_sources.sol_h3[2]") for item in strict)
 
 
 def test_cross_process_companion_provenance_hashes_capture_only_sources_on_disk(tmp_path: Path):
