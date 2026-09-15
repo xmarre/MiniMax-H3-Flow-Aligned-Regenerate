@@ -4,17 +4,19 @@ This document defines the workstation procedure for the single allowed next CUDA
 
 Experiment E is diagnostic-only. It replays the existing experiment-R first-high state, executes exactly one real high-stage H3 call, keeps VDN restricted local support plus its complement, and changes only the final local Sol-Attn selection so every valid local K block is exact. It does not regenerate R, rerun W, run a full diffusion trajectory, or authorize a production fix.
 
-## 1. Exact reviewed implementation
+## 1. Exact reviewed implementation and PR overlays
 
-Use these exact repository revisions for the E run:
+Run E through the existing **ComfyUI Patcher PR-overlay stack**. Do not replace the custom-node checkouts manually.
 
-| Repository | Revision | Purpose |
-| --- | --- | --- |
-| `xmarre/ComfyUI-Sol-H3` | `2eedd341a0f412803afc92702996c07e1702edb7` | E Sol all-selected path and numerical witnesses |
-| `xmarre/ComfyUI-VDN-H3-Plus` | `10bf368bee38b9f942961e6d8c374b5af6c4bc16` | E VDN overlay plus validated bridge tests; production source bytes are unchanged from `64ade194f79ef09af76b0f0e3787a7fe84d8a641` |
-| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | `7ea52470ab5ac82b12d58bcb87db82d715b8005c` | E one-call replay, source/provenance gate, report and durable evidence |
+| Repository | E PR overlay | Reviewed executable source | Purpose |
+| --- | --- | --- | --- |
+| `xmarre/ComfyUI-Sol-H3` | PR #12, stacked on PR #11 | `2eedd341a0f412803afc92702996c07e1702edb7` | E Sol all-selected path and numerical witnesses |
+| `xmarre/ComfyUI-VDN-H3-Plus` | PR #16, stacked on PR #15 | `10bf368bee38b9f942961e6d8c374b5af6c4bc16` | E VDN overlay and generated-loader bridge |
+| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | PR #44, stacked on PR #43 | `7ea52470ab5ac82b12d58bcb87db82d715b8005c` | E one-call replay, source/provenance gate, report and durable evidence |
 
-The Flow source manifest at that revision pins the exact reviewed source bytes. The four installed ComfyUI Core files are verified by their **loaded file bytes at runtime**, not by a Git branch or tag:
+PRs #11, #15 and #43 remain the preserved W evidence bases. E is the next overlay layer; it does not rewrite or repurpose those PRs.
+
+The Flow source manifest pins the exact reviewed executable source bytes. The four installed ComfyUI Core files are verified by their **loaded file bytes at runtime**, not by a Git branch or tag:
 
 - `comfy.model_sampling`: Git blob `4a55655207115a150d5254c5b364b03a6c256627`
 - `comfy.latent_formats`: Git blob `8d8ff6c5f179da8dcdeba854f220fb657de2af1c`
@@ -32,7 +34,7 @@ The E run consumes the existing R bundle and must not overwrite or regenerate it
 /home/toor/ComfyUI/output/h3_flow_replay/h3_same_state_replay_234ed062128e43ed8d5ec63e27517b22.pt
 ```
 
-Before changing any custom-node checkout, record their current hashes:
+Before changing the active Patcher overlay stack, record the bundle hashes:
 
 ```bash
 cd /home/toor/ComfyUI
@@ -47,32 +49,19 @@ The R capture ID must remain exactly:
 234ed062128e43ed8d5ec63e27517b22
 ```
 
-## 3. Safe checkout preparation
+## 3. ComfyUI Patcher / PR-overlay preparation
 
-Stop ComfyUI completely before changing the custom-node sources. Do not reset, rebase, clean, or overwrite local work.
+Stop ComfyUI completely before rebuilding the PR overlay stack.
 
-For each repository, first verify that the working tree is clean. If any command below prints modified or untracked work that must be preserved, stop and checkpoint that work before proceeding.
+Keep the already-established production/diagnostic stack and add E on top in this order:
 
-```bash
-cd /home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3
-git status --short
-git fetch origin
-git switch --detach 2eedd341a0f412803afc92702996c07e1702edb7
+- **Sol-H3:** existing stack through PR #11, then PR #12;
+- **VDN-H3-Plus:** existing stack through PR #15, then PR #16;
+- **Flow-Aligned-Regenerate:** existing R/W stack through PR #43, then PR #44.
 
-cd /home/toor/ComfyUI/custom_nodes/ComfyUI-VDN-H3-Plus
-git status --short
-git fetch origin
-git switch --detach 10bf368bee38b9f942961e6d8c374b5af6c4bc16
+Do not remove PR #11/#15/#43 from the Patcher stack when adding E. PR #12/#16/#44 are stacked deltas relative to those preserved W bases. Let ComfyUI Patcher construct the working tree from the PR overlays; do not `git switch`, rebase, reset, clean, or manually replace the custom-node repositories for this run.
 
-cd /home/toor/ComfyUI/custom_nodes/MiniMax-H3-Flow-Aligned-Regenerate
-git status --short
-git fetch origin
-git switch --detach 7ea52470ab5ac82b12d58bcb87db82d715b8005c
-```
-
-`git switch --detach` is intentional: it selects exact reviewed bytes without rewriting any local branch. It will refuse rather than discard conflicting local modifications.
-
-Verify the critical loaded-source bytes directly:
+After the Patcher has applied the overlay stack, verify the critical loaded-source bytes directly:
 
 ```bash
 cd /home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3
@@ -113,11 +102,11 @@ test "$(git hash-object comfy/k_diffusion/sampling.py)" = \
   4a638008a3df3a2f167e9bf343a258a0f5655ede
 ```
 
-The ComfyUI checks deliberately hash the installed files rather than compare the checkout's branch/tag/commit name. A successful `test` command is silent and exits zero. Any failure means the workstation does not have the reviewed E bytes; do not queue E.
+The ComfyUI checks deliberately hash the installed files rather than compare the checkout's branch/tag/commit name. A successful `test` command is silent and exits zero. Any failure means the active Patcher-built runtime does not contain the reviewed E bytes; do not queue E.
 
 ## 4. Process and graph contract
 
-Start a **fresh ComfyUI process** after the exact source revisions are installed. Do not reuse a process that previously executed R, W, or another diagnostic arm.
+Start a **fresh ComfyUI process** after Patcher has rebuilt the exact overlay stack and the byte checks above pass. Do not reuse a process that previously executed R, W, or another diagnostic arm.
 
 Use the same production model/checkpoint, prompt, references, seed, target geometry, complete sampler schedule, Flow configuration, Spectrum configuration, Sol-H3 configuration, VDN configuration, DiffAid configuration, model loader and attention backend configuration represented by the preserved R capture.
 
