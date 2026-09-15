@@ -4,8 +4,8 @@
 # diagnostics observe the transported target-grid guidance representation. The
 # execution-contract recorder is imported after both; its runtime-observation
 # extension is imported immediately after the base recorder. The same-state
-# replay and first-high operator diagnostics compose only additional wrappers
-# around that recorder.
+# replay, W, and E first-high diagnostics compose only additional wrappers around
+# that recorder.
 import importlib
 import sys
 from pathlib import Path
@@ -53,6 +53,12 @@ try:
     )
     from .h3_flow_regenerate.first_high_operator_comparison import (
         NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_OPERATOR_NODE_DISPLAY_NAME_MAPPINGS,
+    )
+    from .h3_flow_regenerate.first_high_sol_local_diagnostic import (
+        NODE_CLASS_MAPPINGS as FIRST_HIGH_SOL_LOCAL_NODE_CLASS_MAPPINGS,
+    )
+    from .h3_flow_regenerate.first_high_sol_local_diagnostic import (
+        NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_SOL_LOCAL_NODE_DISPLAY_NAME_MAPPINGS,
     )
     from .h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
     from .h3_flow_regenerate.target_sparse_node import (
@@ -104,6 +110,12 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     )
     from h3_flow_regenerate.first_high_operator_comparison import (
         NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_OPERATOR_NODE_DISPLAY_NAME_MAPPINGS,
+    )
+    from h3_flow_regenerate.first_high_sol_local_diagnostic import (
+        NODE_CLASS_MAPPINGS as FIRST_HIGH_SOL_LOCAL_NODE_CLASS_MAPPINGS,
+    )
+    from h3_flow_regenerate.first_high_sol_local_diagnostic import (
+        NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_SOL_LOCAL_NODE_DISPLAY_NAME_MAPPINGS,
     )
     from h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
     from h3_flow_regenerate.target_sparse_node import (
@@ -265,6 +277,7 @@ NODE_CLASS_MAPPINGS = {
     **EXECUTION_CONTRACT_RUNTIME_NODE_CLASS_MAPPINGS,
     **SAME_STATE_REPLAY_NODE_CLASS_MAPPINGS,
     **FIRST_HIGH_OPERATOR_NODE_CLASS_MAPPINGS,
+    **FIRST_HIGH_SOL_LOCAL_NODE_CLASS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **NODE_DISPLAY_NAME_MAPPINGS,
@@ -276,6 +289,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **EXECUTION_CONTRACT_RUNTIME_NODE_DISPLAY_NAME_MAPPINGS,
     **SAME_STATE_REPLAY_NODE_DISPLAY_NAME_MAPPINGS,
     **FIRST_HIGH_OPERATOR_NODE_DISPLAY_NAME_MAPPINGS,
+    **FIRST_HIGH_SOL_LOCAL_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
