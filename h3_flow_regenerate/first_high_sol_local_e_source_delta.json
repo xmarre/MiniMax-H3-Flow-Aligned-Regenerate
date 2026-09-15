@@ -17,7 +17,7 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
       "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
-      "candidate_git_blob_sha": "92f03193ea64677c7ae0a5883cdddea059eef1c7",
+      "candidate_git_blob_sha": "4eab5193d8e1a3ed51f53a7ab434846494b163d0",
       "reason": "register E and normalize only proven E-owned provenance self-effects: bounded DIT closure-depth expansion after exact E -> W -> captured production VDN proof, plus the exact unchanged PR #11/#12 sol_h3/sparse.py lazy import introduced by installing E before the pre-H3 provenance gate"
     },
     {
