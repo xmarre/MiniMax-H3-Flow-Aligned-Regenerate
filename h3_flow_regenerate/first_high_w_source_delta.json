@@ -24,8 +24,8 @@
       "module": "sol_h3.first_high_operator_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "af7cd38692d2ff32ebc5bdbafc65745878ce8c77",
-      "reason": "publish W mode in Sol backend history and validate explicit native-local receipts"
+      "candidate_git_blob_sha": "6367db3a7dc05d5553770de76c4e890b9d57ecf6",
+      "reason": "publish W mode in Sol backend history and bind native-local receipts to the live BlockPatch owner"
     },
     {
       "owner": "sol",
@@ -45,11 +45,19 @@
     },
     {
       "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_sol_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "3fe57c04a0e7142f1a22869edca7ff9d6b3dd073",
+      "reason": "forward completed VDN-native local routes to the live Sol BlockPatch receipt owner"
+    },
+    {
+      "owner": "vdn",
       "module": "vdn_h3",
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
-      "candidate_git_blob_sha": "aca3fbd74e78282639548ff748d04fef21e507d7",
-      "reason": "install VDN W diagnostic overlay before ApplyVDN node construction"
+      "candidate_git_blob_sha": "36c0d8a7ac7c3e75ef49748eabd9142fa4fb878d",
+      "reason": "install VDN W diagnostic overlay and Sol owner bridge before ApplyVDN node construction"
     },
     {
       "owner": "core",
