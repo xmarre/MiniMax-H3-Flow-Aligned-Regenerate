@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import math
 import os
 import re
 import time
@@ -29,13 +28,14 @@ from . import execution_contract_diagnostics as _diag
 from . import execution_contract_runtime_observation as _runtime_observation
 from . import runtime as _runtime
 from .contracts import H3FlowTrajectory, TrajectorySample
-from .geometry import H3Geometry, pack_streams
+from .geometry import H3Geometry
 
 SCHEMA_VERSION = 2
 CAPTURE_STATE_KEY = "h3_flow_same_state_replay_capture_v1"
 REPLAY_STATE_KEY = "h3_flow_same_state_high_replay_v1"
 _CAPTURE_WRAPPER_KEY = "h3_flow_regenerate.same_state_replay.capture.v1"
 _REPLAY_WRAPPER_KEY = "h3_flow_regenerate.same_state_replay.execute.v1"
+_REPLAY_SAMPLER_KEY = "h3_flow_regenerate.same_state_replay.sampler_entry.v1"
 _MAX_BUNDLES = 2
 _MAX_REPORTS = 4
 _SAFE_PREFIX = re.compile(r"[^A-Za-z0-9._-]+")
@@ -1064,33 +1064,60 @@ def _tensor_for_replay(state: _ReplayState, name: str) -> torch.Tensor:
     return restored
 
 
-def _forward_sampler_initial_state(
-    base_model: Any,
-    noise_argument: torch.Tensor,
-    latent_image_internal: torch.Tensor,
-    sigma: torch.Tensor | float,
-    reference_state: torch.Tensor,
-) -> torch.Tensor:
-    """Re-run the exact finite-precision Flow initialization used at SAMPLER_SAMPLE."""
+def _validate_replay_sampler_entry(state: _ReplayState, record: _diag._Record) -> None:
+    """Require the actual installed SAMPLER_SAMPLE boundary to reproduce Job-1 X exactly."""
 
-    model_sampling = getattr(base_model, "model_sampling", None)
-    noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
-    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
-        raise ValueError("same-state replay requires a finite positive H3 noise_scale")
-    if tuple(noise_argument.shape) != tuple(reference_state.shape):
-        raise ValueError("same-state replay captured noise and high-entry state shapes differ")
-    if tuple(latent_image_internal.shape) != tuple(reference_state.shape):
-        raise ValueError("same-state replay internal latent and high-entry state shapes differ")
+    expected_hashes = state.manifest.get("tensor_hashes") or {}
+    contracts = state.manifest.get("tensor_contracts") or {}
+    problems: list[str] = []
+    for name in ("first_high_sampler_input_video", "first_high_sampler_input_audio"):
+        snapshot = record.snapshots.get(name)
+        contract = contracts.get(name)
+        expected_hash = expected_hashes.get(name)
+        if snapshot is None:
+            problems.append(f"{name}: live snapshot missing")
+            continue
+        if not isinstance(contract, dict) or not isinstance(expected_hash, str):
+            problems.append(f"{name}: bundle contract/hash missing")
+            continue
+        value = snapshot.tensor
+        if [int(dim) for dim in value.shape] != contract.get("shape"):
+            problems.append(f"{name}: shape differs")
+        if str(value.dtype) != contract.get("dtype"):
+            problems.append(f"{name}: dtype differs")
+        if str(snapshot.original_device) != contract.get("device"):
+            problems.append(f"{name}: device differs")
+        if [int(item) for item in snapshot.original_stride] != contract.get("stride"):
+            problems.append(f"{name}: stride differs")
+        live_hash = _tensor_sha256(value)
+        if live_hash != expected_hash:
+            problems.append(f"{name}: sha256 {live_hash} != {expected_hash}")
+    if problems:
+        raise RuntimeError(
+            "same-state replay actual SAMPLER_SAMPLE high-entry state differs from the captured Job-1 state: "
+            + "; ".join(problems)
+        )
 
-    noise = noise_argument.to(device=reference_state.device, dtype=reference_state.dtype)
-    latent = latent_image_internal.to(device=reference_state.device, dtype=reference_state.dtype)
-    if torch.is_tensor(sigma):
-        sigma_value = sigma.detach().to(device=reference_state.device, dtype=reference_state.dtype)
-    else:
-        sigma_value = torch.tensor(float(sigma), device=reference_state.device, dtype=reference_state.dtype)
-    if sigma_value.numel() != 1 or not bool(torch.isfinite(sigma_value).all().item()):
-        raise ValueError("same-state replay requires a finite scalar first-high sigma")
-    return sigma_value * (noise_scale * noise) + (1.0 - sigma_value) * latent
+
+def _replay_sampler_entry_wrapper(
+    executor,
+    model_wrap,
+    sigmas,
+    extra_args,
+    callback,
+    noise,
+    latent_image=None,
+    denoise_mask=None,
+    disable_pbar=False,
+):
+    model_options = extra_args.get("model_options") if isinstance(extra_args, dict) else None
+    state = (model_options or {}).get(REPLAY_STATE_KEY)
+    if isinstance(state, _ReplayState) and _diag._stage_name(model_options) == "high":
+        record = _diag._ACTIVE.get()
+        if record is None:
+            raise RuntimeError("same-state replay sampler-entry validation requires active execution diagnostics")
+        _validate_replay_sampler_entry(state, record)
+    return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
 
 
 def _replay_wrapper(
@@ -1185,41 +1212,12 @@ def _replay_wrapper(
     if "high_denoise_mask" in state.tensors:
         replay_mask = _tensor_for_replay(state, "high_denoise_mask")
 
-    # R owns the exact high-entry state X. The Job-1 bundle already contains the
-    # hash-validated high OUTER_SAMPLE noise argument that produced X. An algebraic
-    # inverse of the finite-precision Flow mix is not bit-reversible, so validate
-    # that captured noise by running the original forward initialization arithmetic
-    # in the SAMPLER_SAMPLE device/dtype domain, then replay the original argument.
-    state_video = _tensor_for_replay(state, "first_high_sampler_input_video")
-    state_audio = _tensor_for_replay(state, "first_high_sampler_input_audio")
-    replay_state, replay_shapes = pack_streams((state_video, state_audio))
-    if [tuple(int(dim) for dim in shape) for shape in replay_shapes] != target_shapes:
-        raise RuntimeError("same-state replay packed X geometry differs from captured target geometry")
-    base_model = guider.model_patcher.model
-    sampler_device = guider.model_patcher.load_device
-    captured_noise = _tensor_for_replay(state, "high_noise_argument")
-    sampler_noise = captured_noise.to(device=sampler_device, dtype=torch.float32)
-    sampler_latent = replay_latent.to(device=sampler_device, dtype=torch.float32)
-    if torch.count_nonzero(sampler_latent) > 0:
-        replay_latent_internal = _runtime._process_latent_in(base_model, sampler_latent, target_shapes)
-    else:
-        replay_latent_internal = sampler_latent
-    reconstructed_state = _forward_sampler_initial_state(
-        base_model,
-        sampler_noise,
-        replay_latent_internal,
-        high_sigmas[0],
-        replay_state,
-    )
-    if not torch.equal(reconstructed_state, replay_state):
-        different = int(torch.count_nonzero(reconstructed_state != replay_state).item())
-        delta = (reconstructed_state.float() - replay_state.float()).abs()
-        max_abs_diff = 0.0 if delta.numel() == 0 else float(delta.max().item())
-        raise RuntimeError(
-            "same-state replay captured high noise argument does not forward-reconstruct the captured high-entry "
-            f"state; differing_values={different} max_abs_diff={max_abs_diff:.9g}"
-        )
-    replay_noise = captured_noise
+    # Replay the original hash-validated OUTER_SAMPLE noise argument. The exact
+    # first-high X contract is validated later, at the real SAMPLER_SAMPLE
+    # boundary after the installed Comfy core has performed its own casts,
+    # prepare/load lifecycle and process_latent_in path, but before KSampler can
+    # execute any high H3 evaluation.
+    replay_noise = _tensor_for_replay(state, "high_noise_argument")
     expected_mask = replay_mask is not None
     if bool(denoise_mask is not None) != expected_mask:
         raise RuntimeError("same-state replay caller mask presence differs from captured high stage")
@@ -1449,6 +1447,14 @@ def patch_same_state_replay(model: Any, manifest_path: str) -> tuple[Any, _Repla
         _REPLAY_WRAPPER_KEY,
         _replay_wrapper,
         before=True,
+    )
+    _diag._insert_relative(
+        patched,
+        comfy.patcher_extension.WrappersMP.SAMPLER_SAMPLE,
+        _diag._SAMPLER_KEY,
+        _REPLAY_SAMPLER_KEY,
+        _replay_sampler_entry_wrapper,
+        before=False,
     )
     return patched, state
 
