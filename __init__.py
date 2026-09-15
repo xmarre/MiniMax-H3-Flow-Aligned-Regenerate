@@ -155,9 +155,7 @@ def _resolve_w_source_entry(entry):
     if not resolved_files:
         raise RuntimeError(f"first-high W source module has no resolvable file: {module_name}")
     if len(resolved_files) != 1:
-        raise RuntimeError(
-            f"first-high W source module resolves ambiguously: {module_name}: {sorted(resolved_files)}"
-        )
+        raise RuntimeError(f"first-high W source module resolves ambiguously: {module_name}: {sorted(resolved_files)}")
 
     base = next(iter(resolved_files.values()))
     candidate = base if relative == "." else (base.parent / relative).resolve(strict=True)
