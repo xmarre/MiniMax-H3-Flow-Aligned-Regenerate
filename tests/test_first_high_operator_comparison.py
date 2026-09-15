@@ -22,12 +22,12 @@ def _request_state(*, high_sigmas=None, mode="native_window"):
     )
 
 
-def _source_gate(path="/custom_nodes/flow/h3_flow_regenerate/first_high_operator_comparison.py"):
+def _vdn_source_gate(path="/custom_nodes/vdn/vdn_h3/first_high_operator_diagnostic.py"):
     return {
         "entries": [
             {
-                "owner": "flow",
-                "module": "h3_flow_regenerate.first_high_operator_comparison",
+                "owner": "vdn",
+                "module": "vdn_h3.first_high_operator_diagnostic",
                 "relative_path": ".",
                 "path": path,
                 "base_git_blob_sha": None,
@@ -37,15 +37,31 @@ def _source_gate(path="/custom_nodes/flow/h3_flow_regenerate/first_high_operator
     }
 
 
-def _wrapper_entry(key, qualname, path):
-    return {
-        "key": key,
-        "callable": {
-            "module": "h3_flow_regenerate.first_high_operator_comparison",
-            "qualname": qualname,
-            "file": {"resolved_path": path},
-        },
-    }
+def _vdn_key(index: int) -> str:
+    return f"diffusion_model.blocks.{index}.attn.forward"
+
+
+def _fake_vdn_object_patches():
+    runtime = {}
+    originals = {}
+    capture = {}
+    current = {}
+    for index in range(w._EXPECTED_BLOCKS):
+        key = _vdn_key(index)
+
+        def original(*_args, _index=index, **_kwargs):
+            return _index
+
+        def wrapper(*_args, _index=index, **_kwargs):
+            return _index
+
+        wrapper._h3_first_high_operator_diagnostic_v1 = True
+        wrapper._h3_first_high_operator_original_forward = original
+        runtime[key] = wrapper
+        originals[original] = {"production_identity": index}
+        capture[key] = {"production_identity": index}
+        current[key] = {"diagnostic_identity": index}
+    return runtime, originals, capture, current
 
 
 def _receipts(mode: str):
@@ -125,58 +141,99 @@ def test_request_preserves_complete_r_suffix_and_exact_schema():
         w._request_tuple(_request_state(high_sigmas=changed))
 
 
-def test_provenance_normalization_removes_only_exact_reviewed_w_wrappers():
-    gate = _source_gate()
+def test_vdn_object_patch_normalization_proves_exact_underlying_r_forward(monkeypatch):
+    gate = _vdn_source_gate()
     source_path = gate["entries"][0]["path"]
-    production = {
-        "key": "h3_flow_regenerate.first_high_operator.production_like_name",
-        "callable": {"qualname": "production", "file": {"resolved_path": "/production.py"}},
-    }
-    identity = {
-        "active_wrapper_order": {
-            "outer_sample": [
-                _wrapper_entry(w._OUTER_KEY, "_outer_wrapper", source_path),
-                production,
-            ],
-            "sampler_sample": [_wrapper_entry(w._SAMPLER_KEY, "_sampler_entry_wrapper", source_path)],
+    runtime, originals, capture_patches, current_patches = _fake_vdn_object_patches()
+    unrelated_key = "diffusion_model.unrelated.forward"
+    current_patches[unrelated_key] = {"identity": "unchanged"}
+    capture_patches[unrelated_key] = {"identity": "unchanged"}
+    runtime[unrelated_key] = lambda: None
+
+    wrappers = {value for key, value in runtime.items() if key != unrelated_key}
+    monkeypatch.setattr(
+        w,
+        "_callable_identity",
+        lambda value: {
+            "file": {
+                "resolved_path": source_path if value in wrappers else "/production.py",
+            }
         },
-        "patcher_wrapper_order": {
-            "outer_sample": [_wrapper_entry(w._OUTER_KEY, "_outer_wrapper", source_path)],
-            "sampler_sample": [_wrapper_entry(w._SAMPLER_KEY, "_sampler_entry_wrapper", source_path)],
-        },
-    }
-    original = copy.deepcopy(identity)
+    )
+    monkeypatch.setattr(w, "_callable_equivalence_identity", lambda value: copy.deepcopy(originals[value]))
 
-    normalized = w._without_w_diagnostic_wrappers(identity, gate)
+    current = {"active_object_patches": copy.deepcopy(current_patches)}
+    capture = {"active_object_patches": copy.deepcopy(capture_patches)}
+    original_current = copy.deepcopy(current)
+    guider = SimpleNamespace(model_patcher=SimpleNamespace(object_patches=runtime))
 
-    assert normalized["active_wrapper_order"]["outer_sample"] == [production]
-    assert normalized["active_wrapper_order"]["sampler_sample"] == []
-    assert normalized["patcher_wrapper_order"]["outer_sample"] == []
-    assert normalized["patcher_wrapper_order"]["sampler_sample"] == []
-    assert identity == original
+    normalized = w._normalize_vdn_w_object_patches(current, capture, guider, gate)
+
+    for index in range(w._EXPECTED_BLOCKS):
+        key = _vdn_key(index)
+        assert normalized["active_object_patches"][key] == capture_patches[key]
+    assert normalized["active_object_patches"][unrelated_key] == {"identity": "unchanged"}
+    assert current == original_current
 
 
-def test_provenance_normalization_rejects_foreign_or_duplicate_w_wrapper_identity():
-    gate = _source_gate()
+def test_vdn_object_patch_normalization_fails_closed_on_patch_set_and_source(monkeypatch):
+    gate = _vdn_source_gate()
     source_path = gate["entries"][0]["path"]
-    foreign = {
-        "active_wrapper_order": {
-            "outer_sample": [_wrapper_entry(w._OUTER_KEY, "_outer_wrapper", "/foreign.py")],
-            "sampler_sample": [_wrapper_entry(w._SAMPLER_KEY, "_sampler_entry_wrapper", source_path)],
-        }
-    }
-    with pytest.raises(RuntimeError, match="missing diagnostic wrapper identity"):
-        w._without_w_diagnostic_wrappers(foreign, gate)
+    runtime, originals, capture_patches, current_patches = _fake_vdn_object_patches()
+    current = {"active_object_patches": current_patches}
+    capture = {"active_object_patches": capture_patches}
 
-    duplicate_entry = _wrapper_entry(w._OUTER_KEY, "_outer_wrapper", source_path)
-    duplicate = {
-        "active_wrapper_order": {
-            "outer_sample": [duplicate_entry, copy.deepcopy(duplicate_entry)],
-            "sampler_sample": [_wrapper_entry(w._SAMPLER_KEY, "_sampler_entry_wrapper", source_path)],
-        }
-    }
-    with pytest.raises(RuntimeError, match="installed more than once"):
-        w._without_w_diagnostic_wrappers(duplicate, gate)
+    missing_runtime = dict(runtime)
+    missing_runtime.pop(_vdn_key(49))
+    with pytest.raises(RuntimeError, match="not exactly the 50 H3 attention patches"):
+        w._normalize_vdn_w_object_patches(
+            current,
+            capture,
+            SimpleNamespace(model_patcher=SimpleNamespace(object_patches=missing_runtime)),
+            gate,
+        )
+
+    wrappers = set(runtime.values())
+    wrong = runtime[_vdn_key(0)]
+    monkeypatch.setattr(
+        w,
+        "_callable_identity",
+        lambda value: {
+            "file": {
+                "resolved_path": "/foreign.py" if value is wrong else source_path,
+            }
+        },
+    )
+    monkeypatch.setattr(w, "_callable_equivalence_identity", lambda value: copy.deepcopy(originals[value]))
+    with pytest.raises(RuntimeError, match="wrapper source identity changed"):
+        w._normalize_vdn_w_object_patches(
+            current,
+            capture,
+            SimpleNamespace(model_patcher=SimpleNamespace(object_patches=runtime)),
+            gate,
+        )
+
+
+def test_vdn_object_patch_normalization_rejects_changed_underlying_forward(monkeypatch):
+    gate = _vdn_source_gate()
+    source_path = gate["entries"][0]["path"]
+    runtime, originals, capture_patches, current_patches = _fake_vdn_object_patches()
+    changed_original = runtime[_vdn_key(17)]._h3_first_high_operator_original_forward
+    originals[changed_original] = {"production_identity": "changed"}
+    monkeypatch.setattr(
+        w,
+        "_callable_identity",
+        lambda _value: {"file": {"resolved_path": source_path}},
+    )
+    monkeypatch.setattr(w, "_callable_equivalence_identity", lambda value: copy.deepcopy(originals[value]))
+
+    with pytest.raises(RuntimeError, match="underlying VDN production forward differs from R"):
+        w._normalize_vdn_w_object_patches(
+            {"active_object_patches": current_patches},
+            {"active_object_patches": capture_patches},
+            SimpleNamespace(model_patcher=SimpleNamespace(object_patches=runtime)),
+            gate,
+        )
 
 
 def test_source_delta_allowance_is_exact_path_changed_companion_only():
@@ -243,33 +300,30 @@ def test_receipt_validation_rejects_wrong_geometry_block_partition_and_route():
     assert w._validate_receipts(wrong_route, "native_window")["expected_local_route"] is False
 
 
-def test_provenance_gate_ignores_exact_w_wrappers_but_not_similar_wrapper(monkeypatch):
-    gate = _source_gate()
-    source_path = gate["entries"][0]["path"]
+def test_provenance_gate_normalizes_only_proven_vdn_wrapper_delta(monkeypatch):
+    gate = _vdn_source_gate()
     capture = {
-        "active_wrapper_order": {"outer_sample": [{"key": "production"}], "sampler_sample": []},
+        "active_object_patches": {},
+        "active_wrapper_order": {"outer_sample": [{"key": "production"}]},
         "loaded_companion_sources": {},
     }
-    current = {
-        "active_wrapper_order": {
-            "outer_sample": [
-                _wrapper_entry(w._OUTER_KEY, "_outer_wrapper", source_path),
-                {"key": "production"},
-            ],
-            "sampler_sample": [_wrapper_entry(w._SAMPLER_KEY, "_sampler_entry_wrapper", source_path)],
-        },
-        "loaded_companion_sources": {},
-    }
+    current = copy.deepcopy(capture)
     monkeypatch.setattr(w._replay, "_bundle_provenance_equivalence_identity", lambda _manifest: capture)
     monkeypatch.setattr(w._replay, "_provenance_equivalence_identity", lambda _manifest: current)
+    monkeypatch.setattr(
+        w,
+        "_normalize_vdn_w_object_patches",
+        lambda value, _capture, _guider, _gate: copy.deepcopy(value),
+    )
     state = SimpleNamespace(replay=SimpleNamespace(manifest={}), source_gate=gate)
     record = SimpleNamespace(state=SimpleNamespace(manifest={}))
+    guider = SimpleNamespace()
 
-    report = w._provenance_gate(state, record)
+    report = w._provenance_gate(state, record, guider)
     assert report["differences"] == []
     assert report["exact_except_reviewed_w_delta"] is True
 
-    current["active_wrapper_order"]["outer_sample"].append({"key": "first_high_operator_production"})
-    report = w._provenance_gate(state, record)
+    current["active_wrapper_order"]["outer_sample"].append({"key": "unrelated-change"})
+    report = w._provenance_gate(state, record, guider)
     assert report["exact_except_reviewed_w_delta"] is False
     assert any("active_wrapper_order" in item for item in report["unexpected_differences"])
