@@ -8,16 +8,17 @@
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "e9e4fa32906b3b5ed721c61a6f15ab05615b5629",
-      "reason": "W replay, one-call termination, fail-closed provenance normalization, receipt invariants and source-delta gate"
+      "candidate_git_blob_sha": "f01f82d381cf0dfa11d43097fd7b03dd49fb12ae",
+      "reason": "W replay, one-call termination, fail-closed R-base/current-candidate provenance normalization, exact grouped receipt invariants and source-delta gate"
     },
     {
       "owner": "flow",
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
+      "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
       "candidate_git_blob_sha": "aa18388d95f5bb817d6fb675ab4fcf63486a5417",
-      "reason": "register W diagnostic nodes without changing PR #41"
+      "reason": "register W diagnostic nodes without changing PR #41; R capture bytes are pinned independently of the deployed candidate"
     },
     {
       "owner": "sol",
@@ -32,8 +33,9 @@
       "module": "sol_h3",
       "relative_path": ".",
       "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
+      "base_sha256": "b7dc4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
       "candidate_git_blob_sha": "1bbbbbb867604591b4d02903b6ab730906e4b72b",
-      "reason": "install Sol W history contract at package import"
+      "reason": "install Sol W history contract at package import; R capture bytes are pinned independently of the deployed candidate"
     },
     {
       "owner": "vdn",
@@ -56,8 +58,9 @@
       "module": "vdn_h3",
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
+      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
       "candidate_git_blob_sha": "36c0d8a7ac7c3e75ef49748eabd9142fa4fb878d",
-      "reason": "install VDN W diagnostic overlay and Sol owner bridge before ApplyVDN node construction"
+      "reason": "install VDN W diagnostic overlay and Sol owner bridge before ApplyVDN node construction; R capture bytes are pinned independently of the deployed candidate"
     },
     {
       "owner": "core",
