@@ -33,9 +33,7 @@ def _chains():
         }
     }
     current[key0] = copy.deepcopy(capture[key0])
-    current[key0]["closure"]["previous"]["callable"]["closure"] = {
-        "state": {"type": "vdn_h3.runtime.State"}
-    }
+    current[key0]["closure"]["previous"]["callable"]["closure"] = {"state": {"type": "vdn_h3.runtime.State"}}
 
     key1 = str(("double_block", 1))
     current[key1]["closure"] = {
