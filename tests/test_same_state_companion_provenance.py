@@ -35,9 +35,7 @@ def test_cross_process_companion_provenance_accepts_exact_55_to_10_lazy_import_s
         path.write_text(f"VALUE = {index}\n", encoding="utf-8")
         paths.append(path)
 
-    capture_sources = [
-        _source_entry(path, module=f"sol_h3.module_{index:02d}") for index, path in enumerate(paths)
-    ]
+    capture_sources = [_source_entry(path, module=f"sol_h3.module_{index:02d}") for index, path in enumerate(paths)]
     replay_sources = capture_sources[:10]
     capture = _identity(capture_sources)
     cold = _identity(replay_sources)
@@ -57,9 +55,7 @@ def test_cross_process_companion_provenance_hashes_capture_only_sources_on_disk(
         path.write_text(f"VALUE = {index}\n", encoding="utf-8")
         paths.append(path)
 
-    capture_sources = [
-        _source_entry(path, module=f"sol_h3.module_{index:02d}") for index, path in enumerate(paths)
-    ]
+    capture_sources = [_source_entry(path, module=f"sol_h3.module_{index:02d}") for index, path in enumerate(paths)]
     capture = _identity(capture_sources)
     cold = _identity(capture_sources[:3])
 
