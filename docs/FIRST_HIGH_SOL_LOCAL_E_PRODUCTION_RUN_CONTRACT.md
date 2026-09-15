@@ -12,15 +12,17 @@ Run E through the existing **ComfyUI Patcher PR-overlay stack**. Do not replace 
 | --- | --- | --- | --- |
 | `xmarre/ComfyUI-Sol-H3` | PR #12, stacked on PR #11 | `2eedd341a0f412803afc92702996c07e1702edb7` | E Sol all-selected path and numerical witnesses |
 | `xmarre/ComfyUI-VDN-H3-Plus` | PR #16, stacked on PR #15 | `10bf368bee38b9f942961e6d8c374b5af6c4bc16` | E VDN overlay and generated-loader bridge |
-| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | PR #44, stacked on PR #43 | current PR head; E core `7ea52470ab5ac82b12d58bcb87db82d715b8005c` plus the reviewed bounded runtime-provenance corrections | one-call replay, source/provenance gate, report and durable evidence |
+| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | PR #44, stacked on PR #43 | current PR head; E core `7ea52470ab5ac82b12d58bcb87db82d715b8005c` plus the reviewed bounded runtime-provenance/preflight corrections | one-call replay, source/provenance gate, report and durable evidence |
 
 PRs #11, #15 and #43 remain the preserved W evidence bases. E is the next overlay layer; it does not rewrite or repurpose those PRs.
 
 The first real workstation E attempt on the original #44 overlay established that the graph ordering was correct and reached the sampler, but the diagnostic aborted before H3 because E's additional reviewed VDN wrapper layer exposed one extra bounded `closure` level in Core's derived `replacement_chain_dit` provenance. That is an E instrumentation self-effect, not model/media evidence. PR #44 normalizes only this derived current-only closure-depth expansion **after** proving the exact fifty live E → W → captured-production VDN object-patch chains. Any non-closure difference, capture-owned closure difference, key-set difference, or other provenance change still fails closed.
 
-The next workstation attempt passed that gate and exposed one further deterministic E self-effect before H3: `sol_h3/sparse.py` appeared only in the replay runtime's loaded-companion inventory. E's Sol installer must import that production sparse bridge in order to install its bounded local-attention diagnostic wrapper, while R captured the companion-source inventory before the first high H3 call and therefore had not necessarily imported the bridge yet. The file itself is unchanged across Sol PR #11/#12: Git blob `9f462591e3492d0b7af476c16024c79d1237505e`. PR #44 now removes this one replay-only source entry only after proving the live sibling file belongs to the already source-gated Sol package, has exactly that reviewed Git blob, and its recorded SHA-256 equals the actual file bytes. Every other replay-only companion source remains visible to the ordinary fail-closed provenance comparison. This normalization does **not** waive the later lazy-loaded packaged SM120 kernel/compiler provenance; those modules are still verified by E after the kernel is actually loaded.
+The next workstation attempt passed that gate and exposed one further deterministic E self-effect before H3: `sol_h3/sparse.py` appeared only in the replay runtime's loaded-companion inventory. E's Sol installer must import that production sparse bridge in order to install its bounded local-attention diagnostic wrapper, while R captured the companion-source inventory before the first high H3 call and therefore had not necessarily imported the bridge yet. The file itself is unchanged across Sol PR #11/#12: Git blob `9f462591e3492d0b7af476c16024c79d1237505e`. PR #44 removes this one replay-only source entry only after proving the live sibling file belongs to the already source-gated Sol package, has exactly that reviewed Git blob, and its recorded SHA-256 equals the actual file bytes. Every other replay-only companion source remains visible to the ordinary fail-closed provenance comparison. This normalization does **not** waive the later lazy-loaded packaged SM120 kernel/compiler provenance; those modules are still verified by E after the kernel is actually loaded.
 
-Neither failed workstation attempt executed an H3 E call, so neither provides operator, arithmetic, or media evidence.
+The following workstation attempt passed both provenance corrections and then stopped at E's memory preflight with `first-high Sol-local E requires CUDA SM120`. The workstation log simultaneously proved CUDA was available on a single `NVIDIA RTX PRO 6000 Blackwell Workstation Edition`, while the E caller passed `replay_latent.device` into `_memory_preflight`. R is allowed to store the high sampler replay tensor on CPU, so replay-tensor storage is not the H3/Sol execution device. PR #44 now treats these as separate contracts: an explicit CUDA replay device remains authoritative; a non-CUDA replay device may resolve to CUDA only when exactly one CUDA device is present; multi-GPU non-CUDA replay remains fail-closed as ambiguous. The resolved runtime device must report compute capability exactly `(12, 0)` before the original memory-headroom preflight runs. The report records the replay tensor device, CUDA preflight device, and compute capability separately.
+
+None of these failed workstation attempts executed an H3 E call, so none provides operator, arithmetic, or media evidence.
 
 The Flow source manifest pins the exact reviewed executable source bytes. The four installed ComfyUI Core files are verified by their loaded file bytes at runtime, not by a Git branch or tag:
 
@@ -84,9 +86,9 @@ cd /home/toor/ComfyUI/custom_nodes/MiniMax-H3-Flow-Aligned-Regenerate
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_diagnostic.py)" = \
   138a27c8fbba0ddc9140b6301187a2b01ce0f1fb
 test "$(git hash-object __init__.py)" = \
-  4eab5193d8e1a3ed51f53a7ab434846494b163d0
+  71f70ea78e53aa8d005c6aaaa31d54ea20c54287
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_e_source_delta.json)" = \
-  38406fda32593a649d481b5bb48044277150ba2d
+  a01a78ca0488137dc3e9c2ec91120ae3dbab84fe
 
 cd /home/toor/ComfyUI
 test "$(git hash-object comfy/model_sampling.py)" = \
@@ -141,9 +143,11 @@ Durable machine evidence is written under:
 
 Preserve the generated `.json` and `.pt` files.
 
-## 6. Memory contract
+## 6. Memory and SM120 device contract
 
 E defaults to a 2 GiB additional diagnostic budget for CUDA and 2 GiB for host memory and performs its own preflight. Optional overrides are `H3_FIRST_HIGH_E_CUDA_BUDGET_GIB` and `H3_FIRST_HIGH_E_CPU_BUDGET_GIB`; do not lower a budget merely to bypass a failure.
+
+Replay tensor storage and H3 execution device are distinct. If the restored replay tensor is already on CUDA, E preflights that exact CUDA device. If it is non-CUDA, E resolves the preflight to CUDA only when exactly one CUDA device exists. Multi-GPU non-CUDA replay is rejected as ambiguous. The resolved device must report compute capability exactly `SM120` before CUDA memory headroom is checked.
 
 ## 7. Queue exactly once
 
@@ -183,4 +187,4 @@ M/T/C remain conditional; clean E alone does not authorize permanently dense loc
 
 ## 10. Structural validation
 
-The exact E Sol/VDN stack and the Flow E implementation passed hosted structural validation. The first bounded post-workstation closure-depth correction passed the full Flow source-contract and Python 3.10/3.11/3.12/3.13 matrix before being advanced onto PR #44. The second bounded correction, for E's exact unchanged `sol_h3/sparse.py` pre-H3 lazy-import self-effect, passed the same complete source-contract, Ruff, formatting, pytest, compileall, build, license and isolated-wheel matrix in run `35034482369`. Hosted CI does not establish SM120 arithmetic or media causality; a valid workstation E call remains the empirical gate.
+The exact E Sol/VDN stack and the Flow E implementation passed hosted structural validation. The first bounded post-workstation closure-depth correction passed the full Flow source-contract and Python 3.10/3.11/3.12/3.13 matrix before being advanced onto PR #44. The second bounded correction, for E's exact unchanged `sol_h3/sparse.py` pre-H3 lazy-import self-effect, passed the same complete source-contract, Ruff, formatting, pytest, compileall, build, license and isolated-wheel matrix in run `35034482369`. The third bounded correction separates R replay-tensor storage from the actual SM120 preflight device and adds fail-closed single-GPU/compute-capability tests. Hosted CI does not establish SM120 arithmetic or media causality; a valid workstation E call remains the empirical gate.
