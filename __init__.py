@@ -374,9 +374,7 @@ def _normalize_e_lazy_sol_sparse_source(current, capture, source_gate):
         detail = current_problems + capture_problems
         raise RuntimeError("first-high Sol-local E Sol companion source inventory is invalid: " + "; ".join(detail))
 
-    sol_init = Path(
-        _FIRST_HIGH_SOL_LOCAL_MODULE._source_path(source_gate, "sol", "sol_h3")
-    ).resolve(strict=True)
+    sol_init = Path(_FIRST_HIGH_SOL_LOCAL_MODULE._source_path(source_gate, "sol", "sol_h3")).resolve(strict=True)
     sparse_path = (sol_init.parent / "sparse.py").resolve(strict=True)
     if not sparse_path.is_file() or sparse_path.parent != sol_init.parent:
         raise RuntimeError("first-high Sol-local E sparse bridge is outside the reviewed Sol package")
