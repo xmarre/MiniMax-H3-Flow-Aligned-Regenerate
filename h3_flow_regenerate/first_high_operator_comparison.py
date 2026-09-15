@@ -1,11 +1,11 @@
 """Bounded first-high operator comparison W.
 
 W reuses an existing, hash-validated experiment-R bundle and executes exactly the
-first high Euler model call in a fresh process.  It changes only the explicit VDN
-local-attention operator selected by ``mode``.  The original high sigma suffix is
+first high Euler model call in a fresh process. It changes only the explicit VDN
+local-attention operator selected by ``mode``. The original high sigma suffix is
 kept intact so MiniMax-H3 PDD/final-head selection sees the same schedule.
 
-This module is diagnostic-only.  It never changes production progressive policy,
+This module is diagnostic-only. It never changes production progressive policy,
 never regenerates the R bundle, and never reports R ``attribution_valid`` for an
 operator-modified run.
 """
@@ -26,6 +26,7 @@ from . import comfy_compat as _comfy_compat
 from . import execution_contract_diagnostics as _diag
 from . import runtime as _runtime
 from . import same_state_high_replay as _replay
+from .execution_contract_provenance import callable_identity as _callable_identity
 
 SCHEMA_VERSION = 1
 STATE_KEY = "h3_flow_first_high_operator_comparison_v1"
@@ -41,10 +42,6 @@ _MAX_REPORTS = 4
 _EXPECTED_PACKED_ROWS = 56349
 _EXPECTED_VIDEO_SPAN = (3101, 56349)
 _EXPECTED_BLOCKS = 50
-_W_WRAPPER_SPECS = {
-    _OUTER_KEY: ("outer_sample", "_outer_wrapper"),
-    _SAMPLER_KEY: ("sampler_sample", "_sampler_entry_wrapper"),
-}
 _REQUIRED_SOURCE_ENTRY_KEYS = frozenset(
     {
         ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."),
@@ -232,70 +229,90 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
     }
 
 
-def _w_source_path(source_gate: dict[str, Any]) -> str:
+def _vdn_w_source_path(source_gate: dict[str, Any]) -> str:
     matches = [
         str(entry.get("path", ""))
         for entry in source_gate.get("entries", [])
-        if entry.get("owner") == "flow"
-        and entry.get("module") == "h3_flow_regenerate.first_high_operator_comparison"
+        if entry.get("owner") == "vdn"
+        and entry.get("module") == "vdn_h3.first_high_operator_diagnostic"
         and entry.get("relative_path", ".") == "."
     ]
     if len(matches) != 1 or not matches[0]:
-        raise RuntimeError("first-high W source gate does not identify exactly one W implementation file")
+        raise RuntimeError("first-high W source gate does not identify exactly one VDN diagnostic source file")
     return matches[0]
 
 
-def _without_w_diagnostic_wrappers(value: dict[str, Any], source_gate: dict[str, Any]) -> dict[str, Any]:
-    """Remove only the exact W measurement wrappers from current provenance.
+def _callable_equivalence_identity(value: Any) -> dict[str, Any]:
+    identity = _callable_identity(value)
+    normalized = _replay._provenance_equivalence_identity({"active_object_patches": {"value": identity}})
+    return normalized["active_object_patches"]["value"]
 
-    The capture predates W, so those two measurement wrappers are expected only
-    in the current process.  Matching is bound to the reviewed W source path and
-    exact key/qualname; similarly named or foreign wrappers remain causal diffs.
+
+def _normalize_vdn_w_object_patches(
+    current: dict[str, Any],
+    capture: dict[str, Any],
+    guider: Any,
+    source_gate: dict[str, Any],
+) -> dict[str, Any]:
+    """Prove W's construction wrapper delegates to the captured VDN closure.
+
+    The VDN diagnostic overlay is installed before ApplyVDN constructs its fifty
+    object patches, so the preflight provenance legitimately sees a thin W-aware
+    wrapper instead of R's direct ``vdn_forward`` closure. We do not exempt that
+    difference by path. Each live wrapper must come from the exact reviewed W
+    source, expose its exact underlying production closure, and that closure must
+    equal the corresponding R object-patch identity after the same provenance
+    normalization. Only then is that one entry replaced for comparison.
     """
-    if not isinstance(value, dict):
-        raise TypeError("first-high W provenance identity must be a dictionary")
-    source_path = _w_source_path(source_gate)
-    result = dict(value)
-    removed_total = Counter()
-    for field in ("active_wrapper_order", "patcher_wrapper_order"):
-        groups = value.get(field)
-        if not isinstance(groups, dict):
-            continue
-        rebuilt = {}
-        for boundary, entries in groups.items():
-            if not isinstance(entries, list):
-                rebuilt[boundary] = entries
-                continue
-            kept = []
-            removed_here = Counter()
-            boundary_name = str(boundary).lower()
-            for entry in entries:
-                key = entry.get("key") if isinstance(entry, dict) else None
-                spec = _W_WRAPPER_SPECS.get(key)
-                callable_info = entry.get("callable") if isinstance(entry, dict) else None
-                file_info = callable_info.get("file") if isinstance(callable_info, dict) else None
-                resolved = (
-                    file_info.get("resolved_path") or file_info.get("path") if isinstance(file_info, dict) else None
-                )
-                exact = bool(
-                    spec is not None
-                    and spec[0] in boundary_name
-                    and isinstance(callable_info, dict)
-                    and callable_info.get("qualname") == spec[1]
-                    and resolved == source_path
-                )
-                if exact:
-                    removed_here[str(key)] += 1
-                    removed_total[str(key)] += 1
-                    continue
-                kept.append(entry)
-            if any(count > 1 for count in removed_here.values()):
-                raise RuntimeError("first-high W diagnostic wrapper was installed more than once at one boundary")
-            rebuilt[boundary] = kept
-        result[field] = rebuilt
-    missing = [key for key in _W_WRAPPER_SPECS if removed_total[key] == 0]
-    if missing:
-        raise RuntimeError("first-high W provenance is missing diagnostic wrapper identity: " + ", ".join(missing))
+    current_patches = current.get("active_object_patches")
+    capture_patches = capture.get("active_object_patches")
+    patcher = getattr(guider, "model_patcher", None)
+    runtime_patches = getattr(patcher, "object_patches", None)
+    if not isinstance(current_patches, dict) or not isinstance(capture_patches, dict):
+        raise RuntimeError("first-high W provenance lacks active VDN object-patch manifests")
+    if not isinstance(runtime_patches, dict):
+        raise RuntimeError("first-high W cannot inspect live model object patches")
+
+    expected_keys = {f"diffusion_model.blocks.{index}.attn.forward" for index in range(_EXPECTED_BLOCKS)}
+    wrapped = {
+        str(key): value
+        for key, value in runtime_patches.items()
+        if getattr(value, "_h3_first_high_operator_diagnostic_v1", False) is True
+    }
+    if set(wrapped) != expected_keys:
+        missing = sorted(expected_keys - set(wrapped))
+        extra = sorted(set(wrapped) - expected_keys)
+        raise RuntimeError(
+            "first-high W VDN diagnostic object-patch set is not exactly the 50 H3 attention patches; "
+            f"missing={missing[:4]} extra={extra[:4]}"
+        )
+
+    source_path = _vdn_w_source_path(source_gate)
+    rebuilt = dict(current_patches)
+    for key in sorted(expected_keys):
+        wrapper = wrapped[key]
+        wrapper_identity = _callable_identity(wrapper)
+        file_info = wrapper_identity.get("file") if isinstance(wrapper_identity, dict) else None
+        resolved = file_info.get("resolved_path") if isinstance(file_info, dict) else None
+        if resolved != source_path:
+            raise RuntimeError(f"first-high W VDN wrapper source identity changed for {key}: {resolved!r}")
+        original = getattr(wrapper, "_h3_first_high_operator_original_forward", None)
+        if not callable(original):
+            raise RuntimeError(f"first-high W VDN wrapper lacks its underlying production forward for {key}")
+        if key not in current_patches or key not in capture_patches:
+            raise RuntimeError(f"first-high W provenance is missing VDN object-patch identity for {key}")
+        original_identity = _callable_equivalence_identity(original)
+        capture_identity = capture_patches[key]
+        if _canonical_json(original_identity) != _canonical_json(capture_identity):
+            detail = _replay._provenance_diff_paths(capture_identity, original_identity, limit=8)
+            raise RuntimeError(
+                f"first-high W underlying VDN production forward differs from R for {key}"
+                + ("; " + ", ".join(detail) if detail else "")
+            )
+        rebuilt[key] = capture_identity
+
+    result = dict(current)
+    result["active_object_patches"] = rebuilt
     return result
 
 
@@ -313,10 +330,10 @@ def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bo
     return False
 
 
-def _provenance_gate(state: _State, record: _diag._Record) -> dict[str, Any]:
+def _provenance_gate(state: _State, record: _diag._Record, guider: Any) -> dict[str, Any]:
     capture = _replay._bundle_provenance_equivalence_identity(state.replay.manifest)
     current = _replay._provenance_equivalence_identity(record.state.manifest)
-    current = _without_w_diagnostic_wrappers(current, state.source_gate)
+    current = _normalize_vdn_w_object_patches(current, capture, guider, state.source_gate)
     differences = _replay._cross_process_provenance_diff_paths(capture, current, limit=64)
     unexpected = [path for path in differences if not _allowed_provenance_difference(path, state.source_gate)]
     return {
@@ -530,7 +547,7 @@ def _outer_wrapper(
     if record.pristine_cond_digest != str(replay.manifest["pristine_conditioning_digest"]):
         raise RuntimeError("first-high W pristine target conditioning differs from R capture")
 
-    provenance_gate = _provenance_gate(state, record)
+    provenance_gate = _provenance_gate(state, record, guider)
     if not provenance_gate["exact_except_reviewed_w_delta"]:
         raise RuntimeError(
             "first-high W runtime provenance differs beyond the reviewed source delta: "
