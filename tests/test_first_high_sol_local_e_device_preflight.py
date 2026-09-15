@@ -3,14 +3,14 @@ from __future__ import annotations
 import importlib
 
 import pytest
-import torch
 
 
 root = importlib.import_module("__init__")
+torch = root._FIRST_HIGH_SOL_LOCAL_MODULE.torch
 
 
 def _install_cuda_stubs(monkeypatch, *, count: int, capability: tuple[int, int], current: int = 0):
-    cuda = root._FIRST_HIGH_SOL_LOCAL_MODULE.torch.cuda
+    cuda = torch.cuda
     monkeypatch.setattr(cuda, "is_available", lambda: True)
     monkeypatch.setattr(cuda, "device_count", lambda: count)
     monkeypatch.setattr(cuda, "current_device", lambda: current)
