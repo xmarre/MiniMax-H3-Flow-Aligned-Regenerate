@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "design_commit": "0b8715faa0a82c730f5aaf0e44b1185e64291e49",
+  "purpose": "Exact byte allowlist for bounded first-high Sol-local diagnostic E. Existing-source base identities are the preserved experiment-R bytes; new diagnostic files have no R base identity.",
+  "entries": [
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "90e341d1f5bd111f3f8061cb318e5f88c97d4aa8",
+      "reason": "E one-call replay, fail-closed validity/provenance, bounded witness reporting, memory preflight, and durable evidence persistence"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
+      "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
+      "candidate_git_blob_sha": "7b0d1503a596a7f2ee07eadff6b6c79263366489",
+      "reason": "register E diagnostic nodes while preserving PR43 W source-resolution/provenance normalization"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "b4aef9c2bb55d118c0eae29124f38240819a1d38",
+      "reason": "reuse the reviewed W one-call Core externalization/cleanup and installed-runtime helper contracts without modifying W"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "e318ce1f0113d88633f510a5723740ccaaa3bdfd",
+      "reason": "E all-selected final sink, isolated SM120 trace/LSE specializations, independent preparation/selector witnesses, streaming frozen-route FP32 reference, and lazy kernel/compiler provenance"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_witness_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "3ce204248286a6664d2b0e02fff7a20ddc233185",
+      "reason": "bind only preserved witness calls to the clone-stable evidence owner without changing the production sparse-attention signature"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_receipt_tap",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8db585129d5db6f7f021148551a3b239c426c0e7",
+      "reason": "copy completed actual Sol backend route receipts into E evidence independently of VDN expected-route receipts"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8cb694f4acf872f477b8b7f3f424dfa4454e8a6e",
+      "reason": "preserve PR11 W history/receipt evidence layer underneath E without modifying it"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3",
+      "relative_path": ".",
+      "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
+      "base_sha256": "b7dc4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
+      "candidate_git_blob_sha": "c4184d48f53a1b0703816c371f616e538acde5a7",
+      "reason": "install E Sol-local diagnostic, witness owner, and actual backend receipt tap after the preserved W overlay"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8d0b0c9af1a20bc621635d9931376cca43a71fea",
+      "reason": "preserve ordinary restricted VDN local domains/complement and capture block2 groups 0/2/10 QKV before scratch reuse"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_sol_local_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "2277f7071118d53eb56fe9cd86110cf7ca799efb",
+      "reason": "resolve the loaded namespaced Sol E companion fail-closed by exact source-file identity"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "14efc851eb1ca52ed46d7a2e5362748ae4676bae",
+      "reason": "preserve PR15 W evidence wrapper as an explicit layer underneath E"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_sol_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "4a689892feb2e197fe75a1c4ad419dddb09b6da0",
+      "reason": "preserve PR15 Sol owner bridge bytes underneath E"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
+      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
+      "candidate_git_blob_sha": "c61e2b763d9fba35361729aa0ac1ef9259dcb298",
+      "reason": "install E after W before ApplyVDN constructs the fifty H3 attention object patches"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "candidate_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "reason": "exact installed MiniMax-H3 model-sampling source prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.latent_formats",
+      "relative_path": ".",
+      "base_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "candidate_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "reason": "exact installed MiniMax-H3 latent-format source prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_patcher",
+      "relative_path": ".",
+      "base_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "candidate_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "reason": "exact installed model-patcher source prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.k_diffusion.sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "candidate_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "reason": "exact installed Euler/callback source prerequisite"
+    }
+  ]
+}
