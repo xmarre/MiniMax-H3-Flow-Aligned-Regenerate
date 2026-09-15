@@ -8,8 +8,8 @@
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "00a412b571ae2342230a66c225d7bd2adc9fa706",
-      "reason": "W replay, clone-stable bounded receipt ownership across Core model-option copies, SAMPLER_SAMPLE-bounded one-call termination with normal Core externalization/cleanup completion, fail-closed R-base/current-candidate provenance normalization, exact grouped receipt invariants, and decode-ready raw/pre-guidance media retention without an extra H3/upscale call"
+      "candidate_git_blob_sha": "b4aef9c2bb55d118c0eae29124f38240819a1d38",
+      "reason": "W replay, clone-stable bounded receipt ownership across Core model-option copies, SAMPLER_SAMPLE-bounded one-call termination with normal Core externalization/cleanup completion, fail-closed R-base/current-candidate provenance normalization, exact grouped receipt invariants, decode-ready raw/pre-guidance media retention without an extra H3/upscale call, and post-call companion observation through the execution record's provenance manifest rather than the record object"
     },
     {
       "owner": "flow",

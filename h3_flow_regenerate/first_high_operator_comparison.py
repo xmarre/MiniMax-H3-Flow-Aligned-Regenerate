@@ -991,7 +991,7 @@ def _outer_wrapper(
             raw_media = _decode_ready_video_snapshot(record, "first_high_model_raw_video", target_video_shape)
             pre_media = _decode_ready_video_snapshot(record, "first_high_pre_guidance_video", target_video_shape)
             receipt_report = _validate_receipts(receipt_sink, state.mode)
-            companion = _replay._high_first_companion_observation(record) or {}
+            companion = _replay._high_first_companion_observation(record.state.manifest) or {}
             sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
             required_sol_zero_fields = (
                 "vdn_local_sol_calls",
