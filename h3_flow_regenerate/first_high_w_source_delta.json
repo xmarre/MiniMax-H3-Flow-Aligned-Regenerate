@@ -17,8 +17,8 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
       "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
-      "candidate_git_blob_sha": "c47c996f848d08d927d2c45009977fb68a708436",
-      "reason": "register W diagnostic nodes and resolve reviewed source modules from ComfyUI's actual namespaced custom-node loader without changing PR #41; R capture bytes are pinned independently of the deployed candidate"
+      "candidate_git_blob_sha": "ed2be03c6aed53cfb835a8e9c6d08e579626865a",
+      "reason": "register W diagnostic nodes, resolve reviewed source modules from ComfyUI's namespaced custom-node loader, and normalize only the two exact live W wrapper additions before comparing runtime wrapper order with R; R capture bytes are pinned independently of the deployed candidate"
     },
     {
       "owner": "sol",
