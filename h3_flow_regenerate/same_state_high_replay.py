@@ -255,20 +255,31 @@ def _diagnostic_flow_source_entry(value: Any) -> bool:
 
 
 def _without_process_local_code_digests(value: Any) -> Any:
-    """Remove callable code digests from cross-process causal equality only.
+    """Remove legacy callable digests only when exact source bytes back them.
 
     The provenance collector stores each callable's raw ``code_digest`` in the
     full hash-validated manifest. Its legacy digest construction includes
     ``repr(code.co_consts)``; nested code-object constants embed process-local
     memory addresses, so identical loaded source can produce different digests
-    after a clean restart. Exact source-file SHA-256, module/qualname, captured
-    closure/default structure, wrapper order and policy remain fail-closed here.
+    after a clean restart. For a source-backed callable, exact source-file
+    SHA-256 plus module/qualname, closure/default structure, wrapper order and
+    policy are the cross-process identity. A callable without an exact source
+    SHA keeps its raw code digest so the gate remains fail-closed.
     """
     if isinstance(value, dict):
+        file_info = value.get("file")
+        source_backed_callable = (
+            "code_digest" in value
+            and isinstance(value.get("module"), str)
+            and isinstance(value.get("qualname"), str)
+            and isinstance(file_info, dict)
+            and isinstance(file_info.get("sha256"), str)
+            and bool(file_info["sha256"])
+        )
         return {
             str(key): _without_process_local_code_digests(item)
             for key, item in value.items()
-            if str(key) != "code_digest"
+            if not (source_backed_callable and str(key) == "code_digest")
         }
     if isinstance(value, list):
         return [_without_process_local_code_digests(item) for item in value]
