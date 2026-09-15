@@ -98,9 +98,22 @@ test "$(git hash-object h3_flow_regenerate/first_high_sol_local_diagnostic.py)" 
 
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_e_source_delta.json)" = \
   8f5bf60a6e0ca84ba55f38fa02045ae399bbc296
+
+cd /home/toor/ComfyUI
+test "$(git hash-object comfy/model_sampling.py)" = \
+  4a55655207115a150d5254c5b364b03a6c256627
+
+test "$(git hash-object comfy/latent_formats.py)" = \
+  8d8ff6c5f179da8dcdeba854f220fb657de2af1c
+
+test "$(git hash-object comfy/model_patcher.py)" = \
+  08e69fae149692fed60d886890cc0a8eb80bdf26
+
+test "$(git hash-object comfy/k_diffusion/sampling.py)" = \
+  4a638008a3df3a2f167e9bf343a258a0f5655ede
 ```
 
-A successful `test` command is silent and exits zero. Any failure means the workstation does not have the reviewed E bytes; do not queue E.
+The ComfyUI checks deliberately hash the installed files rather than compare the checkout's branch/tag/commit name. A successful `test` command is silent and exits zero. Any failure means the workstation does not have the reviewed E bytes; do not queue E.
 
 ## 4. Process and graph contract
 
