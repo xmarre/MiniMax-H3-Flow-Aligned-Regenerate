@@ -346,12 +346,90 @@ def _normalize_e_replacement_chain(current, capture):
     return result
 
 
+_E_LAZY_SOL_SPARSE_BLOB = "9f462591e3492d0b7af476c16024c79d1237505e"
+
+
+def _normalize_e_lazy_sol_sparse_source(current, capture, source_gate):
+    """Remove only E's proven pre-H3 lazy import of unchanged ``sol_h3.sparse``.
+
+    R collected companion imports before the first high H3 call, so the production
+    sparse bridge was not necessarily imported yet. Importing E installs its local
+    attention wrapper and therefore imports that unchanged bridge before the E
+    provenance gate runs. Treating this exact self-import as a runtime delta is
+    valid only when the live file sits beside the already source-gated Sol package,
+    has the exact PR #11/#12 blob, and the provenance snapshot reports the same
+    SHA-256. Any other replay-only Sol source remains visible to the ordinary
+    cross-process provenance comparator.
+    """
+    current_groups = current.get("loaded_companion_sources")
+    capture_groups = capture.get("loaded_companion_sources")
+    if not isinstance(current_groups, dict) or not isinstance(capture_groups, dict):
+        raise RuntimeError("first-high Sol-local E provenance lacks companion source inventories")
+
+    current_group = current_groups.get("sol_h3")
+    capture_group = capture_groups.get("sol_h3")
+    current_map, current_problems = _FIRST_HIGH_SOL_LOCAL_MODULE._replay._companion_source_map(current_group)
+    capture_map, capture_problems = _FIRST_HIGH_SOL_LOCAL_MODULE._replay._companion_source_map(capture_group)
+    if current_problems or capture_problems:
+        detail = current_problems + capture_problems
+        raise RuntimeError("first-high Sol-local E Sol companion source inventory is invalid: " + "; ".join(detail))
+
+    sol_init = Path(
+        _FIRST_HIGH_SOL_LOCAL_MODULE._source_path(source_gate, "sol", "sol_h3")
+    ).resolve(strict=True)
+    sparse_path = (sol_init.parent / "sparse.py").resolve(strict=True)
+    if not sparse_path.is_file() or sparse_path.parent != sol_init.parent:
+        raise RuntimeError("first-high Sol-local E sparse bridge is outside the reviewed Sol package")
+    if _FIRST_HIGH_SOL_LOCAL_MODULE._git_blob_sha(sparse_path) != _E_LAZY_SOL_SPARSE_BLOB:
+        raise RuntimeError("first-high Sol-local E sparse bridge differs from reviewed PR #11/#12 bytes")
+
+    sparse_key = str(sparse_path)
+    current_entry = current_map.get(sparse_key)
+    if current_entry is None:
+        return current
+    disk_sha256 = _FIRST_HIGH_SOL_LOCAL_MODULE._sha256_file(sparse_path)
+    if current_entry.get("sha256") != disk_sha256:
+        raise RuntimeError("first-high Sol-local E sparse provenance SHA-256 differs from loaded file bytes")
+
+    capture_entry = capture_map.get(sparse_key)
+    if capture_entry is not None:
+        if capture_entry.get("sha256") != disk_sha256:
+            raise RuntimeError("first-high Sol-local E captured sparse source differs from reviewed file bytes")
+        return current
+
+    rebuilt_group = []
+    removed = 0
+    for entry in current_group:
+        if not isinstance(entry, dict):
+            rebuilt_group.append(entry)
+            continue
+        file_info = entry.get("file")
+        raw_path = None
+        if isinstance(file_info, dict):
+            raw_path = file_info.get("resolved_path") or file_info.get("path")
+        if raw_path == sparse_key:
+            if file_info.get("sha256") != disk_sha256:
+                raise RuntimeError("first-high Sol-local E sparse alias reports inconsistent source bytes")
+            removed += 1
+            continue
+        rebuilt_group.append(entry)
+    if removed < 1:
+        raise RuntimeError("first-high Sol-local E could not isolate its lazy sparse source entry")
+
+    rebuilt_groups = dict(current_groups)
+    rebuilt_groups["sol_h3"] = rebuilt_group
+    result = dict(current)
+    result["loaded_companion_sources"] = rebuilt_groups
+    return result
+
+
 _ORIGINAL_E_VDN_PROVENANCE_NORMALIZER = _FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches
 
 
 def _normalize_e_provenance_delta(current, capture, guider, source_gate):
     normalized = _ORIGINAL_E_VDN_PROVENANCE_NORMALIZER(current, capture, guider, source_gate)
-    return _normalize_e_replacement_chain(normalized, capture)
+    normalized = _normalize_e_replacement_chain(normalized, capture)
+    return _normalize_e_lazy_sol_sparse_source(normalized, capture, source_gate)
 
 
 _FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches = _normalize_e_provenance_delta
