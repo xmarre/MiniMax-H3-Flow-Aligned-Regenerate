@@ -1,0 +1,171 @@
+name: Validate first-high E cross-repo stack
+
+on:
+  push:
+    branches:
+      - validation/first-high-e-cross-repo-stack-20260915
+
+permissions:
+  contents: read
+
+jobs:
+  exact-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: xmarre/ComfyUI-Sol-H3
+          ref: 2eedd341a0f412803afc92702996c07e1702edb7
+          path: _deps/SolE
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: xmarre/ComfyUI-VDN-H3-Plus
+          ref: fbde91d9e830c7f4a4e3a178bd7bd7fce586982b
+          path: _deps/VDNE
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Comfy-Org/ComfyUI
+          ref: 6c53f8c9a06d95f3d847009ceaae55c624169247
+          path: _deps/ComfyUI
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify exact reviewed E source bytes across repositories
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("h3_flow_regenerate/first_high_sol_local_e_source_delta.json").read_text())
+          roots = {
+              "flow": Path("."),
+              "sol": Path("_deps/SolE"),
+              "vdn": Path("_deps/VDNE"),
+          }
+          files = {
+              ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "."):
+                  "h3_flow_regenerate/first_high_sol_local_diagnostic.py",
+              ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "../__init__.py"):
+                  "__init__.py",
+              ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."):
+                  "h3_flow_regenerate/first_high_operator_comparison.py",
+              ("sol", "sol_h3.first_high_sol_local_diagnostic", "."):
+                  "sol_h3/first_high_sol_local_diagnostic.py",
+              ("sol", "sol_h3.first_high_sol_local_witness_bridge", "."):
+                  "sol_h3/first_high_sol_local_witness_bridge.py",
+              ("sol", "sol_h3.first_high_sol_local_receipt_tap", "."):
+                  "sol_h3/first_high_sol_local_receipt_tap.py",
+              ("sol", "sol_h3.first_high_operator_diagnostic", "."):
+                  "sol_h3/first_high_operator_diagnostic.py",
+              ("sol", "sol_h3", "."):
+                  "sol_h3/__init__.py",
+              ("vdn", "vdn_h3.first_high_sol_local_diagnostic", "."):
+                  "vdn_h3/first_high_sol_local_diagnostic.py",
+              ("vdn", "vdn_h3.first_high_sol_local_bridge", "."):
+                  "vdn_h3/first_high_sol_local_bridge.py",
+              ("vdn", "vdn_h3.first_high_operator_diagnostic", "."):
+                  "vdn_h3/first_high_operator_diagnostic.py",
+              ("vdn", "vdn_h3.first_high_operator_sol_bridge", "."):
+                  "vdn_h3/first_high_operator_sol_bridge.py",
+              ("vdn", "vdn_h3", "../__init__.py"):
+                  "__init__.py",
+          }
+
+          def blob_sha(path: Path) -> str:
+              data = path.read_bytes()
+              return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+
+          seen = set()
+          for entry in manifest["entries"]:
+              key = (entry["owner"], entry["module"], entry.get("relative_path", "."))
+              if entry["owner"] == "core":
+                  continue
+              assert key in files, f"unmapped reviewed source entry: {key}"
+              path = roots[entry["owner"]] / files[key]
+              actual = blob_sha(path)
+              expected = entry["candidate_git_blob_sha"]
+              assert actual == expected, f"{key}: {actual} != {expected}"
+              seen.add(key)
+          assert seen == set(files), (seen ^ set(files))
+
+          # Core is deliberately not substituted with a nearby public checkout.
+          # E validates these exact installed-runtime bytes on the SM120 workstation.
+          expected_core = {
+              "comfy.model_sampling": "4a55655207115a150d5254c5b364b03a6c256627",
+              "comfy.latent_formats": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+              "comfy.model_patcher": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+              "comfy.k_diffusion.sampling": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+          }
+          observed_core = {
+              entry["module"]: entry["candidate_git_blob_sha"]
+              for entry in manifest["entries"]
+              if entry["owner"] == "core"
+          }
+          assert observed_core == expected_core
+          print("exact Flow/Sol/VDN E source bytes and installed-Core pins: ok")
+          PY
+      - name: Install bounded CPU validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+          python -m pip install -r _deps/ComfyUI/requirements.txt
+          python -m pip install pytest pytest-timeout
+      - name: Run E-specific Sol and VDN contracts together
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/_deps/ComfyUI
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/_deps/SolE:${{ github.workspace }}/_deps/VDNE:${{ github.workspace }}/_deps/ComfyUI
+        run: |
+          python -m pytest -q \
+            _deps/SolE/tests/test_first_high_sol_local_e_diagnostic.py \
+            _deps/VDNE/tests/test_first_high_sol_local_e.py \
+            --timeout=120
+      - name: Generated custom-node namespace import smoke
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/_deps/ComfyUI
+          PYTHONPATH: ${{ github.workspace }}/_deps/ComfyUI
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import pathlib
+          import sys
+
+          import comfy.cli_args
+          comfy.cli_args.args.cpu = True
+
+          def load(name, root):
+              root = pathlib.Path(root).resolve()
+              spec = importlib.util.spec_from_file_location(
+                  name,
+                  root / "__init__.py",
+                  submodule_search_locations=[str(root)],
+              )
+              module = importlib.util.module_from_spec(spec)
+              sys.modules[name] = module
+              assert spec.loader is not None
+              spec.loader.exec_module(module)
+              return module
+
+          sol = load("custom_nodes.synthetic_sol_e", "_deps/SolE")
+          vdn = load("custom_nodes.synthetic_vdn_e", "_deps/VDNE")
+          flow = load("custom_nodes.synthetic_flow_e", ".")
+
+          assert "ApplySolH3" in sol.NODE_CLASS_MAPPINGS
+          assert "ApplyVDNH3" in vdn.NODE_CLASS_MAPPINGS
+          assert "H3FirstHighSolLocalDiagnostic" in flow.NODE_CLASS_MAPPINGS
+
+          suffixes = {
+              "custom_nodes.synthetic_sol_e.sol_h3.first_high_sol_local_diagnostic",
+              "custom_nodes.synthetic_vdn_e.vdn_h3.first_high_sol_local_diagnostic",
+              "custom_nodes.synthetic_flow_e.h3_flow_regenerate.first_high_sol_local_diagnostic",
+          }
+          assert suffixes <= set(sys.modules)
+          print("generated-namespace E companion import stack: ok")
+          PY
