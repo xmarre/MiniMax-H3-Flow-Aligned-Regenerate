@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: xmarre/ComfyUI-VDN-H3-Plus
-          ref: fbde91d9e830c7f4a4e3a178bd7bd7fce586982b
+          ref: 10bf368bee38b9f942961e6d8c374b5af6c4bc16
           path: _deps/VDNE
           persist-credentials: false
       - uses: actions/checkout@v4
