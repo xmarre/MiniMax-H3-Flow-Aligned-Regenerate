@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "design_commit": "41b54405867a31e1a9e3261d4d79469a640682c4",
-  "purpose": "Exact byte allowlist for the diagnostic-only first-high operator comparison W deployment.",
+  "purpose": "Exact byte allowlist for the diagnostic-only first-high operator comparison W deployment and the previously unresolved Core source prerequisites.",
   "entries": [
     {
       "owner": "flow",
@@ -50,6 +50,38 @@
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
       "candidate_git_blob_sha": "aca3fbd74e78282639548ff748d04fef21e507d7",
       "reason": "install VDN W diagnostic overlay before ApplyVDN node construction"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "candidate_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "reason": "close installed model-sampling source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.latent_formats",
+      "relative_path": ".",
+      "base_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "candidate_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "reason": "close installed latent-format source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_patcher",
+      "relative_path": ".",
+      "base_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "candidate_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "reason": "close installed model-patcher source prerequisite by exact bytes"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.k_diffusion.sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "candidate_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "reason": "close installed Euler/callback source prerequisite by exact bytes"
     }
   ]
 }
