@@ -48,16 +48,29 @@ jobs:
                   '        raise RuntimeError(\n            f"first-high Sol-local E requires 2 GiB CUDA headroom; "\n            f"only {int(free_cuda)} bytes free"\n        )',
               '        raise RuntimeError(f"first-high Sol-local E requires 2 GiB host headroom; only {int(cpu_available)} bytes available")':
                   '        raise RuntimeError(\n            f"first-high Sol-local E requires 2 GiB host headroom; "\n            f"only {int(cpu_available)} bytes available"\n        )',
-              '                            "all-selected-arithmetic-mismatch: localize descriptor/stride/mask/normalization before any new H3 run"':
-                  '                            "all-selected-arithmetic-mismatch: localize descriptor/stride/"\n                            "mask/normalization before any new H3 run"',
-              '                            else "valid-e: decode E media; run only the design-table follow-up selected by that media plus witness result"':
-                  '                            else (\n                                "valid-e: decode E media; run only the design-table follow-up "\n                                "selected by that media plus witness result"\n                            )',
           }
           for old, new in replacements.items():
               text = text.replace(old, new)
           path.write_text(text)
           PY
       - run: python -m pip install ruff
+      - run: ruff format h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - name: Split decision-table literals that Ruff does not rewrite
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("h3_flow_regenerate/first_high_sol_local_diagnostic.py")
+          text = path.read_text()
+          text = text.replace(
+              '"all-selected-arithmetic-mismatch: localize descriptor/stride/mask/normalization before any new H3 run"',
+              '("all-selected-arithmetic-mismatch: localize descriptor/stride/" "mask/normalization before any new H3 run")',
+          )
+          text = text.replace(
+              '"valid-e: decode E media; run only the design-table follow-up selected by that media plus witness result"',
+              '("valid-e: decode E media; run only the design-table follow-up " "selected by that media plus witness result")',
+          )
+          path.write_text(text)
+          PY
       - run: ruff format h3_flow_regenerate/first_high_sol_local_diagnostic.py
       - run: ruff check --fix h3_flow_regenerate/first_high_sol_local_diagnostic.py
       - name: Finalize exact source manifest hashes
