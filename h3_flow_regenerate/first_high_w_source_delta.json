@@ -8,7 +8,7 @@
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "30b0607d32da419e3894c5b9c9381046f0d34afe",
+      "candidate_git_blob_sha": "14a4bd30bba4d01a825874e95684f5461bac4f83",
       "reason": "W replay, one-call termination, invariant report and source-delta gate"
     },
     {
