@@ -12,11 +12,15 @@ Run E through the existing **ComfyUI Patcher PR-overlay stack**. Do not replace 
 | --- | --- | --- | --- |
 | `xmarre/ComfyUI-Sol-H3` | PR #12, stacked on PR #11 | `2eedd341a0f412803afc92702996c07e1702edb7` | E Sol all-selected path and numerical witnesses |
 | `xmarre/ComfyUI-VDN-H3-Plus` | PR #16, stacked on PR #15 | `10bf368bee38b9f942961e6d8c374b5af6c4bc16` | E VDN overlay and generated-loader bridge |
-| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | PR #44, stacked on PR #43 | current PR head; E core `7ea52470ab5ac82b12d58bcb87db82d715b8005c` plus the reviewed bounded runtime-provenance correction | one-call replay, source/provenance gate, report and durable evidence |
+| `xmarre/MiniMax-H3-Flow-Aligned-Regenerate` | PR #44, stacked on PR #43 | current PR head; E core `7ea52470ab5ac82b12d58bcb87db82d715b8005c` plus the reviewed bounded runtime-provenance corrections | one-call replay, source/provenance gate, report and durable evidence |
 
 PRs #11, #15 and #43 remain the preserved W evidence bases. E is the next overlay layer; it does not rewrite or repurpose those PRs.
 
-A real workstation E attempt on the original #44 overlay established that the graph ordering was correct and reached the sampler, but the diagnostic aborted before H3 because E's additional reviewed VDN wrapper layer exposed one extra bounded `closure` level in Core's derived `replacement_chain_dit` provenance. That is an E instrumentation self-effect, not model/media evidence. PR #44 now normalizes only this derived current-only closure-depth expansion **after** proving the exact fifty live E → W → captured-production VDN object-patch chains. Any non-closure difference, capture-owned closure difference, key-set difference, or other provenance change still fails closed.
+The first real workstation E attempt on the original #44 overlay established that the graph ordering was correct and reached the sampler, but the diagnostic aborted before H3 because E's additional reviewed VDN wrapper layer exposed one extra bounded `closure` level in Core's derived `replacement_chain_dit` provenance. That is an E instrumentation self-effect, not model/media evidence. PR #44 normalizes only this derived current-only closure-depth expansion **after** proving the exact fifty live E → W → captured-production VDN object-patch chains. Any non-closure difference, capture-owned closure difference, key-set difference, or other provenance change still fails closed.
+
+The next workstation attempt passed that gate and exposed one further deterministic E self-effect before H3: `sol_h3/sparse.py` appeared only in the replay runtime's loaded-companion inventory. E's Sol installer must import that production sparse bridge in order to install its bounded local-attention diagnostic wrapper, while R captured the companion-source inventory before the first high H3 call and therefore had not necessarily imported the bridge yet. The file itself is unchanged across Sol PR #11/#12: Git blob `9f462591e3492d0b7af476c16024c79d1237505e`. PR #44 now removes this one replay-only source entry only after proving the live sibling file belongs to the already source-gated Sol package, has exactly that reviewed Git blob, and its recorded SHA-256 equals the actual file bytes. Every other replay-only companion source remains visible to the ordinary fail-closed provenance comparison. This normalization does **not** waive the later lazy-loaded packaged SM120 kernel/compiler provenance; those modules are still verified by E after the kernel is actually loaded.
+
+Neither failed workstation attempt executed an H3 E call, so neither provides operator, arithmetic, or media evidence.
 
 The Flow source manifest pins the exact reviewed executable source bytes. The four installed ComfyUI Core files are verified by their loaded file bytes at runtime, not by a Git branch or tag:
 
@@ -65,6 +69,8 @@ test "$(git hash-object sol_h3/first_high_sol_local_diagnostic.py)" = \
   79b3013aa936a836fc4e5c5cf3e80f8ac06a49ac
 test "$(git hash-object sol_h3/__init__.py)" = \
   c4184d48f53a1b0703816c371f616e538acde5a7
+test "$(git hash-object sol_h3/sparse.py)" = \
+  9f462591e3492d0b7af476c16024c79d1237505e
 
 cd /home/toor/ComfyUI/custom_nodes/ComfyUI-VDN-H3-Plus
 test "$(git hash-object vdn_h3/first_high_sol_local_diagnostic.py)" = \
@@ -78,9 +84,9 @@ cd /home/toor/ComfyUI/custom_nodes/MiniMax-H3-Flow-Aligned-Regenerate
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_diagnostic.py)" = \
   138a27c8fbba0ddc9140b6301187a2b01ce0f1fb
 test "$(git hash-object __init__.py)" = \
-  c7b21a31f8df3a0d854afb2565dad0baa041b2d3
+  4eab5193d8e1a3ed51f53a7ab434846494b163d0
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_e_source_delta.json)" = \
-  46481fdff70f76526af6d6cad95f5ebec079e8cb
+  38406fda32593a649d481b5bb48044277150ba2d
 
 cd /home/toor/ComfyUI
 test "$(git hash-object comfy/model_sampling.py)" = \
@@ -177,4 +183,4 @@ M/T/C remain conditional; clean E alone does not authorize permanently dense loc
 
 ## 10. Structural validation
 
-The exact E Sol/VDN stack and the Flow E implementation passed hosted structural validation. The post-workstation provenance correction on PR #44 additionally passed the full Flow source-contract lane and Python 3.10/3.11/3.12/3.13 Ruff, formatting, pytest, compileall, build, license and isolated-wheel matrix before being advanced onto the PR branch. Hosted CI does not establish SM120 arithmetic or media causality; the workstation E run remains the empirical gate.
+The exact E Sol/VDN stack and the Flow E implementation passed hosted structural validation. The first bounded post-workstation closure-depth correction passed the full Flow source-contract and Python 3.10/3.11/3.12/3.13 matrix before being advanced onto PR #44. The second bounded correction, for E's exact unchanged `sol_h3/sparse.py` pre-H3 lazy-import self-effect, passed the same complete source-contract, Ruff, formatting, pytest, compileall, build, license and isolated-wheel matrix in run `35034482369`. Hosted CI does not establish SM120 arithmetic or media causality; a valid workstation E call remains the empirical gate.
