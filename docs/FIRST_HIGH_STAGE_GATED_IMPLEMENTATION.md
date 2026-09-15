@@ -134,6 +134,16 @@ preflight, then uses a cheap path/size/mtime check immediately before sampling t
 reject ordinary post-preflight file changes without rehashing the model on the
 hot path.
 
+For R's fresh-process equality gate, `loaded_companion_sources` is not treated as
+an exact `sys.modules` population contract. A warm progressive capture can have
+many more lazily imported companion modules than a cold high-only replay before
+its first H3 call. The capture list is instead treated as a source-byte inventory:
+every capture-listed companion file must still exist at the same resolved path
+with the same on-disk SHA-256; shared imports must report the same SHA; and a
+replay-imported source absent from the capture inventory is rejected. All other
+causal provenance remains exact. The bundle's persisted-equivalence integrity
+check remains strict and is not relaxed by this cross-process rule.
+
 ### Post-load lifecycle and active-companion observation
 
 A preflight or pre-sampling manifest cannot prove the state of the shared H3
@@ -198,16 +208,22 @@ two separate ComfyUI processes and keeps Untwist absent in both jobs.
 The capture job runs the normal failing progressive path and exports a JSON
 manifest plus pure-tensor payload only after the controlled `9L/7A/2F` topology,
 one-upscaler accounting, O/C structural gate, exact carried audio and first-high
-runtime evidence pass. The bundle contains the exact high-entry tensors, high
-suffix, guidance trajectory and declarative configuration/provenance identities.
+runtime evidence pass. The bundle contains the exact high-entry tensors, the
+original hash-validated high-child `OUTER_SAMPLE` noise argument, high suffix,
+guidance trajectory and declarative configuration/provenance identities.
 
 The replay job validates the original schedule, target geometry, seed,
 conditioning, Flow guidance configuration, Spectrum configuration, exact
 checkpoint identity, installed runtime provenance and first-high companion policy.
 It suppresses the progressive split for that invocation and runs only the captured
-high suffix. It must produce exactly `3L/2A/1F` with zero learned-upscaler calls.
-No low stage, exact probe, stochastic-state transport or weighted Mixed-Grid path
-is executed by R.
+high suffix. It reuses the captured high-child noise argument rather than trying
+to invert finite-precision initialization arithmetic. The actual installed-runtime
+first-high X is then compared to Job 1 at the real `SAMPLER_SAMPLE` boundary after
+Comfy's own preparation/casting/latent processing and before any high H3 evaluation.
+Video and audio must match in shape, dtype, original device, stride and SHA-256.
+The replay must produce exactly `3L/2A/1F` with zero learned-upscaler calls. No low
+stage, exact probe, stochastic-state transport or weighted Mixed-Grid path is
+executed by R.
 
 `attribution_valid=true` additionally requires exact first-high sampler and H3
 video/audio input hashes. Only then is the first-high raw/pre-guidance comparison
@@ -224,10 +240,10 @@ of visual correctness.
 ## Production workflow for the next evidence round
 
 1. Keep the existing PR #35 checkpoint diagnostic and PR #36 learned-anchor
-   validation in the workflow.
+   validation overlays installed in the workflow.
 2. Keep Untwist absent. Apply `MiniMax H3 Execution Contract Diagnostics` **after
    all MODEL patching nodes** with `strict_provenance=true` and `capture_mib=512`,
-   then apply `MiniMax H3 Same-State Replay Capture`.
+   then apply `MiniMax H3 Same-State Replay Capture` for Job 1.
 3. Feed that MODEL to the unchanged failing progressive sampler. Do not change
    the seed, reference inputs, prompt, geometry, sampler, scheduler,
    Spectrum/Sol/VDN/DiffAid settings, guidance, or handoff settings.
@@ -235,9 +251,19 @@ of visual correctness.
    controlled topology/provenance/runtime gates pass.
 5. Exit ComfyUI completely. Start a fresh process, rebuild the same stack with
    Untwist still absent, apply `MiniMax H3 Execution Contract Diagnostics`, then
-   `MiniMax H3 Same-State Cold High Replay` using the saved manifest.
-6. Run the normal sampler node with the original full schedule and seed and save
+   `MiniMax H3 Same-State Cold High Replay` using the saved manifest. Do not run
+   the Job-1 capture node in this process.
+6. Keep the PR #35 checkpoint-diagnostic overlay installed for provenance, but
+   **do not evaluate its `H3HandoffCheckpointDiagnostic` output branch in Job 2**.
+   That output requires the normal low → probe → learned-upscale → high path and
+   is incompatible with R's deliberate high-only execution.
+7. Run the normal sampler node with the original full schedule and seed and save
    the `MiniMax H3 Same-State Replay Report` plus matching decoded media.
+
+An existing valid Job-1 bundle does not need to be regenerated solely because of
+the finite-precision initialization repair or the lazy-import provenance repair;
+the required noise argument, sampler-entry hashes and companion source inventory
+are already stored in the bundle.
 
 If strict provenance, checkpoint identity, topology or any replay contract blocks
 execution, do not weaken the gate. The reported mismatch identifies evidence that
