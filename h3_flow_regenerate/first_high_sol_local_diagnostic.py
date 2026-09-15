@@ -9,8 +9,10 @@ no H3 calls and are excluded from production backend receipts/counters.
 This module is diagnostic-only. It never changes production progressive policy and
 never promotes a production fix from its own result.
 """
+
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -52,7 +54,7 @@ _EXPECTED_CAPTURE_ID = "234ed062128e43ed8d5ec63e27517b22"
 _EXPECTED_ENTRY_HASHES = {
     "first_high_sampler_input_video": "79dca62849b2a159061a1d6204828af7a4c5995c41beec256c1719a5932a41ee",
     "first_high_sampler_input_audio": "f5fd588101bf2ab68eb5aeeb49bfaf8e58f4c71aa99864de89cb1ddef8c859f3",
-    "first_high_h3_input_video": "b49f17a317530795be43ed8ea318b3b242442e8c9a8fe368185131e6f5666672936" if False else "b49f17a317530795be43bc775486777b07d5b5dbb28996819033cdede64195c0",
+    "first_high_h3_input_video": "b49f17a317530795be43bc775486777b07d5b5dbb28996819033cdede64195c0",
     "first_high_h3_input_audio": "f54b22ff25a675c47a4c32aba54b5642033b048441ad6eec9bf5ef935cd29002",
 }
 _EXPECTED_BLOCK0_QKV = "38cc6dc9bec83456a41e8ea3183b242442e8c9a8fe368185131e6f5666672936"
@@ -67,6 +69,27 @@ _ARITH_MEAN_ABS_LIMIT = 0.002
 _ARITH_REL_L2_LIMIT = 0.005
 _ARITH_CATASTROPHIC_MAX_FLOOR = 0.5
 _ARITH_CATASTROPHIC_REFERENCE_PEAK_MULTIPLIER = 4.0
+_REQUIRED_SOURCE_ENTRY_KEYS = frozenset(
+    {
+        ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "."),
+        ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "../__init__.py"),
+        ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."),
+        ("sol", "sol_h3.first_high_sol_local_diagnostic", "."),
+        ("sol", "sol_h3.first_high_sol_local_witness_bridge", "."),
+        ("sol", "sol_h3.first_high_sol_local_receipt_tap", "."),
+        ("sol", "sol_h3.first_high_operator_diagnostic", "."),
+        ("sol", "sol_h3", "."),
+        ("vdn", "vdn_h3.first_high_sol_local_diagnostic", "."),
+        ("vdn", "vdn_h3.first_high_sol_local_bridge", "."),
+        ("vdn", "vdn_h3.first_high_operator_diagnostic", "."),
+        ("vdn", "vdn_h3.first_high_operator_sol_bridge", "."),
+        ("vdn", "vdn_h3", "../__init__.py"),
+        ("core", "comfy.model_sampling", "."),
+        ("core", "comfy.latent_formats", "."),
+        ("core", "comfy.model_patcher", "."),
+        ("core", "comfy.k_diffusion.sampling", "."),
+    }
+)
 
 
 class _FirstCallComplete(BaseException):
@@ -168,6 +191,8 @@ def _load_source_manifest() -> tuple[dict[str, Any], str]:
     keys = [_source_entry_key(item) for item in entries if isinstance(item, dict)]
     if len(keys) != len(entries) or len(keys) != len(set(keys)):
         raise RuntimeError("first-high Sol-local E source-delta manifest has invalid or duplicate entries")
+    if frozenset(keys) != _REQUIRED_SOURCE_ENTRY_KEYS:
+        raise RuntimeError("first-high Sol-local E source-delta manifest differs from the reviewed exact entry set")
     return manifest, _sha_json(manifest)
 
 
@@ -215,9 +240,7 @@ def _source_path(source_gate: dict[str, Any], owner: str, module: str, relative:
     matches = [
         str(entry.get("path", ""))
         for entry in source_gate.get("entries", [])
-        if entry.get("owner") == owner
-        and entry.get("module") == module
-        and entry.get("relative_path", ".") == relative
+        if entry.get("owner") == owner and entry.get("module") == module and entry.get("relative_path", ".") == relative
     ]
     if len(matches) != 1 or not matches[0]:
         raise RuntimeError(f"first-high Sol-local E source gate does not uniquely identify {owner}:{module}:{relative}")
@@ -245,7 +268,9 @@ def _normalize_vdn_object_patches(
         if getattr(value, "_h3_first_high_sol_local_diagnostic_v1", False) is True
     }
     if set(wrapped) != expected_keys:
-        raise RuntimeError("first-high Sol-local E VDN diagnostic object-patch set is not exactly 50 H3 attention patches")
+        raise RuntimeError(
+            "first-high Sol-local E VDN diagnostic object-patch set is not exactly 50 H3 attention patches"
+        )
     e_source = _source_path(source_gate, "vdn", "vdn_h3.first_high_sol_local_diagnostic")
     w_source = _source_path(source_gate, "vdn", "vdn_h3.first_high_operator_diagnostic")
     rebuilt = dict(current_patches)
@@ -320,12 +345,12 @@ def _normalize_wrapper_order(current: dict[str, Any], guider: Any) -> dict[str, 
             if not isinstance(entries, list):
                 raise RuntimeError(f"first-high Sol-local E provenance lacks wrapper list {field_name}.{manifest_key}")
             matches = [
-                (index, item)
-                for index, item in enumerate(entries)
-                if isinstance(item, dict) and item.get("key") == key
+                (index, item) for index, item in enumerate(entries) if isinstance(item, dict) and item.get("key") == key
             ]
             if len(matches) != 1:
-                raise RuntimeError(f"first-high Sol-local E provenance must contain exactly one {field_name} entry for {key}")
+                raise RuntimeError(
+                    f"first-high Sol-local E provenance must contain exactly one {field_name} entry for {key}"
+                )
             index, item = matches[0]
             expected_identity = _w._callable_equivalence_identity(expected_callable)
             if _canonical_json(item.get("callable")) != _canonical_json(expected_identity):
@@ -355,7 +380,8 @@ def _verify_capture_base_sources(capture: dict[str, Any], source_gate: dict[str,
         capture_sources, problems = _replay._companion_source_map(groups.get(group_name))
         if problems:
             raise RuntimeError(
-                f"first-high Sol-local E R companion source inventory is invalid for {group_name}: " + "; ".join(problems)
+                f"first-high Sol-local E R companion source inventory is invalid for {group_name}: "
+                + "; ".join(problems)
             )
         source_path = str(entry.get("path", ""))
         captured = capture_sources.get(source_path)
@@ -370,10 +396,15 @@ def _verify_capture_base_sources(capture: dict[str, Any], source_gate: dict[str,
 def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bool:
     if not path.startswith("$.loaded_companion_sources."):
         return False
-    return any(
-        str(entry.get("path", "")) and f"[{entry['path']}]" in path
-        for entry in source_gate.get("entries", [])
-    )
+    for entry in source_gate.get("entries", []):
+        base_blob = entry.get("base_git_blob_sha")
+        candidate_blob = entry.get("candidate_git_blob_sha")
+        if base_blob == candidate_blob:
+            continue
+        source_path = str(entry.get("path", ""))
+        if source_path and f"[{source_path}]" in path:
+            return True
+    return False
 
 
 def _provenance_gate(state: _State, record: _diag._Record, guider: Any) -> dict[str, Any]:
@@ -403,7 +434,9 @@ def _request_tuple(state: _State) -> tuple[tuple[str, Any], ...]:
         raise RuntimeError(f"first-high Sol-local E requires the captured high suffix; got {high}")
     capture_id = str(manifest.get("capture_id", ""))
     if capture_id != _EXPECTED_CAPTURE_ID:
-        raise RuntimeError(f"first-high Sol-local E requires preserved R capture {_EXPECTED_CAPTURE_ID}, got {capture_id}")
+        raise RuntimeError(
+            f"first-high Sol-local E requires preserved R capture {_EXPECTED_CAPTURE_ID}, got {capture_id}"
+        )
     return (
         ("api", 1),
         ("capture_id", capture_id),
@@ -446,7 +479,9 @@ def _memory_preflight(device: torch.device) -> dict[str, Any]:
     if int(free_cuda) < _MIN_FREE_BYTES:
         raise RuntimeError(f"first-high Sol-local E requires 2 GiB CUDA headroom; only {int(free_cuda)} bytes free")
     if int(cpu_available) < _MIN_FREE_BYTES:
-        raise RuntimeError(f"first-high Sol-local E requires 2 GiB host headroom; only {int(cpu_available)} bytes available")
+        raise RuntimeError(
+            f"first-high Sol-local E requires 2 GiB host headroom; only {int(cpu_available)} bytes available"
+        )
     return report
 
 
@@ -547,11 +582,7 @@ def _validate_vdn_receipts(receipts: _Sink) -> dict[str, Any]:
 
 
 def _validate_backend_receipts(evidence: _Sink, capture_id: str) -> dict[str, Any]:
-    items = [
-        item
-        for item in evidence
-        if isinstance(item, dict) and item.get("kind") == "sol_backend_receipt"
-    ]
+    items = [item for item in evidence if isinstance(item, dict) and item.get("kind") == "sol_backend_receipt"]
     routes = Counter(str(item.get("route")) for item in items)
     blocks = Counter(int(item.get("block_index", -1)) for item in items)
     capture_ok = bool(items and all(item.get("capture_id") == capture_id for item in items))
@@ -572,6 +603,56 @@ def _validate_backend_receipts(evidence: _Sink, capture_id: str) -> dict[str, An
         "per_block_14_calls_exact": per_block_ok,
         "expected_700_backend_routes": len(items) == 700 and routes == expected,
         "valid": bool(len(items) == 700 and routes == expected and capture_ok and per_block_ok),
+    }
+
+
+def _validate_sol_counter_isolation(record: _diag._Record) -> dict[str, Any]:
+    companion = _replay._high_first_companion_observation(record.state.manifest) or {}
+    observation_errors = companion.get("observation_errors") if isinstance(companion, dict) else None
+    sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
+    zero_fields = (
+        "sparse_calls",
+        "external_mixed_sol_calls",
+        "external_mixed_q_rows",
+        "external_mixed_kernel_q_rows",
+        "external_mixed_measure_calls",
+        "external_mixed_measure_q_rows",
+        "external_mixed_measure_kv_rows_before",
+        "external_mixed_measure_kv_rows_after",
+        "external_mixed_measure_removed_rows",
+        "external_mixed_weighted_measure_calls",
+        "external_mixed_weighted_measure_q_rows",
+        "external_mixed_weighted_measure_kv_rows",
+        "vdn_local_sol_calls",
+        "vdn_rectangular_sol_calls",
+        "vdn_requested_q_rows",
+        "vdn_kernel_q_rows",
+        "vdn_square_expanded_calls",
+        "vdn_square_requested_rows",
+        "vdn_square_kernel_rows",
+    )
+    zero_fields_present = bool(isinstance(sol_after, dict) and all(field in sol_after for field in zero_fields))
+    zero = bool(
+        zero_fields_present
+        and all(type(sol_after[field]) in {int, float} and float(sol_after[field]) == 0.0 for field in zero_fields)
+    )
+    expected_dense_only = bool(
+        type(sol_after.get("evaluations")) in {int, float}
+        and int(sol_after["evaluations"]) == 1
+        and type(sol_after.get("eligible_calls")) in {int, float}
+        and int(sol_after["eligible_calls"]) == 22
+        and type(sol_after.get("dense_calls")) in {int, float}
+        and int(sol_after["dense_calls"]) == 22
+    )
+    valid = bool(not (observation_errors or []) and zero and expected_dense_only)
+    return {
+        "valid": valid,
+        "observation_errors": observation_errors or [],
+        "zero_fields": list(zero_fields),
+        "zero_fields_present": zero_fields_present,
+        "ordinary_sparse_external_square_zero": zero,
+        "expected_one_evaluation_and_22_dense_locals": expected_dense_only,
+        "sol_after": sol_after,
     }
 
 
@@ -609,29 +690,55 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
     frozen_conformant = True
     prep_conformant = True
     route_conformant = True
+    input_integrity = True
+    debug_conformant = True
+    all_selected_trace_conformant = True
     complete = identity == expected_identity
     for item in sorted(witnesses, key=lambda value: int(value.get("group_index", -1))):
         group = int(item.get("group_index", -1))
         completed = item.get("completed") is True
         complete = complete and completed
+        input_ok = bool(
+            item.get("input_exact_on_entry") is True
+            and item.get("input_exact_after_sidecars") is True
+            and item.get("preserved_qkv_sha256") == item.get("entry_qkv_sha256")
+            and item.get("preserved_qkv_sha256") == item.get("exit_qkv_sha256")
+        )
+        input_integrity = input_integrity and input_ok
+        debug_ok = item.get("debug_specializations_conform") is True
+        debug_conformant = debug_conformant and debug_ok
+        trace_count_ok = bool(
+            item.get("all_selected_trace_complete") is True
+            and type(item.get("all_selected_selected_block_pairs")) is int
+            and item.get("all_selected_selected_block_pairs") == item.get("all_selected_expected_block_pairs")
+        )
+        all_selected_trace_conformant = all_selected_trace_conformant and trace_count_ok
         all_selected = item.get("all_selected_vs_native") or {}
         all_selected_ok = bool(item.get("all_selected_arithmetic_gate_pass") is True and _metric_gate(all_selected))
         all_selected_conformant = all_selected_conformant and all_selected_ok
         summary = item.get("summary_metrics") or {}
         summary_ok = all(
-            (value.get("finite") is True and float(value.get("rel_l2", math.inf)) <= 0.01)
+            value.get("finite") is True and float(value.get("rel_l2", math.inf)) <= 0.01
             for value in (summary.get("kc") or {}, summary.get("vc") or {}, summary.get("threshold") or {})
         )
         prep_conformant = prep_conformant and summary_ok
-        route_ok = item.get("route_trace_matches_independent") is True and int(item.get("route_mismatch_count", -1)) == 0
+        route_ok = bool(
+            item.get("route_trace_matches_independent") is True and int(item.get("route_mismatch_count", -1)) == 0
+        )
         route_conformant = route_conformant and route_ok
         frozen = item.get("frozen_route_reference") or {}
         frozen_ok = bool(
-            item.get("debug_matches_ordinary_sparse") is True
-            and frozen.get("finite") is True
+            frozen.get("finite") is True
+            and int(frozen.get("score_chunk_keys", -1)) == 1024
+            and int(frozen.get("max_live_score_bytes_fp32", 2**63)) <= 64 * 1024 * 4
             and all(
                 _frozen_gate(frozen.get(name) or {})
-                for name in ("output", "numerator_scaled_to_reference_rowmax", "denominator_scaled_to_reference_rowmax", "lse")
+                for name in (
+                    "output",
+                    "numerator_scaled_to_reference_rowmax",
+                    "denominator_scaled_to_reference_rowmax",
+                    "lse",
+                )
             )
         )
         frozen_conformant = frozen_conformant and frozen_ok
@@ -645,8 +752,15 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
                 "v_contract": item.get("v_contract"),
                 "original_sink_rows": item.get("original_sink_rows"),
                 "scale": item.get("scale"),
+                "input_exact_on_entry": item.get("input_exact_on_entry"),
+                "input_exact_after_sidecars": item.get("input_exact_after_sidecars"),
+                "input_integrity_exact": input_ok,
                 "all_selected_vs_native": all_selected,
                 "all_selected_conformant": all_selected_ok,
+                "all_selected_selected_block_pairs": item.get("all_selected_selected_block_pairs"),
+                "all_selected_expected_block_pairs": item.get("all_selected_expected_block_pairs"),
+                "all_selected_trace_complete": trace_count_ok,
+                "sparse_selected_block_pairs": item.get("sparse_selected_block_pairs"),
                 "summary_metrics": summary,
                 "summary_conformant": summary_ok,
                 "route_trace_matches_independent": route_ok,
@@ -654,6 +768,10 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
                 "route_mismatch_examples": item.get("route_mismatch_examples"),
                 "frozen_route_reference": frozen,
                 "frozen_route_conformant": frozen_ok,
+                "debug_sparse_vs_ordinary": item.get("debug_sparse_vs_ordinary"),
+                "lse_specialization_vs_ordinary": item.get("lse_specialization_vs_ordinary"),
+                "debug_all_selected_vs_returned": item.get("debug_all_selected_vs_returned"),
+                "debug_specializations_conform": debug_ok,
                 "packaged_backend": item.get("packaged_backend"),
                 "packaged_source_tree_verified": item.get("packaged_source_tree_verified"),
             }
@@ -667,7 +785,9 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
         and provenance[0]["provenance"].get("revision") == "2936c47637380842aaa4a4488fac5006cc542b70"
         and provenance[0]["provenance"].get("compute_capability") == [12, 0]
     )
-    execution_valid = bool(complete and provenance_ok)
+    execution_valid = bool(
+        complete and provenance_ok and input_integrity and debug_conformant and all_selected_trace_conformant
+    )
     arithmetic_conformant = bool(execution_valid and all_selected_conformant)
     sparse_conformant = bool(execution_valid and prep_conformant and route_conformant and frozen_conformant)
     return {
@@ -677,6 +797,9 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
         "reports": reports,
         "packaged_sparse_provenance": provenance[0].get("provenance") if len(provenance) == 1 else None,
         "packaged_sparse_provenance_valid": provenance_ok,
+        "input_integrity_exact": input_integrity,
+        "debug_specializations_conform": debug_conformant,
+        "all_selected_trace_conformant": all_selected_trace_conformant,
         "all_selected_sdpa_conformant": all_selected_conformant,
         "preparation_conformant": prep_conformant,
         "selector_trace_conformant": route_conformant,
@@ -691,11 +814,7 @@ def _sanitize_evidence(value: Any) -> Any:
     if torch.is_tensor(value):
         return value
     if isinstance(value, dict):
-        return {
-            str(key): _sanitize_evidence(item)
-            for key, item in value.items()
-            if key not in _PRIVATE_EVIDENCE_KEYS
-        }
+        return {str(key): _sanitize_evidence(item) for key, item in value.items() if key not in _PRIVATE_EVIDENCE_KEYS}
     if isinstance(value, list):
         return [_sanitize_evidence(item) for item in value]
     if isinstance(value, tuple):
@@ -731,10 +850,8 @@ def _atomic_write_bytes(path: Path, writer) -> None:
         writer(temporary)
         os.replace(temporary, path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _persist_evidence(
@@ -1035,8 +1152,7 @@ def _outer_wrapper(
             }
             snapshots = _snapshot_report(record, replay.manifest)
             entry_exact = all(
-                (snapshots.get(name) or {}).get("design_expected_equal") is True
-                for name in _EXPECTED_ENTRY_HASHES
+                (snapshots.get(name) or {}).get("design_expected_equal") is True for name in _EXPECTED_ENTRY_HASHES
             )
             target_video_shape = tuple(int(dim) for dim in replay.manifest["target_shapes"][0])
             raw_media = _w._decode_ready_video_snapshot(record, "first_high_model_raw_video", target_video_shape)
@@ -1044,12 +1160,14 @@ def _outer_wrapper(
             vdn_receipts = _validate_vdn_receipts(receipt_sink)
             backend_receipts = _validate_backend_receipts(evidence_sink, str(replay.manifest["capture_id"]))
             witnesses = _validate_witnesses(evidence_sink)
+            sol_counter_isolation = _validate_sol_counter_isolation(record)
             execution_valid = bool(
                 topology == expected_topology
                 and entry_exact
                 and vdn_receipts["valid"]
                 and backend_receipts["valid"]
                 and witnesses["execution_valid"]
+                and sol_counter_isolation["valid"]
                 and provenance_gate["exact_except_reviewed_e_delta"]
                 and sampling_runtime_ok
                 and export_contract is not None
@@ -1085,6 +1203,7 @@ def _outer_wrapper(
                 "vdn_receipts": vdn_receipts,
                 "backend_receipts": backend_receipts,
                 "operator_witnesses": witnesses,
+                "ordinary_sol_counter_isolation": sol_counter_isolation,
                 "export_contract": export_contract,
                 "core_cleanup": cleanup_contract,
                 "decode_ready_media_available": True,
@@ -1102,15 +1221,19 @@ def _outer_wrapper(
                     "invalid-e: fix the diagnostic defect and rerun only E"
                     if not execution_valid
                     else (
-                        "all-selected-arithmetic-mismatch: localize descriptor/stride/mask/normalization before any new H3 run"
+                        (
+                            "all-selected-arithmetic-mismatch: localize descriptor/stride/"
+                            "mask/normalization before any new H3 run"
+                        )
                         if not arithmetic_conformant
-                        else "valid-e: decode E media; run only the design-table follow-up selected by that media plus witness result"
+                        else (
+                            "valid-e: decode E media; run only the design-table follow-up "
+                            "selected by that media plus witness result"
+                        )
                     )
                 ),
             }
-            durable = _persist_evidence(
-                str(replay.manifest["capture_id"]), evidence_sink, raw_media, pre_media, report
-            )
+            durable = _persist_evidence(str(replay.manifest["capture_id"]), evidence_sink, raw_media, pre_media, report)
             report["durable_evidence"] = durable
             state.complete.append({**report, _MEDIA_RAW_KEY: raw_media, _MEDIA_PRE_KEY: pre_media})
 

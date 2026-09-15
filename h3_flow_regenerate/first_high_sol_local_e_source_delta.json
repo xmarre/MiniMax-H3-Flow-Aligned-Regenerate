@@ -8,7 +8,7 @@
       "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "90e341d1f5bd111f3f8061cb318e5f88c97d4aa8",
+      "candidate_git_blob_sha": "f8b5e074b0bf635e7a8837503cbe427253388da4",
       "reason": "E one-call replay, fail-closed validity/provenance, bounded witness reporting, memory preflight, and durable evidence persistence"
     },
     {
@@ -33,7 +33,7 @@
       "module": "sol_h3.first_high_sol_local_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "e318ce1f0113d88633f510a5723740ccaaa3bdfd",
+      "candidate_git_blob_sha": "30020cf98796549c3ec53004ebb0e4d0421ae908",
       "reason": "E all-selected final sink, isolated SM120 trace/LSE specializations, independent preparation/selector witnesses, streaming frozen-route FP32 reference, and lazy kernel/compiler provenance"
     },
     {
