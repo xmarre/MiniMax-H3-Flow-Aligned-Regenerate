@@ -44,11 +44,29 @@ Connect the sampled LATENT to `Save MiniMax H3 Same-State Replay Bundle` as its 
 
 The bundle records the exact high-stage input state, original target latent, high mask when present, high suffix, seed, conditioning identity, Flow guidance configuration, Spectrum configuration and the committed low/probe guidance trajectory. It also records exact checkpoint identity, installed-runtime provenance, first-high execution policy, first-high Sol/VDN/Spectrum companion policy and the corresponding runtime observation evidence.
 
-`first_high_sampler_input_*` specifically means the raw high-entry sampler state **before** `KSamplerX0Inpaint` may rewrite masked model input. `first_high_model_input_*` is the separate downstream post-inpaint boundary. R serializes the raw sampler state and applies Flow/Core's exact noise-initialization inverse to that raw state; it must never use the post-inpaint model input as replay X.
+`first_high_sampler_input_*` specifically means the raw high-entry sampler state **before** `KSamplerX0Inpaint` may rewrite masked model input. `first_high_model_input_*` is the separate downstream post-inpaint boundary. The bundle also stores the original, hash-validated high-child `OUTER_SAMPLE` noise argument that the progressive Job-1 invocation actually supplied.
+
+Replay does **not** attempt to recover that noise argument with an algebraic inverse. The forward initialization is finite-precision arithmetic and is not generally bit-reversible. Job 2 therefore reuses the captured high-child noise argument directly. Exact high-entry state equivalence is then checked at the real installed-runtime `SAMPLER_SAMPLE` boundary, after Comfy has performed its own load/cast/`process_latent_in` path and immediately before the underlying sampler may execute H3. Video and audio must match Job 1 in shape, dtype, original device, stride and SHA-256. A mismatch aborts before any high H3 evaluation.
 
 The raw VDN observation additionally records bounded retained cache-key topology and the one-block async prefetch lifecycle (generation, target, pending/completed status). These fields are evidence, not equality policy: retained counts, cache contents/keys and prefetch state are intentionally allowed to differ between progressive capture and the cold process. VDN configuration, layout, wrapper identity and whether retention is enabled remain attribution gates.
 
 Do not reuse a bundle if the capture run did not visibly reproduce the artifact.
+
+## Cross-process source provenance
+
+The full Job-1 provenance manifest remains hash-validated and auditable. Cross-process attribution must not, however, equate `sys.modules` population with production source identity: a warm progressive Job 1 can have many more lazily imported Sol/VDN/Spectrum/etc. modules than a fresh high-only Job 2 before its first H3 call.
+
+For companion repositories, Job 1's recorded source list is therefore treated as a **source-byte inventory**, not an import-count contract:
+
+- every capture-listed companion source file must still exist at the same resolved path in Job 2 and its on-disk SHA-256 must still match Job 1;
+- every source imported in both processes must report the same SHA-256;
+- any replay-imported source that was not present in the Job-1 inventory is rejected;
+- capture-only modules are allowed to remain unimported in the fresh process when their exact recorded source bytes are still present unchanged on disk;
+- all non-companion provenance remains exact, including checkpoint identity, model/runtime fingerprint, effective production wrappers/hooks/providers/compiler policy and the separate first-high Sol/VDN/Spectrum runtime-policy gates.
+
+This is intentionally narrower than ignoring companion provenance. It removes only import-population/lazy-import lifecycle as an equality requirement while retaining exact source-byte validation. The strict equality path used to verify a persisted `provenance_equivalence_identity` against the bundle's full provenance is unchanged, so a modified or truncated persisted identity cannot override the authoritative bundle provenance.
+
+Existing Job-1 bundles remain usable for this repair because all required capture source paths and hashes are already stored in the full provenance manifest. Job 1 does not need to be rerun solely because the cross-process comparison was repaired.
 
 ## Job 2: cold high replay
 
@@ -58,12 +76,14 @@ Apply:
 
 1. normal production model/companion patches;
 2. `MiniMax H3 Execution Contract Diagnostics` with `strict_provenance=true` and `capture_mib=512`;
-3. `MiniMax H3 Same-State Cold High Replay`, selecting the job-1 manifest in `bundle` (`[latest]` picks the most recent saved bundle);
+3. `MiniMax H3 Same-State Cold High Replay`, selecting the Job-1 manifest in `bundle` (`[latest]` picks the most recent saved bundle);
 4. the normal sampler node with the original full schedule and seed.
 
-The replay node validates the caller schedule, target geometry, seed, pristine target conditioning, Flow guidance configuration, Spectrum configuration, exact checkpoint identity and installed provenance. It then suppresses Flow's progressive split for that invocation, restores the captured high-stage continuation contract, reconstructs sampler noise through Flow/Core's exact initialization inverse, installs the captured guidance trajectory, and executes only the captured high suffix.
+Keep the PR #35 checkpoint-diagnostic **overlay installed**, because strict provenance validates the #35/#36 stack. But do **not** evaluate the `H3HandoffCheckpointDiagnostic` output branch in Job 2. That output node requires a complete normal progressive learned-3D low → probe → upscale → high invocation, while R intentionally executes only the high suffix. Evaluating that output branch in Job 2 produces an unrelated "no complete learned_3d ... capture" error after an otherwise successful replay.
 
-Connect the replayed LATENT to `MiniMax H3 Same-State Replay Report` as its trigger.
+The replay node validates the caller schedule, target geometry, seed, pristine target conditioning, Flow guidance configuration, Spectrum configuration, exact checkpoint identity and installed provenance. It then suppresses Flow's progressive split for that invocation, restores the captured high-stage continuation contract, reuses the original captured high-child noise argument, installs the captured guidance trajectory, validates exact first-high X at the actual `SAMPLER_SAMPLE` boundary, and executes only the captured high suffix.
+
+Connect the replayed LATENT to `MiniMax H3 Same-State Replay Report` as its trigger. The replay report branch, not the PR #35 handoff-checkpoint output branch, is the Job-2 diagnostic output.
 
 ## Required report gates
 
@@ -73,7 +93,7 @@ Connect the replayed LATENT to `MiniMax H3 Same-State Replay Report` as its trig
 - exact `3L / 2A / 1F` high-only accounting;
 - zero learned-upscaler calls;
 - target conditioning identity matches the capture;
-- installed-runtime provenance matches after excluding only O/C and R instrumentation identity;
+- installed-runtime provenance matches under the source-byte/lazy-import contract above;
 - exact checkpoint identity matched at replay preflight and remained unchanged through the pre-sampling stat guard;
 - Flow guidance configuration matches;
 - Spectrum configuration matches;
