@@ -42,6 +42,9 @@ _MAX_REPORTS = 4
 _EXPECTED_PACKED_ROWS = 56349
 _EXPECTED_VIDEO_SPAN = (3101, 56349)
 _EXPECTED_BLOCKS = 50
+_EXPECTED_LOCAL_Q_ROWS = (4096,) + (5120,) * 9 + (1024,)
+_EXPECTED_WINDOW_KV_ROWS = (14365, 19485) + (20509,) * 7 + (16413, 11293)
+_OWNER_COMPANION_GROUP = {"flow": "flow", "sol": "sol_h3", "vdn": "vdn_h3"}
 _REQUIRED_SOURCE_ENTRY_KEYS = frozenset(
     {
         ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."),
@@ -98,6 +101,10 @@ def _git_blob_sha(path: Path) -> str:
 
 def _valid_git_blob_sha(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+
+
+def _valid_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
 def _source_entry_key(value: dict[str, Any]) -> tuple[str, str, str]:
@@ -161,10 +168,16 @@ def _verify_source_manifest() -> dict[str, Any]:
         path = _resolve_source_entry(raw)
         expected_blob = raw.get("candidate_git_blob_sha")
         base_blob = raw.get("base_git_blob_sha")
+        base_sha256 = raw.get("base_sha256")
         if not _valid_git_blob_sha(expected_blob):
             raise RuntimeError("first-high W source-delta entry lacks candidate Git blob identity")
         if base_blob is not None and not _valid_git_blob_sha(base_blob):
             raise RuntimeError("first-high W source-delta entry has invalid base Git blob identity")
+        changed_existing = base_blob is not None and base_blob != expected_blob
+        if changed_existing and not _valid_sha256(base_sha256):
+            raise RuntimeError("first-high W changed source entry lacks exact R base SHA-256")
+        if not changed_existing and base_sha256 is not None:
+            raise RuntimeError("first-high W source entry has an unexpected R base SHA-256")
         actual_blob = _git_blob_sha(path)
         if actual_blob != expected_blob:
             raise RuntimeError(
@@ -177,6 +190,7 @@ def _verify_source_manifest() -> dict[str, Any]:
                 "relative_path": raw.get("relative_path", "."),
                 "path": str(path),
                 "base_git_blob_sha": base_blob,
+                "base_sha256": base_sha256,
                 "candidate_git_blob_sha": expected_blob,
                 "git_blob_sha": actual_blob,
                 "sha256": _sha256_file(path),
@@ -316,6 +330,50 @@ def _normalize_vdn_w_object_patches(
     return result
 
 
+def _verify_capture_base_sources(capture: dict[str, Any], source_gate: dict[str, Any]) -> dict[str, Any]:
+    groups = capture.get("loaded_companion_sources")
+    if not isinstance(groups, dict):
+        raise RuntimeError("first-high W R provenance lacks companion source inventory")
+    checked = []
+    for entry in source_gate.get("entries", []):
+        base_blob = entry.get("base_git_blob_sha")
+        candidate_blob = entry.get("candidate_git_blob_sha")
+        if base_blob is None or base_blob == candidate_blob:
+            continue
+        owner = str(entry.get("owner", ""))
+        group_name = _OWNER_COMPANION_GROUP.get(owner)
+        if group_name is None:
+            raise RuntimeError(f"first-high W changed source has no R companion owner mapping: {owner!r}")
+        expected_sha256 = entry.get("base_sha256")
+        if not _valid_sha256(expected_sha256):
+            raise RuntimeError("first-high W changed source lacks a reviewed R base SHA-256")
+        capture_sources, problems = _replay._companion_source_map(groups.get(group_name))
+        if problems:
+            raise RuntimeError(
+                f"first-high W R companion source inventory is invalid for {group_name}: " + "; ".join(problems)
+            )
+        source_path = str(entry.get("path", ""))
+        captured = capture_sources.get(source_path)
+        if captured is None:
+            raise RuntimeError(f"first-high W R provenance is missing reviewed base source: {source_path}")
+        captured_sha256 = captured.get("sha256")
+        if captured_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"first-high W R base source differs from reviewed bytes: {source_path}: "
+                f"{captured_sha256} != {expected_sha256}"
+            )
+        checked.append(
+            {
+                "owner": owner,
+                "path": source_path,
+                "capture_sha256": captured_sha256,
+                "expected_base_sha256": expected_sha256,
+                "exact": True,
+            }
+        )
+    return {"exact": True, "checked": checked}
+
+
 def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bool:
     if not path.startswith("$.loaded_companion_sources."):
         return False
@@ -333,13 +391,15 @@ def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bo
 def _provenance_gate(state: _State, record: _diag._Record, guider: Any) -> dict[str, Any]:
     capture = _replay._bundle_provenance_equivalence_identity(state.replay.manifest)
     current = _replay._provenance_equivalence_identity(record.state.manifest)
+    capture_base_sources = _verify_capture_base_sources(capture, state.source_gate)
     current = _normalize_vdn_w_object_patches(current, capture, guider, state.source_gate)
     differences = _replay._cross_process_provenance_diff_paths(capture, current, limit=64)
     unexpected = [path for path in differences if not _allowed_provenance_difference(path, state.source_gate)]
     return {
         "differences": differences,
         "unexpected_differences": unexpected,
-        "exact_except_reviewed_w_delta": not unexpected,
+        "capture_base_sources": capture_base_sources,
+        "exact_except_reviewed_w_delta": capture_base_sources["exact"] and not unexpected,
     }
 
 
@@ -408,6 +468,45 @@ def _block_receipt_topology_ok(subcalls: list[dict[str, Any]]) -> bool:
     return True
 
 
+def _block_receipt_group_geometry_ok(subcalls: list[dict[str, Any]], mode: str) -> bool:
+    by_block: dict[int, list[dict[str, Any]]] = {}
+    for item in subcalls:
+        block = item.get("block")
+        if type(block) is not int or not 0 <= block < _EXPECTED_BLOCKS:
+            return False
+        by_block.setdefault(block, []).append(item)
+    if set(by_block) != set(range(_EXPECTED_BLOCKS)):
+        return False
+    expected_local_kv = (
+        (_EXPECTED_PACKED_ROWS,) * len(_EXPECTED_LOCAL_Q_ROWS)
+        if mode == "native_full_support"
+        else _EXPECTED_WINDOW_KV_ROWS
+    )
+    for items in by_block.values():
+        globals_ = [item for item in items if item.get("kind") == "global"]
+        locals_ = sorted(
+            (item for item in items if item.get("kind") == "local"),
+            key=lambda item: item.get("group_index", -1),
+        )
+        anchors = sorted(
+            (item for item in items if item.get("kind") == "anchor"),
+            key=lambda item: item.get("group_index", -1),
+        )
+        if len(globals_) != 1 or len(locals_) != 11 or len(anchors) != 2:
+            return False
+        if globals_[0].get("q_rows") != _EXPECTED_VIDEO_SPAN[0] or globals_[0].get("kv_rows") != _EXPECTED_PACKED_ROWS:
+            return False
+        if tuple(item.get("q_rows") for item in locals_) != _EXPECTED_LOCAL_Q_ROWS:
+            return False
+        if tuple(item.get("kv_rows") for item in locals_) != expected_local_kv:
+            return False
+        if tuple(item.get("q_rows") for item in anchors) != (1024, 1024):
+            return False
+        if tuple(item.get("kv_rows") for item in anchors) != (_EXPECTED_PACKED_ROWS, _EXPECTED_PACKED_ROWS):
+            return False
+    return True
+
+
 def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     subcalls = [item for item in receipts if isinstance(item, dict)]
     kinds = Counter(str(item.get("kind")) for item in subcalls)
@@ -438,6 +537,7 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     )
     geometry_ok = packed_rows == {_EXPECTED_PACKED_ROWS} and video_spans == {_EXPECTED_VIDEO_SPAN}
     per_block_ok = _block_receipt_topology_ok(subcalls)
+    per_group_geometry_ok = _block_receipt_group_geometry_ok(subcalls, mode)
     fingerprints_ok = bool(subcalls) and all(
         isinstance(item.get("gate_fingerprint"), str) and isinstance(item.get("adapter_fingerprint"), str)
         for item in subcalls
@@ -464,6 +564,7 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
         "nonlocal_full_support_ok": nonlocal_ok,
         "geometry_ok": geometry_ok,
         "per_block_topology_ok": per_block_ok,
+        "per_group_geometry_ok": per_group_geometry_ok,
         "fingerprints_present": fingerprints_ok,
         "expected_700_subcalls": expected and len(subcalls) == 700,
         "expected_local_route": local_routes == Counter({expected_local_route: 550}),
@@ -700,6 +801,7 @@ def _outer_wrapper(
                 and receipt_report["nonlocal_full_support_ok"]
                 and receipt_report["geometry_ok"]
                 and receipt_report["per_block_topology_ok"]
+                and receipt_report["per_group_geometry_ok"]
                 and receipt_report["fingerprints_present"]
                 and receipt_report["first_block_pre_attention_qkv_digest_present"]
                 and sol_zero
