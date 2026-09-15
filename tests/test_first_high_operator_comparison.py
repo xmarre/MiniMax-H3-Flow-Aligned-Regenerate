@@ -76,8 +76,8 @@ def _receipts(mode: str):
             "packed_rows": 56349,
             "video_start": 3101,
             "video_end": 56349,
-            "gate_fingerprint": "gate",
-            "adapter_fingerprint": "adapter",
+            "gate_fingerprint": "d" * 64,
+            "adapter_fingerprint": "e" * 64,
         }
         result.append(
             {
@@ -322,6 +322,7 @@ def test_receipt_validation_requires_exact_700_subcall_geometry(mode):
     report = w._validate_receipts(_receipts(mode), mode)
     assert report["expected_700_subcalls"] is True
     assert report["expected_local_route"] is True
+    assert report["expected_nonlocal_routes"] is True
     assert report["support_ok"] is True
     assert report["complement_ok"] is True
     assert report["canonical_or_window_kv_ok"] is True
@@ -329,6 +330,8 @@ def test_receipt_validation_requires_exact_700_subcall_geometry(mode):
     assert report["geometry_ok"] is True
     assert report["per_block_topology_ok"] is True
     assert report["per_group_geometry_ok"] is True
+    assert report["gate_fingerprint_consistent"] is True
+    assert report["adapter_fingerprints_complete"] is True
     assert report["first_block_pre_attention_qkv_digest_present"] is True
 
 
@@ -360,6 +363,26 @@ def test_receipt_validation_rejects_wrong_geometry_block_partition_and_route():
     first_local = next(item for item in wrong_route if item["kind"] == "local")
     first_local["provider_route"] = "vdn_local_sol"
     assert w._validate_receipts(wrong_route, "native_window")["expected_local_route"] is False
+
+    wrong_nonlocal_route = copy.deepcopy(receipts)
+    first_global = next(item for item in wrong_nonlocal_route if item["kind"] == "global")
+    first_global["provider_route"] = "foreign_global"
+    assert w._validate_receipts(wrong_nonlocal_route, "native_window")["expected_nonlocal_routes"] is False
+
+    wrong_gate = copy.deepcopy(receipts)
+    wrong_gate[0]["gate_fingerprint"] = "f" * 64
+    assert w._validate_receipts(wrong_gate, "native_window")["gate_fingerprint_consistent"] is False
+
+    wrong_adapter = copy.deepcopy(receipts)
+    wrong_adapter[0]["adapter_fingerprint"] = "f" * 64
+    assert w._validate_receipts(wrong_adapter, "native_window")["adapter_fingerprints_complete"] is False
+
+
+def test_receipt_sink_is_bounded_mutable_owner():
+    sink = w._ReceiptSink()
+    sink.append({"block": 0})
+    assert len(sink) == 1
+    assert list(sink) == [{"block": 0}]
 
 
 def test_provenance_gate_normalizes_only_proven_vdn_wrapper_delta(monkeypatch):

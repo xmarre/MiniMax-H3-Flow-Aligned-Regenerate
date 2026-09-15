@@ -87,6 +87,30 @@ class _Call:
     raw_x0: torch.Tensor | None = None
 
 
+@dataclass(slots=True)
+class _ReceiptSink:
+    """Clone-stable mutable receipt owner for Core model-option copies.
+
+    Core recursively copies dictionaries and shallow-copies list values when it
+    creates child model options. A bare list installed before ``inner_sample``
+    would therefore be detached from the owner inspected after sampling. This
+    custom container is intentionally neither a dict nor a list, so the exact
+    Core copy contract preserves its identity while VDN can still use ``len`` and
+    ``append`` through its bounded receipt API.
+    """
+
+    items: list[Any] = field(default_factory=list)
+
+    def append(self, value: Any) -> None:
+        self.items.append(value)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __iter__(self):
+        return iter(self.items)
+
+
 _ACTIVE_CALL: contextvars.ContextVar[_Call | None] = contextvars.ContextVar(
     "h3_flow_first_high_operator_call", default=None
 )
@@ -609,10 +633,13 @@ def _block_receipt_group_geometry_ok(subcalls: list[dict[str, Any]], mode: str) 
     return True
 
 
-def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
+def _validate_receipts(receipts: Any, mode: str) -> dict[str, Any]:
     subcalls = [item for item in receipts if isinstance(item, dict)]
     kinds = Counter(str(item.get("kind")) for item in subcalls)
     local_routes = Counter(str(item.get("provider_route")) for item in subcalls if item.get("kind") == "local")
+    nonlocal_routes = Counter(
+        str(item.get("provider_route")) for item in subcalls if item.get("kind") in {"global", "anchor"}
+    )
     packed_rows = {int(item.get("packed_rows", -1)) for item in subcalls}
     video_spans = {(int(item.get("video_start", -1)), int(item.get("video_end", -1))) for item in subcalls}
     local = [item for item in subcalls if item.get("kind") == "local"]
@@ -640,10 +667,35 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     geometry_ok = packed_rows == {_EXPECTED_PACKED_ROWS} and video_spans == {_EXPECTED_VIDEO_SPAN}
     per_block_ok = _block_receipt_topology_ok(subcalls)
     per_group_geometry_ok = _block_receipt_group_geometry_ok(subcalls, mode)
-    fingerprints_ok = bool(subcalls) and all(
-        isinstance(item.get("gate_fingerprint"), str) and isinstance(item.get("adapter_fingerprint"), str)
-        for item in subcalls
+
+    gate_fingerprints = {item.get("gate_fingerprint") for item in subcalls}
+    gate_fingerprint_consistent = len(gate_fingerprints) == 1 and all(_valid_sha256(item) for item in gate_fingerprints)
+    adapter_fingerprints_by_block: dict[str, str] = {}
+    adapter_fingerprints_complete = True
+    for block in range(_EXPECTED_BLOCKS):
+        values = {
+            item.get("adapter_fingerprint")
+            for item in subcalls
+            if item.get("block") == block
+        }
+        if len(values) != 1:
+            adapter_fingerprints_complete = False
+            continue
+        value = next(iter(values))
+        if not _valid_sha256(value):
+            adapter_fingerprints_complete = False
+            continue
+        adapter_fingerprints_by_block[str(block)] = value
+    adapter_fingerprints_complete = bool(
+        adapter_fingerprints_complete and len(adapter_fingerprints_by_block) == _EXPECTED_BLOCKS
     )
+    adapter_fingerprint_digest = (
+        _sha_json(adapter_fingerprints_by_block) if adapter_fingerprints_complete else None
+    )
+    fingerprints_ok = bool(
+        subcalls and gate_fingerprint_consistent and adapter_fingerprints_complete
+    )
+
     pre_attention_digest = next(
         (
             item.get("pre_attention_qkv_digest")
@@ -652,12 +704,14 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
         ),
         None,
     )
-    pre_attention_digest_present = isinstance(pre_attention_digest, str) and len(pre_attention_digest) == 64
+    pre_attention_digest_present = _valid_sha256(pre_attention_digest)
     expected = kinds == Counter({"local": 550, "global": 50, "anchor": 100})
+    expected_nonlocal_routes = nonlocal_routes == Counter({"vdn_global_native": 50, "vdn_anchor_native": 100})
     return {
         "count": len(subcalls),
         "kind_counts": dict(kinds),
         "local_routes": dict(local_routes),
+        "nonlocal_routes": dict(nonlocal_routes),
         "packed_rows": sorted(packed_rows),
         "video_spans": sorted(video_spans),
         "support_ok": support_ok,
@@ -668,8 +722,14 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
         "per_block_topology_ok": per_block_ok,
         "per_group_geometry_ok": per_group_geometry_ok,
         "fingerprints_present": fingerprints_ok,
+        "gate_fingerprint_consistent": gate_fingerprint_consistent,
+        "gate_fingerprint": next(iter(gate_fingerprints)) if gate_fingerprint_consistent else None,
+        "adapter_fingerprints_complete": adapter_fingerprints_complete,
+        "adapter_fingerprints_by_block": adapter_fingerprints_by_block,
+        "adapter_fingerprint_digest": adapter_fingerprint_digest,
         "expected_700_subcalls": expected and len(subcalls) == 700,
         "expected_local_route": local_routes == Counter({expected_local_route: 550}),
+        "expected_nonlocal_routes": expected_nonlocal_routes,
         "first_block_pre_attention_qkv_digest": pre_attention_digest,
         "first_block_pre_attention_qkv_digest_present": pre_attention_digest_present,
     }
@@ -806,7 +866,7 @@ def _outer_wrapper(
     replay_latent = _replay._tensor_for_replay(replay, "high_latent_image")
     replay_noise = _replay._tensor_for_replay(replay, "high_noise_argument")
     request = _request_tuple(state)
-    receipt_sink: list[Any] = []
+    receipt_sink = _ReceiptSink()
     transformer = options.setdefault("transformer_options", {})
     if not isinstance(transformer, dict):
         raise RuntimeError("first-high W requires mutable transformer options")
@@ -919,16 +979,30 @@ def _outer_wrapper(
             receipt_report = _validate_receipts(receipt_sink, state.mode)
             companion = _replay._high_first_companion_observation(record) or {}
             sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
+            required_sol_zero_fields = (
+                "vdn_local_sol_calls",
+                "sparse_calls",
+                "external_mixed_sol_calls",
+            )
+            companion_observation_clean = bool(
+                isinstance(companion, dict) and not (companion.get("observation_errors") or [])
+            )
+            sol_zero_fields_present = bool(
+                isinstance(sol_after, dict) and all(field in sol_after for field in required_sol_zero_fields)
+            )
             sol_zero = bool(
-                int(sol_after.get("vdn_local_sol_calls", 0) or 0) == 0
-                and int(sol_after.get("sparse_calls", 0) or 0) == 0
-                and int(sol_after.get("external_mixed_sol_calls", 0) or 0) == 0
+                sol_zero_fields_present
+                and all(
+                    type(sol_after[field]) in {int, float} and float(sol_after[field]) == 0.0
+                    for field in required_sol_zero_fields
+                )
             )
             invariants = bool(
                 topology == expected_topology
                 and entry_exact
                 and receipt_report["expected_700_subcalls"]
                 and receipt_report["expected_local_route"]
+                and receipt_report["expected_nonlocal_routes"]
                 and receipt_report["support_ok"]
                 and receipt_report["complement_ok"]
                 and receipt_report["canonical_or_window_kv_ok"]
@@ -937,7 +1011,11 @@ def _outer_wrapper(
                 and receipt_report["per_block_topology_ok"]
                 and receipt_report["per_group_geometry_ok"]
                 and receipt_report["fingerprints_present"]
+                and receipt_report["gate_fingerprint_consistent"]
+                and receipt_report["adapter_fingerprints_complete"]
                 and receipt_report["first_block_pre_attention_qkv_digest_present"]
+                and companion_observation_clean
+                and sol_zero_fields_present
                 and sol_zero
                 and provenance_gate["exact_except_reviewed_w_delta"]
                 and sampling_runtime_ok
@@ -967,6 +1045,8 @@ def _outer_wrapper(
                     "snapshot_hashes": snapshots,
                     "entry_state_exact": entry_exact,
                     "receipts": receipt_report,
+                    "companion_observation_clean": companion_observation_clean,
+                    "sol_zero_fields_present": sol_zero_fields_present,
                     "sol_local_sparse_zero": sol_zero,
                     "sol_after": sol_after,
                     "export_contract": export_contract,
