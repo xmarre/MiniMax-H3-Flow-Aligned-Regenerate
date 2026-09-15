@@ -55,9 +55,7 @@ def test_cross_process_equivalence_ignores_process_local_callable_code_digest():
 
 
 def test_cross_process_equivalence_still_rejects_source_sha_change():
-    capture = replay._provenance_equivalence_identity(
-        _full_provenance("capture-process-digest", source_sha="source-a")
-    )
+    capture = replay._provenance_equivalence_identity(_full_provenance("capture-process-digest", source_sha="source-a"))
     replay_job = replay._provenance_equivalence_identity(
         _full_provenance("replay-process-digest", source_sha="source-b")
     )
