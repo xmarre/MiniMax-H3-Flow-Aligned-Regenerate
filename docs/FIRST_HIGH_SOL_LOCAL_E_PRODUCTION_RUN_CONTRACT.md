@@ -68,7 +68,7 @@ After Patcher has applied the overlays, verify the critical loaded-source bytes:
 ```bash
 cd /home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3
 test "$(git hash-object sol_h3/first_high_sol_local_diagnostic.py)" = \
-  79b3013aa936a836fc4e5c5cf3e80f8ac06a49ac
+  79b3013aa936a836fc92702996c07e1702edb7
 test "$(git hash-object sol_h3/__init__.py)" = \
   c4184d48f53a1b0703816c371f616e538acde5a7
 test "$(git hash-object sol_h3/sparse.py)" = \
@@ -86,9 +86,9 @@ cd /home/toor/ComfyUI/custom_nodes/MiniMax-H3-Flow-Aligned-Regenerate
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_diagnostic.py)" = \
   138a27c8fbba0ddc9140b6301187a2b01ce0f1fb
 test "$(git hash-object __init__.py)" = \
-  71f70ea78e53aa8d005c6aaaa31d54ea20c54287
+  f15b9ab236a7a566354d22b0b7430843e68fd5b6
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_e_source_delta.json)" = \
-  a01a78ca0488137dc3e9c2ec91120ae3dbab84fe
+  84d35c52e37d7b6ea62aadce7d0aa4a4cea5e72d
 
 cd /home/toor/ComfyUI
 test "$(git hash-object comfy/model_sampling.py)" = \
