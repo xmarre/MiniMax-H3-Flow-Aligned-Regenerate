@@ -50,8 +50,8 @@
       "module": "vdn_h3.first_high_operator_sol_bridge",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "3fe57c04a0e7142f1a22869edca7ff9d6b3dd073",
-      "reason": "forward completed VDN-native local routes to the live Sol BlockPatch receipt owner"
+      "candidate_git_blob_sha": "4a689892feb2e197fe75a1c4ad419dddb09b6da0",
+      "reason": "forward completed VDN-native local routes to the live Sol BlockPatch receipt owner while resolving ComfyUI namespaced Sol companion modules fail-closed by exact source-file identity"
     },
     {
       "owner": "vdn",
