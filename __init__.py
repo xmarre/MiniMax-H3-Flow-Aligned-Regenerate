@@ -48,6 +48,7 @@ try:
         NODE_DISPLAY_NAME_MAPPINGS as SAME_STATE_REPLAY_NODE_DISPLAY_NAME_MAPPINGS,
     )
     from .h3_flow_regenerate import first_high_operator_comparison as _FIRST_HIGH_OPERATOR_MODULE
+    from .h3_flow_regenerate import first_high_sol_local_diagnostic as _FIRST_HIGH_SOL_LOCAL_MODULE
     from .h3_flow_regenerate.first_high_operator_comparison import (
         NODE_CLASS_MAPPINGS as FIRST_HIGH_OPERATOR_NODE_CLASS_MAPPINGS,
     )
@@ -105,6 +106,7 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
         NODE_DISPLAY_NAME_MAPPINGS as SAME_STATE_REPLAY_NODE_DISPLAY_NAME_MAPPINGS,
     )
     from h3_flow_regenerate import first_high_operator_comparison as _FIRST_HIGH_OPERATOR_MODULE
+    from h3_flow_regenerate import first_high_sol_local_diagnostic as _FIRST_HIGH_SOL_LOCAL_MODULE
     from h3_flow_regenerate.first_high_operator_comparison import (
         NODE_CLASS_MAPPINGS as FIRST_HIGH_OPERATOR_NODE_CLASS_MAPPINGS,
     )
@@ -266,6 +268,95 @@ def _normalize_w_provenance_delta(current, capture, guider, source_gate):
 
 
 _FIRST_HIGH_OPERATOR_MODULE._normalize_vdn_w_object_patches = _normalize_w_provenance_delta
+
+
+def _drop_current_only_closure_expansion(capture_value, current_value):
+    """Prune only closure metadata introduced by an extra diagnostic wrapper layer.
+
+    ``callable_identity`` intentionally expands closures only to a bounded depth.
+    E wraps the already-reviewed W VDN wrapper, so Core's derived DIT replacement
+    chain can expose one additional nested ``closure`` dictionary even though the
+    live E -> W -> production object-patch chain has already been proven exactly
+    against R. No non-closure key, capture-owned closure, list shape, or value is
+    relaxed here.
+    """
+    if isinstance(capture_value, dict) and isinstance(current_value, dict):
+        rebuilt = {}
+        dropped = 0
+        for raw_key, item in current_value.items():
+            key = str(raw_key)
+            if key not in capture_value:
+                if key == "closure":
+                    dropped += 1
+                    continue
+                rebuilt[key] = item
+                continue
+            child, child_dropped = _drop_current_only_closure_expansion(capture_value[key], item)
+            rebuilt[key] = child
+            dropped += child_dropped
+        return rebuilt, dropped
+    if isinstance(capture_value, list) and isinstance(current_value, list) and len(capture_value) == len(current_value):
+        rebuilt = []
+        dropped = 0
+        for capture_item, current_item in zip(capture_value, current_value, strict=True):
+            child, child_dropped = _drop_current_only_closure_expansion(capture_item, current_item)
+            rebuilt.append(child)
+            dropped += child_dropped
+        return rebuilt, dropped
+    return current_value, 0
+
+
+def _normalize_e_replacement_chain(current, capture):
+    """Normalize only the E-owned closure-depth expansion in DIT replacements.
+
+    The live VDN object-patch normalizer runs first and proves all fifty chains are
+    exact E -> reviewed W -> captured production forwards. After that proof, the
+    derived ``replacement_chain_dit`` may differ solely because the provenance
+    collector sees one deeper closure layer. Each of the fifty MiniMax-H3 double
+    block entries must otherwise equal R exactly after removing only current-only
+    keys literally named ``closure``. Any other difference remains fatal.
+    """
+    current_chain = current.get("replacement_chain_dit")
+    capture_chain = capture.get("replacement_chain_dit")
+    if not isinstance(current_chain, dict) or not isinstance(capture_chain, dict):
+        raise RuntimeError("first-high Sol-local E provenance lacks DIT replacement-chain manifests")
+    if set(current_chain) != set(capture_chain):
+        raise RuntimeError("first-high Sol-local E DIT replacement-chain key set differs from R")
+
+    expected = {str(("double_block", index)) for index in range(_FIRST_HIGH_SOL_LOCAL_MODULE._EXPECTED_BLOCKS)}
+    if not expected.issubset(current_chain):
+        missing = sorted(expected - set(current_chain))
+        raise RuntimeError(f"first-high Sol-local E DIT replacement-chain is missing H3 blocks: {missing[:4]}")
+
+    rebuilt = dict(current_chain)
+    for key in sorted(expected):
+        pruned, _dropped = _drop_current_only_closure_expansion(capture_chain[key], current_chain[key])
+        if _FIRST_HIGH_SOL_LOCAL_MODULE._canonical_json(pruned) != _FIRST_HIGH_SOL_LOCAL_MODULE._canonical_json(
+            capture_chain[key]
+        ):
+            detail = _FIRST_HIGH_SOL_LOCAL_MODULE._replay._provenance_diff_paths(
+                capture_chain[key], pruned, limit=8
+            )
+            raise RuntimeError(
+                f"first-high Sol-local E DIT replacement-chain differs from R for {key}"
+                + ("; " + ", ".join(detail) if detail else "")
+            )
+        rebuilt[key] = capture_chain[key]
+
+    result = dict(current)
+    result["replacement_chain_dit"] = rebuilt
+    return result
+
+
+_ORIGINAL_E_VDN_PROVENANCE_NORMALIZER = _FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches
+
+
+def _normalize_e_provenance_delta(current, capture, guider, source_gate):
+    normalized = _ORIGINAL_E_VDN_PROVENANCE_NORMALIZER(current, capture, guider, source_gate)
+    return _normalize_e_replacement_chain(normalized, capture)
+
+
+_FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches = _normalize_e_provenance_delta
 
 NODE_CLASS_MAPPINGS = {
     **NODE_CLASS_MAPPINGS,
