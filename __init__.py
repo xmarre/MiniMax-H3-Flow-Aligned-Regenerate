@@ -203,7 +203,7 @@ def _normalize_w_wrapper_order(current, guider):
     Before comparing to R, prove those additions are the exact live W callables at
     the exact wrapper types/keys and that both active and patcher manifests record
     the same callable identities. Only those two entries are then removed. Any
-    unrelated wrapper change remains visible to the ordinary provenance diff.
+    unrelated wrapper change remains visible to the ordinary R provenance diff.
     """
     patcher = getattr(guider, "model_patcher", None)
     runtime_wrappers = getattr(patcher, "wrappers", None)
@@ -334,9 +334,7 @@ def _normalize_e_replacement_chain(current, capture):
         if _FIRST_HIGH_SOL_LOCAL_MODULE._canonical_json(pruned) != _FIRST_HIGH_SOL_LOCAL_MODULE._canonical_json(
             capture_chain[key]
         ):
-            detail = _FIRST_HIGH_SOL_LOCAL_MODULE._replay._provenance_diff_paths(
-                capture_chain[key], pruned, limit=8
-            )
+            detail = _FIRST_HIGH_SOL_LOCAL_MODULE._replay._provenance_diff_paths(capture_chain[key], pruned, limit=8)
             raise RuntimeError(
                 f"first-high Sol-local E DIT replacement-chain differs from R for {key}"
                 + ("; " + ", ".join(detail) if detail else "")
