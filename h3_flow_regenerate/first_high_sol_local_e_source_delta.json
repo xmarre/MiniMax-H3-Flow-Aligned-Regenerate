@@ -8,7 +8,7 @@
       "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "f8b5e074b0bf635e7a8837503cbe427253388da4",
+      "candidate_git_blob_sha": "2c8603d64383415cf6242e5517c6ee7ce940b7e0",
       "reason": "E one-call replay, fail-closed validity/provenance, bounded witness reporting, memory preflight, and durable evidence persistence"
     },
     {
