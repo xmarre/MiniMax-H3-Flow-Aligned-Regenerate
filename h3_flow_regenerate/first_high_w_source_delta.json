@@ -8,8 +8,8 @@
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "14a4bd30bba4d01a825874e95684f5461bac4f83",
-      "reason": "W replay, one-call termination, invariant report and source-delta gate"
+      "candidate_git_blob_sha": "9eda2061e728f26d087fa19862a9f22d41c024da",
+      "reason": "W replay, one-call termination, fail-closed provenance normalization, receipt invariants and source-delta gate"
     },
     {
       "owner": "flow",
