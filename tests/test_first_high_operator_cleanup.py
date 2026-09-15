@@ -35,6 +35,7 @@ def test_sampler_boundary_catches_only_owned_completion_and_returns_raw_x0(monke
     record_token = w._diag._ACTIVE.set(SimpleNamespace())
     call_token = w._ACTIVE_CALL.set(call)
     try:
+
         def executor(*_args, **_kwargs):
             raise w._FirstCallComplete(call.token, x0)
 
@@ -58,6 +59,7 @@ def test_sampler_boundary_rethrows_foreign_completion(monkeypatch):
     record_token = w._diag._ACTIVE.set(SimpleNamespace())
     call_token = w._ACTIVE_CALL.set(call)
     try:
+
         def executor(*_args, **_kwargs):
             raise w._FirstCallComplete(object(), x0)
 
@@ -84,6 +86,7 @@ def test_sampler_boundary_rejects_missing_or_duplicate_owner(monkeypatch):
         call = w._Call(state=state, completed=True, raw_x0=x0)
         call_token = w._ACTIVE_CALL.set(call)
         try:
+
             def executor(*_args, **_kwargs):
                 raise w._FirstCallComplete(call.token, x0)
 
