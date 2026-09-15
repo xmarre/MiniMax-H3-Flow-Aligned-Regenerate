@@ -254,6 +254,27 @@ def _diagnostic_flow_source_entry(value: Any) -> bool:
     return Path(raw_path).name.lower() in _DIAGNOSTIC_FLOW_SOURCE_FILES
 
 
+def _without_process_local_code_digests(value: Any) -> Any:
+    """Remove callable code digests from cross-process causal equality only.
+
+    The provenance collector stores each callable's raw ``code_digest`` in the
+    full hash-validated manifest. Its legacy digest construction includes
+    ``repr(code.co_consts)``; nested code-object constants embed process-local
+    memory addresses, so identical loaded source can produce different digests
+    after a clean restart. Exact source-file SHA-256, module/qualname, captured
+    closure/default structure, wrapper order and policy remain fail-closed here.
+    """
+    if isinstance(value, dict):
+        return {
+            str(key): _without_process_local_code_digests(item)
+            for key, item in value.items()
+            if str(key) != "code_digest"
+        }
+    if isinstance(value, list):
+        return [_without_process_local_code_digests(item) for item in value]
+    return value
+
+
 def _provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
     """Return the causal capture/replay provenance identity for experiment R.
 
@@ -265,6 +286,8 @@ def _provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]
     patcher injection state is intentionally allowed to differ between the warm
     capture process and cold replay process. R/O/C diagnostic implementation
     files and wrappers are measurement plumbing rather than production runtime.
+    Raw callable code digests are also audit-only because their legacy encoding
+    is process-local for functions containing nested code objects.
     """
     normalized = _normalize_provenance(manifest)
     if not isinstance(normalized, dict):
@@ -288,7 +311,7 @@ def _provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]
             return [canonicalize(item, (*path, "[]")) for item in items]
         return value
 
-    return canonicalize(normalized)
+    return _without_process_local_code_digests(canonicalize(normalized))
 
 
 def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -305,8 +328,9 @@ def _bundle_provenance_equivalence_identity(manifest: dict[str, Any]) -> dict[st
         raise RuntimeError("same-state replay provenance-equivalence identity is incomplete")
     if _sha_json(persisted) != persisted_digest:
         raise RuntimeError("same-state replay provenance-equivalence digest is inconsistent")
-    if _canonical_json(persisted) != _canonical_json(derived):
-        differences = _provenance_diff_paths(derived, persisted)
+    persisted_comparable = _without_process_local_code_digests(persisted)
+    if _canonical_json(persisted_comparable) != _canonical_json(derived):
+        differences = _provenance_diff_paths(derived, persisted_comparable)
         detail = "" if not differences else "; differing fields: " + ", ".join(differences)
         raise RuntimeError(
             "same-state replay provenance-equivalence identity is inconsistent with full provenance" + detail
