@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "design_commit": "41b54405867a31e1a9e3261d4d79469a640682c4",
+  "purpose": "Exact byte allowlist for the diagnostic-only first-high operator comparison W deployment.",
+  "entries": [
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "50d428a0dce0f30029b50589484e4fcfc483d1d5",
+      "reason": "W replay, one-call termination, invariant report and source-delta gate"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
+      "candidate_git_blob_sha": "aa18388d95f5bb817d6fb675ab4fcf63486a5417",
+      "reason": "register W diagnostic nodes without changing PR #41"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "af7cd38692d2ff32ebc5bdbafc65745878ce8c77",
+      "reason": "publish W mode in Sol backend history and validate explicit native-local receipts"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3",
+      "relative_path": ".",
+      "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
+      "candidate_git_blob_sha": "1bbbbbb867604591b4d02903b6ab730906e4b72b",
+      "reason": "install Sol W history contract at package import"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "14efc851eb1ca52ed46d7a2e5362748ae4676bae",
+      "reason": "VDN-owned native-window/full-support operator switch and bounded receipts"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
+      "candidate_git_blob_sha": "aca3fbd74e78282639548ff748d04fef21e507d7",
+      "reason": "install VDN W diagnostic overlay before ApplyVDN node construction"
+    }
+  ]
+}
