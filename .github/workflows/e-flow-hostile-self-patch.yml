@@ -1,0 +1,60 @@
+name: Flow E hostile self patch
+
+on:
+  push:
+    branches:
+      - mirror/first-high-sol-local-e-implementation-20260915
+    paths:
+      - .github/workflows/e-flow-hostile-self-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python .github/e_flow_hostile_patch.py
+      - run: python -m pip install ruff
+      - run: ruff check --fix h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - run: ruff format h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - name: Finalize exact source manifest hashes
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          def blob_sha(path):
+              data = Path(path).read_bytes()
+              return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+          manifest_path = Path("h3_flow_regenerate/first_high_sol_local_e_source_delta.json")
+          manifest = json.loads(manifest_path.read_text())
+          mapping = {
+              ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "."):
+                  "h3_flow_regenerate/first_high_sol_local_diagnostic.py",
+              ("flow", "h3_flow_regenerate.first_high_sol_local_diagnostic", "../__init__.py"):
+                  "__init__.py",
+          }
+          for entry in manifest["entries"]:
+              key = (entry.get("owner"), entry.get("module"), entry.get("relative_path", "."))
+              path = mapping.get(key)
+              if path:
+                  entry["candidate_git_blob_sha"] = blob_sha(path)
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - run: ruff check h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - run: python -m compileall -q h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - name: Commit patched source and remove one-shot patcher
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add h3_flow_regenerate/first_high_sol_local_diagnostic.py h3_flow_regenerate/first_high_sol_local_e_source_delta.json
+          git rm .github/e_flow_hostile_patch.py .github/workflows/e-flow-hostile-self-patch.yml
+          git commit -m "Harden first-high E validity gates"
+          git push origin HEAD:mirror/first-high-sol-local-e-implementation-20260915
