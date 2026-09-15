@@ -12,9 +12,11 @@ operator-modified run.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import importlib
 import json
+import math
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +77,19 @@ class _State:
     mode: str
     source_gate: dict[str, Any]
     complete: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_REPORTS))
+
+
+@dataclass(slots=True)
+class _Call:
+    state: _State
+    token: object = field(default_factory=object)
+    completed: bool = False
+    raw_x0: torch.Tensor | None = None
+
+
+_ACTIVE_CALL: contextvars.ContextVar[_Call | None] = contextvars.ContextVar(
+    "h3_flow_first_high_operator_call", default=None
+)
 
 
 def _canonical_json(value: Any) -> str:
@@ -221,7 +236,17 @@ def _request_tuple(state: _State) -> tuple[tuple[str, Any], ...]:
     )
 
 
+def _numeric_attr(value: Any, name: str) -> float | None:
+    raw = getattr(value, name, None)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    return None
+
+
 def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
+    import comfy.latent_formats
+    import comfy.model_sampling
+
     patcher = getattr(guider, "model_patcher", None)
     base = getattr(patcher, "model", None)
     sampling = getattr(base, "model_sampling", None)
@@ -238,8 +263,85 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
         "model_sampling_class": (
             None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}"
         ),
+        "model_sampling_av": isinstance(sampling, comfy.model_sampling.ModelSamplingAV),
+        "model_sampling_const": isinstance(sampling, comfy.model_sampling.CONST),
+        "noise_scale": _numeric_attr(sampling, "noise_scale"),
+        "shift": _numeric_attr(sampling, "shift"),
+        "audio_shift": _numeric_attr(sampling, "audio_shift"),
         "latent_format_class": (None if latent is None else f"{type(latent).__module__}.{type(latent).__qualname__}"),
+        "latent_format_minimax_h3_av": isinstance(latent, comfy.latent_formats.MiniMaxH3AV),
+        "latent_scale_factor": _numeric_attr(latent, "scale_factor"),
         "final_head_count": head_count,
+    }
+
+
+def _sampling_runtime_ok(identity: dict[str, Any]) -> bool:
+    noise_scale = identity.get("noise_scale")
+    head_count = identity.get("final_head_count")
+    return bool(
+        identity.get("model_sampling_av") is True
+        and identity.get("model_sampling_const") is True
+        and identity.get("latent_format_minimax_h3_av") is True
+        and isinstance(noise_scale, float)
+        and math.isfinite(noise_scale)
+        and noise_scale > 0.0
+        and type(head_count) is int
+        and head_count > 0
+    )
+
+
+def _export_contract(guider: Any, raw_x0: torch.Tensor, returned: Any) -> dict[str, Any]:
+    if not torch.is_tensor(raw_x0) or not torch.is_tensor(returned):
+        raise RuntimeError("first-high W export contract requires packed tensor callback/output values")
+    patcher = getattr(guider, "model_patcher", None)
+    base = getattr(patcher, "model", None)
+    process_out = getattr(base, "process_latent_out", None)
+    if not callable(process_out):
+        raise RuntimeError("first-high W cannot resolve the active Core process_latent_out transform")
+    raw_float = raw_x0.to(torch.float32)
+    expected = process_out(raw_float)
+    if not torch.is_tensor(expected):
+        raise RuntimeError("first-high W process_latent_out did not return a packed tensor")
+    exact = (
+        tuple(returned.shape) == tuple(expected.shape)
+        and returned.dtype == expected.dtype
+        and returned.device == expected.device
+        and torch.equal(returned, expected)
+    )
+    process_out_identity = (
+        tuple(expected.shape) == tuple(raw_float.shape)
+        and expected.dtype == raw_float.dtype
+        and expected.device == raw_float.device
+        and torch.equal(expected, raw_float)
+    )
+    return {
+        "exact_core_callback_x0_externalization": exact,
+        "process_latent_out_identity_for_this_x0": process_out_identity,
+        "raw_x0_shape": [int(dim) for dim in raw_x0.shape],
+        "raw_x0_dtype": str(raw_x0.dtype),
+        "raw_x0_device": str(raw_x0.device),
+        "raw_x0_sha256": _replay._tensor_sha256(raw_x0),
+        "expected_export_shape": [int(dim) for dim in expected.shape],
+        "expected_export_dtype": str(expected.dtype),
+        "expected_export_device": str(expected.device),
+        "expected_export_sha256": _replay._tensor_sha256(expected),
+        "returned_shape": [int(dim) for dim in returned.shape],
+        "returned_dtype": str(returned.dtype),
+        "returned_device": str(returned.device),
+        "returned_sha256": _replay._tensor_sha256(returned),
+        "boundary": "SAMPLER_SAMPLE callback x0 -> CFGGuider.inner_sample process_latent_out",
+    }
+
+
+def _core_cleanup_contract(guider: Any, options: dict[str, Any]) -> dict[str, Any]:
+    inner_absent = not hasattr(guider, "inner_model")
+    loaded_absent = not hasattr(guider, "loaded_models")
+    pool_absent = "multigpu_thread_pool" not in options
+    return {
+        "inner_model_absent": inner_absent,
+        "loaded_models_absent": loaded_absent,
+        "multigpu_thread_pool_absent": pool_absent,
+        "complete": inner_absent and loaded_absent and pool_absent,
     }
 
 
@@ -586,12 +688,31 @@ def _sampler_entry_wrapper(
 ):
     options = extra_args.get("model_options") if isinstance(extra_args, dict) else None
     state = (options or {}).get(STATE_KEY)
-    if isinstance(state, _State) and _diag._stage_name(options) == "high":
-        record = _diag._ACTIVE.get()
-        if record is None:
-            raise RuntimeError("first-high W sampler-entry validation requires active execution diagnostics")
-        _replay._validate_replay_sampler_entry(state.replay, record)
-    return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
+    if not isinstance(state, _State) or _diag._stage_name(options) != "high":
+        return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
+
+    record = _diag._ACTIVE.get()
+    if record is None:
+        raise RuntimeError("first-high W sampler-entry validation requires active execution diagnostics")
+    _replay._validate_replay_sampler_entry(state.replay, record)
+    call = _ACTIVE_CALL.get()
+    if not isinstance(call, _Call) or call.state is not state:
+        raise RuntimeError("first-high W sampler entry has no matching execution-local completion owner")
+    try:
+        return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
+    except _FirstCallComplete as exc:
+        if exc.token is not call.token:
+            raise
+        if call.completed:
+            raise RuntimeError("first-high W sampler callback completed more than once")
+        if not torch.is_tensor(exc.x0):
+            raise RuntimeError("first-high W sampler callback x0 is not a packed tensor")
+        call.completed = True
+        call.raw_x0 = exc.x0
+        # Catch at SAMPLER_SAMPLE so KSAMPLER cannot take another Euler step, while
+        # CFGGuider.inner_sample/outer_sample still finish their normal externalize
+        # and cleanup lifecycle above this boundary.
+        return exc.x0
 
 
 def _outer_wrapper(
@@ -654,6 +775,10 @@ def _outer_wrapper(
             "first-high W runtime provenance differs beyond the reviewed source delta: "
             + ", ".join(provenance_gate["unexpected_differences"][:12])
         )
+    sampling_runtime = _sampling_runtime_identity(guider)
+    sampling_runtime_ok = _sampling_runtime_ok(sampling_runtime)
+    if not sampling_runtime_ok:
+        raise RuntimeError("first-high W runtime is not the expected MiniMax-H3 AV flow sampling contract")
 
     binding = _runtime._resolve_binding(guider)
     if binding is None:
@@ -691,6 +816,8 @@ def _outer_wrapper(
     sol_config = transformer.get("sol_h3_runtime_v1")
     if not isinstance(sol_config, dict) or sol_config.get("backend") != "sol":
         raise RuntimeError("first-high W requires the active Sol-H3 backend companion")
+    if _ACTIVE_CALL.get() is not None:
+        raise RuntimeError("nested first-high W execution is unsupported")
 
     metric_start = binding.metrics.counters
     event_start = len(binding.metrics.events)
@@ -703,46 +830,53 @@ def _outer_wrapper(
     binding.capture_enabled = False
     transformer[REQUEST_KEY] = request
     transformer[RECEIPTS_KEY] = receipt_sink
-    sentinel_token = object()
+    call = _Call(state=state)
+    call_token = _ACTIVE_CALL.set(call)
     completed = False
     diagnostic_x0 = None
+    diagnostic_output = None
+    export_contract = None
+    cleanup_contract = None
     replay_error: BaseException | None = None
 
     def stop_after_first(step, x0, x, _total):
         _ = x
         if int(step) != 0:
             raise RuntimeError("first-high W callback reached a second Euler step")
-        raise _FirstCallComplete(sentinel_token, x0)
+        raise _FirstCallComplete(call.token, x0)
 
     try:
         if record.pristine_conds is None:
             raise RuntimeError("first-high W record is missing pristine target conditions")
         _runtime._reset_guider_conds(guider, template=record.pristine_conds)
-        try:
-            with _runtime._flow_stage_contract(guider, "high"), _runtime._high_stage_contract(guider):
-                executor(
-                    replay_noise,
-                    replay_latent,
-                    sampler,
-                    high_sigmas,
-                    None,
-                    stop_after_first,
-                    disable_pbar,
-                    seed,
-                    latent_shapes=latent_shapes,
-                )
-        except _FirstCallComplete as exc:
-            if exc.token is not sentinel_token:
-                raise
-            completed = True
-            diagnostic_x0 = exc.x0
-        if not completed or diagnostic_x0 is None:
+        with _runtime._flow_stage_contract(guider, "high"), _runtime._high_stage_contract(guider):
+            diagnostic_output = executor(
+                replay_noise,
+                replay_latent,
+                sampler,
+                high_sigmas,
+                None,
+                stop_after_first,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
+            )
+        if not call.completed or call.raw_x0 is None:
             raise RuntimeError("first-high W Euler callback sentinel did not terminate after the first model call")
-        return diagnostic_x0
+        diagnostic_x0 = call.raw_x0
+        export_contract = _export_contract(guider, diagnostic_x0, diagnostic_output)
+        cleanup_contract = _core_cleanup_contract(guider, options)
+        if export_contract["exact_core_callback_x0_externalization"] is not True:
+            raise RuntimeError("first-high W callback x0 did not traverse the canonical Core externalization path")
+        if cleanup_contract["complete"] is not True:
+            raise RuntimeError("first-high W bounded sampler return bypassed Core outer-sample cleanup")
+        completed = True
+        return diagnostic_output
     except BaseException as exc:
         replay_error = exc
         raise
     finally:
+        _ACTIVE_CALL.reset(call_token)
         transformer.pop(REQUEST_KEY, None)
         transformer.pop(RECEIPTS_KEY, None)
         binding.trajectory = previous_trajectory
@@ -806,6 +940,11 @@ def _outer_wrapper(
                 and receipt_report["first_block_pre_attention_qkv_digest_present"]
                 and sol_zero
                 and provenance_gate["exact_except_reviewed_w_delta"]
+                and sampling_runtime_ok
+                and export_contract is not None
+                and export_contract["exact_core_callback_x0_externalization"] is True
+                and cleanup_contract is not None
+                and cleanup_contract["complete"] is True
             )
             state.complete.append(
                 {
@@ -822,15 +961,20 @@ def _outer_wrapper(
                     "topology_exact": topology == expected_topology,
                     "source_gate": state.source_gate,
                     "provenance_gate": provenance_gate,
-                    "sampling_runtime": _sampling_runtime_identity(guider),
+                    "sampling_runtime": sampling_runtime,
+                    "sampling_runtime_ok": sampling_runtime_ok,
                     "request": dict(request),
                     "snapshot_hashes": snapshots,
                     "entry_state_exact": entry_exact,
                     "receipts": receipt_report,
                     "sol_local_sparse_zero": sol_zero,
                     "sol_after": sol_after,
+                    "export_contract": export_contract,
+                    "core_cleanup": cleanup_contract,
                     "diagnostic_x0_sha256": _replay._tensor_sha256(diagnostic_x0),
                     "diagnostic_x0_shape": [int(dim) for dim in diagnostic_x0.shape],
+                    "diagnostic_output_sha256": _replay._tensor_sha256(diagnostic_output),
+                    "diagnostic_output_shape": [int(dim) for dim in diagnostic_output.shape],
                     "decision_gate": (
                         "valid-arm: compare decoded first-high diagnostic media"
                         if invariants
