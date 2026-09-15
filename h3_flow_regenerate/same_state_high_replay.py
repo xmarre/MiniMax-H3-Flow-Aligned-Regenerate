@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -1063,6 +1064,35 @@ def _tensor_for_replay(state: _ReplayState, name: str) -> torch.Tensor:
     return restored
 
 
+def _forward_sampler_initial_state(
+    base_model: Any,
+    noise_argument: torch.Tensor,
+    latent_image_internal: torch.Tensor,
+    sigma: torch.Tensor | float,
+    reference_state: torch.Tensor,
+) -> torch.Tensor:
+    """Re-run the exact finite-precision Flow initialization used at SAMPLER_SAMPLE."""
+
+    model_sampling = getattr(base_model, "model_sampling", None)
+    noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
+    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
+        raise ValueError("same-state replay requires a finite positive H3 noise_scale")
+    if tuple(noise_argument.shape) != tuple(reference_state.shape):
+        raise ValueError("same-state replay captured noise and high-entry state shapes differ")
+    if tuple(latent_image_internal.shape) != tuple(reference_state.shape):
+        raise ValueError("same-state replay internal latent and high-entry state shapes differ")
+
+    noise = noise_argument.to(device=reference_state.device, dtype=reference_state.dtype)
+    latent = latent_image_internal.to(device=reference_state.device, dtype=reference_state.dtype)
+    if torch.is_tensor(sigma):
+        sigma_value = sigma.detach().to(device=reference_state.device, dtype=reference_state.dtype)
+    else:
+        sigma_value = torch.tensor(float(sigma), device=reference_state.device, dtype=reference_state.dtype)
+    if sigma_value.numel() != 1 or not bool(torch.isfinite(sigma_value).all().item()):
+        raise ValueError("same-state replay requires a finite scalar first-high sigma")
+    return sigma_value * (noise_scale * noise) + (1.0 - sigma_value) * latent
+
+
 def _replay_wrapper(
     executor,
     noise,
@@ -1155,30 +1185,41 @@ def _replay_wrapper(
     if "high_denoise_mask" in state.tensors:
         replay_mask = _tensor_for_replay(state, "high_denoise_mask")
 
-    # R owns the exact high-entry state X. Reconstruct the sampler noise through
-    # Flow/Comfy's reviewed inverse rather than trusting a serialized noise
-    # argument. Restore X on its captured device and dtype so the inverse follows
-    # the same arithmetic domain as the original progressive handoff.
+    # R owns the exact high-entry state X. The Job-1 bundle already contains the
+    # hash-validated high OUTER_SAMPLE noise argument that produced X. An algebraic
+    # inverse of the finite-precision Flow mix is not bit-reversible, so validate
+    # that captured noise by running the original forward initialization arithmetic
+    # in the SAMPLER_SAMPLE device/dtype domain, then replay the original argument.
     state_video = _tensor_for_replay(state, "first_high_sampler_input_video")
     state_audio = _tensor_for_replay(state, "first_high_sampler_input_audio")
     replay_state, replay_shapes = pack_streams((state_video, state_audio))
     if [tuple(int(dim) for dim in shape) for shape in replay_shapes] != target_shapes:
         raise RuntimeError("same-state replay packed X geometry differs from captured target geometry")
     base_model = guider.model_patcher.model
-    replay_latent_internal = _runtime._process_latent_in(base_model, replay_latent, target_shapes)
-    replay_noise = _runtime._noise_argument(
+    sampler_device = guider.model_patcher.load_device
+    captured_noise = _tensor_for_replay(state, "high_noise_argument")
+    sampler_noise = captured_noise.to(device=sampler_device, dtype=torch.float32)
+    sampler_latent = replay_latent.to(device=sampler_device, dtype=torch.float32)
+    if torch.count_nonzero(sampler_latent) > 0:
+        replay_latent_internal = _runtime._process_latent_in(base_model, sampler_latent, target_shapes)
+    else:
+        replay_latent_internal = sampler_latent
+    reconstructed_state = _forward_sampler_initial_state(
         base_model,
-        replay_state,
-        float(state.manifest["handoff_sigma"]),
+        sampler_noise,
         replay_latent_internal,
+        high_sigmas[0],
+        replay_state,
     )
-    captured_noise = _tensor_for_replay(state, "high_noise_argument").to(
-        device=replay_noise.device, dtype=replay_noise.dtype
-    )
-    if not torch.equal(replay_noise, captured_noise):
+    if not torch.equal(reconstructed_state, replay_state):
+        different = int(torch.count_nonzero(reconstructed_state != replay_state).item())
+        delta = (reconstructed_state.float() - replay_state.float()).abs()
+        max_abs_diff = 0.0 if delta.numel() == 0 else float(delta.max().item())
         raise RuntimeError(
-            "same-state replay exact initialization inverse did not reconstruct the captured high noise argument"
+            "same-state replay captured high noise argument does not forward-reconstruct the captured high-entry "
+            f"state; differing_values={different} max_abs_diff={max_abs_diff:.9g}"
         )
+    replay_noise = captured_noise
     expected_mask = replay_mask is not None
     if bool(denoise_mask is not None) != expected_mask:
         raise RuntimeError("same-state replay caller mask presence differs from captured high stage")
