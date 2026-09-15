@@ -24,8 +24,8 @@
       "module": "sol_h3.first_high_operator_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "6abb36a8ad63b8d967a4d5c0b578c6359369085a",
-      "reason": "publish W mode in Sol backend history, preserve the underlying ordinary VDN history identity, and bind native-local receipts to the live BlockPatch owner"
+      "candidate_git_blob_sha": "8cb694f4acf872f477b8b7f3f424dfa4454e8a6e",
+      "reason": "publish W mode in Sol backend history, preserve the underlying ordinary VDN history identity, reject non-R Untwist state before Spectrum/model execution, and bind native-local receipts to the live BlockPatch owner"
     },
     {
       "owner": "sol",
