@@ -47,6 +47,8 @@ _EXPECTED_BLOCKS = 50
 _EXPECTED_LOCAL_Q_ROWS = (4096,) + (5120,) * 9 + (1024,)
 _EXPECTED_WINDOW_KV_ROWS = (14365, 19485) + (20509,) * 7 + (16413, 11293)
 _OWNER_COMPANION_GROUP = {"flow": "flow", "sol": "sol_h3", "vdn": "vdn_h3"}
+_MEDIA_RAW_KEY = "_first_high_model_raw_video"
+_MEDIA_PRE_KEY = "_first_high_pre_guidance_video"
 _REQUIRED_SOURCE_ENTRY_KEYS = frozenset(
     {
         ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."),
@@ -568,6 +570,23 @@ def _snapshot_report(record: _diag._Record, manifest: dict[str, Any]) -> dict[st
     return result
 
 
+def _decode_ready_video_snapshot(
+    record: _diag._Record,
+    name: str,
+    expected_shape: tuple[int, ...],
+) -> torch.Tensor:
+    snapshot = record.snapshots.get(name)
+    if snapshot is None or not torch.is_tensor(snapshot.tensor):
+        raise RuntimeError(f"first-high W is missing decode-ready diagnostic media: {name}")
+    value = snapshot.tensor
+    if value.ndim != 5 or int(value.shape[1]) != 24 or tuple(int(dim) for dim in value.shape) != expected_shape:
+        raise RuntimeError(
+            f"first-high W diagnostic media {name} has {tuple(int(dim) for dim in value.shape)}, "
+            f"expected {expected_shape}"
+        )
+    return value
+
+
 def _block_receipt_topology_ok(subcalls: list[dict[str, Any]]) -> bool:
     by_block: dict[int, list[dict[str, Any]]] = {}
     for item in subcalls:
@@ -673,11 +692,7 @@ def _validate_receipts(receipts: Any, mode: str) -> dict[str, Any]:
     adapter_fingerprints_by_block: dict[str, str] = {}
     adapter_fingerprints_complete = True
     for block in range(_EXPECTED_BLOCKS):
-        values = {
-            item.get("adapter_fingerprint")
-            for item in subcalls
-            if item.get("block") == block
-        }
+        values = {item.get("adapter_fingerprint") for item in subcalls if item.get("block") == block}
         if len(values) != 1:
             adapter_fingerprints_complete = False
             continue
@@ -689,12 +704,8 @@ def _validate_receipts(receipts: Any, mode: str) -> dict[str, Any]:
     adapter_fingerprints_complete = bool(
         adapter_fingerprints_complete and len(adapter_fingerprints_by_block) == _EXPECTED_BLOCKS
     )
-    adapter_fingerprint_digest = (
-        _sha_json(adapter_fingerprints_by_block) if adapter_fingerprints_complete else None
-    )
-    fingerprints_ok = bool(
-        subcalls and gate_fingerprint_consistent and adapter_fingerprints_complete
-    )
+    adapter_fingerprint_digest = _sha_json(adapter_fingerprints_by_block) if adapter_fingerprints_complete else None
+    fingerprints_ok = bool(subcalls and gate_fingerprint_consistent and adapter_fingerprints_complete)
 
     pre_attention_digest = next(
         (
@@ -976,6 +987,9 @@ def _outer_wrapper(
                     "first_high_h3_input_audio",
                 )
             )
+            target_video_shape = tuple(int(dim) for dim in replay.manifest["target_shapes"][0])
+            raw_media = _decode_ready_video_snapshot(record, "first_high_model_raw_video", target_video_shape)
+            pre_media = _decode_ready_video_snapshot(record, "first_high_pre_guidance_video", target_video_shape)
             receipt_report = _validate_receipts(receipt_sink, state.mode)
             companion = _replay._high_first_companion_observation(record) or {}
             sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
@@ -1051,6 +1065,14 @@ def _outer_wrapper(
                     "sol_after": sol_after,
                     "export_contract": export_contract,
                     "core_cleanup": cleanup_contract,
+                    "decode_ready_media_available": True,
+                    "media_contract": {
+                        "first_high_model_raw_shape": [int(dim) for dim in raw_media.shape],
+                        "first_high_model_raw_sha256": _replay._tensor_sha256(raw_media),
+                        "first_high_pre_guidance_shape": [int(dim) for dim in pre_media.shape],
+                        "first_high_pre_guidance_sha256": _replay._tensor_sha256(pre_media),
+                        "retention": "existing execution-contract snapshot references; no extra tensor clone",
+                    },
                     "diagnostic_x0_sha256": _replay._tensor_sha256(diagnostic_x0),
                     "diagnostic_x0_shape": [int(dim) for dim in diagnostic_x0.shape],
                     "diagnostic_output_sha256": _replay._tensor_sha256(diagnostic_output),
@@ -1060,6 +1082,8 @@ def _outer_wrapper(
                         if invariants
                         else "invalid-arm: do not interpret media"
                     ),
+                    _MEDIA_RAW_KEY: raw_media,
+                    _MEDIA_PRE_KEY: pre_media,
                 }
             )
 
@@ -1162,11 +1186,13 @@ class H3FirstHighOperatorComparison:
 class H3FirstHighOperatorComparisonReport:
     CATEGORY = "MiniMax H3/flow regenerate/diagnostic"
     DESCRIPTION = (
-        "Emit W invariants after the one-call sampler returns its diagnostic x0. "
-        "final_trajectory_available is always false; do not treat the trigger as a completed diffusion trajectory."
+        "Emit W invariants plus the decode-ready first-high raw and pre-guidance video latents after the one-call "
+        "sampler returns. final_trajectory_available is always false; do not treat the trigger as a completed "
+        "diffusion trajectory. Media from an invalid arm is diagnostic evidence only and must not be interpreted "
+        "as a W quality result."
     )
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("report",)
+    RETURN_TYPES = ("STRING", "LATENT", "LATENT")
+    RETURN_NAMES = ("report", "first_high_model_raw", "first_high_pre_guidance")
     FUNCTION = "extract"
 
     @classmethod
@@ -1184,7 +1210,18 @@ class H3FirstHighOperatorComparisonReport:
             raise TypeError("invalid first-high W comparison handle")
         if not comparison.complete:
             raise RuntimeError("no completed first-high W report is available")
-        return (json.dumps(comparison.complete.pop(), indent=2, sort_keys=True, default=str),)
+        entry = comparison.complete[-1]
+        raw = entry.get(_MEDIA_RAW_KEY)
+        pre = entry.get(_MEDIA_PRE_KEY)
+        if not torch.is_tensor(raw) or not torch.is_tensor(pre):
+            raise RuntimeError("completed first-high W report is missing decode-ready diagnostic media")
+        comparison.complete.pop()
+        public = {key: value for key, value in entry.items() if key not in {_MEDIA_RAW_KEY, _MEDIA_PRE_KEY}}
+        return (
+            json.dumps(public, indent=2, sort_keys=True, default=str),
+            {"samples": raw},
+            {"samples": pre},
+        )
 
 
 NODE_CLASS_MAPPINGS = {

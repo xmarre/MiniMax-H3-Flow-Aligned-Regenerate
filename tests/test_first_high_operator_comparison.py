@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from h3_flow_regenerate import first_high_operator_comparison as w
 
@@ -383,6 +385,49 @@ def test_receipt_sink_is_bounded_mutable_owner():
     sink.append({"block": 0})
     assert len(sink) == 1
     assert list(sink) == [{"block": 0}]
+
+
+def test_decode_ready_media_requires_exact_target_video_shape():
+    video = torch.zeros((1, 24, 52, 64, 64), dtype=torch.float32)
+    record = SimpleNamespace(snapshots={"first_high_model_raw_video": SimpleNamespace(tensor=video)})
+    assert w._decode_ready_video_snapshot(record, "first_high_model_raw_video", tuple(video.shape)) is video
+
+    with pytest.raises(RuntimeError, match="expected"):
+        w._decode_ready_video_snapshot(record, "first_high_model_raw_video", (1, 24, 52, 63, 64))
+    with pytest.raises(RuntimeError, match="missing decode-ready"):
+        w._decode_ready_video_snapshot(record, "first_high_pre_guidance_video", tuple(video.shape))
+
+
+def test_report_extract_returns_raw_and_pre_guidance_media_without_serializing_tensors():
+    raw = torch.zeros((1, 24, 2, 4, 4), dtype=torch.float32)
+    pre = torch.ones((1, 24, 2, 4, 4), dtype=torch.float32)
+    state = w._State(replay=SimpleNamespace(), mode="native_window", source_gate={})
+    state.complete.append(
+        {
+            "schema_version": 1,
+            "w_invariants_valid": True,
+            "decode_ready_media_available": True,
+            w._MEDIA_RAW_KEY: raw,
+            w._MEDIA_PRE_KEY: pre,
+        }
+    )
+
+    report_text, raw_latent, pre_latent = w.H3FirstHighOperatorComparisonReport().extract(state, None)
+    report = json.loads(report_text)
+    assert report["w_invariants_valid"] is True
+    assert w._MEDIA_RAW_KEY not in report
+    assert w._MEDIA_PRE_KEY not in report
+    assert raw_latent["samples"] is raw
+    assert pre_latent["samples"] is pre
+    assert not state.complete
+
+
+def test_report_extract_does_not_consume_entry_when_media_is_missing():
+    state = w._State(replay=SimpleNamespace(), mode="native_window", source_gate={})
+    state.complete.append({"schema_version": 1})
+    with pytest.raises(RuntimeError, match="missing decode-ready"):
+        w.H3FirstHighOperatorComparisonReport().extract(state, None)
+    assert len(state.complete) == 1
 
 
 def test_provenance_gate_normalizes_only_proven_vdn_wrapper_delta(monkeypatch):
