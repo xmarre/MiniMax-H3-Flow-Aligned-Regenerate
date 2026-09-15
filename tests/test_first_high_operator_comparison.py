@@ -344,9 +344,7 @@ def test_receipt_validation_rejects_wrong_geometry_block_partition_and_route():
     assert w._validate_receipts(wrong_partition, "native_window")["per_block_topology_ok"] is False
 
     wrong_q_geometry = copy.deepcopy(receipts)
-    block_zero_locals = [
-        item for item in wrong_q_geometry if item["block"] == 0 and item["kind"] == "local"
-    ]
+    block_zero_locals = [item for item in wrong_q_geometry if item["block"] == 0 and item["kind"] == "local"]
     block_zero_locals[0]["q_rows"] += 1
     block_zero_locals[1]["q_rows"] -= 1
     report = w._validate_receipts(wrong_q_geometry, "native_window")
