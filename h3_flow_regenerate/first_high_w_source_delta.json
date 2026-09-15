@@ -8,7 +8,7 @@
       "module": "h3_flow_regenerate.first_high_operator_comparison",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "f01f82d381cf0dfa11d43097fd7b03dd49fb12ae",
+      "candidate_git_blob_sha": "27ab1575ec8e8362dfc4dc9bd12c2434a31d0a38",
       "reason": "W replay, one-call termination, fail-closed R-base/current-candidate provenance normalization, exact grouped receipt invariants and source-delta gate"
     },
     {
