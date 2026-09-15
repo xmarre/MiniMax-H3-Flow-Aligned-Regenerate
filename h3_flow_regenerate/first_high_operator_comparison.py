@@ -34,9 +34,32 @@ RECEIPTS_KEY = "h3_first_high_operator_receipts_v1"
 _OUTER_KEY = "h3_flow_regenerate.first_high_operator.execute.v1"
 _SAMPLER_KEY = "h3_flow_regenerate.first_high_operator.sampler_entry.v1"
 _SOURCE_MANIFEST = "first_high_w_source_delta.json"
+_DESIGN_COMMIT = "41b54405867a31e1a9e3261d4d79469a640682c4"
 _ALLOWED_MODES = ("native_window", "native_full_support")
 _REQUIRED_SUFFIX = [0.8780487775802612, 0.800000011920929, 0.6315789222717285, 0.0]
 _MAX_REPORTS = 4
+_EXPECTED_PACKED_ROWS = 56349
+_EXPECTED_VIDEO_SPAN = (3101, 56349)
+_EXPECTED_BLOCKS = 50
+_W_WRAPPER_SPECS = {
+    _OUTER_KEY: ("outer_sample", "_outer_wrapper"),
+    _SAMPLER_KEY: ("sampler_sample", "_sampler_entry_wrapper"),
+}
+_REQUIRED_SOURCE_ENTRY_KEYS = frozenset(
+    {
+        ("flow", "h3_flow_regenerate.first_high_operator_comparison", "."),
+        ("flow", "h3_flow_regenerate.first_high_operator_comparison", "../__init__.py"),
+        ("sol", "sol_h3.first_high_operator_diagnostic", "."),
+        ("sol", "sol_h3", "."),
+        ("vdn", "vdn_h3.first_high_operator_diagnostic", "."),
+        ("vdn", "vdn_h3.first_high_operator_sol_bridge", "."),
+        ("vdn", "vdn_h3", "../__init__.py"),
+        ("core", "comfy.model_sampling", "."),
+        ("core", "comfy.latent_formats", "."),
+        ("core", "comfy.model_patcher", "."),
+        ("core", "comfy.k_diffusion.sampling", "."),
+    }
+)
 
 
 class _FirstCallComplete(BaseException):
@@ -76,6 +99,18 @@ def _git_blob_sha(path: Path) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def _valid_git_blob_sha(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+
+
+def _source_entry_key(value: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(value.get("owner", "")),
+        str(value.get("module", "")),
+        str(value.get("relative_path", ".")),
+    )
+
+
 def _load_source_manifest() -> tuple[dict[str, Any], str]:
     path = Path(__file__).with_name(_SOURCE_MANIFEST)
     try:
@@ -85,9 +120,20 @@ def _load_source_manifest() -> tuple[dict[str, Any], str]:
         raise RuntimeError("first-high W source-delta manifest is missing or invalid") from exc
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         raise RuntimeError("first-high W source-delta manifest schema is unsupported")
+    if manifest.get("design_commit") != _DESIGN_COMMIT:
+        raise RuntimeError("first-high W source-delta manifest targets the wrong design commit")
     entries = manifest.get("entries")
     if not isinstance(entries, list) or not entries:
         raise RuntimeError("first-high W source-delta manifest has no reviewed entries")
+    keys = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("first-high W source-delta entry is not a dictionary")
+        keys.append(_source_entry_key(entry))
+    if len(keys) != len(set(keys)):
+        raise RuntimeError("first-high W source-delta manifest contains duplicate source entries")
+    if frozenset(keys) != _REQUIRED_SOURCE_ENTRY_KEYS:
+        raise RuntimeError("first-high W source-delta manifest entry set differs from the reviewed W contract")
     digest = _sha_json(manifest)
     return manifest, digest
 
@@ -115,12 +161,13 @@ def _verify_source_manifest() -> dict[str, Any]:
     manifest, digest = _load_source_manifest()
     observed = []
     for raw in manifest["entries"]:
-        if not isinstance(raw, dict):
-            raise RuntimeError("first-high W source-delta entry is not a dictionary")
         path = _resolve_source_entry(raw)
         expected_blob = raw.get("candidate_git_blob_sha")
-        if not isinstance(expected_blob, str) or len(expected_blob) != 40:
+        base_blob = raw.get("base_git_blob_sha")
+        if not _valid_git_blob_sha(expected_blob):
             raise RuntimeError("first-high W source-delta entry lacks candidate Git blob identity")
+        if base_blob is not None and not _valid_git_blob_sha(base_blob):
+            raise RuntimeError("first-high W source-delta entry has invalid base Git blob identity")
         actual_blob = _git_blob_sha(path)
         if actual_blob != expected_blob:
             raise RuntimeError(
@@ -129,7 +176,11 @@ def _verify_source_manifest() -> dict[str, Any]:
         observed.append(
             {
                 "owner": raw.get("owner"),
+                "module": raw.get("module"),
+                "relative_path": raw.get("relative_path", "."),
                 "path": str(path),
+                "base_git_blob_sha": base_blob,
+                "candidate_git_blob_sha": expected_blob,
                 "git_blob_sha": actual_blob,
                 "sha256": _sha256_file(path),
                 "reason": raw.get("reason"),
@@ -181,16 +232,83 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
     }
 
 
+def _w_source_path(source_gate: dict[str, Any]) -> str:
+    matches = [
+        str(entry.get("path", ""))
+        for entry in source_gate.get("entries", [])
+        if entry.get("owner") == "flow"
+        and entry.get("module") == "h3_flow_regenerate.first_high_operator_comparison"
+        and entry.get("relative_path", ".") == "."
+    ]
+    if len(matches) != 1 or not matches[0]:
+        raise RuntimeError("first-high W source gate does not identify exactly one W implementation file")
+    return matches[0]
+
+
+def _without_w_diagnostic_wrappers(value: dict[str, Any], source_gate: dict[str, Any]) -> dict[str, Any]:
+    """Remove only the exact W measurement wrappers from current provenance.
+
+    The capture predates W, so those two measurement wrappers are expected only
+    in the current process.  Matching is bound to the reviewed W source path and
+    exact key/qualname; similarly named or foreign wrappers remain causal diffs.
+    """
+    if not isinstance(value, dict):
+        raise TypeError("first-high W provenance identity must be a dictionary")
+    source_path = _w_source_path(source_gate)
+    result = dict(value)
+    removed_total = Counter()
+    for field in ("active_wrapper_order", "patcher_wrapper_order"):
+        groups = value.get(field)
+        if not isinstance(groups, dict):
+            continue
+        rebuilt = {}
+        for boundary, entries in groups.items():
+            if not isinstance(entries, list):
+                rebuilt[boundary] = entries
+                continue
+            kept = []
+            removed_here = Counter()
+            boundary_name = str(boundary).lower()
+            for entry in entries:
+                key = entry.get("key") if isinstance(entry, dict) else None
+                spec = _W_WRAPPER_SPECS.get(key)
+                callable_info = entry.get("callable") if isinstance(entry, dict) else None
+                file_info = callable_info.get("file") if isinstance(callable_info, dict) else None
+                resolved = (
+                    file_info.get("resolved_path") or file_info.get("path") if isinstance(file_info, dict) else None
+                )
+                exact = bool(
+                    spec is not None
+                    and spec[0] in boundary_name
+                    and isinstance(callable_info, dict)
+                    and callable_info.get("qualname") == spec[1]
+                    and resolved == source_path
+                )
+                if exact:
+                    removed_here[str(key)] += 1
+                    removed_total[str(key)] += 1
+                    continue
+                kept.append(entry)
+            if any(count > 1 for count in removed_here.values()):
+                raise RuntimeError("first-high W diagnostic wrapper was installed more than once at one boundary")
+            rebuilt[boundary] = kept
+        result[field] = rebuilt
+    missing = [key for key in _W_WRAPPER_SPECS if removed_total[key] == 0]
+    if missing:
+        raise RuntimeError("first-high W provenance is missing diagnostic wrapper identity: " + ", ".join(missing))
+    return result
+
+
 def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bool:
-    lowered = path.lower()
-    if "first_high_operator" in lowered:
-        return True
+    if not path.startswith("$.loaded_companion_sources."):
+        return False
     for entry in source_gate.get("entries", []):
+        base_blob = entry.get("base_git_blob_sha")
+        candidate_blob = entry.get("candidate_git_blob_sha")
+        if base_blob == candidate_blob:
+            continue
         source_path = str(entry.get("path", ""))
-        if source_path and source_path in path:
-            return True
-        name = Path(source_path).name if source_path else ""
-        if name and name in path and any(token in lowered for token in ("loaded_companion_sources", "source")):
+        if source_path and f"[{source_path}]" in path:
             return True
     return False
 
@@ -198,6 +316,7 @@ def _allowed_provenance_difference(path: str, source_gate: dict[str, Any]) -> bo
 def _provenance_gate(state: _State, record: _diag._Record) -> dict[str, Any]:
     capture = _replay._bundle_provenance_equivalence_identity(state.replay.manifest)
     current = _replay._provenance_equivalence_identity(record.state.manifest)
+    current = _without_w_diagnostic_wrappers(current, state.source_gate)
     differences = _replay._cross_process_provenance_diff_paths(capture, current, limit=64)
     unexpected = [path for path in differences if not _allowed_provenance_difference(path, state.source_gate)]
     return {
@@ -246,6 +365,32 @@ def _snapshot_report(record: _diag._Record, manifest: dict[str, Any]) -> dict[st
     return result
 
 
+def _block_receipt_topology_ok(subcalls: list[dict[str, Any]]) -> bool:
+    by_block: dict[int, list[dict[str, Any]]] = {}
+    for item in subcalls:
+        block = item.get("block")
+        if type(block) is not int or not 0 <= block < _EXPECTED_BLOCKS:
+            return False
+        by_block.setdefault(block, []).append(item)
+    if set(by_block) != set(range(_EXPECTED_BLOCKS)):
+        return False
+    for items in by_block.values():
+        kinds = Counter(str(item.get("kind")) for item in items)
+        if kinds != Counter({"local": 11, "global": 1, "anchor": 2}):
+            return False
+        local_groups = sorted(item.get("group_index") for item in items if item.get("kind") == "local")
+        anchor_groups = sorted(item.get("group_index") for item in items if item.get("kind") == "anchor")
+        global_groups = [item.get("group_index") for item in items if item.get("kind") == "global"]
+        if local_groups != list(range(11)) or anchor_groups != [0, 1] or global_groups != [None]:
+            return False
+        q_rows = [item.get("q_rows") for item in items]
+        if any(type(rows) is not int or rows <= 0 for rows in q_rows):
+            return False
+        if sum(q_rows) != _EXPECTED_PACKED_ROWS:
+            return False
+    return True
+
+
 def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     subcalls = [item for item in receipts if isinstance(item, dict)]
     kinds = Counter(str(item.get("kind")) for item in subcalls)
@@ -253,6 +398,7 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     packed_rows = {int(item.get("packed_rows", -1)) for item in subcalls}
     video_spans = {(int(item.get("video_start", -1)), int(item.get("video_end", -1))) for item in subcalls}
     local = [item for item in subcalls if item.get("kind") == "local"]
+    nonlocal_calls = [item for item in subcalls if item.get("kind") in {"global", "anchor"}]
     expected_local_route = "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
     support_ok = all(
         item.get("support_mode") == ("restricted_window" if mode == "native_window" else "canonical_full")
@@ -262,12 +408,32 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     full_kv_ok = True
     if mode == "native_full_support":
         full_kv_ok = all(
-            item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == 56349 for item in local
+            item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == _EXPECTED_PACKED_ROWS
+            for item in local
         )
+    else:
+        full_kv_ok = all(0 < int(item.get("kv_rows", -1)) <= _EXPECTED_PACKED_ROWS for item in local)
+    nonlocal_ok = all(
+        int(item.get("kv_rows", -1)) == _EXPECTED_PACKED_ROWS
+        and item.get("support_mode") == "full"
+        and item.get("complement_executed") is False
+        for item in nonlocal_calls
+    )
+    geometry_ok = packed_rows == {_EXPECTED_PACKED_ROWS} and video_spans == {_EXPECTED_VIDEO_SPAN}
+    per_block_ok = _block_receipt_topology_ok(subcalls)
     fingerprints_ok = bool(subcalls) and all(
         isinstance(item.get("gate_fingerprint"), str) and isinstance(item.get("adapter_fingerprint"), str)
         for item in subcalls
     )
+    pre_attention_digest = next(
+        (
+            item.get("pre_attention_qkv_digest")
+            for item in subcalls
+            if item.get("block") == 0 and item.get("kind") == "global"
+        ),
+        None,
+    )
+    pre_attention_digest_present = isinstance(pre_attention_digest, str) and len(pre_attention_digest) == 64
     expected = kinds == Counter({"local": 550, "global": 50, "anchor": 100})
     return {
         "count": len(subcalls),
@@ -277,18 +443,15 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
         "video_spans": sorted(video_spans),
         "support_ok": support_ok,
         "complement_ok": complement_ok,
-        "canonical_full_kv_ok": full_kv_ok,
+        "canonical_or_window_kv_ok": full_kv_ok,
+        "nonlocal_full_support_ok": nonlocal_ok,
+        "geometry_ok": geometry_ok,
+        "per_block_topology_ok": per_block_ok,
         "fingerprints_present": fingerprints_ok,
         "expected_700_subcalls": expected and len(subcalls) == 700,
         "expected_local_route": local_routes == Counter({expected_local_route: 550}),
-        "first_block_pre_attention_qkv_digest": next(
-            (
-                item.get("pre_attention_qkv_digest")
-                for item in subcalls
-                if item.get("block") == 0 and item.get("kind") == "global"
-            ),
-            None,
-        ),
+        "first_block_pre_attention_qkv_digest": pre_attention_digest,
+        "first_block_pre_attention_qkv_digest_present": pre_attention_digest_present,
     }
 
 
@@ -516,8 +679,12 @@ def _outer_wrapper(
                 and receipt_report["expected_local_route"]
                 and receipt_report["support_ok"]
                 and receipt_report["complement_ok"]
-                and receipt_report["canonical_full_kv_ok"]
+                and receipt_report["canonical_or_window_kv_ok"]
+                and receipt_report["nonlocal_full_support_ok"]
+                and receipt_report["geometry_ok"]
+                and receipt_report["per_block_topology_ok"]
                 and receipt_report["fingerprints_present"]
+                and receipt_report["first_block_pre_attention_qkv_digest_present"]
                 and sol_zero
                 and provenance_gate["exact_except_reviewed_w_delta"]
             )
