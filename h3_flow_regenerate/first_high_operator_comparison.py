@@ -9,6 +9,7 @@ This module is diagnostic-only.  It never changes production progressive policy,
 never regenerates the R bundle, and never reports R ``attribution_valid`` for an
 operator-modified run.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -175,9 +176,7 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
         "model_sampling_class": (
             None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}"
         ),
-        "latent_format_class": (
-            None if latent is None else f"{type(latent).__module__}.{type(latent).__qualname__}"
-        ),
+        "latent_format_class": (None if latent is None else f"{type(latent).__module__}.{type(latent).__qualname__}"),
         "final_head_count": head_count,
     }
 
@@ -233,9 +232,7 @@ def _snapshot_report(record: _diag._Record, manifest: dict[str, Any]) -> dict[st
             "capture_sha256": expected.get(name),
             "w_sha256": current,
             "entry_equal": (
-                current is not None
-                and expected.get(name) is not None
-                and current == expected.get(name)
+                current is not None and expected.get(name) is not None and current == expected.get(name)
                 if name
                 in {
                     "first_high_sampler_input_video",
@@ -252,29 +249,20 @@ def _snapshot_report(record: _diag._Record, manifest: dict[str, Any]) -> dict[st
 def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
     subcalls = [item for item in receipts if isinstance(item, dict)]
     kinds = Counter(str(item.get("kind")) for item in subcalls)
-    local_routes = Counter(
-        str(item.get("provider_route")) for item in subcalls if item.get("kind") == "local"
-    )
+    local_routes = Counter(str(item.get("provider_route")) for item in subcalls if item.get("kind") == "local")
     packed_rows = {int(item.get("packed_rows", -1)) for item in subcalls}
-    video_spans = {
-        (int(item.get("video_start", -1)), int(item.get("video_end", -1))) for item in subcalls
-    }
+    video_spans = {(int(item.get("video_start", -1)), int(item.get("video_end", -1))) for item in subcalls}
     local = [item for item in subcalls if item.get("kind") == "local"]
-    expected_local_route = (
-        "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
-    )
+    expected_local_route = "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
     support_ok = all(
         item.get("support_mode") == ("restricted_window" if mode == "native_window" else "canonical_full")
         for item in local
     )
-    complement_ok = all(
-        bool(item.get("complement_executed")) == (mode == "native_window") for item in local
-    )
+    complement_ok = all(bool(item.get("complement_executed")) == (mode == "native_window") for item in local)
     full_kv_ok = True
     if mode == "native_full_support":
         full_kv_ok = all(
-            item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == 56349
-            for item in local
+            item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == 56349 for item in local
         )
     fingerprints_ok = bool(subcalls) and all(
         isinstance(item.get("gate_fingerprint"), str) and isinstance(item.get("adapter_fingerprint"), str)
@@ -515,9 +503,7 @@ def _outer_wrapper(
             )
             receipt_report = _validate_receipts(receipt_sink, state.mode)
             companion = _replay._high_first_companion_observation(record) or {}
-            sol_after = (
-                ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
-            )
+            sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
             sol_zero = bool(
                 int(sol_after.get("vdn_local_sol_calls", 0) or 0) == 0
                 and int(sol_after.get("sparse_calls", 0) or 0) == 0
