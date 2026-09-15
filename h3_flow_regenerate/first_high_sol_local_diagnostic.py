@@ -926,6 +926,7 @@ def _validate_witnesses(evidence: _Sink) -> dict[str, Any]:
                 "route_trace_matches_independent": route_ok,
                 "route_mismatch_count": item.get("route_mismatch_count"),
                 "route_mismatch_examples": item.get("route_mismatch_examples"),
+                "route_margin_summary": item.get("route_margin_summary"),
                 "frozen_route_reference": frozen,
                 "frozen_route_conformant": frozen_ok,
                 "debug_sparse_vs_ordinary": item.get("debug_sparse_vs_ordinary"),
