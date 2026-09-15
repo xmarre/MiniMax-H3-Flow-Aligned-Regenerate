@@ -193,7 +193,6 @@ def test_vdn_object_patch_normalization_fails_closed_on_patch_set_and_source(mon
             gate,
         )
 
-    wrappers = set(runtime.values())
     wrong = runtime[_vdn_key(0)]
     monkeypatch.setattr(
         w,
