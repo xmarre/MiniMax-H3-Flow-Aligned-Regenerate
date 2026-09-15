@@ -22,9 +22,44 @@ jobs:
         with:
           python-version: "3.12"
       - run: python .github/e_flow_hostile_patch.py
+      - name: Normalize pre-existing long diagnostic literals
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          path = Path("h3_flow_regenerate/first_high_sol_local_diagnostic.py")
+          text = path.read_text()
+          text = re.sub(
+              r'    "first_high_h3_input_video": .*?\n',
+              '    "first_high_h3_input_video": "b49f17a317530795be43bc775486777b07d5b5dbb28996819033cdede64195c0",\n',
+              text,
+              count=1,
+          )
+          replacements = {
+              '        raise RuntimeError("first-high Sol-local E VDN diagnostic object-patch set is not exactly 50 H3 attention patches")':
+                  '        raise RuntimeError(\n            "first-high Sol-local E VDN diagnostic object-patch set is not exactly "\n            "50 H3 attention patches"\n        )',
+              '                raise RuntimeError(f"first-high Sol-local E provenance must contain exactly one {field_name} entry for {key}")':
+                  '                raise RuntimeError(\n                    f"first-high Sol-local E provenance must contain exactly one "\n                    f"{field_name} entry for {key}"\n                )',
+              '                f"first-high Sol-local E R companion source inventory is invalid for {group_name}: " + "; ".join(problems)':
+                  '                f"first-high Sol-local E R companion source inventory is invalid for {group_name}: "\n                + "; ".join(problems)',
+              '        raise RuntimeError(f"first-high Sol-local E requires preserved R capture {_EXPECTED_CAPTURE_ID}, got {capture_id}")':
+                  '        raise RuntimeError(\n            f"first-high Sol-local E requires preserved R capture {_EXPECTED_CAPTURE_ID}, "\n            f"got {capture_id}"\n        )',
+              '        raise RuntimeError(f"first-high Sol-local E requires 2 GiB CUDA headroom; only {int(free_cuda)} bytes free")':
+                  '        raise RuntimeError(\n            f"first-high Sol-local E requires 2 GiB CUDA headroom; "\n            f"only {int(free_cuda)} bytes free"\n        )',
+              '        raise RuntimeError(f"first-high Sol-local E requires 2 GiB host headroom; only {int(cpu_available)} bytes available")':
+                  '        raise RuntimeError(\n            f"first-high Sol-local E requires 2 GiB host headroom; "\n            f"only {int(cpu_available)} bytes available"\n        )',
+              '                            "all-selected-arithmetic-mismatch: localize descriptor/stride/mask/normalization before any new H3 run"':
+                  '                            "all-selected-arithmetic-mismatch: localize descriptor/stride/"\n                            "mask/normalization before any new H3 run"',
+              '                            else "valid-e: decode E media; run only the design-table follow-up selected by that media plus witness result"':
+                  '                            else (\n                                "valid-e: decode E media; run only the design-table follow-up "\n                                "selected by that media plus witness result"\n                            )',
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+          path.write_text(text)
+          PY
       - run: python -m pip install ruff
-      - run: ruff check --fix h3_flow_regenerate/first_high_sol_local_diagnostic.py
       - run: ruff format h3_flow_regenerate/first_high_sol_local_diagnostic.py
+      - run: ruff check --fix h3_flow_regenerate/first_high_sol_local_diagnostic.py
       - name: Finalize exact source manifest hashes
         run: |
           python - <<'PY'
