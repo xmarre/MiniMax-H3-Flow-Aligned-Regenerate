@@ -432,6 +432,53 @@ def _normalize_e_provenance_delta(current, capture, guider, source_gate):
 
 _FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches = _normalize_e_provenance_delta
 
+_ORIGINAL_E_MEMORY_PREFLIGHT = _FIRST_HIGH_SOL_LOCAL_MODULE._memory_preflight
+
+
+def _e_runtime_cuda_device(device):
+    """Resolve E's CUDA preflight target independently of replay tensor storage.
+
+    R legitimately captured the first-high latent on CPU in the sampler lifetime,
+    while the H3 transformer and Sol-Attn execute on CUDA. A CPU replay tensor is
+    therefore not evidence that the runtime lacks CUDA. When exactly one CUDA
+    device exists, that device is unambiguous; multi-GPU CPU replay remains
+    fail-closed because E cannot infer which GPU owns the forthcoming H3 call.
+    """
+    torch = _FIRST_HIGH_SOL_LOCAL_MODULE.torch
+    replay_device = torch.device(device)
+    if not torch.cuda.is_available():
+        raise RuntimeError("first-high Sol-local E requires CUDA SM120")
+    if replay_device.type == "cuda":
+        runtime_device = replay_device
+        if runtime_device.index is None:
+            runtime_device = torch.device("cuda", int(torch.cuda.current_device()))
+    else:
+        if int(torch.cuda.device_count()) != 1:
+            raise RuntimeError(
+                "first-high Sol-local E replay tensor is non-CUDA and the runtime CUDA device is ambiguous"
+            )
+        runtime_device = torch.device("cuda", 0)
+
+    capability = tuple(int(value) for value in torch.cuda.get_device_capability(runtime_device))
+    if capability != (12, 0):
+        sm = capability[0] * 10 + capability[1]
+        raise RuntimeError(
+            f"first-high Sol-local E requires CUDA SM120; runtime device {runtime_device} reports SM{sm}"
+        )
+    return replay_device, runtime_device, capability
+
+
+def _memory_preflight_on_runtime_cuda(device):
+    replay_device, runtime_device, capability = _e_runtime_cuda_device(device)
+    result = dict(_ORIGINAL_E_MEMORY_PREFLIGHT(runtime_device))
+    result["replay_tensor_device"] = str(replay_device)
+    result["cuda_preflight_device"] = str(runtime_device)
+    result["cuda_compute_capability"] = [int(capability[0]), int(capability[1])]
+    return result
+
+
+_FIRST_HIGH_SOL_LOCAL_MODULE._memory_preflight = _memory_preflight_on_runtime_cuda
+
 NODE_CLASS_MAPPINGS = {
     **NODE_CLASS_MAPPINGS,
     **TARGET_SPARSE_NODE_CLASS_MAPPINGS,
