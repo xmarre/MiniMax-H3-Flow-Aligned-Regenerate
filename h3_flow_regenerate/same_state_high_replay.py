@@ -385,6 +385,130 @@ def _provenance_diff_paths(left: Any, right: Any, *, limit: int = 24) -> list[st
     return differences
 
 
+def _companion_source_map(value: Any) -> tuple[dict[str, dict[str, str]], list[str]]:
+    """Index one companion import snapshot by resolved source path.
+
+    ``loaded_companion_sources`` is collected from ``sys.modules``. Import
+    population is lifecycle state, so a cold replay may legitimately contain a
+    strict subset of the warm capture's modules. The capture paths and hashes
+    are still useful: replay can validate those exact source bytes on disk even
+    when a module has not been imported yet.
+    """
+    if not isinstance(value, list):
+        return {}, ["group is not a list"]
+    result: dict[str, dict[str, str]] = {}
+    problems: list[str] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            problems.append(f"entry[{index}] is not a dictionary")
+            continue
+        file_info = entry.get("file")
+        if not isinstance(file_info, dict):
+            problems.append(f"entry[{index}] has no file identity")
+            continue
+        raw_path = file_info.get("resolved_path") or file_info.get("path")
+        sha256 = file_info.get("sha256")
+        if not isinstance(raw_path, str) or not raw_path or not isinstance(sha256, str) or not sha256:
+            problems.append(f"entry[{index}] has incomplete path/SHA-256 identity")
+            continue
+        module = entry.get("module")
+        current = {"sha256": sha256, "module": str(module) if module is not None else ""}
+        previous = result.get(raw_path)
+        if previous is not None and previous["sha256"] != sha256:
+            problems.append(f"duplicate path has conflicting SHA-256: {raw_path}")
+            continue
+        result[raw_path] = current
+    return result, problems
+
+
+def _cross_process_provenance_diff_paths(left: Any, right: Any, *, limit: int = 24) -> list[str]:
+    """Compare causal provenance without equating warm/cold import population.
+
+    All non-companion provenance remains exact. For companion repositories, the
+    capture's source list is treated as a byte inventory: every capture-listed
+    source file must still exist at the same resolved path with the same SHA-256.
+    Replay-imported files must be drawn from that captured inventory and shared
+    files must report the same SHA-256. A capture-only module is therefore safe
+    when it is merely not imported yet in the fresh process; changed source
+    bytes, a different installation root/path, or a replay-only source remain
+    fail-closed.
+
+    The strict ``_provenance_diff_paths`` function is intentionally retained for
+    validating a persisted equivalence identity against the bundle's full
+    provenance. This relaxation applies only to capture-vs-fresh-process R.
+    """
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return _provenance_diff_paths(left, right, limit=limit)
+
+    left_base = {key: value for key, value in left.items() if key != "loaded_companion_sources"}
+    right_base = {key: value for key, value in right.items() if key != "loaded_companion_sources"}
+    differences = _provenance_diff_paths(left_base, right_base, limit=limit)
+    if len(differences) >= limit:
+        return differences
+
+    left_groups = left.get("loaded_companion_sources")
+    right_groups = right.get("loaded_companion_sources")
+    if not isinstance(left_groups, dict) or not isinstance(right_groups, dict):
+        differences.append("$.loaded_companion_sources")
+        return differences[:limit]
+
+    for label in sorted(set(left_groups) | set(right_groups)):
+        if len(differences) >= limit:
+            break
+        path = f"$.loaded_companion_sources.{label}"
+        if label not in left_groups:
+            differences.append(path + " (capture missing)")
+            continue
+        if label not in right_groups:
+            differences.append(path + " (replay missing)")
+            continue
+
+        capture_sources, capture_problems = _companion_source_map(left_groups[label])
+        replay_sources, replay_problems = _companion_source_map(right_groups[label])
+        for problem in capture_problems:
+            if len(differences) >= limit:
+                break
+            differences.append(path + ".capture_identity: " + problem)
+        for problem in replay_problems:
+            if len(differences) >= limit:
+                break
+            differences.append(path + ".replay_identity: " + problem)
+        if len(differences) >= limit:
+            break
+
+        for source_path, capture_entry in sorted(capture_sources.items()):
+            if len(differences) >= limit:
+                break
+            try:
+                resolved = Path(source_path).resolve(strict=True)
+            except (OSError, RuntimeError):
+                differences.append(path + f".capture_source[{source_path}].missing")
+                continue
+            if not resolved.is_file() or str(resolved) != source_path:
+                differences.append(path + f".capture_source[{source_path}].resolved_path")
+                continue
+            try:
+                disk_sha256 = _sha256_file(resolved)
+            except OSError:
+                differences.append(path + f".capture_source[{source_path}].unreadable")
+                continue
+            if disk_sha256 != capture_entry["sha256"]:
+                differences.append(path + f".capture_source[{source_path}].on_disk_sha256")
+                continue
+            replay_entry = replay_sources.get(source_path)
+            if replay_entry is not None and replay_entry["sha256"] != capture_entry["sha256"]:
+                differences.append(path + f".shared_source[{source_path}].sha256")
+
+        if len(differences) >= limit:
+            break
+        for source_path in sorted(set(replay_sources) - set(capture_sources)):
+            if len(differences) >= limit:
+                break
+            differences.append(path + f".replay_only_source[{source_path}]")
+
+    return differences[:limit]
+
+
 def _guidance_config_dict(binding: _runtime.FlowBinding | None) -> dict[str, Any] | None:
     if binding is None or binding.guidance is None:
         return None
@@ -1176,7 +1300,7 @@ def _replay_wrapper(
         raise RuntimeError("same-state replay pristine target conditioning differs from capture")
     capture_provenance = _bundle_provenance_equivalence_identity(state.manifest)
     current_provenance = _provenance_equivalence_identity(record.state.manifest)
-    provenance_differences = _provenance_diff_paths(capture_provenance, current_provenance)
+    provenance_differences = _cross_process_provenance_diff_paths(capture_provenance, current_provenance)
     if provenance_differences:
         raise RuntimeError(
             "same-state replay production runtime provenance differs from capture; differing fields: "
@@ -1320,7 +1444,7 @@ def _replay_wrapper(
         condition_exact = record.high_pre_core_digest == state.manifest.get("conditioning_digest")
         replay_provenance = _provenance_equivalence_identity(record.state.manifest)
         capture_provenance = _bundle_provenance_equivalence_identity(state.manifest)
-        provenance_differences = _provenance_diff_paths(capture_provenance, replay_provenance)
+        provenance_differences = _cross_process_provenance_diff_paths(capture_provenance, replay_provenance)
         provenance_exact = not provenance_differences
         guidance_exact = _dict_equal(current_guidance, state.manifest.get("guidance_config"))
         spectrum_config_exact = _dict_equal(current_spectrum_config, state.manifest.get("spectrum_config"))
