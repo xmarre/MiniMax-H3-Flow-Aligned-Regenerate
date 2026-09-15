@@ -167,9 +167,7 @@ def test_e_lazy_sparse_rejects_snapshot_sha_mismatch(tmp_path, monkeypatch):
 
 def test_e_lazy_sparse_leaves_unrelated_replay_only_source_visible(tmp_path, monkeypatch):
     capture, current, source_gate, sparse, other = _lazy_sparse_fixture(tmp_path, monkeypatch)
-    current["loaded_companion_sources"]["sol_h3"].append(
-        _source_record(other, "generated.sol_h3.other", "e" * 64)
-    )
+    current["loaded_companion_sources"]["sol_h3"].append(_source_record(other, "generated.sol_h3.other", "e" * 64))
     normalized = root._normalize_e_lazy_sol_sparse_source(current, capture, source_gate)
     current_map, problems = root._FIRST_HIGH_SOL_LOCAL_MODULE._replay._companion_source_map(
         normalized["loaded_companion_sources"]["sol_h3"]
