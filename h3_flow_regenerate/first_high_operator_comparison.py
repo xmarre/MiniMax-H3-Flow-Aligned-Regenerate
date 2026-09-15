@@ -11,12 +11,11 @@ operator-modified run.
 """
 from __future__ import annotations
 
-from collections import Counter, deque
-from dataclasses import dataclass, field
 import hashlib
 import importlib
 import json
-import math
+from collections import Counter, deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +36,6 @@ _SOURCE_MANIFEST = "first_high_w_source_delta.json"
 _ALLOWED_MODES = ("native_window", "native_full_support")
 _REQUIRED_SUFFIX = [0.8780487775802612, 0.800000011920929, 0.6315789222717285, 0.0]
 _MAX_REPORTS = 4
-_MISSING = object()
 
 
 class _FirstCallComplete(BaseException):
@@ -74,7 +72,7 @@ def _sha256_file(path: Path) -> str:
 def _git_blob_sha(path: Path) -> str:
     data = path.read_bytes()
     header = f"blob {len(data)}\0".encode("ascii")
-    return hashlib.sha1(header + data).hexdigest()  # noqa: S324 - exact Git object identity, not a security digest.
+    return hashlib.sha1(header + data).hexdigest()
 
 
 def _load_source_manifest() -> tuple[dict[str, Any], str]:
@@ -174,8 +172,12 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
     if torch.is_tensor(weight) and type(out_features) is int and out_features > 0:
         head_count = int(weight.shape[0]) // int(out_features)
     return {
-        "model_sampling_class": None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}",
-        "latent_format_class": None if latent is None else f"{type(latent).__module__}.{type(latent).__qualname__}",
+        "model_sampling_class": (
+            None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}"
+        ),
+        "latent_format_class": (
+            None if latent is None else f"{type(latent).__module__}.{type(latent).__qualname__}"
+        ),
         "final_head_count": head_count,
     }
 
@@ -234,7 +236,8 @@ def _snapshot_report(record: _diag._Record, manifest: dict[str, Any]) -> dict[st
                 current is not None
                 and expected.get(name) is not None
                 and current == expected.get(name)
-                if name in {
+                if name
+                in {
                     "first_high_sampler_input_video",
                     "first_high_sampler_input_audio",
                     "first_high_h3_input_video",
@@ -257,15 +260,22 @@ def _validate_receipts(receipts: list[Any], mode: str) -> dict[str, Any]:
         (int(item.get("video_start", -1)), int(item.get("video_end", -1))) for item in subcalls
     }
     local = [item for item in subcalls if item.get("kind") == "local"]
-    expected_local_route = "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
+    expected_local_route = (
+        "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
+    )
     support_ok = all(
         item.get("support_mode") == ("restricted_window" if mode == "native_window" else "canonical_full")
         for item in local
     )
-    complement_ok = all(bool(item.get("complement_executed")) == (mode == "native_window") for item in local)
+    complement_ok = all(
+        bool(item.get("complement_executed")) == (mode == "native_window") for item in local
+    )
     full_kv_ok = True
     if mode == "native_full_support":
-        full_kv_ok = all(item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == 56349 for item in local)
+        full_kv_ok = all(
+            item.get("canonical_full_kv") is True and int(item.get("kv_rows", -1)) == 56349
+            for item in local
+        )
     fingerprints_ok = bool(subcalls) and all(
         isinstance(item.get("gate_fingerprint"), str) and isinstance(item.get("adapter_fingerprint"), str)
         for item in subcalls
@@ -352,7 +362,8 @@ def _outer_wrapper(
     config = options.get(_runtime.PROGRESSIVE_KEY)
     if not _diag._eligible(config):
         raise RuntimeError("first-high W requires the original progressive Target Input config")
-    if str(replay.manifest.get("sampler")) != _runtime.sampler_name(sampler) or _runtime.sampler_name(sampler) != "sample_euler":
+    current_sampler = _runtime.sampler_name(sampler)
+    if str(replay.manifest.get("sampler")) != current_sampler or current_sampler != "sample_euler":
         raise RuntimeError("first-high W is bounded to the captured Euler sampler")
     if int(seed or 0) != int(replay.manifest["seed"]):
         raise RuntimeError("first-high W seed differs from R capture")
@@ -504,7 +515,9 @@ def _outer_wrapper(
             )
             receipt_report = _validate_receipts(receipt_sink, state.mode)
             companion = _replay._high_first_companion_observation(record) or {}
-            sol_after = ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
+            sol_after = (
+                ((companion.get("after") or {}).get("sol") or {}) if isinstance(companion, dict) else {}
+            )
             sol_zero = bool(
                 int(sol_after.get("vdn_local_sol_calls", 0) or 0) == 0
                 and int(sol_after.get("sparse_calls", 0) or 0) == 0
@@ -555,7 +568,11 @@ def _outer_wrapper(
             )
 
 
-def patch_first_high_operator_comparison(model: Any, manifest_path: str, mode: str) -> tuple[Any, _State]:
+def patch_first_high_operator_comparison(
+    model: Any,
+    manifest_path: str,
+    mode: str,
+) -> tuple[Any, _State]:
     if mode not in _ALLOWED_MODES:
         raise ValueError(f"unsupported first-high W mode: {mode}")
     diagnostic = (getattr(model, "model_options", None) or {}).get(_diag.DIAGNOSTIC_KEY)
@@ -581,7 +598,11 @@ def patch_first_high_operator_comparison(model: Any, manifest_path: str, mode: s
         raise RuntimeError("first-high W requires mutable transformer options")
     if "h3_flow_untwist_clock_trial_v1" in transformer or "h3_flow_sampling_context" in transformer:
         raise RuntimeError("first-high W requires the established no-Untwist R control")
-    if STATE_KEY in patched.model_options or _replay.CAPTURE_STATE_KEY in patched.model_options or _replay.REPLAY_STATE_KEY in patched.model_options:
+    if (
+        STATE_KEY in patched.model_options
+        or _replay.CAPTURE_STATE_KEY in patched.model_options
+        or _replay.REPLAY_STATE_KEY in patched.model_options
+    ):
         raise RuntimeError("first-high W cannot be combined with R capture/replay wrappers")
     state = _State(replay=replay_state, mode=mode, source_gate=source_gate)
     patched.model_options[STATE_KEY] = state
