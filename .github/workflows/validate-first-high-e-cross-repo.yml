@@ -161,11 +161,17 @@ jobs:
           assert "ApplyVDNH3" in vdn.NODE_CLASS_MAPPINGS
           assert "H3FirstHighSolLocalDiagnostic" in flow.NODE_CLASS_MAPPINGS
 
-          suffixes = {
-              "custom_nodes.synthetic_sol_e.sol_h3.first_high_sol_local_diagnostic",
-              "custom_nodes.synthetic_vdn_e.vdn_h3.first_high_sol_local_diagnostic",
-              "custom_nodes.synthetic_flow_e.h3_flow_regenerate.first_high_sol_local_diagnostic",
-          }
-          assert suffixes <= set(sys.modules)
-          print("generated-namespace E companion import stack: ok")
+          assert "custom_nodes.synthetic_sol_e.sol_h3.first_high_sol_local_diagnostic" in sys.modules
+          # VDN deliberately imports its internal package as bare `vdn_h3` after
+          # adding the custom-node root to sys.path; validate that actual loader
+          # behavior instead of inventing a generated VDN subpackage name.
+          assert "vdn_h3.first_high_sol_local_diagnostic" in sys.modules
+          assert "custom_nodes.synthetic_flow_e.h3_flow_regenerate.first_high_sol_local_diagnostic" in sys.modules
+
+          from vdn_h3 import first_high_sol_local_bridge
+
+          resolved = first_high_sol_local_bridge._functions()
+          enter = resolved["enter_local_group"]
+          assert enter.__module__ == "custom_nodes.synthetic_sol_e.sol_h3.first_high_sol_local_diagnostic"
+          print("generated-namespace E companion import/bridge stack: ok")
           PY
