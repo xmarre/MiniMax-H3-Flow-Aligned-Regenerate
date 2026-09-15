@@ -209,9 +209,7 @@ def _normalize_w_wrapper_order(current, guider):
             if isinstance(keyed, dict) and key in keyed
         ]
         if len(locations) != 1 or locations[0] != wrapper_type:
-            raise RuntimeError(
-                f"first-high W live wrapper key ownership changed for {key}: {locations!r}"
-            )
+            raise RuntimeError(f"first-high W live wrapper key ownership changed for {key}: {locations!r}")
         keyed = runtime_wrappers.get(wrapper_type)
         values = keyed.get(key) if isinstance(keyed, dict) else None
         if not isinstance(values, (list, tuple)) or len(values) != 1 or values[0] is not expected_callable:
@@ -227,29 +225,21 @@ def _normalize_w_wrapper_order(current, guider):
             manifest_key = str(wrapper_type)
             entries = rebuilt_manifest.get(manifest_key)
             if not isinstance(entries, list):
-                raise RuntimeError(
-                    f"first-high W provenance lacks wrapper list {field_name}.{manifest_key}"
-                )
+                raise RuntimeError(f"first-high W provenance lacks wrapper list {field_name}.{manifest_key}")
             matches = [
                 (index, entry)
                 for index, entry in enumerate(entries)
                 if isinstance(entry, dict) and entry.get("key") == key
             ]
             if len(matches) != 1:
-                raise RuntimeError(
-                    f"first-high W provenance must contain exactly one {field_name} entry for {key}"
-                )
+                raise RuntimeError(f"first-high W provenance must contain exactly one {field_name} entry for {key}")
             index, entry = matches[0]
             expected_identity = _FIRST_HIGH_OPERATOR_MODULE._callable_equivalence_identity(expected_callable)
             observed_identity_json = _FIRST_HIGH_OPERATOR_MODULE._canonical_json(entry.get("callable"))
             expected_identity_json = _FIRST_HIGH_OPERATOR_MODULE._canonical_json(expected_identity)
             if observed_identity_json != expected_identity_json:
-                raise RuntimeError(
-                    f"first-high W provenance wrapper callable identity changed for {field_name}:{key}"
-                )
-            rebuilt_manifest[manifest_key] = [
-                item for item_index, item in enumerate(entries) if item_index != index
-            ]
+                raise RuntimeError(f"first-high W provenance wrapper callable identity changed for {field_name}:{key}")
+            rebuilt_manifest[manifest_key] = [item for item_index, item in enumerate(entries) if item_index != index]
         result[field_name] = rebuilt_manifest
     return result
 
