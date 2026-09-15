@@ -704,9 +704,9 @@ def _sampler_entry_wrapper(
         if exc.token is not call.token:
             raise
         if call.completed:
-            raise RuntimeError("first-high W sampler callback completed more than once")
+            raise RuntimeError("first-high W sampler callback completed more than once") from None
         if not torch.is_tensor(exc.x0):
-            raise RuntimeError("first-high W sampler callback x0 is not a packed tensor")
+            raise RuntimeError("first-high W sampler callback x0 is not a packed tensor") from None
         call.completed = True
         call.raw_x0 = exc.x0
         # Catch at SAMPLER_SAMPLE so KSAMPLER cannot take another Euler step, while
