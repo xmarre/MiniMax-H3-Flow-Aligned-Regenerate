@@ -31,6 +31,7 @@ def _vdn_source_gate(path="/custom_nodes/vdn/vdn_h3/first_high_operator_diagnost
                 "relative_path": ".",
                 "path": path,
                 "base_git_blob_sha": None,
+                "base_sha256": None,
                 "candidate_git_blob_sha": "b" * 40,
             }
         ]
@@ -66,7 +67,8 @@ def _fake_vdn_object_patches():
 
 def _receipts(mode: str):
     local_route = "vdn_local_native_window_w" if mode == "native_window" else "vdn_local_native_full_w"
-    local_rows = [4655] * 10 + [4650]
+    local_rows = list(w._EXPECTED_LOCAL_Q_ROWS)
+    window_kv_rows = list(w._EXPECTED_WINDOW_KV_ROWS)
     result = []
     for block in range(50):
         common = {
@@ -97,7 +99,7 @@ def _receipts(mode: str):
                     "kind": "local",
                     "group_index": group_index,
                     "q_rows": q_rows,
-                    "kv_rows": 56349 if mode == "native_full_support" else 13341,
+                    "kv_rows": 56349 if mode == "native_full_support" else window_kv_rows[group_index],
                     "support_mode": "canonical_full" if mode == "native_full_support" else "restricted_window",
                     "complement_executed": mode == "native_window",
                     "provider_route": local_route,
@@ -235,6 +237,52 @@ def test_vdn_object_patch_normalization_rejects_changed_underlying_forward(monke
         )
 
 
+def test_capture_base_source_gate_requires_exact_recorded_bytes():
+    source_path = "/home/toor/ComfyUI/custom_nodes/ComfyUI-Sol-H3/sol_h3/__init__.py"
+    gate = {
+        "entries": [
+            {
+                "owner": "sol",
+                "path": source_path,
+                "base_git_blob_sha": "1" * 40,
+                "candidate_git_blob_sha": "2" * 40,
+                "base_sha256": "a" * 64,
+            }
+        ]
+    }
+    capture = {
+        "loaded_companion_sources": {
+            "sol_h3": [
+                {
+                    "module": "sol_h3",
+                    "file": {"resolved_path": source_path, "sha256": "a" * 64},
+                }
+            ]
+        }
+    }
+
+    report = w._verify_capture_base_sources(capture, gate)
+    assert report["exact"] is True
+    assert report["checked"] == [
+        {
+            "owner": "sol",
+            "path": source_path,
+            "capture_sha256": "a" * 64,
+            "expected_base_sha256": "a" * 64,
+            "exact": True,
+        }
+    ]
+
+    changed = copy.deepcopy(capture)
+    changed["loaded_companion_sources"]["sol_h3"][0]["file"]["sha256"] = "b" * 64
+    with pytest.raises(RuntimeError, match="R base source differs"):
+        w._verify_capture_base_sources(changed, gate)
+
+    missing = {"loaded_companion_sources": {"sol_h3": []}}
+    with pytest.raises(RuntimeError, match="R provenance is missing reviewed base source"):
+        w._verify_capture_base_sources(missing, gate)
+
+
 def test_source_delta_allowance_is_exact_path_changed_companion_only():
     changed_path = "/custom_nodes/sol_h3/sol_h3/__init__.py"
     unchanged_core = "/ComfyUI/comfy/model_sampling.py"
@@ -243,6 +291,7 @@ def test_source_delta_allowance_is_exact_path_changed_companion_only():
             {
                 "path": changed_path,
                 "base_git_blob_sha": "1" * 40,
+                "base_sha256": "a" * 64,
                 "candidate_git_blob_sha": "2" * 40,
             },
             {
@@ -279,6 +328,7 @@ def test_receipt_validation_requires_exact_700_subcall_geometry(mode):
     assert report["nonlocal_full_support_ok"] is True
     assert report["geometry_ok"] is True
     assert report["per_block_topology_ok"] is True
+    assert report["per_group_geometry_ok"] is True
     assert report["first_block_pre_attention_qkv_digest_present"] is True
 
 
@@ -292,6 +342,21 @@ def test_receipt_validation_rejects_wrong_geometry_block_partition_and_route():
     first_local = next(item for item in wrong_partition if item["block"] == 0 and item["kind"] == "local")
     first_local["group_index"] = 10
     assert w._validate_receipts(wrong_partition, "native_window")["per_block_topology_ok"] is False
+
+    wrong_q_geometry = copy.deepcopy(receipts)
+    block_zero_locals = [
+        item for item in wrong_q_geometry if item["block"] == 0 and item["kind"] == "local"
+    ]
+    block_zero_locals[0]["q_rows"] += 1
+    block_zero_locals[1]["q_rows"] -= 1
+    report = w._validate_receipts(wrong_q_geometry, "native_window")
+    assert report["per_block_topology_ok"] is True
+    assert report["per_group_geometry_ok"] is False
+
+    wrong_kv_geometry = copy.deepcopy(receipts)
+    first_local = next(item for item in wrong_kv_geometry if item["block"] == 0 and item["kind"] == "local")
+    first_local["kv_rows"] += 1024
+    assert w._validate_receipts(wrong_kv_geometry, "native_window")["per_group_geometry_ok"] is False
 
     wrong_route = copy.deepcopy(receipts)
     first_local = next(item for item in wrong_route if item["kind"] == "local")
@@ -320,6 +385,7 @@ def test_provenance_gate_normalizes_only_proven_vdn_wrapper_delta(monkeypatch):
 
     report = w._provenance_gate(state, record, guider)
     assert report["differences"] == []
+    assert report["capture_base_sources"] == {"exact": True, "checked": []}
     assert report["exact_except_reviewed_w_delta"] is True
 
     current["active_wrapper_order"]["outer_sample"].append({"key": "unrelated-change"})
