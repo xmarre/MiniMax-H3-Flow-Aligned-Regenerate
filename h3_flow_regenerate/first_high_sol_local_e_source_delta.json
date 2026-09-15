@@ -17,8 +17,8 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
       "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
-      "candidate_git_blob_sha": "7b0d1503a596a7f2ee07eadff6b6c79263366489",
-      "reason": "register E diagnostic nodes while preserving PR43 W source-resolution/provenance normalization"
+      "candidate_git_blob_sha": "fb71020c149ff47a0d1fb5bcd0ecf011ebb155ac",
+      "reason": "register E and normalize only E-owned extra closure-depth metadata in the derived DIT replacement chain after proving exact E -> W -> captured production VDN forwards"
     },
     {
       "owner": "flow",
