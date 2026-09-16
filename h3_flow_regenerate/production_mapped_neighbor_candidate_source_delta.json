@@ -19,9 +19,9 @@
       "owner": "flow",
       "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
       "relative_path": "../__init__.py",
-      "candidate_git_blob_sha": "381e1c1227c7f11c5d23e4c4f097034511940a3c",
+      "candidate_git_blob_sha": "76a02e8f213b4ed7eebb6f9e924fc6c44e46add3",
       "capture_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
-      "reason": "register the production-candidate validation nodes without importing W/E/M overlays"
+      "reason": "register candidate nodes and resolve reviewed production sources under the active Comfy namespace without importing lazy SM120 modules"
     },
     {
       "owner": "sol",
