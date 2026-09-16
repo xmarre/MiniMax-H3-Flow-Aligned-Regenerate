@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -172,7 +171,10 @@ def _validate_mapped_routes(evidence) -> dict[str, Any]:
     total_effective = 0
     total_pairs = 0
     max_increase = 0.0
-    for item in sorted(routes, key=lambda value: (int(value.get("block_index", -1)), int(value.get("group_index", -1)))):
+    for item in sorted(
+        routes,
+        key=lambda value: (int(value.get("block_index", -1)), int(value.get("group_index", -1))),
+    ):
         block = int(item.get("block_index", -1))
         group = int(item.get("group_index", -1))
         q_rows = int(item.get("q_rows", -1))
@@ -216,7 +218,7 @@ def _validate_mapped_routes(evidence) -> dict[str, Any]:
             and original > 0
             and added >= 0
             and effective == original + added
-            and 0 < pairs
+            and pairs > 0
             and effective <= pairs
             and math.isfinite(increase)
             and 0.0 <= increase <= 0.25
