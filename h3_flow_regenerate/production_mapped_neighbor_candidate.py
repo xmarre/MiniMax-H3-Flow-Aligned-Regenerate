@@ -3,7 +3,7 @@
 This validation layer reuses the hash-validated experiment-R first-high bundle but
 executes the ordinary installed VDN retained path and ordinary packaged Sol-H3 ABI.
 It does not import or install W/E/M operator substitutions, selector replacements,
-or route-label normalization.  Its only runtime instrumentation is a bounded
+or route-label normalization. Its only runtime instrumentation is a bounded
 backend-receipt sink plus the existing execution-contract recorder.
 """
 from __future__ import annotations
@@ -25,6 +25,7 @@ from . import comfy_compat as _comfy_compat
 from . import execution_contract_diagnostics as _diag
 from . import runtime as _runtime
 from . import same_state_high_replay as _replay
+from .execution_contract_provenance import callable_identity as _callable_identity
 from .geometry import unpack_streams
 
 SCHEMA_VERSION = 1
@@ -59,6 +60,25 @@ _FORBIDDEN_DIAGNOSTIC_MODULE_SUFFIXES = (
     "first_high_operator_diagnostic",
     "first_high_sol_local_receipt_tap",
     "first_high_sol_local_witness_bridge",
+)
+_EXPECTED_SOURCE_ENTRY_KEYS = frozenset(
+    {
+        ("flow", "h3_flow_regenerate.production_mapped_neighbor_candidate", "."),
+        ("flow", "h3_flow_regenerate.production_mapped_neighbor_candidate", "../__init__.py"),
+        ("sol", "sol_h3.interop", "."),
+        ("sol", "sol_h3.runtime", "."),
+        ("sol", "sol_h3.sparse", "."),
+        ("sol", "sol_h3.provenance", "."),
+        ("sol", "sol_h3.provenance", "sol_manifest.json"),
+        ("sol", "sol_h3.mapped_neighbors", "."),
+        ("sol", "sol_h3._vendor.sol_attn.interface", "."),
+        ("sol", "sol_h3._vendor.sol_attn.sm120.kernel", "."),
+        ("sol", "sol_h3._vendor.sol_attn.sm120.mainloop", "."),
+        ("vdn", "vdn_h3.hybrid", "."),
+        ("vdn", "vdn_h3.retained", "."),
+        ("vdn", "vdn_h3.softmax_provider", "."),
+        ("vdn", "vdn_h3.query_positions", "."),
+    }
 )
 _PRIVATE_REPORT_KEYS = frozenset({"_media_raw", "_media_pre", "_media_final"})
 
@@ -166,6 +186,8 @@ def _load_source_manifest() -> tuple[dict[str, Any], str]:
     keys = [_source_entry_key(entry) for entry in entries if isinstance(entry, dict)]
     if len(keys) != len(entries) or len(keys) != len(set(keys)):
         raise RuntimeError("production candidate source-delta manifest entries are invalid or duplicated")
+    if frozenset(keys) != _EXPECTED_SOURCE_ENTRY_KEYS:
+        raise RuntimeError("production candidate source-delta manifest differs from the reviewed exact entry set")
     return manifest, _sha_json(manifest)
 
 
@@ -238,7 +260,9 @@ def _verify_source_manifest() -> dict[str, Any]:
         raise RuntimeError("production candidate requires VDN provider API v4")
     forbidden = _forbidden_diagnostic_modules()
     if forbidden:
-        raise RuntimeError("production candidate process has W/E/M operator diagnostic modules loaded: " + ", ".join(forbidden))
+        raise RuntimeError(
+            "production candidate process has W/E/M operator diagnostic modules loaded: " + ", ".join(forbidden)
+        )
     return {
         "manifest_digest": digest,
         "entries": observed,
@@ -264,7 +288,7 @@ def _normalize_approved_callables(value: Any, source_gate: dict[str, Any], *, si
     """Collapse only exact source-backed identities from reviewed changed files.
 
     Capture-side identities must carry the manifest's exact R SHA-256; current-side
-    identities must carry the verified candidate SHA-256.  The collapse keeps the
+    identities must carry the verified candidate SHA-256. The collapse keeps the
     callable qualname and reviewed candidate blob in the comparable identity, so a
     different runtime owner cannot be hidden by the source-delta allowance.
     """
@@ -363,7 +387,11 @@ def _companion_source_diff(
             if source_path in capture:
                 continue
             delta = approved.get(source_path)
-            if delta is not None and delta.get("capture_sha256") is None and current_entry.get("sha256") == delta.get("sha256"):
+            if (
+                delta is not None
+                and delta.get("capture_sha256") is None
+                and current_entry.get("sha256") == delta.get("sha256")
+            ):
                 continue
             differences.append(path + f".current_only_source[{source_path}]")
             if len(differences) >= limit:
@@ -371,9 +399,83 @@ def _companion_source_diff(
     return differences[:limit]
 
 
-def _provenance_gate(state: _State, record: _diag._Record) -> dict[str, Any]:
+def _callable_equivalence_identity(value: Any) -> dict[str, Any]:
+    identity = _callable_identity(value)
+    normalized = _replay._provenance_equivalence_identity({"value": identity})
+    result = normalized.get("value") if isinstance(normalized, dict) else None
+    if not isinstance(result, dict):
+        raise RuntimeError("production candidate could not normalize validation wrapper callable identity")
+    return result
+
+
+def _wrapper_specs():
+    import comfy.patcher_extension
+
+    return (
+        (comfy.patcher_extension.WrappersMP.OUTER_SAMPLE, _OUTER_KEY, _outer_wrapper),
+        (comfy.patcher_extension.WrappersMP.SAMPLER_SAMPLE, _SAMPLER_KEY, _sampler_entry_wrapper),
+    )
+
+
+def _normalize_validation_wrapper_order(current: dict[str, Any], guider: Any) -> dict[str, Any]:
+    """Remove only the two proven validation wrappers from comparable R provenance.
+
+    R predates this validation layer, so its wrapper-order manifests cannot contain
+    these entries. Prove the live ModelPatcher owns exactly the expected callables
+    at the expected wrapper types before removing their manifest entries. This is
+    instrumentation normalization only; production Sol/VDN wrappers remain exact.
+    """
+    patcher = getattr(guider, "model_patcher", None)
+    runtime_wrappers = getattr(patcher, "wrappers", None)
+    if not isinstance(runtime_wrappers, dict):
+        raise RuntimeError("production candidate cannot inspect live ModelPatcher wrapper ownership")
+    specs = _wrapper_specs()
+    for wrapper_type, key, expected_callable in specs:
+        locations = [
+            existing_type
+            for existing_type, keyed in runtime_wrappers.items()
+            if isinstance(keyed, dict) and key in keyed
+        ]
+        if len(locations) != 1 or locations[0] != wrapper_type:
+            raise RuntimeError(f"production candidate live wrapper key ownership changed for {key}: {locations!r}")
+        keyed = runtime_wrappers.get(wrapper_type)
+        values = keyed.get(key) if isinstance(keyed, dict) else None
+        if not isinstance(values, (list, tuple)) or len(values) != 1 or values[0] is not expected_callable:
+            raise RuntimeError(f"production candidate live wrapper callable identity changed for {key}")
+
+    result = dict(current)
+    for field_name in ("active_wrapper_order", "patcher_wrapper_order"):
+        manifest = result.get(field_name)
+        if not isinstance(manifest, dict):
+            raise RuntimeError(f"production candidate provenance lacks {field_name}")
+        rebuilt = dict(manifest)
+        for wrapper_type, key, expected_callable in specs:
+            manifest_key = str(wrapper_type)
+            entries = rebuilt.get(manifest_key)
+            if not isinstance(entries, list):
+                raise RuntimeError(f"production candidate provenance lacks wrapper list {field_name}.{manifest_key}")
+            matches = [
+                (index, item)
+                for index, item in enumerate(entries)
+                if isinstance(item, dict) and item.get("key") == key
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"production candidate provenance must contain exactly one {field_name} entry for {key}"
+                )
+            index, item = matches[0]
+            expected_identity = _callable_equivalence_identity(expected_callable)
+            if _canonical_json(item.get("callable")) != _canonical_json(expected_identity):
+                raise RuntimeError(f"production candidate provenance callable changed for {field_name}:{key}")
+            rebuilt[manifest_key] = [entry for ordinal, entry in enumerate(entries) if ordinal != index]
+        result[field_name] = rebuilt
+    return result
+
+
+def _provenance_gate(state: _State, record: _diag._Record, guider: Any) -> dict[str, Any]:
     capture = _replay._bundle_provenance_equivalence_identity(state.replay.manifest)
     current = _replay._provenance_equivalence_identity(record.state.manifest)
+    current = _normalize_validation_wrapper_order(current, guider)
     capture_sources = capture.get("loaded_companion_sources") if isinstance(capture, dict) else None
     current_sources = current.get("loaded_companion_sources") if isinstance(current, dict) else None
     source_differences = _companion_source_diff(capture_sources, current_sources, state.source_gate)
@@ -415,7 +517,9 @@ def _sampling_runtime_identity(guider: Any) -> dict[str, Any]:
     if torch.is_tensor(weight) and type(out_features) is int and out_features > 0:
         head_count = int(weight.shape[0]) // int(out_features)
     return {
-        "model_sampling_class": None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}",
+        "model_sampling_class": (
+            None if sampling is None else f"{type(sampling).__module__}.{type(sampling).__qualname__}"
+        ),
         "model_sampling_av": isinstance(sampling, comfy.model_sampling.ModelSamplingAV),
         "model_sampling_const": isinstance(sampling, comfy.model_sampling.CONST),
         "noise_scale": _numeric_attr(sampling, "noise_scale"),
@@ -519,7 +623,12 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
             continue
         owner, block, route = item[:3]
         fields = item[3] if len(item) == 4 else None
-        if owner != "sol_h3" or type(block) is not int or not 0 <= block < _EXPECTED_BLOCKS or not isinstance(route, str):
+        if (
+            owner != "sol_h3"
+            or type(block) is not int
+            or not 0 <= block < _EXPECTED_BLOCKS
+            or not isinstance(route, str)
+        ):
             malformed.append(index)
             continue
         parsed.append((block, route, fields))
@@ -533,10 +642,27 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
             "vdn_anchor_native": 100,
         }
     )
-    per_block_ok = len(blocks) == _EXPECTED_BLOCKS and all(blocks.get(block) == 14 for block in range(_EXPECTED_BLOCKS))
+    per_block_ok = len(blocks) == _EXPECTED_BLOCKS and all(
+        blocks.get(block) == 14 for block in range(_EXPECTED_BLOCKS)
+    )
+    per_block_route_topology_ok = True
+    for block in range(_EXPECTED_BLOCKS):
+        block_routes = Counter(route for item_block, route, _fields in parsed if item_block == block)
+        expected_block_routes = Counter(
+            {
+                "vdn_dense_warmup" if block < 2 else "vdn_local_sol_mapped_v1": 11,
+                "vdn_global_native": 1,
+                "vdn_anchor_native": 2,
+            }
+        )
+        if block_routes != expected_block_routes:
+            per_block_route_topology_ok = False
+            break
+
     mapped = [(block, fields) for block, route, fields in parsed if route == "vdn_local_sol_mapped_v1"]
     mapped_fields_valid = True
     mapped_by_block: dict[int, list[tuple[Any, ...]]] = {}
+    mapped_identities_by_group: dict[int, set[tuple[Any, ...]]] = {}
     owners = set()
     plans = set()
     for block, fields in mapped:
@@ -580,6 +706,9 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
             owners.add(owner_generation)
             plans.add(plan_digest)
             mapped_by_block.setdefault(block, []).append(fields)
+            mapped_identities_by_group.setdefault(group_index, set()).add(
+                (q_rows, kv_rows, sink_rows, map_digest, descriptor_digest)
+            )
     mapped_geometry_ok = True
     for block in range(2, _EXPECTED_BLOCKS):
         values = sorted(mapped_by_block.get(block, []), key=lambda value: value[3])
@@ -592,6 +721,10 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
             mapped_geometry_ok = False
         if tuple(value[5] for value in values) != _EXPECTED_WINDOW_KV_ROWS:
             mapped_geometry_ok = False
+    mapped_identity_consistent = bool(
+        set(mapped_identities_by_group) == set(range(11))
+        and all(len(values) == 1 for values in mapped_identities_by_group.values())
+    )
     warmup_only_first_two = all(
         (route != "vdn_dense_warmup") or block in {0, 1} for block, route, _fields in parsed
     ) and sum(1 for block, route, _fields in parsed if route == "vdn_dense_warmup" and block == 0) == 11 and sum(
@@ -606,9 +739,11 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
         and not malformed
         and routes == expected_routes
         and per_block_ok
+        and per_block_route_topology_ok
         and len(mapped) == 528
         and mapped_fields_valid
         and mapped_geometry_ok
+        and mapped_identity_consistent
         and len(owners) == 1
         and len(plans) == 1
         and warmup_only_first_two
@@ -620,9 +755,11 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
         "routes": dict(routes),
         "expected_routes": dict(expected_routes),
         "per_block_14_calls_exact": per_block_ok,
+        "per_block_route_topology_exact": per_block_route_topology_ok,
         "mapped_receipt_count": len(mapped),
         "mapped_fields_valid": mapped_fields_valid,
         "mapped_geometry_exact": mapped_geometry_ok,
+        "mapped_identity_consistent_by_group": mapped_identity_consistent,
         "owner_generation_count": len(owners),
         "plan_digest_count": len(plans),
         "warmup_only_first_two_blocks": warmup_only_first_two,
@@ -681,7 +818,17 @@ def _outer_wrapper(
     options = getattr(guider, "model_options", None)
     state = (options or {}).get(STATE_KEY)
     if not isinstance(state, _State):
-        return executor(noise, latent_image, sampler, sigmas, denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes)
+        return executor(
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
     record = _diag._ACTIVE.get()
     if record is None or not record.state.strict_provenance or not record.state.manifest.get("gate_complete"):
         raise RuntimeError("production candidate requires strict, complete execution-contract diagnostics")
@@ -709,7 +856,7 @@ def _outer_wrapper(
     if record.pristine_cond_digest != str(replay.manifest["pristine_conditioning_digest"]):
         raise RuntimeError("production candidate pristine target conditioning differs from R capture")
 
-    provenance_gate = _provenance_gate(state, record)
+    provenance_gate = _provenance_gate(state, record, guider)
     if not provenance_gate["exact_except_reviewed_production_delta"]:
         raise RuntimeError(
             "production candidate runtime provenance differs beyond reviewed Sol/VDN/Flow delta: "
@@ -937,7 +1084,11 @@ def patch_production_mapped_neighbor_candidate(model: Any, manifest_path: str) -
         raise RuntimeError("production candidate requires mutable transformer options")
     if "h3_flow_untwist_clock_trial_v1" in transformer or "h3_flow_sampling_context" in transformer:
         raise RuntimeError("production candidate requires the established no-Untwist R control")
-    if STATE_KEY in patched.model_options or _replay.CAPTURE_STATE_KEY in patched.model_options or _replay.REPLAY_STATE_KEY in patched.model_options:
+    if (
+        STATE_KEY in patched.model_options
+        or _replay.CAPTURE_STATE_KEY in patched.model_options
+        or _replay.REPLAY_STATE_KEY in patched.model_options
+    ):
         raise RuntimeError("production candidate cannot be combined with R capture/replay wrappers")
     if any(str(key).startswith("h3_flow_first_high_") for key in patched.model_options):
         raise RuntimeError("production candidate cannot be combined with W/E/M first-high wrappers")
