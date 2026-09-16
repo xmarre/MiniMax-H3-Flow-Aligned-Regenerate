@@ -4,6 +4,11 @@ from .contracts import H3FlowTrajectory, TrajectoryRun, TrajectorySample
 from .geometry import H3Geometry, normalize_target_geometry
 from .sigma import audio_sigma, flow_shift, inverse_flow_shift
 
+# Stacked first-high M overlay. Importing this module patches only the reviewed E
+# diagnostic harness; ordinary Flow execution is untouched when that node is not
+# used.
+from . import first_high_mapped_neighbor_diagnostic as _first_high_mapped_neighbor_diagnostic  # noqa: F401,E402
+
 __all__ = [
     "H3FlowTrajectory",
     "H3Geometry",
