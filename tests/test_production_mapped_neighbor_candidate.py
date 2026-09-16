@@ -88,6 +88,24 @@ def _wrapper_manifest_entry(key: str, function) -> dict[str, object]:
     return {"key": key, "callable": candidate._callable_equivalence_identity(function)}
 
 
+def _fake_spectrum_guider():
+    class Runtime:
+        def __init__(self):
+            self.calls = []
+
+        def observe_backend_history(self, run_id, step_id, identity, receipts, safe):
+            self.calls.append((run_id, step_id, identity, tuple(receipts), bool(safe)))
+            return "original-observer-return"
+
+    runtime = Runtime()
+    guider = types.SimpleNamespace(
+        model_options={
+            candidate._runtime.SPECTRUM_BINDING_KEY: types.SimpleNamespace(runtime=runtime),
+        }
+    )
+    return guider, runtime
+
+
 def test_candidate_identity_is_distinct_and_bound_to_authoritative_design():
     assert candidate.SCHEMA_VERSION == 1
     assert candidate.MODE == "production_mapped_neighbor_v4_candidate"
@@ -201,6 +219,76 @@ def test_receipt_gate_has_exact_50_block_14_subcall_distribution():
     sink = _valid_receipts()
     blocks = Counter(item[1] for item in sink.items)
     assert blocks == Counter({block: 14 for block in range(50)})
+
+
+def test_spectrum_receipt_tap_mirrors_spectrum_owned_final_receipts_and_restores_method():
+    guider, runtime = _fake_spectrum_guider()
+    candidate_sink = candidate._ReceiptSink()
+    spectrum_owned = _valid_receipts()
+    owner, tap, observation = candidate._install_spectrum_receipt_tap(guider, candidate_sink)
+
+    assert owner is runtime
+    assert candidate.RECEIPTS_KEY not in guider.model_options
+    assert candidate_sink.items == []
+    result = runtime.observe_backend_history(
+        17,
+        23,
+        ("mapped-policy", "owner"),
+        tuple(spectrum_owned.items),
+        True,
+    )
+    assert result == "original-observer-return"
+    assert runtime.calls == [
+        (17, 23, ("mapped-policy", "owner"), tuple(spectrum_owned.items), True)
+    ]
+    assert candidate_sink.items == spectrum_owned.items
+
+    report = candidate._validate_spectrum_receipt_observation(candidate_sink, observation)
+    assert report["valid"] is True
+    assert report["source"] == "SpectrumH3Runtime.observe_backend_history"
+    assert report["spectrum_observe_call_count"] == 1
+    assert report["spectrum_forecast_safe"] is True
+    assert report["candidate_owned_generic_receipt_list"] is False
+    assert isinstance(report["spectrum_policy_identity_sha256"], str)
+    assert len(report["spectrum_policy_identity_sha256"]) == 64
+
+    candidate._restore_spectrum_receipt_tap(runtime, tap)
+    assert "observe_backend_history" not in vars(runtime)
+    assert runtime.observe_backend_history(18, 24, (), (), False) == "original-observer-return"
+    assert len(runtime.calls) == 2
+
+
+def test_spectrum_receipt_tap_fails_closed_on_existing_instance_owner():
+    guider, runtime = _fake_spectrum_guider()
+    runtime.observe_backend_history = lambda *_args, **_kwargs: None
+    with pytest.raises(RuntimeError, match="already instance-owned"):
+        candidate._install_spectrum_receipt_tap(guider, candidate._ReceiptSink())
+
+
+def test_spectrum_receipt_observation_requires_provider_accepted_forecast_safe_route():
+    guider, runtime = _fake_spectrum_guider()
+    sink = candidate._ReceiptSink()
+    spectrum_owned = _valid_receipts()
+    _owner, tap, observation = candidate._install_spectrum_receipt_tap(guider, sink)
+    runtime.observe_backend_history(1, 2, ("mapped-policy",), tuple(spectrum_owned.items), False)
+    report = candidate._validate_spectrum_receipt_observation(sink, observation)
+    candidate._restore_spectrum_receipt_tap(runtime, tap)
+
+    assert report["count"] == 700
+    assert report["spectrum_observe_call_count"] == 1
+    assert report["spectrum_forecast_safe"] is False
+    assert report["valid"] is False
+
+
+def test_spectrum_receipt_tap_rejects_duplicate_candidate_observation():
+    guider, runtime = _fake_spectrum_guider()
+    sink = candidate._ReceiptSink()
+    spectrum_owned = _valid_receipts()
+    _owner, tap, _observation = candidate._install_spectrum_receipt_tap(guider, sink)
+    runtime.observe_backend_history(1, 2, ("mapped-policy",), tuple(spectrum_owned.items), True)
+    with pytest.raises(RuntimeError, match="more than one Spectrum backend-history completion"):
+        runtime.observe_backend_history(1, 3, ("mapped-policy",), tuple(spectrum_owned.items), True)
+    candidate._restore_spectrum_receipt_tap(runtime, tap)
 
 
 def test_approved_callable_normalization_requires_exact_source_identity(tmp_path):
