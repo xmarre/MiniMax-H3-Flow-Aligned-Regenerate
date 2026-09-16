@@ -69,8 +69,8 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
         suffix_geometric_bridge=None,
     ):
         # Keep direct Python calls consistent with the inherited Target Input
-        # handoff default. Mixed-Grid additionally enables its validated seam
-        # repair by default; Target-Sparse does not expose that control.
+        # handoff default. Mixed-Grid additionally enables its historical seam
+        # repair by default for compatibility with serialized workflows.
         if handoff_transfer is None:
             handoff_transfer = "learned_3d"
         if suffix_geometric_bridge is None:
@@ -124,13 +124,15 @@ class H3ProgressiveTargetSparseHandoff(H3ProgressiveTargetInputHandoff):
 
 
 class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
+    """Deprecated compatibility implementation for serialized Mixed-Grid workflows."""
+
+    CATEGORY = "MiniMax H3/flow regenerate/deprecated"
     EXACT_PREFIX_MODE = "mixed_grid_low_suffix"
     DESCRIPTION = (
-        "Recommended accelerated exact-prefix Continuum path. It keeps the authoritative target-grid "
-        "protected-prefix conditioning, generates a genuine low-grid suffix, performs learned 3D latent "
-        "transfer, restores the exact prefix, and starts fresh target-grid refinement. Requires an H3 "
-        "latent-upscaler provider and VDN external-sequence API v2 when VDN is enabled. The validated "
-        "one-token DC bridge and Mixed-Grid seam-repair path are enabled by default."
+        "Deprecated compatibility path retained for one release so existing serialized Mixed-Grid "
+        "workflows keep their original semantics. Do not use for new production workflows; use "
+        "MiniMax H3 Progressive Handoff (Target Input). The old node ID is intentionally not remapped "
+        "because remapping would silently change saved workflow behavior. Mixed-Grid is not a release gate."
     )
 
     @classmethod
@@ -140,9 +142,8 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
         inputs = copy.deepcopy(super().INPUT_TYPES())
         required = inputs["required"]
 
-        # Canonical production defaults. Keep every visible value aligned with
-        # the shipped workflows so a newly added node and an opened example do
-        # not silently exercise different handoff policies.
+        # Preserve the historical serialized-node contract unchanged during the
+        # compatibility window. Deprecation changes discovery/documentation only.
         required["source_mode"] = (["pixels", "scale"], {"default": "scale"})
         required["source_scale"] = ("FLOAT", {"default": 0.70, "min": 0.1, "max": 0.99, "step": 0.01})
         required["source_width"] = ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32})
@@ -162,7 +163,7 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             ["learned_3d"],
             {
                 "default": "learned_3d",
-                "tooltip": "Mixed-Grid requires a connected H3 latent-upscaler provider for learned 3D transfer.",
+                "tooltip": "Deprecated Mixed-Grid compatibility requires the connected H3 latent-upscaler provider.",
             },
         )
         required["suffix_dc_bridge"] = (
@@ -170,9 +171,8 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": True,
                 "tooltip": (
-                    "One-token suffix-only per-channel DC bridge. Uses the discarded learned prefix as "
-                    "calibration while keeping the authoritative Continuum prefix bit-exact. Enabled by "
-                    "default after matched multi-boundary decoded-media validation removed the handoff flash."
+                    "Historical Mixed-Grid one-token suffix DC bridge. Retained unchanged for compatibility; "
+                    "new workflows should use the Target Input exact-prefix fallback instead."
                 ),
             },
         )
@@ -181,10 +181,8 @@ class H3ProgressiveMixedGridHandoff(H3ProgressiveTargetSparseHandoff):
             {
                 "default": True,
                 "tooltip": (
-                    "Enable the validated Mixed-Grid seam-repair path. It publishes the protected-prefix K/V "
-                    "measure contract for compatible Sol-H3 backends and applies the independent target "
-                    "exact-overlap representation reconciliation after learned transfer. The authoritative "
-                    "prefix, generated suffix ownership, audio, masks, conditioning and H3 NFE count are preserved."
+                    "Historical Mixed-Grid seam-repair control retained unchanged for serialized workflows. "
+                    "It is deprecated and is not part of the current production acceptance matrix."
                 ),
             },
         )
@@ -198,5 +196,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3ProgressiveTargetSparseHandoff": "MiniMax H3 Progressive Target-Sparse Continuum [Experimental]",
-    "H3ProgressiveMixedGridHandoff": "MiniMax H3 Progressive Mixed-Grid Continuum",
+    "H3ProgressiveMixedGridHandoff": "MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]",
 }
