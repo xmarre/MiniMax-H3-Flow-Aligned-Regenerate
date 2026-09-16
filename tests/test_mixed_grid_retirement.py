@@ -10,10 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_target_input_remains_the_standard_progressive_node():
-    assert (
-        nodes.NODE_CLASS_MAPPINGS["H3ProgressiveTargetInputHandoff"]
-        is nodes.H3ProgressiveTargetInputHandoff
-    )
+    assert nodes.NODE_CLASS_MAPPINGS["H3ProgressiveTargetInputHandoff"] is nodes.H3ProgressiveTargetInputHandoff
     assert nodes.NODE_DISPLAY_NAME_MAPPINGS["H3ProgressiveTargetInputHandoff"] == (
         "MiniMax H3 Progressive Handoff (Target Input)"
     )
