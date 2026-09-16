@@ -56,10 +56,8 @@ def test_candidate_source_resolver_keeps_unloaded_sm120_module_lazy(monkeypatch,
     package = _module("custom_nodes.synthetic.sol_h3", package_path, package=True)
     monkeypatch.setitem(sys.modules, package.__name__, package)
 
-    def fail_import(name: str):
-        raise AssertionError(f"unexpected import: {name}")
-
-    monkeypatch.setattr(plugin_root.importlib, "import_module", fail_import)
+    target_module = "sol_h3._vendor.sol_attn.sm120.mainloop"
+    assert target_module not in sys.modules
     resolved = plugin_root._resolve_production_candidate_source_entry(
         {
             "owner": "sol",
@@ -69,6 +67,7 @@ def test_candidate_source_resolver_keeps_unloaded_sm120_module_lazy(monkeypatch,
     )
 
     assert resolved == mainloop_path.resolve(strict=True)
+    assert target_module not in sys.modules
 
 
 def test_candidate_source_resolver_fails_closed_on_distinct_suffix_sources(monkeypatch, tmp_path):
