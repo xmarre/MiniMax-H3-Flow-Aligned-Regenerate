@@ -43,7 +43,7 @@
       "module": "h3_flow_regenerate.first_high_mapped_neighbor_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "dd1c555d4a45b60037409de34456ab206e902a71",
+      "candidate_git_blob_sha": "c83ea401343703c2411e89fb0121221991f4514a",
       "reason": "select mode M, validate exact additive route evidence, preserve E lifecycle, and persist separately named M evidence/media"
     },
     {
