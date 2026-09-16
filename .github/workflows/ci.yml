@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: xmarre/ComfyUI-Sol-H3
-          ref: 8b049e39d000b0d283f2f01e8477f74cf5c2d608
+          ref: 1459b34853a39d1054fd5c8643de28a7b0e240c7
           path: .contracts/Sol
           persist-credentials: false
       - uses: actions/checkout@v4
