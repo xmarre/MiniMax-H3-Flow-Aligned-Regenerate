@@ -19,7 +19,7 @@
       "owner": "flow",
       "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
       "relative_path": "../__init__.py",
-      "candidate_git_blob_sha": "b7dd1bd44bd640f19deedea9048317e2628d5551",
+      "candidate_git_blob_sha": "469f75950d0353a4a79a0c263dee1f1d5c1005fc",
       "capture_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
       "reason": "register candidate nodes and resolve reviewed production sources under the active Comfy namespace without importing lazy SM120 modules"
     },
