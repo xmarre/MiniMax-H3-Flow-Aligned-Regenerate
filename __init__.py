@@ -145,9 +145,7 @@ def _candidate_loaded_module_matches(module_name):
     for loaded_name, module, path in matches:
         by_path.setdefault(str(path), (loaded_name, module, path))
     if len(by_path) > 1:
-        raise RuntimeError(
-            f"production candidate source module resolves ambiguously: {module_name}: {sorted(by_path)}"
-        )
+        raise RuntimeError(f"production candidate source module resolves ambiguously: {module_name}: {sorted(by_path)}")
     return None if not by_path else next(iter(by_path.values()))
 
 
@@ -201,82 +199,72 @@ def _resolve_production_candidate_source_entry(entry):
     return candidate
 
 
-def _load_production_candidate_contract_module(module_name):
-    """Load only the two lightweight contract modules in their real namespace."""
-    loaded = _candidate_loaded_module_matches(module_name)
-    if loaded is not None:
-        return loaded[1]
-    package_name, _, child = module_name.partition(".")
-    package = _candidate_loaded_module_matches(package_name)
-    if package is None or not child:
-        raise RuntimeError(f"production candidate contract package is not loaded: {package_name}")
-    actual_name = f"{package[0]}.{child}"
+def _same_resolved_source(left, right):
+    left_file = getattr(left, "__file__", None)
+    right_file = getattr(right, "__file__", None)
+    if not isinstance(left_file, str) or not isinstance(right_file, str):
+        return False
     try:
-        module = importlib.import_module(actual_name)
-    except Exception as exc:
-        raise RuntimeError(
-            f"production candidate contract module is not importable in the active Comfy namespace: {module_name}"
-        ) from exc
-    return module
+        return Path(left_file).resolve(strict=True) == Path(right_file).resolve(strict=True)
+    except OSError:
+        return False
 
 
 _ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY = _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._verify_source_manifest
 
 
 def _verify_production_candidate_sources():
-    """Run the candidate verifier with temporary bare aliases for safe contracts.
+    """Expose loader aliases without importing reviewed child modules early.
 
-    The candidate verifier itself still imports ``sol_h3.provenance`` and
-    ``vdn_h3.softmax_provider`` for their runtime constants. Resolve those two
-    lightweight modules through the actual Comfy loader namespace and expose only
-    temporary aliases while verification runs. Optional CuTe modules stay lazy.
+    The original verifier hashes every allowlisted source before importing the
+    lightweight Sol/VDN contract modules.  Preserve that ordering: alias only
+    owner packages that Comfy has already loaded, plus contract children that are
+    already loaded.  If a child is still lazy, the original verifier imports it
+    only after all reviewed bytes have passed their Git-blob checks.  Optional
+    SM120 CuTe modules are never imported for source discovery.
     """
     manifest, _manifest_digest = _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._load_source_manifest()
     if manifest.get("flow_base") != _CANDIDATE_FLOW_BASE:
         raise RuntimeError("production candidate source-delta manifest targets the wrong Flow R base")
 
-    aliases = []
-    parent_aliases = []
+    introduced = []
+    absent_contracts = []
     try:
-        for module_name in _CANDIDATE_CONTRACT_MODULES:
-            module = _load_production_candidate_contract_module(module_name)
-            package_name = module_name.split(".", 1)[0]
+        for package_name in ("sol_h3", "vdn_h3"):
             package = _candidate_loaded_module_matches(package_name)
             if package is None:
-                raise RuntimeError(f"production candidate contract package disappeared: {package_name}")
-            existing_parent = sys.modules.get(package_name)
-            if existing_parent is None:
+                raise RuntimeError(f"production candidate contract package is not loaded: {package_name}")
+            existing = sys.modules.get(package_name)
+            if existing is None:
                 sys.modules[package_name] = package[1]
-                parent_aliases.append(package_name)
-            elif existing_parent is not package[1]:
+                introduced.append(package_name)
+            elif existing is not package[1] and not _same_resolved_source(existing, package[1]):
                 raise RuntimeError(
                     f"production candidate bare package alias is owned by another source: {package_name}"
                 )
+
+        for module_name in _CANDIDATE_CONTRACT_MODULES:
+            loaded = _candidate_loaded_module_matches(module_name)
             existing = sys.modules.get(module_name)
             if existing is None:
-                sys.modules[module_name] = module
-                aliases.append(module_name)
-            elif existing is not module:
-                existing_file = getattr(existing, "__file__", None)
-                module_file = getattr(module, "__file__", None)
-                try:
-                    same_source = (
-                        isinstance(existing_file, str)
-                        and isinstance(module_file, str)
-                        and Path(existing_file).resolve(strict=True) == Path(module_file).resolve(strict=True)
-                    )
-                except OSError:
-                    same_source = False
-                if not same_source:
-                    raise RuntimeError(
-                        f"production candidate bare contract alias is owned by another source: {module_name}"
-                    )
+                absent_contracts.append(module_name)
+                if loaded is not None:
+                    sys.modules[module_name] = loaded[1]
+                    introduced.append(module_name)
+            elif loaded is not None and existing is not loaded[1] and not _same_resolved_source(existing, loaded[1]):
+                raise RuntimeError(
+                    f"production candidate bare contract alias is owned by another source: {module_name}"
+                )
+
         return _ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY()
     finally:
-        for module_name in reversed(aliases):
+        # A child that was absent before this gate may have been imported by the
+        # original verifier after its source bytes were validated.  Do not leak
+        # that temporary bare alias into the long-lived Comfy process.
+        for module_name in reversed(absent_contracts):
             sys.modules.pop(module_name, None)
-        for package_name in reversed(parent_aliases):
-            sys.modules.pop(package_name, None)
+        for module_name in reversed(introduced):
+            sys.modules.pop(module_name, None)
 
 
 _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._resolve_source_entry = _resolve_production_candidate_source_entry
