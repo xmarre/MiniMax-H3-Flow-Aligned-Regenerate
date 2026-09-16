@@ -6,6 +6,7 @@ It does not import or install W/E/M operator substitutions, selector replacement
 or route-label normalization. Its only runtime instrumentation is a bounded
 backend-receipt sink plus the existing execution-contract recorder.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -455,9 +456,7 @@ def _normalize_validation_wrapper_order(current: dict[str, Any], guider: Any) ->
             if not isinstance(entries, list):
                 raise RuntimeError(f"production candidate provenance lacks wrapper list {field_name}.{manifest_key}")
             matches = [
-                (index, item)
-                for index, item in enumerate(entries)
-                if isinstance(item, dict) and item.get("key") == key
+                (index, item) for index, item in enumerate(entries) if isinstance(item, dict) and item.get("key") == key
             ]
             if len(matches) != 1:
                 raise RuntimeError(
@@ -642,9 +641,7 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
             "vdn_anchor_native": 100,
         }
     )
-    per_block_ok = len(blocks) == _EXPECTED_BLOCKS and all(
-        blocks.get(block) == 14 for block in range(_EXPECTED_BLOCKS)
-    )
+    per_block_ok = len(blocks) == _EXPECTED_BLOCKS and all(blocks.get(block) == 14 for block in range(_EXPECTED_BLOCKS))
     per_block_route_topology_ok = True
     for block in range(_EXPECTED_BLOCKS):
         block_routes = Counter(route for item_block, route, _fields in parsed if item_block == block)
@@ -725,11 +722,11 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
         set(mapped_identities_by_group) == set(range(11))
         and all(len(values) == 1 for values in mapped_identities_by_group.values())
     )
-    warmup_only_first_two = all(
-        (route != "vdn_dense_warmup") or block in {0, 1} for block, route, _fields in parsed
-    ) and sum(1 for block, route, _fields in parsed if route == "vdn_dense_warmup" and block == 0) == 11 and sum(
-        1 for block, route, _fields in parsed if route == "vdn_dense_warmup" and block == 1
-    ) == 11
+    warmup_only_first_two = (
+        all((route != "vdn_dense_warmup") or block in {0, 1} for block, route, _fields in parsed)
+        and sum(1 for block, route, _fields in parsed if route == "vdn_dense_warmup" and block == 0) == 11
+        and sum(1 for block, route, _fields in parsed if route == "vdn_dense_warmup" and block == 1) == 11
+    )
     no_native_local_fallback = not any(
         route.startswith("vdn_local_native") or route.startswith("kernel_unavailable:")
         for _block, route, _fields in parsed
