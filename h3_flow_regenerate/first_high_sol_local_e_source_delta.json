@@ -17,7 +17,7 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
       "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
-      "candidate_git_blob_sha": "16d380908892cd62d0c52e93880eec23dde583b3",
+      "candidate_git_blob_sha": "2ab8bc0cf94c9f38cf7de887e69856dd89c6a7b2",
       "reason": "register E and normalize only proven E-owned self-effects: bounded DIT closure-depth expansion after exact E -> W -> captured production VDN proof, the exact unchanged PR #11/#12 sol_h3/sparse.py lazy import introduced before the pre-H3 provenance gate, and SM120 memory accounting device ownership when R stored the sampler replay tensor on CPU but the single-device H3 runtime executes on CUDA; completion must reuse the exact CUDA device/capability validated by preflight"
     },
     {
