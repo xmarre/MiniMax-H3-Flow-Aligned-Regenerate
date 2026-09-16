@@ -123,3 +123,31 @@ def test_candidate_contract_aliases_are_temporary_and_source_exact(monkeypatch, 
     assert "sol_h3.provenance" not in sys.modules
     assert "vdn_h3" not in sys.modules
     assert "vdn_h3.softmax_provider" not in sys.modules
+
+
+def test_candidate_contract_children_remain_lazy_until_original_verifier(monkeypatch, tmp_path):
+    for name in ("sol_h3", "sol_h3.provenance", "vdn_h3", "vdn_h3.softmax_provider"):
+        _remove_suffix_modules(monkeypatch, name)
+
+    sol_pkg_path = tmp_path / "sol" / "sol_h3" / "__init__.py"
+    vdn_pkg_path = tmp_path / "vdn" / "vdn_h3" / "__init__.py"
+    for path in (sol_pkg_path, vdn_pkg_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# package\n", encoding="utf-8")
+
+    sol_pkg = _module("custom_nodes.synthetic_sol.sol_h3", sol_pkg_path, package=True)
+    vdn_pkg = _module("custom_nodes.synthetic_vdn.vdn_h3", vdn_pkg_path, package=True)
+    monkeypatch.setitem(sys.modules, sol_pkg.__name__, sol_pkg)
+    monkeypatch.setitem(sys.modules, vdn_pkg.__name__, vdn_pkg)
+
+    def fake_verify():
+        assert sys.modules["sol_h3"] is sol_pkg
+        assert sys.modules["vdn_h3"] is vdn_pkg
+        assert "sol_h3.provenance" not in sys.modules
+        assert "vdn_h3.softmax_provider" not in sys.modules
+        return {"verified": True}
+
+    monkeypatch.setattr(plugin_root, "_ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY", fake_verify)
+    assert plugin_root._verify_production_candidate_sources() == {"verified": True}
+    assert "sol_h3" not in sys.modules
+    assert "vdn_h3" not in sys.modules
