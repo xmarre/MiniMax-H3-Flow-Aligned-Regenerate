@@ -6,6 +6,10 @@
 # extension is imported immediately after the base recorder. The same-state
 # replay and production-candidate validation layers compose only additional
 # wrappers around that recorder.
+import importlib
+import sys
+from pathlib import Path
+
 try:
     from .h3_flow_regenerate.decode_context import (
         NODE_CLASS_MAPPINGS as DECODE_NODE_CLASS_MAPPINGS,
@@ -43,6 +47,7 @@ try:
     from .h3_flow_regenerate.same_state_high_replay import (
         NODE_DISPLAY_NAME_MAPPINGS as SAME_STATE_REPLAY_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from .h3_flow_regenerate import production_mapped_neighbor_candidate as _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE
     from .h3_flow_regenerate.production_mapped_neighbor_candidate import (
         NODE_CLASS_MAPPINGS as PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_NODE_CLASS_MAPPINGS,
     )
@@ -93,6 +98,7 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.same_state_high_replay import (
         NODE_DISPLAY_NAME_MAPPINGS as SAME_STATE_REPLAY_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from h3_flow_regenerate import production_mapped_neighbor_candidate as _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE
     from h3_flow_regenerate.production_mapped_neighbor_candidate import (
         NODE_CLASS_MAPPINGS as PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_NODE_CLASS_MAPPINGS,
     )
@@ -106,6 +112,175 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.target_sparse_node import (
         NODE_DISPLAY_NAME_MAPPINGS as TARGET_SPARSE_NODE_DISPLAY_NAME_MAPPINGS,
     )
+
+
+_CANDIDATE_OWNER_PACKAGES = {
+    "flow": "h3_flow_regenerate",
+    "sol": "sol_h3",
+    "vdn": "vdn_h3",
+}
+_CANDIDATE_CONTRACT_MODULES = (
+    "sol_h3.provenance",
+    "vdn_h3.softmax_provider",
+)
+_CANDIDATE_FLOW_BASE = "4ae2e35f77ed961151ab5695bef9e1dbe277cc54"
+
+
+def _candidate_loaded_module_matches(module_name):
+    """Return one loaded exact/suffix module identity, failing on distinct files."""
+    suffix = f".{module_name}"
+    matches = []
+    for loaded_name, module in tuple(sys.modules.items()):
+        if module is None or not (loaded_name == module_name or loaded_name.endswith(suffix)):
+            continue
+        raw_file = getattr(module, "__file__", None)
+        if not isinstance(raw_file, str) or not raw_file:
+            continue
+        try:
+            path = Path(raw_file).resolve(strict=True)
+        except OSError:
+            continue
+        matches.append((loaded_name, module, path))
+    by_path = {}
+    for loaded_name, module, path in matches:
+        by_path.setdefault(str(path), (loaded_name, module, path))
+    if len(by_path) > 1:
+        raise RuntimeError(
+            f"production candidate source module resolves ambiguously: {module_name}: {sorted(by_path)}"
+        )
+    return None if not by_path else next(iter(by_path.values()))
+
+
+def _candidate_owner_root(owner):
+    package_name = _CANDIDATE_OWNER_PACKAGES.get(str(owner))
+    if package_name is None:
+        raise RuntimeError(f"production candidate source entry has unknown owner: {owner!r}")
+    loaded = _candidate_loaded_module_matches(package_name)
+    if loaded is None:
+        raise RuntimeError(
+            f"production candidate owner package is not loaded under the active Comfy namespace: {package_name}"
+        )
+    _loaded_name, _module, package_file = loaded
+    if package_file.name != "__init__.py":
+        raise RuntimeError(f"production candidate owner package has unexpected source path: {package_file}")
+    return package_file.parent.parent
+
+
+def _resolve_production_candidate_source_entry(entry):
+    """Resolve reviewed bytes without importing optional production modules.
+
+    Comfy can load custom nodes below generated package names, so bare ``sol_h3``
+    imports are not a valid source locator. Prefer an already-loaded exact/suffix
+    module. If a reviewed child is intentionally lazy (notably the SM120 CuTe
+    kernel), derive its path from the already-loaded owner package instead of
+    importing it. Distinct source identities fail closed.
+    """
+    module_name = entry.get("module")
+    relative = entry.get("relative_path", ".")
+    owner = entry.get("owner")
+    if not isinstance(module_name, str) or not module_name or not isinstance(relative, str):
+        raise RuntimeError("production candidate source entry has invalid module/path metadata")
+
+    loaded = _candidate_loaded_module_matches(module_name)
+    if loaded is not None:
+        base = loaded[2]
+    else:
+        root = _candidate_owner_root(owner)
+        candidate = root.joinpath(*module_name.split("."))
+        package_init = candidate / "__init__.py"
+        base = package_init if package_init.is_file() else candidate.with_suffix(".py")
+        try:
+            base = base.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"production candidate source module is not loaded and has no reviewed on-disk path: {module_name}"
+            ) from exc
+    candidate = base if relative == "." else (base.parent / relative).resolve(strict=True)
+    if not candidate.is_file():
+        raise RuntimeError(f"production candidate source path is not a file: {candidate}")
+    return candidate
+
+
+def _load_production_candidate_contract_module(module_name):
+    """Load only the two lightweight contract modules in their real namespace."""
+    loaded = _candidate_loaded_module_matches(module_name)
+    if loaded is not None:
+        return loaded[1]
+    package_name, _, child = module_name.partition(".")
+    package = _candidate_loaded_module_matches(package_name)
+    if package is None or not child:
+        raise RuntimeError(f"production candidate contract package is not loaded: {package_name}")
+    actual_name = f"{package[0]}.{child}"
+    try:
+        module = importlib.import_module(actual_name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"production candidate contract module is not importable in the active Comfy namespace: {module_name}"
+        ) from exc
+    return module
+
+
+_ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY = _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._verify_source_manifest
+
+
+def _verify_production_candidate_sources():
+    """Run the candidate verifier with temporary bare aliases for safe contracts.
+
+    The candidate verifier itself still imports ``sol_h3.provenance`` and
+    ``vdn_h3.softmax_provider`` for their runtime constants. Resolve those two
+    lightweight modules through the actual Comfy loader namespace and expose only
+    temporary aliases while verification runs. Optional CuTe modules stay lazy.
+    """
+    manifest, _manifest_digest = _PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._load_source_manifest()
+    if manifest.get("flow_base") != _CANDIDATE_FLOW_BASE:
+        raise RuntimeError("production candidate source-delta manifest targets the wrong Flow R base")
+
+    aliases = []
+    parent_aliases = []
+    try:
+        for module_name in _CANDIDATE_CONTRACT_MODULES:
+            module = _load_production_candidate_contract_module(module_name)
+            package_name = module_name.split(".", 1)[0]
+            package = _candidate_loaded_module_matches(package_name)
+            if package is None:
+                raise RuntimeError(f"production candidate contract package disappeared: {package_name}")
+            existing_parent = sys.modules.get(package_name)
+            if existing_parent is None:
+                sys.modules[package_name] = package[1]
+                parent_aliases.append(package_name)
+            elif existing_parent is not package[1]:
+                raise RuntimeError(
+                    f"production candidate bare package alias is owned by another source: {package_name}"
+                )
+            existing = sys.modules.get(module_name)
+            if existing is None:
+                sys.modules[module_name] = module
+                aliases.append(module_name)
+            elif existing is not module:
+                existing_file = getattr(existing, "__file__", None)
+                module_file = getattr(module, "__file__", None)
+                try:
+                    same_source = (
+                        isinstance(existing_file, str)
+                        and isinstance(module_file, str)
+                        and Path(existing_file).resolve(strict=True) == Path(module_file).resolve(strict=True)
+                    )
+                except OSError:
+                    same_source = False
+                if not same_source:
+                    raise RuntimeError(
+                        f"production candidate bare contract alias is owned by another source: {module_name}"
+                    )
+        return _ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY()
+    finally:
+        for module_name in reversed(aliases):
+            sys.modules.pop(module_name, None)
+        for package_name in reversed(parent_aliases):
+            sys.modules.pop(package_name, None)
+
+
+_PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._resolve_source_entry = _resolve_production_candidate_source_entry
+_PRODUCTION_MAPPED_NEIGHBOR_CANDIDATE_MODULE._verify_source_manifest = _verify_production_candidate_sources
 
 NODE_CLASS_MAPPINGS = {
     **NODE_CLASS_MAPPINGS,
