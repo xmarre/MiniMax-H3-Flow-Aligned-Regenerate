@@ -11,7 +11,7 @@ For target-input workflows, including H3 Continuum exact-prefix continuation, **
 
 ## Canonical Target Input defaults
 
-A newly added **MiniMax H3 Progressive Handoff (Target Input)** node uses the same defaults as the shipped progressive target-input example:
+**MiniMax H3 Progressive Handoff (Target Input)** uses the same defaults as the shipped progressive target-input example:
 
 ```text
 source_mode          = scale
