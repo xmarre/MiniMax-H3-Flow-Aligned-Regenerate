@@ -18,6 +18,8 @@ The runtime source gate verifies exact candidate Git blobs for the changed Flow,
 
 Start from the same production model, references, prompt, seed, schedule, Flow/Spectrum/Sol/VDN/DiffAid settings and companion stack used by the preserved experiment-R capture. The saved bundle for capture `234ed062128e43ed8d5ec63e27517b22` is reused; R is not regenerated.
 
+Run the candidate from a fresh ComfyUI process and queue this validation alone. Do not overlap another queue that shares the same Spectrum runtime instance while the bounded receipt observer is installed.
+
 The queued validation path is:
 
 1. **MiniMax H3 Execution Contract Diagnostics** with `strict_provenance=true`;
