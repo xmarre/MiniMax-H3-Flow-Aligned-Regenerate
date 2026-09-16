@@ -3,8 +3,9 @@
 This validation layer reuses the hash-validated experiment-R first-high bundle but
 executes the ordinary installed VDN retained path and ordinary packaged Sol-H3 ABI.
 It does not import or install W/E/M operator substitutions, selector replacements,
-or route-label normalization. Its only runtime instrumentation is a bounded
-backend-receipt sink plus the existing execution-contract recorder.
+or route-label normalization. Its only runtime instrumentation is a bounded tap on
+Spectrum's completed backend-history observation plus the existing execution-contract
+recorder.
 """
 
 from __future__ import annotations
@@ -93,7 +94,7 @@ class _FirstCallComplete(BaseException):
 
 @dataclass(slots=True)
 class _ReceiptSink:
-    """Identity-stable receipt owner across Core model-option copies."""
+    """Bounded mirror of receipts after Spectrum owns and accepts the actual call."""
 
     items: list[Any] = field(default_factory=list)
     limit: int = 800
@@ -108,6 +109,15 @@ class _ReceiptSink:
 
     def __iter__(self):
         return iter(self.items)
+
+
+@dataclass(slots=True)
+class _ReceiptObservation:
+    count: int = 0
+    safe: bool | None = None
+    run_id: Any = None
+    step_id: Any = None
+    identity_digest: str | None = None
 
 
 @dataclass(slots=True)
@@ -136,6 +146,63 @@ def _canonical_json(value: Any) -> str:
 
 def _sha_json(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _install_spectrum_receipt_tap(guider: Any, sink: _ReceiptSink):
+    """Mirror the exact receipt tuple Spectrum passes into runtime history.
+
+    Spectrum owns ``attention_backend_receipts_v1`` per actual call and deliberately
+    replaces any caller value while preparing transformer options. Observing the
+    runtime history boundary therefore preserves production ownership and captures
+    the final provider-qualified tuple without changing numerical dispatch.
+    """
+    options = getattr(guider, "model_options", None) or {}
+    spectrum_binding = options.get(_runtime.SPECTRUM_BINDING_KEY)
+    spectrum_runtime = getattr(spectrum_binding, "runtime", None)
+    if spectrum_runtime is None:
+        raise RuntimeError("production candidate requires an installed Spectrum H3 runtime")
+    try:
+        namespace = vars(spectrum_runtime)
+    except TypeError as exc:
+        raise RuntimeError("production candidate cannot inspect Spectrum runtime instance ownership") from exc
+    if "observe_backend_history" in namespace:
+        raise RuntimeError("production candidate Spectrum history observer is already instance-owned")
+    original = getattr(spectrum_runtime, "observe_backend_history", None)
+    if not callable(original):
+        raise RuntimeError("production candidate Spectrum runtime lacks observe_backend_history")
+    observation = _ReceiptObservation()
+
+    def observed(run_id, step_id, identity, receipts, safe):
+        result = original(run_id, step_id, identity, receipts, safe)
+        if observation.count != 0:
+            raise RuntimeError("production candidate observed more than one Spectrum backend-history completion")
+        try:
+            frozen = tuple(receipts)
+        except TypeError as exc:
+            raise RuntimeError("production candidate Spectrum backend receipts are not iterable") from exc
+        if len(frozen) > sink.limit:
+            raise RuntimeError("production candidate Spectrum backend receipt count exceeds validation bound")
+        for item in frozen:
+            sink.append(item)
+        observation.count = 1
+        observation.safe = bool(safe)
+        observation.run_id = run_id
+        observation.step_id = step_id
+        observation.identity_digest = _sha_json(identity)
+        return result
+
+    spectrum_runtime.observe_backend_history = observed
+    return spectrum_runtime, observed, observation
+
+
+def _restore_spectrum_receipt_tap(spectrum_runtime: Any, observed: Any) -> None:
+    try:
+        namespace = vars(spectrum_runtime)
+    except TypeError as exc:
+        raise RuntimeError("production candidate cannot restore Spectrum runtime observer ownership") from exc
+    if namespace.get("observe_backend_history") is not observed:
+        raise RuntimeError("production candidate Spectrum history observer ownership changed during execution")
+    delattr(spectrum_runtime, "observe_backend_history")
 
 
 def _sha256_file(path: Path) -> str:
@@ -765,6 +832,28 @@ def _validate_backend_receipts(receipts: _ReceiptSink) -> dict[str, Any]:
     }
 
 
+def _validate_spectrum_receipt_observation(
+    receipts: _ReceiptSink,
+    observation: _ReceiptObservation,
+) -> dict[str, Any]:
+    report = _validate_backend_receipts(receipts)
+    observed_once = observation.count == 1
+    forecast_safe = observation.safe is True
+    report.update(
+        {
+            "source": "SpectrumH3Runtime.observe_backend_history",
+            "spectrum_observe_call_count": observation.count,
+            "spectrum_forecast_safe": forecast_safe,
+            "spectrum_run_id": observation.run_id,
+            "spectrum_step_id": observation.step_id,
+            "spectrum_policy_identity_sha256": observation.identity_digest,
+            "candidate_owned_generic_receipt_list": False,
+        }
+    )
+    report["valid"] = bool(report["valid"] and observed_once and forecast_safe)
+    return report
+
+
 def _sampler_entry_wrapper(
     executor,
     model_wrap,
@@ -888,7 +977,7 @@ def _outer_wrapper(
     if not isinstance(transformer, dict):
         raise RuntimeError("production candidate requires mutable transformer options")
     if RECEIPTS_KEY in transformer:
-        raise RuntimeError("production candidate backend receipt key is already owned")
+        raise RuntimeError("production candidate entered with stale backend receipt ownership")
     if any(str(key).startswith("h3_first_high_") for key in transformer):
         raise RuntimeError("production candidate cannot execute with W/E/M transformer instrumentation")
     if "h3_flow_untwist_clock_trial_v1" in transformer or "h3_flow_sampling_context" in transformer:
@@ -902,6 +991,7 @@ def _outer_wrapper(
     replay_latent = _replay._tensor_for_replay(replay, "high_latent_image")
     replay_noise = _replay._tensor_for_replay(replay, "high_noise_argument")
     receipt_sink = _ReceiptSink()
+    spectrum_runtime, receipt_tap, receipt_observation = _install_spectrum_receipt_tap(guider, receipt_sink)
     metric_start = binding.metrics.counters
     event_start = len(binding.metrics.events)
     previous_progressive = options.pop(_runtime.PROGRESSIVE_KEY)
@@ -911,7 +1001,6 @@ def _outer_wrapper(
     binding.trajectory = trajectory
     binding.guidance_run_id = run_id
     binding.capture_enabled = False
-    transformer[RECEIPTS_KEY] = receipt_sink
     call = _Call(state=state)
     call_token = _ACTIVE_CALL.set(call)
     completed = False
@@ -957,7 +1046,7 @@ def _outer_wrapper(
         raise
     finally:
         _ACTIVE_CALL.reset(call_token)
-        transformer.pop(RECEIPTS_KEY, None)
+        _restore_spectrum_receipt_tap(spectrum_runtime, receipt_tap)
         binding.trajectory = previous_trajectory
         binding.guidance_run_id = previous_guidance_run_id
         binding.capture_enabled = previous_capture_enabled
@@ -986,7 +1075,7 @@ def _outer_wrapper(
             }
             snapshots = _snapshot_report(record)
             entry_exact = all(value["exact"] is True for value in snapshots.values())
-            receipts = _validate_backend_receipts(receipt_sink)
+            receipts = _validate_spectrum_receipt_observation(receipt_sink, receipt_observation)
             target_video_shape = tuple(int(dim) for dim in target_shapes[0])
             raw_media = _decode_ready_snapshot(record, "first_high_model_raw_video", target_video_shape)
             pre_media = _decode_ready_snapshot(record, "first_high_pre_guidance_video", target_video_shape)
