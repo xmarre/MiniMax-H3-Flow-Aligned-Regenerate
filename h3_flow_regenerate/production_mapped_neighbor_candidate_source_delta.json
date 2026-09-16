@@ -11,9 +11,9 @@
       "owner": "flow",
       "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
       "relative_path": ".",
-      "candidate_git_blob_sha": "4bea83d7dc0939f2219e8f8a77bf2454472a505c",
+      "candidate_git_blob_sha": "d770cbc8aef25d4bea911098537887f8bf1c1159",
       "capture_sha256": null,
-      "reason": "new production-v4 candidate replay/report adapter; validation-only and absent from R"
+      "reason": "new production-v4 candidate replay/report adapter with validation-only mirroring of Spectrum-owned completed backend receipts; absent from R"
     },
     {
       "owner": "flow",
