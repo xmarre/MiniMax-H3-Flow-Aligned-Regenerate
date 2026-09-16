@@ -207,9 +207,6 @@ def _normalize_w_wrapper_order(current, guider):
     """
     patcher = getattr(guider, "model_patcher", None)
     runtime_wrappers = getattr(patcher, "wrappers", None)
-    # Unit-level provenance helpers can be exercised without a real ModelPatcher.
-    # Real W runtime always has ModelPatcher.wrappers; malformed runtime state is
-    # rejected below rather than silently normalized.
     if runtime_wrappers is None:
         return current
     if not isinstance(runtime_wrappers, dict):
@@ -433,6 +430,7 @@ def _normalize_e_provenance_delta(current, capture, guider, source_gate):
 _FIRST_HIGH_SOL_LOCAL_MODULE._normalize_vdn_object_patches = _normalize_e_provenance_delta
 
 _ORIGINAL_E_MEMORY_PREFLIGHT = _FIRST_HIGH_SOL_LOCAL_MODULE._memory_preflight
+_ORIGINAL_E_MEMORY_COMPLETION = _FIRST_HIGH_SOL_LOCAL_MODULE._memory_completion
 
 
 def _e_runtime_cuda_device(device):
@@ -478,6 +476,27 @@ def _memory_preflight_on_runtime_cuda(device):
 
 
 _FIRST_HIGH_SOL_LOCAL_MODULE._memory_preflight = _memory_preflight_on_runtime_cuda
+
+
+def _memory_completion_on_runtime_cuda(device, preflight, evidence):
+    replay_device, runtime_device, capability = _e_runtime_cuda_device(device)
+    expected_capability = [int(capability[0]), int(capability[1])]
+    if preflight.get("cuda_preflight_device") != str(runtime_device):
+        raise RuntimeError(
+            "first-high Sol-local E completion CUDA device differs from the validated preflight device"
+        )
+    if preflight.get("cuda_compute_capability") != expected_capability:
+        raise RuntimeError(
+            "first-high Sol-local E completion CUDA capability differs from the validated preflight capability"
+        )
+    if preflight.get("replay_tensor_device") != str(replay_device):
+        raise RuntimeError(
+            "first-high Sol-local E completion replay device differs from the validated preflight replay device"
+        )
+    return _ORIGINAL_E_MEMORY_COMPLETION(runtime_device, preflight, evidence)
+
+
+_FIRST_HIGH_SOL_LOCAL_MODULE._memory_completion = _memory_completion_on_runtime_cuda
 
 NODE_CLASS_MAPPINGS = {
     **NODE_CLASS_MAPPINGS,
