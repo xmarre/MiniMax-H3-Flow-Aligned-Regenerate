@@ -33,8 +33,8 @@
       "module": "sol_h3.first_high_sol_local_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "79b3013aa936a836fc4e5c5cf3e80f8ac06a49ac",
-      "reason": "E all-selected final sink, isolated SM120 trace/LSE specializations, independent preparation/selector witnesses, streaming frozen-route FP32 reference, and lazy kernel/compiler provenance"
+      "candidate_git_blob_sha": "1c02baa4bae1c17c2ee2ba2e5081012737e83e01",
+      "reason": "E all-selected final sink, isolated SM120 trace/LSE specializations, independent preparation/selector witnesses, streaming frozen-route FP32 reference, lazy kernel/compiler provenance, and bounded all-selected-vs-native metrics carrying the production arithmetic-gate catastrophic limit"
     },
     {
       "owner": "sol",
