@@ -148,7 +148,7 @@
       "module": "vdn_h3",
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
-      "base_sha256": "7132e4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
+      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
       "candidate_git_blob_sha": "02b05ada12584207fd657e35f0f02bbbea049a0c",
       "reason": "install M after W/E before ApplyVDN constructs attention object patches while preserving E parsing and multiplexing only the separately versioned M request through the Sol companion"
     },
