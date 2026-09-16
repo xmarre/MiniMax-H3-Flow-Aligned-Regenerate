@@ -207,6 +207,9 @@ def _normalize_w_wrapper_order(current, guider):
     """
     patcher = getattr(guider, "model_patcher", None)
     runtime_wrappers = getattr(patcher, "wrappers", None)
+    # Unit-level provenance helpers can be exercised without a real ModelPatcher.
+    # Real W runtime always has ModelPatcher.wrappers; malformed runtime state is
+    # rejected below rather than silently normalized.
     if runtime_wrappers is None:
         return current
     if not isinstance(runtime_wrappers, dict):
