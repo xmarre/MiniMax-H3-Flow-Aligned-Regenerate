@@ -35,7 +35,7 @@
       "relative_path": ".",
       "base_git_blob_sha": "6fa3c26067207d3c579af7e4bbe34357e612a2c3",
       "base_sha256": "6f01af6b5144160c0a84cded3d2c59e3daae7f39e14eb823ce1f2201894be91e",
-      "candidate_git_blob_sha": "084c8ab745141c57383192d4125653cce2cbb911",
+      "candidate_git_blob_sha": "ecb1c8c41c23d00bd45d50e9c317e4d463d32f1c",
       "reason": "load the stacked M adapter before root node mappings are assembled; ordinary execution remains inert"
     },
     {
@@ -43,7 +43,7 @@
       "module": "h3_flow_regenerate.first_high_mapped_neighbor_diagnostic",
       "relative_path": ".",
       "base_git_blob_sha": null,
-      "candidate_git_blob_sha": "508cd15735a41726441bdd54c371668ae50c2e4e",
+      "candidate_git_blob_sha": "dd1c555d4a45b60037409de34456ab206e902a71",
       "reason": "select mode M, validate exact additive route evidence, preserve E lifecycle, and persist separately named M evidence/media"
     },
     {
@@ -148,9 +148,9 @@
       "module": "vdn_h3",
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
-      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
-      "candidate_git_blob_sha": "bdf53d3f2b300af4290f0de3aafc52c2d694d35d",
-      "reason": "install M after W/E before ApplyVDN constructs attention object patches and retarget only the reviewed diagnostic request parser to mode M"
+      "base_sha256": "7132e4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
+      "candidate_git_blob_sha": "02b05ada12584207fd657e35f0f02bbbea049a0c",
+      "reason": "install M after W/E before ApplyVDN constructs attention object patches while preserving E parsing and multiplexing only the separately versioned M request through the Sol companion"
     },
     {
       "owner": "core",
