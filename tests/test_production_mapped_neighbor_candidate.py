@@ -162,12 +162,8 @@ def test_receipt_gate_rejects_native_local_fallback_and_old_kernel_contract():
 
 def test_receipt_gate_rejects_per_block_route_swaps_with_same_aggregate_counts():
     sink = _valid_receipts()
-    block0_global = next(
-        i for i, item in enumerate(sink.items) if item[1] == 0 and item[2] == "vdn_global_native"
-    )
-    block1_anchor = next(
-        i for i, item in enumerate(sink.items) if item[1] == 1 and item[2] == "vdn_anchor_native"
-    )
+    block0_global = next(i for i, item in enumerate(sink.items) if item[1] == 0 and item[2] == "vdn_global_native")
+    block1_anchor = next(i for i, item in enumerate(sink.items) if item[1] == 1 and item[2] == "vdn_anchor_native")
     sink.items[block0_global] = ("sol_h3", 0, "vdn_anchor_native")
     sink.items[block1_anchor] = ("sol_h3", 1, "vdn_global_native")
 
@@ -321,11 +317,7 @@ def test_flow_source_delta_blob_identities_match_current_candidate_tree():
         if entry["owner"] != "flow":
             continue
         module_file = _module_file(ROOT, entry["module"])
-        path = (
-            module_file
-            if entry["relative_path"] == "."
-            else (module_file.parent / entry["relative_path"]).resolve()
-        )
+        path = module_file if entry["relative_path"] == "." else (module_file.parent / entry["relative_path"]).resolve()
         assert path.is_file()
         assert _git_blob_sha(path) == entry["candidate_git_blob_sha"]
 
@@ -342,11 +334,7 @@ def test_paired_sol_vdn_source_delta_blob_identities_match_pinned_pr_heads():
         if owner not in roots:
             continue
         module_file = _module_file(roots[owner], entry["module"])
-        path = (
-            module_file
-            if entry["relative_path"] == "."
-            else (module_file.parent / entry["relative_path"]).resolve()
-        )
+        path = module_file if entry["relative_path"] == "." else (module_file.parent / entry["relative_path"]).resolve()
         assert path.is_file(), path
         assert _git_blob_sha(path) == entry["candidate_git_blob_sha"], path
 
