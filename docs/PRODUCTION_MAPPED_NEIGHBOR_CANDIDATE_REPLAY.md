@@ -29,9 +29,17 @@ The queued validation path is:
    - `first_high_pre_guidance`;
    - `first_high_final`.
 
-The candidate replaces the normal progressive execution only inside its validation wrapper. It restores the Flow binding, progressive model option, trajectory and receipt ownership before returning. Core outer-sample cleanup must complete normally.
+The candidate replaces the normal progressive execution only inside its validation wrapper. It restores the Flow binding, progressive model option, trajectory and validation instrumentation before returning. Core outer-sample cleanup must complete normally.
 
 Do not place any W/E/M first-high operator node in the queued graph. The candidate also rejects W/E/M transformer instrumentation, selector replacements, replay capture/replay wrappers, and the rejected Untwist trial.
+
+## Backend-receipt ownership
+
+Spectrum owns `attention_backend_receipts_v1` for each actual model call. Its backend-history preflight creates the per-call receipt list and Sol appends ordinary production receipts to that list. The candidate must not replace or pre-own that key because doing so would inspect a different object from the one used by the executed production call.
+
+For the bounded replay, validation temporarily mirrors the receipt tuple passed to the active Spectrum runtime's completed `observe_backend_history(...)` boundary. The original Spectrum observer executes first. The validation mirror therefore sees the same provider-qualified numerical receipt tuple that Spectrum consumes, without changing Sol dispatch, VDN dispatch, receipt construction, backend-history policy, selector logic, or the generic receipt-list owner. The temporary instance-level observer is removed before the candidate returns.
+
+A valid result requires exactly one completed Spectrum backend-history observation for the one actual H3 call and requires Spectrum to have accepted the mapped provider route as forecast-safe. A stale pre-owned generic receipt key, a pre-existing instance-owned observer, duplicate observations, malformed receipts, or failed provider qualification invalidates the candidate.
 
 ## Structural acceptance
 
@@ -45,7 +53,8 @@ A valid bounded run must report all of the following:
 - packaged Sol contract `sana-sol-engine-sol-attn-64-rect-sm120-mapped-neighbor-v4`;
 - VDN provider API v4;
 - no loaded or executed W/E/M operator substitution;
-- exactly 700 Sol backend receipts:
+- exactly one Spectrum backend-history completion with `spectrum_forecast_safe=true` and candidate ownership of the generic receipt list reported as false;
+- exactly 700 Sol backend receipts from that completed Spectrum observation:
   - 528 `vdn_local_sol_mapped_v1`;
   - 22 `vdn_dense_warmup` on blocks 0 and 1 only;
   - 50 `vdn_global_native`;
