@@ -3,16 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from h3_flow_regenerate.nodes import (
-    H3ProgressiveTargetInputHandoff,
-    NODE_CLASS_MAPPINGS as CORE_NODE_CLASS_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as CORE_NODE_DISPLAY_NAME_MAPPINGS,
-)
+from h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS as CORE_NODE_CLASS_MAPPINGS
+from h3_flow_regenerate.nodes import NODE_DISPLAY_NAME_MAPPINGS as CORE_NODE_DISPLAY_NAME_MAPPINGS
+from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
+from h3_flow_regenerate.target_sparse_node import NODE_CLASS_MAPPINGS as COMPAT_NODE_CLASS_MAPPINGS
 from h3_flow_regenerate.target_sparse_node import (
-    H3ProgressiveMixedGridHandoff,
-    NODE_CLASS_MAPPINGS as COMPAT_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as COMPAT_NODE_DISPLAY_NAME_MAPPINGS,
 )
+from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff
 
 
 ROOT = Path(__file__).resolve().parents[1]
