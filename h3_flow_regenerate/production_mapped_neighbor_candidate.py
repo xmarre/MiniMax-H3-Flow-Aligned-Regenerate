@@ -177,7 +177,7 @@ def _load_source_manifest() -> tuple[dict[str, Any], str]:
         raise RuntimeError("production candidate source-delta manifest schema is unsupported")
     if manifest.get("design_commit") != DESIGN_COMMIT:
         raise RuntimeError("production candidate source-delta manifest targets the wrong design commit")
-    if manifest.get("sol_pr_head") != "8b049e39d000b0d283f2f01e8477f74cf5c2d608":
+    if manifest.get("sol_pr_head") != "1459b34853a39d1054fd5c8643de28a7b0e240c7":
         raise RuntimeError("production candidate source-delta manifest targets the wrong Sol production head")
     if manifest.get("vdn_pr_head") != "333d63f81d33fe29dc1f1f637c5f4a4396880f99":
         raise RuntimeError("production candidate source-delta manifest targets the wrong VDN production head")
