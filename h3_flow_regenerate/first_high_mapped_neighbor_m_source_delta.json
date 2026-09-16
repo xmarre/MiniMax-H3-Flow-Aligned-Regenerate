@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "design_commit": "0b8715faa0a82c730f5aaf0e44b1185e64291e49",
+  "mode": "mapped_neighbor_m",
+  "purpose": "Exact byte allowlist for the evidence-selected bounded first-high mapped-neighbor M arm, stacked on the reviewed E/W diagnostics.",
+  "entries": [
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "138a27c8fbba0ddc9140b6301187a2b01ce0f1fb",
+      "reason": "reuse the validated E one-call replay, Core externalization/cleanup, state and media capture machinery without modifying it"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_sol_local_diagnostic",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "44e3184c3dbb5bb7fb5a71bbb7bf7ab20312a74b",
+      "base_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
+      "candidate_git_blob_sha": "2b322d96b2c6f9887f33abebbf61f58ce018624d",
+      "reason": "preserve the validated E provenance/device corrections and node registration"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_operator_comparison",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "b4aef9c2bb55d118c0eae29124f38240819a1d38",
+      "reason": "preserve reviewed W helper contracts underneath E/M"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate",
+      "relative_path": ".",
+      "base_git_blob_sha": "6fa3c26067207d3c579af7e4bbe34357e612a2c3",
+      "base_sha256": "6f01af6b5144160c0a84cded3d2c59e3daae7f39e14eb823ce1f2201894be91e",
+      "candidate_git_blob_sha": "084c8ab745141c57383192d4125653cce2cbb911",
+      "reason": "load the stacked M adapter before root node mappings are assembled; ordinary execution remains inert"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.first_high_mapped_neighbor_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "508cd15735a41726441bdd54c371668ae50c2e4e",
+      "reason": "select mode M, validate exact additive route evidence, preserve E lifecycle, and persist separately named M evidence/media"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "1c02baa4bae1c17c2ee2ba2e5081012737e83e01",
+      "reason": "preserve E request/provenance and loaded packaged SM120 source inventory"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_witness_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "3ce204248286a6664d2b0e02fff7a20ddc233185",
+      "reason": "preserve reviewed E wrapper chain"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_sol_local_receipt_tap",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8db585129d5db6f7f021148551a3b239c426c0e7",
+      "reason": "preserve actual backend receipt evidence sink"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8cb694f4acf872f477b8b7f3f424dfa4454e8a6e",
+      "reason": "preserve W evidence layer underneath E/M"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.first_high_mapped_neighbor_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "a0f66f191b752ec01d2780c79525064c63fcda4b",
+      "reason": "compile and execute the additive mapped-neighbor SM120 specialization and emit bounded exact-work evidence"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3",
+      "relative_path": ".",
+      "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
+      "base_sha256": "b7dc4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
+      "candidate_git_blob_sha": "f2d307ba4d93df81613c2c38a036120b95a1a64f",
+      "reason": "install M after the preserved W/E Sol diagnostics"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_sol_local_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "8d0b0c9af1a20bc621635d9931376cca43a71fea",
+      "reason": "reuse reviewed restricted VDN geometry/fingerprints and helper contracts"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_sol_local_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "2277f7071118d53eb56fe9cd86110cf7ca799efb",
+      "reason": "preserve reviewed namespaced Sol request bridge"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "14efc851eb1ca52ed46d7a2e5362748ae4676bae",
+      "reason": "preserve W wrapper evidence underneath E/M"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_operator_sol_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "4a689892feb2e197fe75a1c4ad419dddb09b6da0",
+      "reason": "preserve W Sol bridge bytes underneath E/M"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_mapped_neighbor_diagnostic",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "554733105daa04b297260da0b0b2bc8c4e65d56a",
+      "reason": "derive exact VDN-owned query positions and bounded mapped-neighbor intervals without expanding restricted support"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.first_high_mapped_neighbor_bridge",
+      "relative_path": ".",
+      "base_git_blob_sha": null,
+      "candidate_git_blob_sha": "1a6e46f1fc127054b9d3030f6942834cda465aaa",
+      "reason": "resolve the loaded namespaced Sol M companion fail-closed"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3",
+      "relative_path": "../__init__.py",
+      "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
+      "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
+      "candidate_git_blob_sha": "c1fad7049e93d04a9bf03d16ea99027e15bb7cf1",
+      "reason": "install M after W/E before ApplyVDN constructs attention object patches"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "candidate_git_blob_sha": "4a55655207115a150d5254c5b364b03a6c256627",
+      "reason": "exact installed MiniMax-H3 model-sampling prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.latent_formats",
+      "relative_path": ".",
+      "base_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "candidate_git_blob_sha": "8d8ff6c5f179da8dcdeba854f220fb657de2af1c",
+      "reason": "exact installed MiniMax-H3 latent-format prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.model_patcher",
+      "relative_path": ".",
+      "base_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "candidate_git_blob_sha": "08e69fae149692fed60d886890cc0a8eb80bdf26",
+      "reason": "exact installed model-patcher prerequisite"
+    },
+    {
+      "owner": "core",
+      "module": "comfy.k_diffusion.sampling",
+      "relative_path": ".",
+      "base_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "candidate_git_blob_sha": "4a638008a3df3a2f167e9bf343a258a0f5655ede",
+      "reason": "exact installed Euler/callback prerequisite"
+    }
+  ]
+}
