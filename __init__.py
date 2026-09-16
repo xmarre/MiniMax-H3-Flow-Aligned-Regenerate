@@ -228,6 +228,7 @@ def _verify_production_candidate_sources():
 
     introduced = []
     absent_contracts = []
+    package_attributes = []
     try:
         for package_name in ("sol_h3", "vdn_h3"):
             package = _candidate_loaded_module_matches(package_name)
@@ -243,6 +244,10 @@ def _verify_production_candidate_sources():
                 )
 
         for module_name in _CANDIDATE_CONTRACT_MODULES:
+            package_name, _, child_name = module_name.partition(".")
+            package = sys.modules[package_name]
+            namespace = vars(package)
+            package_attributes.append((package, child_name, child_name in namespace, namespace.get(child_name)))
             loaded = _candidate_loaded_module_matches(module_name)
             existing = sys.modules.get(module_name)
             if existing is None:
@@ -258,8 +263,14 @@ def _verify_production_candidate_sources():
         return _ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY()
     finally:
         # A child that was absent before this gate may have been imported by the
-        # original verifier after its source bytes were validated.  Do not leak
-        # that temporary bare alias into the long-lived Comfy process.
+        # original verifier after its source bytes were validated.  Restore both
+        # sys.modules and the package attribute that import machinery mutates, so
+        # this source gate is state-neutral in the long-lived Comfy process.
+        for package, child_name, existed, value in reversed(package_attributes):
+            if existed:
+                setattr(package, child_name, value)
+            else:
+                vars(package).pop(child_name, None)
         for module_name in reversed(absent_contracts):
             sys.modules.pop(module_name, None)
         for module_name in reversed(introduced):
