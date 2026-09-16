@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import ast
-from collections import Counter
 import hashlib
 import json
 import os
+import sys
+import types
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from h3_flow_regenerate import production_mapped_neighbor_candidate as candidate
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "h3_flow_regenerate" / "production_mapped_neighbor_candidate_source_delta.json"
@@ -68,6 +69,25 @@ def _module_file(root: Path, module: str) -> Path:
     return package if package.is_file() else path.with_suffix(".py")
 
 
+def _install_fake_patcher_extension(monkeypatch):
+    comfy = types.ModuleType("comfy")
+    patcher_extension = types.ModuleType("comfy.patcher_extension")
+
+    class WrappersMP:
+        OUTER_SAMPLE = "outer_sample"
+        SAMPLER_SAMPLE = "sampler_sample"
+
+    patcher_extension.WrappersMP = WrappersMP
+    comfy.patcher_extension = patcher_extension
+    monkeypatch.setitem(sys.modules, "comfy", comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", patcher_extension)
+    return WrappersMP
+
+
+def _wrapper_manifest_entry(key: str, function) -> dict[str, object]:
+    return {"key": key, "callable": candidate._callable_equivalence_identity(function)}
+
+
 def test_candidate_identity_is_distinct_and_bound_to_authoritative_design():
     assert candidate.SCHEMA_VERSION == 1
     assert candidate.MODE == "production_mapped_neighbor_v4_candidate"
@@ -112,8 +132,10 @@ def test_valid_backend_receipts_require_exact_production_topology():
     }
     assert report["mapped_receipt_count"] == 528
     assert report["per_block_14_calls_exact"] is True
+    assert report["per_block_route_topology_exact"] is True
     assert report["mapped_fields_valid"] is True
     assert report["mapped_geometry_exact"] is True
+    assert report["mapped_identity_consistent_by_group"] is True
     assert report["warmup_only_first_two_blocks"] is True
     assert report["no_native_local_fallback"] is True
     assert report["valid"] is True
@@ -122,7 +144,7 @@ def test_valid_backend_receipts_require_exact_production_topology():
 def test_receipt_gate_rejects_native_local_fallback_and_old_kernel_contract():
     sink = _valid_receipts()
     index = next(i for i, item in enumerate(sink.items) if item[2] == "vdn_local_sol_mapped_v1")
-    block, fields = sink.items[index][1], sink.items[index][3]
+    block = sink.items[index][1]
     sink.items[index] = ("sol_h3", block, "vdn_local_native_mapping:owner")
     report = candidate._validate_backend_receipts(sink)
     assert report["no_native_local_fallback"] is False
@@ -135,6 +157,47 @@ def test_receipt_gate_rejects_native_local_fallback_and_old_kernel_contract():
     sink.items[index] = (owner, block, route, mutated)
     report = candidate._validate_backend_receipts(sink)
     assert report["mapped_fields_valid"] is False
+    assert report["valid"] is False
+
+
+def test_receipt_gate_rejects_per_block_route_swaps_with_same_aggregate_counts():
+    sink = _valid_receipts()
+    block0_global = next(
+        i for i, item in enumerate(sink.items) if item[1] == 0 and item[2] == "vdn_global_native"
+    )
+    block1_anchor = next(
+        i for i, item in enumerate(sink.items) if item[1] == 1 and item[2] == "vdn_anchor_native"
+    )
+    sink.items[block0_global] = ("sol_h3", 0, "vdn_anchor_native")
+    sink.items[block1_anchor] = ("sol_h3", 1, "vdn_global_native")
+
+    report = candidate._validate_backend_receipts(sink)
+    assert report["routes"] == {
+        "vdn_dense_warmup": 22,
+        "vdn_global_native": 50,
+        "vdn_anchor_native": 100,
+        "vdn_local_sol_mapped_v1": 528,
+    }
+    assert report["per_block_14_calls_exact"] is True
+    assert report["per_block_route_topology_exact"] is False
+    assert report["valid"] is False
+
+
+def test_receipt_gate_rejects_group_mapping_identity_drift_between_blocks():
+    sink = _valid_receipts()
+    index = next(
+        i
+        for i, item in enumerate(sink.items)
+        if item[1] == 2 and item[2] == "vdn_local_sol_mapped_v1" and item[3][3] == 0
+    )
+    owner, block, route, fields = sink.items[index]
+    mutated = (*fields[:7], "d" * 64, *fields[8:])
+    sink.items[index] = (owner, block, route, mutated)
+
+    report = candidate._validate_backend_receipts(sink)
+    assert report["mapped_fields_valid"] is True
+    assert report["mapped_geometry_exact"] is True
+    assert report["mapped_identity_consistent_by_group"] is False
     assert report["valid"] is False
 
 
@@ -171,20 +234,59 @@ def test_approved_callable_normalization_requires_exact_source_identity(tmp_path
         "code_digest": "new",
         "file": {"resolved_path": str(path.resolve()), "sha256": "2" * 64},
     }
-    assert candidate._normalize_approved_callables(capture, gate, side="capture") == candidate._normalize_approved_callables(
-        current, gate, side="current"
-    )
+    capture_normalized = candidate._normalize_approved_callables(capture, gate, side="capture")
+    current_normalized = candidate._normalize_approved_callables(current, gate, side="current")
+    assert capture_normalized == current_normalized
 
     current["file"]["sha256"] = "3" * 64
     with pytest.raises(RuntimeError, match="current callable source identity differs"):
         candidate._normalize_approved_callables(current, gate, side="current")
 
 
+def test_validation_wrapper_normalization_proves_live_ownership_before_removal(monkeypatch):
+    wrappers = _install_fake_patcher_extension(monkeypatch)
+    keep = {"key": "production-wrapper", "callable": {"module": "production"}}
+    current = {
+        "active_wrapper_order": {
+            wrappers.OUTER_SAMPLE: [
+                keep,
+                _wrapper_manifest_entry(candidate._OUTER_KEY, candidate._outer_wrapper),
+            ],
+            wrappers.SAMPLER_SAMPLE: [
+                _wrapper_manifest_entry(candidate._SAMPLER_KEY, candidate._sampler_entry_wrapper)
+            ],
+        },
+        "patcher_wrapper_order": {
+            wrappers.OUTER_SAMPLE: [
+                keep,
+                _wrapper_manifest_entry(candidate._OUTER_KEY, candidate._outer_wrapper),
+            ],
+            wrappers.SAMPLER_SAMPLE: [
+                _wrapper_manifest_entry(candidate._SAMPLER_KEY, candidate._sampler_entry_wrapper)
+            ],
+        },
+    }
+    live = {
+        wrappers.OUTER_SAMPLE: {candidate._OUTER_KEY: [candidate._outer_wrapper]},
+        wrappers.SAMPLER_SAMPLE: {candidate._SAMPLER_KEY: [candidate._sampler_entry_wrapper]},
+    }
+    guider = types.SimpleNamespace(model_patcher=types.SimpleNamespace(wrappers=live))
+
+    normalized = candidate._normalize_validation_wrapper_order(current, guider)
+    for field in ("active_wrapper_order", "patcher_wrapper_order"):
+        assert normalized[field][wrappers.OUTER_SAMPLE] == [keep]
+        assert normalized[field][wrappers.SAMPLER_SAMPLE] == []
+
+    live[wrappers.SAMPLER_SAMPLE][candidate._SAMPLER_KEY] = [lambda: None]
+    with pytest.raises(RuntimeError, match="live wrapper callable identity changed"):
+        candidate._normalize_validation_wrapper_order(current, guider)
+
+
 def test_source_delta_manifest_is_exactly_the_reviewed_production_runtime_delta():
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
     assert manifest["design_commit"] == candidate.DESIGN_COMMIT
-    assert manifest["flow_base"] == "4ae2e35f77ed961151ab5695bef9e1dbe277cc54"
+    assert manifest["flow_base"] == "4ae2e35f77ed961151ab5695bef9e1dbe60ed352b8"
     assert manifest["sol_pr"] == 14
     assert manifest["sol_pr_head"] == "8b049e39d000b0d283f2f01e8477f74cf5c2d608"
     assert manifest["vdn_pr"] == 18
@@ -209,6 +311,7 @@ def test_source_delta_manifest_is_exactly_the_reviewed_production_runtime_delta(
         ("vdn", "vdn_h3.query_positions", "."),
     }
     assert keys == expected
+    assert candidate._EXPECTED_SOURCE_ENTRY_KEYS == frozenset(expected)
     assert len(keys) == len(manifest["entries"])
 
 
@@ -223,7 +326,10 @@ def test_flow_source_delta_blob_identities_match_current_candidate_tree():
         assert _git_blob_sha(path) == entry["candidate_git_blob_sha"]
 
 
-@pytest.mark.skipif(not os.environ.get("SOL_PATH") or not os.environ.get("VDN_PATH"), reason="paired production sources not supplied")
+@pytest.mark.skipif(
+    not os.environ.get("SOL_PATH") or not os.environ.get("VDN_PATH"),
+    reason="paired production sources not supplied",
+)
 def test_paired_sol_vdn_source_delta_blob_identities_match_pinned_pr_heads():
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     roots = {"sol": Path(os.environ["SOL_PATH"]), "vdn": Path(os.environ["VDN_PATH"])}
