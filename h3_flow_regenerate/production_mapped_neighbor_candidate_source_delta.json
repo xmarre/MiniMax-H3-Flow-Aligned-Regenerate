@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "design_commit": "941b8571b099d18d1fe4e4deef9f04fd343b1098",
+  "flow_base": "4ae2e35f77ed961151ab5695bef9e1dbe277cc54",
+  "sol_pr": 14,
+  "sol_pr_head": "8b049e39d000b0d283f2f01e8477f74cf5c2d608",
+  "vdn_pr": 18,
+  "vdn_pr_head": "333d63f81d33fe29dc1f1f637c5f4a4396880f99",
+  "entries": [
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "879b4abdd5655a0cdf6e716d0198df1fb623d1b7",
+      "capture_sha256": null,
+      "reason": "new production-v4 candidate replay/report adapter; validation-only and absent from R"
+    },
+    {
+      "owner": "flow",
+      "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
+      "relative_path": "../__init__.py",
+      "candidate_git_blob_sha": "381e1c1227c7f11c5d23e4c4f097034511940a3c",
+      "capture_sha256": "bc685e2ee1666cb39cf87fc8cbea93b3b731d6fec8ee50b4b83061332194434b",
+      "reason": "register the production-candidate validation nodes without importing W/E/M overlays"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.interop",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "8b47ec7aa97991f132be44ef3ddbe5e003ea0831",
+      "capture_sha256": "b9a10efceea9873ddb5a52d840e17508a070db857fff27662fa1567658973b76",
+      "reason": "provider-v4 plan preflight and mapped receipt/history identity"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.runtime",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "cf7debe2ea4ee5d407145ee5dee80e53c41b0115",
+      "capture_sha256": "5fa136dd67b8b25df5451b3359971c5a128202d11cd12031839f29cebe75e1f7",
+      "reason": "provider-v4 runtime closure, request cache and production mapped route receipts"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.sparse",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "b37892cab6ed75736f70b23dcd2690a6649b060f",
+      "capture_sha256": "f364be362d9de9f555aa88cccccfe640c10c40e3ea2bd6ec6726b4b7f27f2d0e",
+      "reason": "pass validated mapped metadata through the ordinary packaged Sol ABI"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.provenance",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "e3d0e3341d18e21080c33bf0f6fae4b8ebe0e237",
+      "capture_sha256": "927b27330245674ea65b965d8d364e4a2ff359889c4425263677b23701377c1d",
+      "reason": "bind packaged source verification to mapped-neighbor-v4 contract"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.provenance",
+      "relative_path": "sol_manifest.json",
+      "candidate_git_blob_sha": "1dfd622bd102aa9f66db00f5dc49aa627560173e",
+      "capture_sha256": null,
+      "reason": "reviewed regenerated vendor manifest for the ordered rectangular plus mapped-neighbor patches"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3.mapped_neighbors",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "6a527beb80b4072cb2b611019655ae50be0195d5",
+      "capture_sha256": null,
+      "reason": "new strict v4 map validator, bounded descriptor compiler and request-local descriptor cache"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3._vendor.sol_attn.interface",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "e63156d016aa6bdf1fa9ae43b61cdc271594dd4f",
+      "capture_sha256": "cd278f6efbba842bec5684997925d7bd10746dd1f2da2758e18ac571e0666166",
+      "reason": "ordinary packaged ABI transports runtime mapped-neighbor metadata without value-specialized JIT keys"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3._vendor.sol_attn.sm120.kernel",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "57feb6f02ab7f3c6eaaea43312697fd04c221d93",
+      "capture_sha256": "03e7c3da49e2af2e75366765784fab809529ce461993068da96aedcfdefab9df",
+      "reason": "mapped-neighbor-enabled SM120 kernel recipe"
+    },
+    {
+      "owner": "sol",
+      "module": "sol_h3._vendor.sol_attn.sm120.mainloop",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "256fa0e5a01f8b3ea760a088b6e30f4bc5d59e0b",
+      "capture_sha256": "3568c456083fc1ebf468648628e8026507da6efcd3f256ca8cc5eccea965b2a6",
+      "reason": "add mapped physical K64 interval by OR before ballot/compaction while retaining existing route terms"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.hybrid",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "90848983d775ebcd3e15784853b2bba13bb5f2c9",
+      "capture_sha256": "eb290b17cfd566d9466030067db4acc7dd9f57248db739d1e70b5aab3b404a5c",
+      "reason": "bind one immutable query-position owner to each production VDN execution"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.retained",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "d9ba7e8e6261b96751be04057a495465fc4fe97a",
+      "capture_sha256": "39fe2a6aba50ba11a8d49c2a129f20aadf0a0f31a6c54ac47e1cf3815aaa55a0",
+      "reason": "derive v4 maps from the exact geometry that owns the ordinary restricted-domain gathers"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.softmax_provider",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "c73caec58f1df9e7338992f40e9f6bffb104358b",
+      "capture_sha256": "a0acb2c1a1ffcdb7b69c00ce8412fe4629ba443be7b0481dec10310579f8e00c",
+      "reason": "provider-v4-first dispatch with fail-closed native fallback and legacy compatibility"
+    },
+    {
+      "owner": "vdn",
+      "module": "vdn_h3.query_positions",
+      "relative_path": ".",
+      "candidate_git_blob_sha": "cadb2ad93da16cdc11365f2c4008527d2ccdbb4d",
+      "capture_sha256": null,
+      "reason": "new pure CPU geometry and immutable affine query-position transport"
+    }
+  ]
+}
