@@ -122,6 +122,8 @@ def test_candidate_contract_aliases_are_temporary_and_source_exact(monkeypatch, 
     assert "sol_h3.provenance" not in sys.modules
     assert "vdn_h3" not in sys.modules
     assert "vdn_h3.softmax_provider" not in sys.modules
+    assert sol_pkg.provenance is sol_child
+    assert vdn_pkg.softmax_provider is vdn_child
 
 
 def test_candidate_contract_children_remain_lazy_until_original_verifier(monkeypatch, tmp_path):
@@ -129,24 +131,42 @@ def test_candidate_contract_children_remain_lazy_until_original_verifier(monkeyp
         _remove_suffix_modules(monkeypatch, name)
 
     sol_pkg_path = tmp_path / "sol" / "sol_h3" / "__init__.py"
+    sol_child_path = tmp_path / "sol" / "sol_h3" / "provenance.py"
     vdn_pkg_path = tmp_path / "vdn" / "vdn_h3" / "__init__.py"
-    for path in (sol_pkg_path, vdn_pkg_path):
+    vdn_child_path = tmp_path / "vdn" / "vdn_h3" / "softmax_provider.py"
+    for path in (sol_pkg_path, sol_child_path, vdn_pkg_path, vdn_child_path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# package\n", encoding="utf-8")
+        path.write_text("# source\n", encoding="utf-8")
 
     sol_pkg = _module("custom_nodes.synthetic_sol.sol_h3", sol_pkg_path, package=True)
     vdn_pkg = _module("custom_nodes.synthetic_vdn.vdn_h3", vdn_pkg_path, package=True)
     monkeypatch.setitem(sys.modules, sol_pkg.__name__, sol_pkg)
     monkeypatch.setitem(sys.modules, vdn_pkg.__name__, vdn_pkg)
 
+    imported_sol_child = _module("sol_h3.provenance", sol_child_path)
+    imported_vdn_child = _module("vdn_h3.softmax_provider", vdn_child_path)
+
     def fake_verify():
         assert sys.modules["sol_h3"] is sol_pkg
         assert sys.modules["vdn_h3"] is vdn_pkg
         assert "sol_h3.provenance" not in sys.modules
         assert "vdn_h3.softmax_provider" not in sys.modules
+        assert not hasattr(sol_pkg, "provenance")
+        assert not hasattr(vdn_pkg, "softmax_provider")
+
+        # Model the import side effects of the original verifier. Python records
+        # both a sys.modules child and an attribute on its parent package.
+        sys.modules["sol_h3.provenance"] = imported_sol_child
+        sys.modules["vdn_h3.softmax_provider"] = imported_vdn_child
+        sol_pkg.provenance = imported_sol_child
+        vdn_pkg.softmax_provider = imported_vdn_child
         return {"verified": True}
 
     monkeypatch.setattr(plugin_root, "_ORIGINAL_PRODUCTION_CANDIDATE_SOURCE_VERIFY", fake_verify)
     assert plugin_root._verify_production_candidate_sources() == {"verified": True}
     assert "sol_h3" not in sys.modules
+    assert "sol_h3.provenance" not in sys.modules
     assert "vdn_h3" not in sys.modules
+    assert "vdn_h3.softmax_provider" not in sys.modules
+    assert not hasattr(sol_pkg, "provenance")
+    assert not hasattr(vdn_pkg, "softmax_provider")
