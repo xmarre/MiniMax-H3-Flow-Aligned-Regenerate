@@ -238,9 +238,7 @@ def test_spectrum_receipt_tap_mirrors_spectrum_owned_final_receipts_and_restores
         True,
     )
     assert result == "original-observer-return"
-    assert runtime.calls == [
-        (17, 23, ("mapped-policy", "owner"), tuple(spectrum_owned.items), True)
-    ]
+    assert runtime.calls == [(17, 23, ("mapped-policy", "owner"), tuple(spectrum_owned.items), True)]
     assert candidate_sink.items == spectrum_owned.items
 
     report = candidate._validate_spectrum_receipt_observation(candidate_sink, observation)
