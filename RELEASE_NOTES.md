@@ -1,3 +1,79 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.5
+
+v0.3.5 makes **MiniMax H3 Progressive Handoff (Target Input)** the standard target-input/Continuum progressive path and retires Mixed-Grid from the production acceptance matrix.
+
+## Target Input is the production path
+
+The canonical Target Input controls remain:
+
+```text
+source_mode          = scale
+source_scale         = 0.70
+source_width         = 864
+source_height        = 640
+handoff_coordinate   = 0.35
+handoff_selection    = fixed
+guidance_mode        = direction+temporal
+direction_weight     = 0.25
+acceleration_weight  = 0.25
+consistency_weight   = 0.25
+low_frequency_cutoff = 0.25
+temporal_weight      = 0.20
+handoff_transfer     = learned_3d
+```
+
+For unprotected/fractional-mask calls, Target Input keeps the existing low-grid -> exact probe -> learned transfer -> fresh target-grid refinement behavior.
+
+For exact protected video, the exact contract takes precedence: the node executes one ordinary target-grid sampler lifetime with the caller's original latent/noise/mask/schedule. It performs no private low-grid sampler, no handoff probe, no learned-upscaler call, and no geometry/history boundary.
+
+## Bounded guided-audio overlap
+
+The exact-prefix fallback includes the production-validated four-tick guided audio overlap introduced by the PR #33 line. During sampler lifetime only, the last four carried audio-mask ticks become the Core 1/256-aligned ramp:
+
+```text
+0.203125
+0.40234375
+0.6015625
+0.80078125
+```
+
+The video mask remains byte-for-byte unchanged and the original exact video/audio mask remains authoritative at output. `H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` remains the explicit disable/bisect hook.
+
+The clean 00422 validation retained the established `17 logical / 13 actual H3 NFE / 4 Spectrum forecast` topology while improving the first-new-audio latent boundary diagnostic relative to the control and preserving the reported decoded audio/video improvement.
+
+## Mixed-Grid deprecation window
+
+`H3ProgressiveMixedGridHandoff` is retained for **one compatibility release** and is displayed as **MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]**.
+
+The node ID is intentionally not remapped to Target Input. Existing serialized workflows therefore keep their historical Mixed-Grid semantics instead of silently changing behavior.
+
+Mixed-Grid is no longer:
+
+- the recommended production path;
+- part of the production Patcher topology;
+- a release/promotion gate;
+- subject to a required compatibility render.
+
+The old weighted-key-measure / external-sequence companion PR cluster has been retired from the active acceptance topology. Historical results and source remain preserved as evidence/compatibility material. Runtime Mixed-Grid machinery is scheduled for deletion after the compatibility window rather than being removed in the same release that marks the node deprecated.
+
+## Workflow/documentation changes
+
+`workflows/progressive-handoff.overlay.json` now documents Target Input as the canonical topology and records the exact-prefix target-grid fallback, four-tick audio overlap, and explicit Mixed-Grid deprecation contract. The existing executable target-input workflow already uses `H3ProgressiveTargetInputHandoff` with the learned 3D provider.
+
+Regression coverage now locks down that:
+
+- Target Input remains the standard node;
+- the old Mixed-Grid node ID remains registered;
+- Mixed-Grid is a distinct compatibility implementation rather than an alias to Target Input;
+- the canonical overlay contains no Mixed-Grid node;
+- exact-prefix Target Input policy records zero low-grid/probe/upscaler/history-boundary work and the exact four-tick audio ramp.
+
+## Distribution
+
+The package version is `0.3.5`. Historical release notes below remain unchanged as records of the behavior and evidence that applied to those releases.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.4
 
 v0.3.4 aligns the shipped progressive defaults and example workflows with the current learned-transfer path. The target-input example had remained on the older dependency-free bicubic handoff even though decoded-media testing had already promoted `learned_3d` for aggressive source-to-target transitions.
