@@ -92,8 +92,8 @@
       "relative_path": ".",
       "base_git_blob_sha": "9561c85a2c671f0e22b49831c1806d11d17d24f5",
       "base_sha256": "b7dc4718d80eeff9a682add5bd2ed940442e03d9eb751d8c7df0b2dcc3ab9e8e",
-      "candidate_git_blob_sha": "f2d307ba4d93df81613c2c38a036120b95a1a64f",
-      "reason": "install M after the preserved W/E Sol diagnostics"
+      "candidate_git_blob_sha": "0f7a50441f92b7c64ad028d7d44633b231d2d4f9",
+      "reason": "install M after the preserved W/E Sol diagnostics while preserving E parsing and normalizing only M's diagnostic route label for backend-history equivalence"
     },
     {
       "owner": "vdn",
@@ -149,8 +149,8 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
       "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
-      "candidate_git_blob_sha": "02b05ada12584207fd657e35f0f02bbbea049a0c",
-      "reason": "install M after W/E before ApplyVDN constructs attention object patches while preserving E parsing and multiplexing only the separately versioned M request through the Sol companion"
+      "candidate_git_blob_sha": "d0220b75e56d8a2b4794c913cd1ba251bb719c49",
+      "reason": "install M after W/E before ApplyVDN constructs attention object patches while preserving E parsing and keeping the M dispatcher inactive for non-M requests"
     },
     {
       "owner": "core",
