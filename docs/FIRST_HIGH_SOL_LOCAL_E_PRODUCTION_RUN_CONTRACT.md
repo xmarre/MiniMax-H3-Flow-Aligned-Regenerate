@@ -18,14 +18,15 @@ PRs #11, #15 and #43 remain preserved W evidence bases. E is an overlay above th
 
 ## 2. Workstation instrumentation evidence already established
 
-Four successive workstation attempts identified diagnostic instrumentation defects. None is operator/media evidence for the underlying Sol-local hypothesis.
+Five successive workstation attempts identified bounded diagnostic instrumentation defects. None authorizes a production fix or an M/T/C follow-up.
 
 1. **Derived replacement-chain closure depth.** E's extra reviewed VDN wrapper exposed one current-only `closure` level in Core's derived `replacement_chain_dit` provenance. #44 now normalizes only that E-owned closure-depth expansion after proving all fifty live chains are exactly `E -> reviewed W -> captured production VDN`. All non-closure changes and capture-owned differences remain fatal.
 2. **Pre-H3 Sol sparse import.** Installing E imports unchanged production `sol_h3/sparse.py` before Flow's pre-H3 source inventory, whereas R captured before that bridge was necessarily imported. #44 suppresses only that replay-only entry after proving the already source-gated Sol package, exact reviewed sparse blob `9f462591e3492d0b7af476c16024c79d1237505e`, and recorded SHA-256 against disk bytes. Later lazy-loaded SM120 kernel/compiler provenance is still mandatory.
 3. **Replay storage device versus H3 execution device.** R may store the replay latent on CPU. #44 no longer treats that storage device as the Sol execution device: explicit CUDA remains authoritative; a non-CUDA replay resolves to CUDA only with exactly one CUDA device; multi-GPU non-CUDA replay is ambiguous and fails closed; the resolved device must be compute capability `(12, 0)` before memory preflight.
 4. **E rich-metric arithmetic-gate schema.** The next run passed the previous gates, entered the real H3 call, loaded the verified packaged `cute_sm120` backend, completed the 22 native dense local calls and reached the first block-2 local witness. The ordinary Sol arithmetic gate itself produced a valid payload including `reference_peak_abs=18.125` and `catastrophic_max_abs_limit=72.5`, but E's richer `all_selected_vs_native` metric payload omitted those two standard gate fields. Calling the unchanged production `arithmetic_gate_passes()` therefore raised `KeyError: 'catastrophic_max_abs_limit'` during the first witness. Sol PR #12 now computes the reference peak incrementally across the existing Q64 pass and derives the catastrophic limit from the same production constants; non-finite metrics remain fail-closed. No attention route, threshold, kernel, VDN geometry, model state, receipt, or H3-call count is changed by this correction.
+5. **Post-call CUDA memory completion used replay storage device.** The following run passed all earlier corrections and completed the real first H3/SM120 model call. VDN accepted exactly 700 backend-history receipts covering `vdn_local_sol_all_selected_e`, `vdn_dense_warmup`, `vdn_global_native`, and `vdn_anchor_native`; Sol reported one actual evaluation, `cute_sm120`, verified source tree, 22 dense warmup calls, no ordinary sparse local calls, and five finite production arithmetic-gate records with `max_abs=0.0625` and relative-L2 errors around `0.00104..0.00110`. After the model call and Spectrum teardown, E's diagnostic-only completion accounting still called `_memory_completion(replay_latent.device, ...)`. Because R stores that replay latent on CPU, the original completion path passed `cpu` to `torch.cuda.mem_get_info()` and raised `ValueError: Expected a cuda device, but got: cpu`. #44 now binds completion to the same resolved CUDA device used by preflight and requires the replay-device, CUDA-device, and SM120 capability records to match the validated preflight before calling the original completion code.
 
-The fourth attempt **did enter** a real H3/SM120 call, unlike the first three, but it aborted inside the first block-2 witness before the E call completed. It therefore still does not establish a valid E arithmetic, operator, or media result.
+The fifth attempt therefore establishes that the real one-call path reached and completed H3/SM120 with the expected 700 returned attention routes and production arithmetic gates, but it still aborted before E could finalize `execution_valid`, the complete witness/report payload, durable evidence, and decoded media. It is not yet the valid E result required by the design decision table.
 
 ## 3. Preserved R evidence
 
@@ -82,9 +83,9 @@ cd /home/toor/ComfyUI/custom_nodes/MiniMax-H3-Flow-Aligned-Regenerate
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_diagnostic.py)" = \
   138a27c8fbba0ddc9140b6301187a2b01ce0f1fb
 test "$(git hash-object __init__.py)" = \
-  f15b9ab236a7a566354d22b0b7430843e68fd5b6
+  2b322d96b2c6f9887f33abebbf61f58ce018624d
 test "$(git hash-object h3_flow_regenerate/first_high_sol_local_e_source_delta.json)" = \
-  b6b1cbd6b06a8a564515b5ed9aca849e74fa821b
+  3c11f5122536b82aa2df33aeea0d2423e8e38b99
 
 cd /home/toor/ComfyUI
 test "$(git hash-object comfy/model_sampling.py)" = \
@@ -143,7 +144,7 @@ Preserve the generated `.json` and `.pt` files.
 
 E defaults to a 2 GiB additional diagnostic budget for CUDA and 2 GiB for host memory. Optional overrides are `H3_FIRST_HIGH_E_CUDA_BUDGET_GIB` and `H3_FIRST_HIGH_E_CPU_BUDGET_GIB`; do not lower them simply to bypass a failure.
 
-Replay storage and H3 execution device are distinct. A CUDA replay uses that exact device. A non-CUDA replay resolves to CUDA only when exactly one CUDA device exists. Multi-GPU non-CUDA replay fails closed. The resolved device must be SM120 before memory-headroom checks run.
+Replay storage and H3 execution device are distinct. A CUDA replay uses that exact device. A non-CUDA replay resolves to CUDA only when exactly one CUDA device exists. Multi-GPU non-CUDA replay fails closed. The resolved device must be SM120 before memory-headroom checks run. Completion accounting must reuse that same resolved CUDA device and must reject any change in replay-device identity, CUDA-device identity, or compute capability since preflight.
 
 ## 8. Queue exactly once
 
@@ -183,4 +184,6 @@ M/T/C remain conditional. Clean E alone does not authorize permanently dense loc
 
 ## 11. Validation boundary
 
-Hosted CPU/source-contract CI can validate the corrected metric schema, fail-closed behavior, companion integration and source manifests. It cannot establish SM120 arithmetic or media causality. A complete workstation E call remains the empirical gate.
+The post-call completion-device correction is validated at commit `27f5db18810380f4c52eb91f310f1cb5f3ef4547`. Flow CI run `35040792919` passed source contracts plus Python 3.10/3.11/3.12/3.13 Ruff, format, pytest, compileall, build, license and isolated-wheel validation. Regression tests explicitly prove CPU replay completion is routed to the preflight-validated CUDA device and that replay-device, CUDA-device, and capability mismatches fail closed.
+
+Hosted CPU/source-contract CI cannot establish the final SM120 witness/report/media verdict. One complete fresh-process workstation E call remains the empirical gate.
