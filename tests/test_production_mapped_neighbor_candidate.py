@@ -286,7 +286,7 @@ def test_source_delta_manifest_is_exactly_the_reviewed_production_runtime_delta(
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
     assert manifest["design_commit"] == candidate.DESIGN_COMMIT
-    assert manifest["flow_base"] == "4ae2e35f77ed961151ab5695bef9e1dbe60ed352b8"
+    assert manifest["flow_base"] == "4ae2e35f77ed961151ab5695bef9e1dbe277cc54"
     assert manifest["sol_pr"] == 14
     assert manifest["sol_pr_head"] == "8b049e39d000b0d283f2f01e8477f74cf5c2d608"
     assert manifest["vdn_pr"] == 18
@@ -311,7 +311,7 @@ def test_source_delta_manifest_is_exactly_the_reviewed_production_runtime_delta(
         ("vdn", "vdn_h3.query_positions", "."),
     }
     assert keys == expected
-    assert candidate._EXPECTED_SOURCE_ENTRY_KEYS == frozenset(expected)
+    assert frozenset(expected) == candidate._EXPECTED_SOURCE_ENTRY_KEYS
     assert len(keys) == len(manifest["entries"])
 
 
@@ -321,7 +321,11 @@ def test_flow_source_delta_blob_identities_match_current_candidate_tree():
         if entry["owner"] != "flow":
             continue
         module_file = _module_file(ROOT, entry["module"])
-        path = module_file if entry["relative_path"] == "." else (module_file.parent / entry["relative_path"]).resolve()
+        path = (
+            module_file
+            if entry["relative_path"] == "."
+            else (module_file.parent / entry["relative_path"]).resolve()
+        )
         assert path.is_file()
         assert _git_blob_sha(path) == entry["candidate_git_blob_sha"]
 
@@ -338,7 +342,11 @@ def test_paired_sol_vdn_source_delta_blob_identities_match_pinned_pr_heads():
         if owner not in roots:
             continue
         module_file = _module_file(roots[owner], entry["module"])
-        path = module_file if entry["relative_path"] == "." else (module_file.parent / entry["relative_path"]).resolve()
+        path = (
+            module_file
+            if entry["relative_path"] == "."
+            else (module_file.parent / entry["relative_path"]).resolve()
+        )
         assert path.is_file(), path
         assert _git_blob_sha(path) == entry["candidate_git_blob_sha"], path
 
