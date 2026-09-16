@@ -5,6 +5,7 @@ stacked diagnostic overlay changes only the request mode, exact source allowlist
 route validators, durable evidence name, and user-visible arm identity required
 for the single M media call selected by the authoritative design.
 """
+
 from __future__ import annotations
 
 import json
