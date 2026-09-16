@@ -3,33 +3,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from h3_flow_regenerate.nodes import NODE_CLASS_MAPPINGS as CORE_NODE_CLASS_MAPPINGS
-from h3_flow_regenerate.nodes import NODE_DISPLAY_NAME_MAPPINGS as CORE_NODE_DISPLAY_NAME_MAPPINGS
-from h3_flow_regenerate.nodes import H3ProgressiveTargetInputHandoff
-from h3_flow_regenerate.target_sparse_node import NODE_CLASS_MAPPINGS as COMPAT_NODE_CLASS_MAPPINGS
-from h3_flow_regenerate.target_sparse_node import (
-    NODE_DISPLAY_NAME_MAPPINGS as COMPAT_NODE_DISPLAY_NAME_MAPPINGS,
-)
-from h3_flow_regenerate.target_sparse_node import H3ProgressiveMixedGridHandoff
+from h3_flow_regenerate import nodes, target_sparse_node
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_target_input_remains_the_standard_progressive_node():
-    assert CORE_NODE_CLASS_MAPPINGS["H3ProgressiveTargetInputHandoff"] is H3ProgressiveTargetInputHandoff
-    assert CORE_NODE_DISPLAY_NAME_MAPPINGS["H3ProgressiveTargetInputHandoff"] == (
+    assert (
+        nodes.NODE_CLASS_MAPPINGS["H3ProgressiveTargetInputHandoff"]
+        is nodes.H3ProgressiveTargetInputHandoff
+    )
+    assert nodes.NODE_DISPLAY_NAME_MAPPINGS["H3ProgressiveTargetInputHandoff"] == (
         "MiniMax H3 Progressive Handoff (Target Input)"
     )
 
 
 def test_mixed_grid_id_is_preserved_but_not_remapped():
-    assert COMPAT_NODE_CLASS_MAPPINGS["H3ProgressiveMixedGridHandoff"] is H3ProgressiveMixedGridHandoff
-    assert H3ProgressiveMixedGridHandoff is not H3ProgressiveTargetInputHandoff
-    assert H3ProgressiveMixedGridHandoff.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
-    assert H3ProgressiveMixedGridHandoff.CATEGORY.endswith("/deprecated")
-    assert COMPAT_NODE_DISPLAY_NAME_MAPPINGS["H3ProgressiveMixedGridHandoff"].endswith("[Deprecated]")
-    assert "Deprecated compatibility path" in H3ProgressiveMixedGridHandoff.DESCRIPTION
+    mixed = target_sparse_node.H3ProgressiveMixedGridHandoff
+    assert target_sparse_node.NODE_CLASS_MAPPINGS["H3ProgressiveMixedGridHandoff"] is mixed
+    assert mixed is not nodes.H3ProgressiveTargetInputHandoff
+    assert mixed.EXACT_PREFIX_MODE == "mixed_grid_low_suffix"
+    assert mixed.CATEGORY.endswith("/deprecated")
+    assert target_sparse_node.NODE_DISPLAY_NAME_MAPPINGS["H3ProgressiveMixedGridHandoff"].endswith("[Deprecated]")
+    assert "Deprecated compatibility path" in mixed.DESCRIPTION
 
 
 def test_canonical_overlay_uses_target_input_and_records_exact_prefix_fallback():
