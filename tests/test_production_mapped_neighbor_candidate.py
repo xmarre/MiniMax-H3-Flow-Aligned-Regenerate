@@ -284,7 +284,7 @@ def test_source_delta_manifest_is_exactly_the_reviewed_production_runtime_delta(
     assert manifest["design_commit"] == candidate.DESIGN_COMMIT
     assert manifest["flow_base"] == "4ae2e35f77ed961151ab5695bef9e1dbe277cc54"
     assert manifest["sol_pr"] == 14
-    assert manifest["sol_pr_head"] == "8b049e39d000b0d283f2f01e8477f74cf5c2d608"
+    assert manifest["sol_pr_head"] == "1459b34853a39d1054fd5c8643de28a7b0e240c7"
     assert manifest["vdn_pr"] == 18
     assert manifest["vdn_pr_head"] == "333d63f81d33fe29dc1f1f637c5f4a4396880f99"
 
