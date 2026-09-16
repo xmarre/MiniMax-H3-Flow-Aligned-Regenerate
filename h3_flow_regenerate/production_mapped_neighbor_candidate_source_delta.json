@@ -11,7 +11,7 @@
       "owner": "flow",
       "module": "h3_flow_regenerate.production_mapped_neighbor_candidate",
       "relative_path": ".",
-      "candidate_git_blob_sha": "fc984928e127b503d7693edae01e3d474322e4dd",
+      "candidate_git_blob_sha": "e39e5ecb11d1ecfda2ca8b89572ad5b8ba4010f1",
       "capture_sha256": null,
       "reason": "new production-v4 candidate replay/report adapter; validation-only and absent from R"
     },
