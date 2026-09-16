@@ -61,3 +61,75 @@ def test_e_preflight_rejects_non_sm120_runtime_device(monkeypatch):
 
     with pytest.raises(RuntimeError, match=r"requires CUDA SM120.*SM89"):
         root._memory_preflight_on_runtime_cuda(torch.device("cpu"))
+
+
+def test_e_completion_uses_same_runtime_cuda_as_preflight_for_cpu_replay(monkeypatch):
+    _install_cuda_stubs(monkeypatch, count=1, capability=(12, 0))
+    seen = []
+
+    def fake_completion(device, preflight, evidence):
+        seen.append((str(device), preflight, evidence))
+        return {"ok": True}
+
+    monkeypatch.setattr(root, "_ORIGINAL_E_MEMORY_COMPLETION", fake_completion)
+    preflight = {
+        "replay_tensor_device": "cpu",
+        "cuda_preflight_device": "cuda:0",
+        "cuda_compute_capability": [12, 0],
+    }
+    evidence = object()
+    result = root._memory_completion_on_runtime_cuda(torch.device("cpu"), preflight, evidence)
+
+    assert result == {"ok": True}
+    assert seen == [("cuda:0", preflight, evidence)]
+
+
+def test_e_completion_rejects_preflight_device_mismatch(monkeypatch):
+    _install_cuda_stubs(monkeypatch, count=1, capability=(12, 0))
+    monkeypatch.setattr(
+        root,
+        "_ORIGINAL_E_MEMORY_COMPLETION",
+        lambda *_args: pytest.fail("completion must not run"),
+    )
+    preflight = {
+        "replay_tensor_device": "cpu",
+        "cuda_preflight_device": "cuda:1",
+        "cuda_compute_capability": [12, 0],
+    }
+
+    with pytest.raises(RuntimeError, match="completion CUDA device differs"):
+        root._memory_completion_on_runtime_cuda(torch.device("cpu"), preflight, object())
+
+
+def test_e_completion_rejects_preflight_capability_mismatch(monkeypatch):
+    _install_cuda_stubs(monkeypatch, count=1, capability=(12, 0))
+    monkeypatch.setattr(
+        root,
+        "_ORIGINAL_E_MEMORY_COMPLETION",
+        lambda *_args: pytest.fail("completion must not run"),
+    )
+    preflight = {
+        "replay_tensor_device": "cpu",
+        "cuda_preflight_device": "cuda:0",
+        "cuda_compute_capability": [8, 9],
+    }
+
+    with pytest.raises(RuntimeError, match="completion CUDA capability differs"):
+        root._memory_completion_on_runtime_cuda(torch.device("cpu"), preflight, object())
+
+
+def test_e_completion_rejects_replay_device_mismatch(monkeypatch):
+    _install_cuda_stubs(monkeypatch, count=1, capability=(12, 0))
+    monkeypatch.setattr(
+        root,
+        "_ORIGINAL_E_MEMORY_COMPLETION",
+        lambda *_args: pytest.fail("completion must not run"),
+    )
+    preflight = {
+        "replay_tensor_device": "cuda:0",
+        "cuda_preflight_device": "cuda:0",
+        "cuda_compute_capability": [12, 0],
+    }
+
+    with pytest.raises(RuntimeError, match="completion replay device differs"):
+        root._memory_completion_on_runtime_cuda(torch.device("cpu"), preflight, object())
