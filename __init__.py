@@ -6,7 +6,6 @@
 # extension is imported immediately after the base recorder. The same-state
 # replay and production-candidate validation layers compose only additional
 # wrappers around that recorder.
-import importlib
 import sys
 from pathlib import Path
 
