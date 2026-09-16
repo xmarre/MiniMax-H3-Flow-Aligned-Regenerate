@@ -485,9 +485,7 @@ def _memory_completion_on_runtime_cuda(device, preflight, evidence):
     replay_device, runtime_device, capability = _e_runtime_cuda_device(device)
     expected_capability = [int(capability[0]), int(capability[1])]
     if preflight.get("cuda_preflight_device") != str(runtime_device):
-        raise RuntimeError(
-            "first-high Sol-local E completion CUDA device differs from the validated preflight device"
-        )
+        raise RuntimeError("first-high Sol-local E completion CUDA device differs from the validated preflight device")
     if preflight.get("cuda_compute_capability") != expected_capability:
         raise RuntimeError(
             "first-high Sol-local E completion CUDA capability differs from the validated preflight capability"
