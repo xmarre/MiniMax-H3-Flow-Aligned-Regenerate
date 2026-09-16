@@ -149,8 +149,8 @@
       "relative_path": "../__init__.py",
       "base_git_blob_sha": "bd3a49b9aaa7d9510971ab525bf2c72fefa2c0ae",
       "base_sha256": "7132e471b7f2d4222d33d9d118bde1778f3227da50427c3004aab8b01ed10f4b",
-      "candidate_git_blob_sha": "c1fad7049e93d04a9bf03d16ea99027e15bb7cf1",
-      "reason": "install M after W/E before ApplyVDN constructs attention object patches"
+      "candidate_git_blob_sha": "bdf53d3f2b300af4290f0de3aafc52c2d694d35d",
+      "reason": "install M after W/E before ApplyVDN constructs attention object patches and retarget only the reviewed diagnostic request parser to mode M"
     },
     {
       "owner": "core",
