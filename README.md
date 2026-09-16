@@ -175,4 +175,8 @@ Important contracts:
 
 ## License
 
-Apache License 2.0. Referenced papers and third-party repositories retain their own licenses.
+MiniMax H3 Flow-Aligned Regenerate is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 xmarre.
+
+Referenced papers and third-party repositories retain their own copyrights and licenses.
