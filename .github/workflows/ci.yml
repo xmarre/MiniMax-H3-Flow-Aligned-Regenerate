@@ -62,6 +62,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: xmarre/ComfyUI-Sol-H3
+          ref: 1459b34853a39d1054fd5c8643de28a7b0e240c7
+          path: .contracts/Sol
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: xmarre/ComfyUI-VDN-H3-Plus
+          ref: 333d63f81d33fe29dc1f1f637c5f4a4396880f99
+          path: .contracts/VDNPlus
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -99,10 +111,12 @@ jobs:
             --continuum .contracts/Continuum \
             --diffaid .contracts/DiffAid \
             --vdn .contracts/VDN
-      - name: Execute mixed-grid and temporal VAE native source oracles
+      - name: Execute mixed-grid, temporal VAE and production-v4 source oracles
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
+          SOL_PATH: ${{ github.workspace }}/.contracts/Sol
+          VDN_PATH: ${{ github.workspace }}/.contracts/VDNPlus
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
-          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
+          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py tests/test_production_mapped_neighbor_candidate.py -q
