@@ -6,7 +6,6 @@ from pathlib import Path
 import h3_flow_regenerate.nodes as nodes
 import h3_flow_regenerate.target_sparse_node as target_sparse_node
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
