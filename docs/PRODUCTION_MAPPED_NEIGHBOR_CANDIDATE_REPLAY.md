@@ -8,7 +8,7 @@ The candidate is intentionally separate from the W/E/M diagnostics. Flow PRs #43
 
 The source-delta manifest pins the reviewed production pair:
 
-- Sol-H3 PR #14 at `8b049e39d000b0d283f2f01e8477f74cf5c2d608`;
+- Sol-H3 PR #14 at `1459b34853a39d1054fd5c8643de28a7b0e240c7`;
 - VDN-H3-Plus PR #18 at `333d63f81d33fe29dc1f1f637c5f4a4396880f99`;
 - this Flow validation layer on top of the experiment-R implementation at `4ae2e35f77ed961151ab5695bef9e1dbe277cc54`.
 
