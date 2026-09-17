@@ -29,6 +29,7 @@ from .partitioned_stage import (
 
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
 PARTITIONED_BLOCK_INDEX_KEY = "h3_flow_partitioned_block_index_v1"
+PARTITIONED_ATTENTION_CACHE_KEY = "h3_flow_partitioned_attention_override_cache_v1"
 VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
 VDN_PARTITIONED_SEQUENCE_API = 4
 VDN_PARTITIONED_SEQUENCE_MODE = "partitioned_attention_variable_grid_linear"
@@ -150,6 +151,40 @@ def make_partitioned_attention_override(previous, metrics):
     return override
 
 
+def _stage_partitioned_attention_override(stage: dict, previous, metrics):
+    """Return one stable partitioned provider for one sampler-stage lifetime.
+
+    Sol history-v1 deliberately includes dense-provider object identity. Rebuilding
+    the otherwise identical partition leaf for every H3 evaluation therefore
+    creates a false numerical-backend transition and forces Spectrum history back
+    to actual execution. The stage dictionary is owned by one low/probe sampler
+    context, so caching here keeps identity stable only while that lifetime is
+    active. A real inherited-provider change still creates a distinct owner.
+    """
+    cache = stage.get(PARTITIONED_ATTENTION_CACHE_KEY)
+    if cache is None:
+        cache = {}
+        stage[PARTITIONED_ATTENTION_CACHE_KEY] = cache
+    if not isinstance(cache, dict):
+        raise RuntimeError("partitioned exact-prefix attention provider cache is malformed")
+
+    key = id(previous)
+    cached = cache.get(key)
+    if cached is not None:
+        if not isinstance(cached, tuple) or len(cached) != 2:
+            raise RuntimeError("partitioned exact-prefix attention provider cache entry is malformed")
+        cached_previous, cached_override = cached
+        if cached_previous is previous and callable(cached_override):
+            metrics.increment("partitioned_attention_provider_reuses")
+            return cached_override
+        cache.pop(key, None)
+
+    override = make_partitioned_attention_override(previous, metrics)
+    cache[key] = (previous, override)
+    metrics.increment("partitioned_attention_provider_creations")
+    return override
+
+
 def _partitioned_transformer_options(options, partitioned_layout, partition_contract, metrics, *, block_index):
     block_options = dict(options)
     if any(key in block_options for key in _DEPRECATED_MIXED_GRID_KEYS):
@@ -258,7 +293,8 @@ def partitioned_diffusion_wrapper(
         raise RuntimeError("partitioned exact-prefix plan does not match transformed sequence rows")
 
     local = dict(options)
-    local["optimized_attention_override"] = make_partitioned_attention_override(
+    local["optimized_attention_override"] = _stage_partitioned_attention_override(
+        stage,
         local.get("optimized_attention_override"),
         metrics,
     )
@@ -364,6 +400,7 @@ def partitioned_diffusion_wrapper(
 
 
 __all__ = [
+    "PARTITIONED_ATTENTION_CACHE_KEY",
     "PARTITIONED_BLOCK_INDEX_KEY",
     "PARTITIONED_WRAPPER_KEY",
     "VDN_PARTITIONED_SEQUENCE_API",
