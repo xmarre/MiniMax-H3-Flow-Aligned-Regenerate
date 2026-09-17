@@ -1,4 +1,5 @@
 """OUTER_SAMPLE boundary for partitioned exact-prefix progressive continuation."""
+
 from __future__ import annotations
 
 import logging
@@ -75,8 +76,7 @@ def partitioned_outer_wrapper(
         )
         if bool(guided_report.get("applied")):
             LOG.info(
-                "partitioned audio guided overlap active ticks=%d exact_prefix=%d "
-                "ramp=%s final_exact_restore=true",
+                "partitioned audio guided overlap active ticks=%d exact_prefix=%d ramp=%s final_exact_restore=true",
                 guided_ticks,
                 int(guided_report.get("audio_prefix_ticks", 0)),
                 guided_report.get("ramp_values"),
