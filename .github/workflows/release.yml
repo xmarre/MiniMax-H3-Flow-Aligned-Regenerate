@@ -55,7 +55,18 @@ jobs:
       - name: Extract current release notes
         shell: bash
         run: |
-          awk '/^---$/ { exit } { print }' RELEASE_NOTES.md > CURRENT_RELEASE_NOTES.md
+          python - <<'PY'
+          from pathlib import Path
+
+          current = Path("RELEASE_NOTES.md").read_text(encoding="utf-8").split("\n---\n", 1)[0].strip()
+          lines = current.splitlines()
+          if not lines or not lines[0].startswith("# "):
+              raise SystemExit("current release notes must start with a level-1 heading")
+          context = Path("RELEASE_CONTEXT.md").read_text(encoding="utf-8").strip()
+          body = "\n".join(lines[1:]).lstrip()
+          merged = lines[0] + "\n\n" + context + "\n\n" + body + "\n"
+          Path("CURRENT_RELEASE_NOTES.md").write_text(merged, encoding="utf-8")
+          PY
           test -s CURRENT_RELEASE_NOTES.md
 
       - name: Publish or refresh GitHub release
@@ -95,7 +106,7 @@ jobs:
               docs_only=true
               for path in "${changed_files[@]}"; do
                 case "${path}" in
-                  README.md|RELEASE_NOTES.md|.github/workflows/release.yml) ;;
+                  README.md|RELEASE_NOTES.md|RELEASE_CONTEXT.md|.github/workflows/release.yml) ;;
                   *) docs_only=false ;;
                 esac
               done

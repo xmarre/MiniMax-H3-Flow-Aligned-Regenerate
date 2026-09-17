@@ -32,14 +32,14 @@ def test_resolution_shift_matrix_preserves_base_and_refine():
     assert matrix["runs"][1]["id"] == "E1-refine-resolution-aware"
 
 
-def test_progressive_overlay_defines_canonical_mixed_grid_defaults_and_preserves_history():
+def test_progressive_overlay_defines_canonical_target_input_defaults_and_preserves_history():
     overlay = _load("workflows/progressive-handoff.overlay.json")
     defaults = overlay["canonical_defaults"]
     provider = overlay["latent_upscaler_provider"]
     historical = overlay["historical_learned_transfer_ab"]
 
-    assert overlay["schema_version"] == 4
-    assert overlay["placement"]["chain"][-2] == "H3ProgressiveMixedGridHandoff"
+    assert overlay["schema_version"] == 5
+    assert overlay["placement"]["chain"][-2] == "H3ProgressiveTargetInputHandoff"
     assert defaults == {
         "source_mode": "scale",
         "source_scale": 0.7,
@@ -54,8 +54,6 @@ def test_progressive_overlay_defines_canonical_mixed_grid_defaults_and_preserves
         "low_frequency_cutoff": 0.25,
         "temporal_weight": 0.2,
         "handoff_transfer": "learned_3d",
-        "suffix_dc_bridge": True,
-        "suffix_geometric_bridge": True,
         "weight_semantics": (
             "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values "
             "only; apply_guidance does not use them unless the corresponding guidance mode is selected."
