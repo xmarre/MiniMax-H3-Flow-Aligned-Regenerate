@@ -163,9 +163,7 @@ def main() -> None:
         FLOW_VDN_API == SOL_VDN_API == VDN_PARTITIONED_SEQUENCE_API
         and FLOW_VDN_MODE == SOL_VDN_MODE == VDN_PARTITIONED_SEQUENCE_MODE
     ):
-        raise SystemExit(
-            "Flow/Sol/VDN partitioned external-sequence API or mode identity diverged"
-        )
+        raise SystemExit("Flow/Sol/VDN partitioned external-sequence API or mode identity diverged")
     if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
         raise SystemExit("Sol partitioned request ABI is missing")
 
