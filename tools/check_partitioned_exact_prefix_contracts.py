@@ -100,9 +100,7 @@ def main() -> None:
     flow_external = _vdn_external_contract(flow)
     vdn_external = make_vdn_partitioned_external_contract(vdn_plan)
     if flow_external != vdn_external:
-        raise SystemExit(
-            f"Flow/VDN external-sequence binding mismatch:\nFlow={flow_external!r}\nVDN={vdn_external!r}"
-        )
+        raise SystemExit(f"Flow/VDN external-sequence binding mismatch:\nFlow={flow_external!r}\nVDN={vdn_external!r}")
 
     grouped = build_partitioned_grouped_plan(
         vdn_plan,
