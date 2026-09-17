@@ -38,9 +38,7 @@ def _validate_preprocess_transport() -> None:
     from vdn_h3.softmax_provider import PREPROCESS_KEY, preprocess as vdn_preprocess
 
     if VDN_PREPROCESS_KEY != PREPROCESS_KEY:
-        raise SystemExit(
-            f"Sol/VDN preprocessing key mismatch: Sol={VDN_PREPROCESS_KEY!r} VDN={PREPROCESS_KEY!r}"
-        )
+        raise SystemExit(f"Sol/VDN preprocessing key mismatch: Sol={VDN_PREPROCESS_KEY!r} VDN={PREPROCESS_KEY!r}")
 
     block_source = inspect.getsource(BlockPatch.__call__)
     required_publication = (
