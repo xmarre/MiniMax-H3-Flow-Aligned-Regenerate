@@ -17,6 +17,7 @@ import torch
 
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
+from .keyless_compat import validate_keyless_contract
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStageRuntime,
@@ -84,6 +85,24 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         yield
     finally:
         transformer.pop(PARTITIONED_STAGE_KEY, None)
+
+
+def _validate_partitioned_keyless_compat(patcher: Any) -> None:
+    """Keep the QKV partitioned backend away from Keyless row-domain semantics.
+
+    The current Sol/VDN partitioned stack gathers projected K/V and carries its
+    physical key measure through VDN API 4. Canonical Keyless requires one V-domain
+    selection followed by routing derivation from those selected rows. Until the
+    Sol/VDN stack advertises that reviewed value-domain provider, fall back before
+    any sampler lifetime rather than reinterpreting raw V as an ordinary K tensor.
+    """
+    model = getattr(patcher, "model", None)
+    diffusion = getattr(model, "diffusion_model", None)
+    if validate_keyless_contract(diffusion) is not None:
+        raise PartitionedPreflightUnsupported(
+            "partitioned exact-prefix Keyless execution requires a reviewed value-domain "
+            "Sol/VDN provider; the current API-4 partition route is QKV-only"
+        )
 
 
 def _validate_partitioned_vdn_compat(patcher: Any) -> None:
@@ -154,9 +173,10 @@ def _preflight(
     if target_h % 2 or target_w % 2:
         raise PartitionedPreflightUnsupported("target H3 geometry is not patch-safe")
 
-    # These two owners are structural prerequisites for the heterogeneous
+    # These owners are structural prerequisites for the heterogeneous
     # attention path. Validate them before any sampler lifetime is committed so
     # unsupported saved workflows use the released exact target-grid fallback.
+    _validate_partitioned_keyless_compat(guider.model_patcher)
     _validate_partitioned_vdn_compat(guider.model_patcher)
     _validate_partitioned_sol_compat(guider)
 

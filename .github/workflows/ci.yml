@@ -87,6 +87,8 @@ jobs:
           git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
           git -C .contracts/VDNPartitioned checkout 1bc9f9cd0f685a28f84664b50951df8241501249
+          git clone --filter=blob:none https://github.com/xmarre/MiniMax-H3-Keyless.git .contracts/Keyless
+          git -C .contracts/Keyless checkout 3f7737da3189d23ab50fc31e1ff384d3ba298f1d
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -115,3 +117,6 @@ jobs:
           python tools/check_partitioned_exact_prefix_contracts.py \
             --sol .contracts/SolPartitioned \
             --vdn .contracts/VDNPartitioned
+      - name: Validate MiniMax-H3-Keyless public contract
+        run: |
+          python tools/check_keyless_flow_contracts.py --keyless .contracts/Keyless
