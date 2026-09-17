@@ -84,7 +84,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
-          git -C .contracts/SolPartitioned checkout 8739c49fa05f3aa11141eb923fb7cc0c4793213b
+          git -C .contracts/SolPartitioned checkout be38c9c699e0e0823e13fdbbd0dd293ffb32726d
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
           git -C .contracts/VDNPartitioned checkout a5d5b25c6c8fbaf81de5cbd0e355cfba7634bbda
       - name: Validate native and sibling contracts
