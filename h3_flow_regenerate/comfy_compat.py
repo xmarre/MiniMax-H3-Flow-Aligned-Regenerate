@@ -58,9 +58,7 @@ def validate_h3_model(model: Any) -> Any:
     }
     keyless = validate_keyless_contract(diffusion)
     native_base = base.__class__.__name__ == "MiniMaxH3"
-    keyless_base = keyless is not None and any(
-        cls.__name__ == "MiniMaxH3" for cls in base.__class__.__mro__[1:]
-    )
+    keyless_base = keyless is not None and any(cls.__name__ == "MiniMaxH3" for cls in base.__class__.__mro__[1:])
     if facts != expected or not (native_base or keyless_base):
         raise TypeError(f"model does not match the supported native/Keyless MiniMax H3 contract: {facts}")
     return diffusion
