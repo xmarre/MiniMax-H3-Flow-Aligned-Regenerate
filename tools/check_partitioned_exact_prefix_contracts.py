@@ -123,12 +123,16 @@ def main() -> None:
     )
     from h3_flow_regenerate.partitioned_transformer import (
         PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
+        VDN_PARTITIONED_SEQUENCE_API as FLOW_VDN_API,
+        VDN_PARTITIONED_SEQUENCE_MODE as FLOW_VDN_MODE,
         _vdn_external_contract,
     )
     from sol_h3.mapped_neighbors import compile_descriptor, validate_wire_map
     from sol_h3.partitioned_history import (
         PARTITIONED_FLOW_IDENTITY,
         VDN_EXTERNAL_SEQUENCE_KEY,
+        VDN_PARTITIONED_SEQUENCE_API as SOL_VDN_API,
+        VDN_PARTITIONED_SEQUENCE_MODE as SOL_VDN_MODE,
         _partitioned_history_layout_valid,
     )
     from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
@@ -137,6 +141,7 @@ def main() -> None:
         PARTITIONED_PREFIX_KEY as VDN_FLOW_KEY,
         PARTITIONED_PREFIX_TOPOLOGY as VDN_TOPOLOGY,
         VDN_PARTITIONED_SEQUENCE_API,
+        VDN_PARTITIONED_SEQUENCE_MODE,
         make_vdn_partitioned_external_contract,
         validate_flow_partition_contract,
     )
@@ -151,8 +156,15 @@ def main() -> None:
         raise SystemExit(f"partitioned Flow key mismatch: {sorted(keys)}")
     if PARTITIONED_PREFIX_TOPOLOGY != VDN_TOPOLOGY:
         raise SystemExit("Flow/VDN partition topology mismatch")
-    if VDN_PARTITIONED_SEQUENCE_API != 3:
+    if VDN_PARTITIONED_SEQUENCE_API != 4:
         raise SystemExit("unexpected partitioned VDN external-sequence API")
+    if not (
+        FLOW_VDN_API == SOL_VDN_API == VDN_PARTITIONED_SEQUENCE_API
+        and FLOW_VDN_MODE == SOL_VDN_MODE == VDN_PARTITIONED_SEQUENCE_MODE
+    ):
+        raise SystemExit(
+            "Flow/Sol/VDN partitioned external-sequence API or mode identity diverged"
+        )
     if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
         raise SystemExit("Sol partitioned request ABI is missing")
 
