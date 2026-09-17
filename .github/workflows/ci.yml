@@ -83,6 +83,10 @@ jobs:
           git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
+          git -C .contracts/SolPartitioned checkout 8739c49fa05f3aa11141eb923fb7cc0c4793213b
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
+          git -C .contracts/VDNPartitioned checkout 60973e444cb53f4fa017bc4cbf88b4c6ed7de2bc
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -106,3 +110,8 @@ jobs:
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
           python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
+      - name: Validate partitioned exact-prefix cross-repo contracts
+        run: |
+          python tools/check_partitioned_exact_prefix_contracts.py \
+            --sol .contracts/SolPartitioned \
+            --vdn .contracts/VDNPartitioned
