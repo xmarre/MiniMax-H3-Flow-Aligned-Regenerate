@@ -5,9 +5,12 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import torch
 
 
 def _root(value: str) -> Path:
@@ -25,6 +28,82 @@ def _namespace_package(name: str, package_dir: Path) -> None:
     package.__package__ = name
     package.__path__ = [str(package_dir)]
     sys.modules[name] = package
+
+
+def _validate_preprocess_transport() -> None:
+    """Prove Flow metadata is consumable by Sol and published under VDN's key."""
+    from h3_flow_regenerate.partitioned_transformer import make_partitioned_attention_override
+    from sol_h3.interop import VDN_PREPROCESS_KEY
+    from sol_h3.runtime import BlockPatch, _preprocess_chain
+    from vdn_h3.softmax_provider import PREPROCESS_KEY, preprocess as vdn_preprocess
+
+    if VDN_PREPROCESS_KEY != PREPROCESS_KEY:
+        raise SystemExit(
+            f"Sol/VDN preprocessing key mismatch: Sol={VDN_PREPROCESS_KEY!r} VDN={PREPROCESS_KEY!r}"
+        )
+
+    block_source = inspect.getsource(BlockPatch.__call__)
+    required_publication = (
+        'hasattr(previous, "attention_preprocess_v1")',
+        "options[VDN_PREPROCESS_KEY] = vdn_preprocess",
+    )
+    missing = tuple(marker for marker in required_publication if marker not in block_source)
+    if missing:
+        raise SystemExit(f"Sol BlockPatch no longer publishes inherited preprocessing to VDN: {missing!r}")
+
+    calls = []
+
+    def terminal(original, q, k, v, heads, mask=None, **kw):
+        del original, heads, mask, kw
+        return q + k + v
+
+    def inherited_transform(q, k, v, *, heads, **kw):
+        del kw
+        calls.append(int(heads))
+        return q + 1, k + 2, v + 3
+
+    def inherited(original, q, k, v, heads, mask=None, **kw):
+        return terminal(original, q, k, v, heads, mask=mask, **kw)
+
+    inherited.attention_preprocess_v1 = (inherited_transform, terminal)
+    metrics = SimpleNamespace(increment=lambda *_args, **_kwargs: None)
+    flow_override = make_partitioned_attention_override(inherited, metrics)
+    contract = getattr(flow_override, "attention_preprocess_v1", None)
+    if not isinstance(contract, tuple) or len(contract) != 2 or not callable(contract[0]):
+        raise SystemExit("Flow partitioned override did not preserve attention_preprocess_v1 metadata")
+    expected_leaf = contract[1]
+
+    def sol_vdn_bridge(q, k, v, *, heads, transformer_options=None):
+        processed_q, processed_k, processed_v, leaf = _preprocess_chain(
+            flow_override,
+            q,
+            k,
+            v,
+            heads,
+            {"transformer_options": transformer_options or {}},
+        )
+        if leaf is not expected_leaf:
+            raise SystemExit("Sol preprocessing chain did not terminate at Flow's partition leaf")
+        return processed_q, processed_k, processed_v
+
+    q = torch.zeros((4, 2, 3), dtype=torch.float32)
+    k = torch.zeros_like(q)
+    v = torch.zeros_like(q)
+    processed_q, processed_k, processed_v = vdn_preprocess(
+        {PREPROCESS_KEY: sol_vdn_bridge},
+        q,
+        k,
+        v,
+        q.shape[1],
+    )
+    if calls != [q.shape[1]]:
+        raise SystemExit(f"inherited Flow preprocessing executed {len(calls)} times instead of once")
+    if not torch.equal(processed_q, q + 1):
+        raise SystemExit("Flow->Sol->VDN preprocessing changed Q unexpectedly")
+    if not torch.equal(processed_k, k + 2):
+        raise SystemExit("Flow->Sol->VDN preprocessing changed K unexpectedly")
+    if not torch.equal(processed_v, v + 3):
+        raise SystemExit("Flow->Sol->VDN preprocessing changed V unexpectedly")
 
 
 def main() -> None:
@@ -78,6 +157,8 @@ def main() -> None:
         raise SystemExit("unexpected partitioned VDN external-sequence API")
     if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
         raise SystemExit("Sol partitioned request ABI is missing")
+
+    _validate_preprocess_transport()
 
     flow = PartitionedExactPrefixPlan(
         video_start=7,
