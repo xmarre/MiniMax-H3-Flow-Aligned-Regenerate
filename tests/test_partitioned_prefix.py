@@ -69,10 +69,18 @@ def test_partitioned_lse_merge_matches_explicit_dense_attention():
         torch.randn((1, 2, 7, 8), generator=generator, dtype=torch.float64),
         torch.randn((1, 2, 4, 8), generator=generator, dtype=torch.float64),
     ]
-    values = [torch.randn(k.shape, generator=generator, dtype=torch.float64) for k in keys]
+    values = [
+        torch.randn(key.shape, generator=generator, dtype=torch.float64)
+        for key in keys
+    ]
     measures = [0.0, math.log(0.4), math.log(1.25)]
 
-    full_out, full_lse, merged_out, merged_lse = dense_partition_oracle(q, keys, values, measures)
+    full_out, full_lse, merged_out, merged_lse = dense_partition_oracle(
+        q,
+        keys,
+        values,
+        measures,
+    )
     assert torch.allclose(merged_out, full_out, rtol=1e-12, atol=1e-12)
     assert torch.allclose(merged_lse, full_lse, rtol=1e-12, atol=1e-12)
 
@@ -108,9 +116,15 @@ def test_partition_merge_uses_fp32_for_bfloat16_production_inputs():
         torch.tensor([[[[1.0, 3.0]]]], dtype=torch.bfloat16),
         torch.tensor([[[[5.0, 7.0]]]], dtype=torch.bfloat16),
     ]
-    lses = [torch.tensor([[[0.0]]], dtype=torch.float32), torch.tensor([[[0.0]]], dtype=torch.float32)]
+    lses = [
+        torch.tensor([[[0.0]]], dtype=torch.float32),
+        torch.tensor([[[0.0]]], dtype=torch.float32),
+    ]
     merged, merged_lse = merge_partition_attention(outputs, lses, [0.0, 0.0])
     assert merged.dtype == torch.bfloat16
     assert merged_lse.dtype == torch.float32
-    assert torch.equal(merged, torch.tensor([[[[3.0, 5.0]]]], dtype=torch.bfloat16))
+    assert torch.equal(
+        merged,
+        torch.tensor([[[[3.0, 5.0]]]], dtype=torch.bfloat16),
+    )
     assert merged_lse.item() == pytest.approx(math.log(2.0), abs=1e-7)
