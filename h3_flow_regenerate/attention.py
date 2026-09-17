@@ -36,7 +36,7 @@ class AttentionConfig:
         if self.max_sequence < 1:
             raise ValueError("max_sequence must be positive")
         if self.vdn_chunk_size < 1 or self.vdn_chunk_radius < 0:
-            raise ValueError("VDN chunk size must be positive and radius non-negative")
+            raise ValueError("VDN chunk size must be positive and radius must be non-negative")
         if self.vdn_anchor_mode not in {"none", "columns", "rows", "both"}:
             raise ValueError(f"unsupported VDN anchor mode {self.vdn_anchor_mode!r}")
 
