@@ -1,6 +1,6 @@
 # Exact-Prefix Progressive Continuation Design
 
-Status: design / implementation plan
+Status: implementation candidate / validation plan
 
 Base: Flow v0.3.5 main (`b659b311fa548c7e3275db0e6f0a05c037dac730`)
 
@@ -51,20 +51,41 @@ Text/reference/audio rows remain ordinary H3 non-video rows (`G`).
 
 Each H3 block keeps `P` and `S` as separately described domains with their own physical spatial coordinates and RoPE. The implementation must not pretend that target-grid prefix rows and source-grid suffix rows share one uniform spatial measure.
 
-### Attention
+### Attention semantics and production execution
 
-For each query partition, attention against the key partitions is evaluated as explicit rectangular pieces and merged by log-sum-exp so that the result is equivalent to one softmax over the union of the permitted key domains without concatenating them into an implicit single-grid sequence.
-
-For a query partition `Q` and key partitions `K_i`, each backend piece returns output `O_i` and log-normalizer `L_i`. With any required physical key-measure bias included in `L_i`, combine:
+The mathematical reference is partitioned attention. For a query partition `Q` and permitted key partitions `K_i`, each dense reference piece returns output `O_i` and natural-log normalizer `L_i`. With the physical key-measure correction included as an additive log measure, the pieces combine exactly as:
 
 ```text
-L = logsumexp_i(L_i)
-O = sum_i exp(L_i - L) * O_i
+L = logsumexp_i(L_i + log_measure_i)
+O = sum_i exp(L_i + log_measure_i - L) * O_i
 ```
 
-This removes the old failure mode where unequal target-prefix/source-suffix carrier density changed softmax mass merely because one domain had more discrete spatial rows.
+This reference is algebraically equivalent to dense attention over one concatenated K/V union with the same per-key additive log-measure bias. It is the arithmetic oracle used to prove that unequal target-prefix/source-suffix carrier density does not change physical attention mass merely because one domain contains more discrete rows.
+
+The production sparse Sol route deliberately does **not** execute each physical K/V partition through an independently prepared sparse kernel and then merge those results. Sol's sparse routing threshold is derived from the K/V domain presented to preprocessing. Preparing `G`, `P`, and `S` independently would therefore create independent routing thresholds and would no longer represent the same sparse decision as one permitted K/V domain.
+
+For production sparse execution, VDN first constructs the exact permitted K/V domain for each query group. Sol then evaluates that **single physical K/V union** in one SM120 call, with:
+
+- the target-prefix rows carrying the exact additive log-measure bias `log(source_rows_per_frame / target_rows_per_frame)`;
+- the global/non-video and source-suffix rows carrying zero log-measure bias;
+- VDN-owned provider-v4 query-position metadata applied to the already-gathered restricted K/V domain;
+- one shared Sol preprocessing/routing threshold for the complete permitted union;
+- target-prefix K/V rows kept exact where required by the partition contract.
+
+The single union is only an execution transport. It does not make the heterogeneous video stream a uniform spatial lattice: target-prefix and source-suffix coordinates, RoPE, ownership, row counts, physical key measure, and mapped query positions remain explicit in the immutable contract.
+
+Dense correctness therefore has two required equivalence checks:
+
+1. explicit physical partitions + LSE merge must equal explicit dense weighted-union attention;
+2. the production single-union additive-bias dense reference must equal that same partition-LSE oracle.
 
 The partition metadata must be explicit and immutable for the block call. Query-position ownership remains with the producer of the restricted domain; the Sol mapped-neighbor v4 contract continues to apply where VDN owns rectangular restricted K/V positions.
+
+### Preprocessing ownership
+
+Shape-preserving inherited Q/K/V transforms such as Untwisting RoPE must execute exactly once on the complete post-RoPE physical sequence **before** VDN performs any grouped gather. Flow preserves the generic `attention_preprocess_v1` chain on its partitioned override; Sol consumes that chain and republishes it under the VDN preprocessing key; VDN then applies it before constructing restricted query/K/V groups.
+
+A partitioned path must fail its source-contract gate if Flow, Sol, and VDN disagree about that preprocessing key or if the inherited transform can be applied twice, dropped, or moved after the gather.
 
 ### Block state
 
@@ -87,17 +108,20 @@ At the existing selected handoff coordinate:
 
 ## Backend contract
 
-This design should not revive the deprecated `mixed_grid_low_suffix` API or its node. Introduce a new versioned, narrowly scoped contract for partitioned progressive video domains.
+This design must not revive the deprecated `mixed_grid_low_suffix` API or its node. The replacement uses a new versioned, narrowly scoped contract for partitioned progressive video domains.
 
 The contract must carry at minimum:
 
-- domain id and owner generation;
+- domain identity and owner generation;
 - query domain (`global/nonvideo`, `prefix_target`, `suffix_source`);
 - target/source spatial shape and temporal extent;
 - immutable physical query-position map inside any VDN-restricted K/V domain;
 - per-domain physical key-measure scale or exact additive log-measure bias;
-- explicit capability bit for backend log-sum-exp return/merge;
-- fallback callback for unsupported cases.
+- a versioned Sol request ABI identifying single-union key-measure execution;
+- bounded structural descriptor/cache identity that excludes per-request map contents and runtime bias values;
+- a fail-closed path for unsupported geometry/backend combinations.
+
+The SM120 output+LSE primitive remains a useful arithmetic oracle and diagnostic primitive, but production sparse routing is not required to decompose the permitted K/V union into independently thresholded sparse calls.
 
 No compatibility adapter may silently reinterpret the deprecated Mixed-Grid contract as this new one.
 
@@ -106,21 +130,29 @@ No compatibility adapter may silently reinterpret the deprecated Mixed-Grid cont
 ### Phase A — structural prototype
 
 - keep v0.3.5 behavior unchanged by default;
-- add a new internal exact-prefix mode, disabled unless the complete backend capability contract is present;
-- implement partition metadata and fail-closed validation;
+- add a separate partitioned scheduler/runtime contract rather than reusing a deprecated `exact_prefix_mode`;
+- implement partition metadata and fail-closed validation before any sampler lifetime begins;
 - preserve all current exact-mask and audio-overlap invariants;
-- add unit tests proving that exact-prefix continuation chooses the new path only when every capability is present.
+- add unit tests proving that unsupported preflight conditions return to the conservative target-grid fallback without partially executing a second numerical path.
 
-### Phase B — arithmetic oracle
+### Phase B — arithmetic and transport oracles
 
-Before any media claim, build a small dense reference that compares partitioned log-sum-exp merge against explicit concatenated dense attention on synthetic tiny domains. Required tolerance is ordinary BF16/FP32 numerical agreement, with explicit tests for unequal spatial carrier density.
+Before any media claim:
+
+- compare partition-LSE dense attention against explicit dense weighted-union attention on synthetic tiny domains;
+- compare the production single-union additive-bias dense reference against the same partition-LSE oracle;
+- include unequal spatial carrier density;
+- verify BF16 production accumulation uses FP32 where required;
+- prove the Flow `attention_preprocess_v1` chain is consumed exactly once by Sol and published under the exact preprocessing key VDN consumes.
 
 ### Phase C — real Sol/VDN backend
 
-- extend the rectangular Sol backend with the bounded partition/LSE contract rather than reviving the old Mixed-Grid weighted path;
+- extend the rectangular Sol backend with one bounded single-union request carrying additive key-measure bias plus mapped-neighbor metadata;
+- keep the partition-LSE primitive as the dense arithmetic oracle rather than using independent sparse thresholds in production;
 - extend VDN provider ownership only where its restricted-domain semantics require physical query-position transport;
+- apply inherited preprocessing on the complete physical sequence before VDN gathers;
 - preserve native global/anchor fallbacks and mapped-neighbor v4 local routing;
-- keep specialization keys structural: runtime descriptor values and per-request positions must not create unbounded kernel specializations.
+- keep specialization keys structural: runtime descriptor values, request digests, positions, and measure values must not create unbounded kernel specializations.
 
 ### Phase D — production runtime gate
 
@@ -145,7 +177,10 @@ Structural acceptance includes:
 - first high call actual;
 - four-tick audio overlap preserved;
 - bounded backend descriptors/caches;
+- no duplicated or dropped inherited attention preprocessing;
 - no unsupported backend fallback in the matched production run.
+
+The current VDN candidate intentionally disables its geometry-dependent learned linear complement for the heterogeneous stage because the released branch assumes one fixed `tokens_per_frame`. That omission is explicit and remains a promotion gate until either a variable-grid linear oracle/runtime is implemented or a separately documented production decision replaces that requirement. It must not be silently treated as equivalent to full released VDN.
 
 ### Phase E — media/performance gate
 
@@ -167,4 +202,4 @@ Performance promotion requires a material reduction in later-chunk sampler/model
 
 The eight continuous target-grid steps are the direct consequence of the v0.3.5 conservative exact-prefix fallback. There is no safe configuration toggle that turns the current standard Target Input node back into low/probe/high continuation without selecting one of the previously rejected approximations.
 
-The production fix is therefore a new exact-prefix progressive backend contract, not a scheduler tweak and not a reactivation of deprecated Mixed-Grid.
+The replacement is a new partitioned exact-prefix progressive backend contract: explicit target-prefix/source-suffix physical domains, dense partition-LSE arithmetic as the semantic oracle, and a production single-union Sol execution that preserves one sparse routing threshold while carrying the exact physical key-measure bias and VDN-owned query-position mapping. It is not a scheduler tweak and not a reactivation of deprecated Mixed-Grid.
