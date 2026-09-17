@@ -471,11 +471,17 @@ def _validate_vdn_target_sparse_compat(
     object_patches = getattr(model, "object_patches", None)
     if not isinstance(object_patches, dict):
         return
+    keyless = validate_keyless_contract(validate_h3_model(model))
     for layer in range(num_layers):
         key = f"diffusion_model.blocks.{layer}.attn.forward"
         owner = object_patches.get(key)
         if owner is None or not getattr(owner, "_vdn_forward", False):
             continue
+        if keyless is not None:
+            raise RuntimeError(
+                "VDN-H3 attention ownership is not compatible with h3_keyless_core50_v1; "
+                "a Keyless-specific value-derived branch/checkpoint contract is required"
+            )
         api = int(getattr(owner, "_vdn_external_sequence_api", 0))
         if api < minimum_api:
             raise RuntimeError(
