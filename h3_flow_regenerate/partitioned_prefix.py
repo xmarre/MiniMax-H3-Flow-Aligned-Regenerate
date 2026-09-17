@@ -5,6 +5,7 @@ contains the immutable geometry/measure contract that Flow will publish once the
 runtime path is enabled, plus a small dense reference used to prove that
 partition-wise attention can be merged without changing softmax semantics.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -134,10 +135,7 @@ def validate_partitioned_contract(
 ) -> PartitionedExactPrefixPlan:
     if not isinstance(contract, dict):
         raise ValueError("partitioned exact-prefix contract must be a dictionary")
-    if (
-        contract.get("api") != PARTITIONED_PREFIX_API
-        or contract.get("topology") != PARTITIONED_PREFIX_TOPOLOGY
-    ):
+    if contract.get("api") != PARTITIONED_PREFIX_API or contract.get("topology") != PARTITIONED_PREFIX_TOPOLOGY:
         raise ValueError("unsupported partitioned exact-prefix contract")
     names = (
         "video_start",
@@ -201,9 +199,7 @@ def merge_partition_attention(
         else torch.float32
     )
     adjusted_lses = []
-    for index, (output, lse, measure) in enumerate(
-        zip(outputs, lses, log_measures, strict=True)
-    ):
+    for index, (output, lse, measure) in enumerate(zip(outputs, lses, log_measures, strict=True)):
         if (
             output.shape != reference_output.shape
             or output.dtype != reference_output.dtype
@@ -212,10 +208,7 @@ def merge_partition_attention(
             raise ValueError(f"partition output {index} does not match the first output")
         if lse.shape != reference_lse.shape or lse.device != reference_lse.device:
             raise ValueError(f"partition LSE {index} does not match the first LSE")
-        adjusted_lses.append(
-            lse.to(acc_dtype)
-            + torch.as_tensor(measure, device=lse.device, dtype=acc_dtype)
-        )
+        adjusted_lses.append(lse.to(acc_dtype) + torch.as_tensor(measure, device=lse.device, dtype=acc_dtype))
     merged_lse = torch.logsumexp(torch.stack(adjusted_lses, dim=0), dim=0)
     merged = torch.zeros_like(reference_output, dtype=acc_dtype)
     for output, adjusted in zip(outputs, adjusted_lses, strict=True):
@@ -238,9 +231,7 @@ def dense_partition_oracle(
     execution belongs to the Sol/VDN backend and must not call this helper.
     """
     if q.ndim != 4 or not key_partitions or len(key_partitions) != len(value_partitions):
-        raise ValueError(
-            "dense partition oracle requires BHTD Q and matching non-empty K/V partitions"
-        )
+        raise ValueError("dense partition oracle requires BHTD Q and matching non-empty K/V partitions")
     if len(key_partitions) != len(log_measures):
         raise ValueError("dense partition oracle requires one log measure per K/V partition")
     d = q.shape[-1]
@@ -248,20 +239,12 @@ def dense_partition_oracle(
     outputs = []
     lses = []
     for k, v in zip(key_partitions, value_partitions, strict=True):
-        if (
-            k.shape != v.shape
-            or k.ndim != 4
-            or k.shape[:2] != q.shape[:2]
-            or k.shape[-1] != d
-        ):
+        if k.shape != v.shape or k.ndim != 4 or k.shape[:2] != q.shape[:2] or k.shape[-1] != d:
             raise ValueError("dense partition oracle received incompatible K/V geometry")
-        scores = (
-            torch.matmul(
-                q.to(torch.float64),
-                k.to(torch.float64).transpose(-1, -2),
-            )
-            * effective_scale
-        )
+        scores = torch.matmul(
+            q.to(torch.float64),
+            k.to(torch.float64).transpose(-1, -2),
+        ) * effective_scale
         lse = torch.logsumexp(scores, dim=-1)
         probs = torch.softmax(scores, dim=-1)
         out = torch.matmul(probs, v.to(torch.float64))
@@ -282,10 +265,13 @@ def dense_partition_oracle(
             for k, log_measure in zip(key_partitions, log_measures, strict=True)
         )
     )
-    full_scores = torch.matmul(
-        q.to(torch.float64),
-        full_k.transpose(-1, -2),
-    ) * effective_scale
+    full_scores = (
+        torch.matmul(
+            q.to(torch.float64),
+            full_k.transpose(-1, -2),
+        )
+        * effective_scale
+    )
     full_scores = full_scores + full_bias.view(1, 1, 1, -1)
     full_lse = torch.logsumexp(full_scores, dim=-1)
     full_out = torch.matmul(torch.softmax(full_scores, dim=-1), full_v)
