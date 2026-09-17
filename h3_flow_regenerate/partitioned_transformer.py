@@ -179,6 +179,7 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
         metrics.increment("partitioned_kv_rows", int(k.shape[2]))
         return output.reshape(q.shape[0], q.shape[2], -1)
 
+    transforms, _terminal = _runtime_provider_state(runtime)
     if transforms:
 
         def override(original, q, k, v, heads, mask=None, **kw):
