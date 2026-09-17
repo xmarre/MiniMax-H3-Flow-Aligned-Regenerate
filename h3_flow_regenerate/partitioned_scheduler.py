@@ -128,8 +128,7 @@ def _validate_partitioned_sol_compat(guider: Any) -> None:
     ]
     if mismatches:
         raise PartitionedPreflightUnsupported(
-            "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: "
-            + ", ".join(mismatches)
+            "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: " + ", ".join(mismatches)
         )
 
 
