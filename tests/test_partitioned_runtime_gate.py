@@ -93,8 +93,7 @@ def _log(record: dict | None = None) -> str:
     record = _sol_record() if record is None else record
     return "\n".join(
         (
-            "partitioned exact-prefix: grouped VDN softmax active; "
-            "variable-grid linear complement active",
+            "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active",
             "partitioned audio guided overlap active ticks=4 exact_prefix=4 "
             "ramp=[0.203125, 0.40234375, 0.6015625, 0.80078125] "
             "final_exact_restore=true",
