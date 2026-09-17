@@ -22,6 +22,7 @@ from .partitioned_prefix import (
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStagePlan,
+    PartitionedStageRuntime,
     partitioned_carrier_layout,
     partitioned_mod_segments,
     partitioned_positions,
@@ -29,7 +30,6 @@ from .partitioned_stage import (
 
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
 PARTITIONED_BLOCK_INDEX_KEY = "h3_flow_partitioned_block_index_v1"
-PARTITIONED_ATTENTION_CACHE_KEY = "h3_flow_partitioned_attention_override_cache_v1"
 VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
 VDN_PARTITIONED_SEQUENCE_API = 4
 VDN_PARTITIONED_SEQUENCE_MODE = "partitioned_attention_variable_grid_linear"
@@ -151,20 +151,19 @@ def make_partitioned_attention_override(previous, metrics):
     return override
 
 
-def _stage_partitioned_attention_override(stage: dict, previous, metrics):
+def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, previous, metrics):
     """Return one stable partitioned provider for one sampler-stage lifetime.
 
-    Sol history-v1 deliberately includes dense-provider object identity. Rebuilding
-    the otherwise identical partition leaf for every H3 evaluation therefore
-    creates a false numerical-backend transition and forces Spectrum history back
-    to actual execution. The stage dictionary is owned by one low/probe sampler
-    context, so caching here keeps identity stable only while that lifetime is
-    active. A real inherited-provider change still creates a distinct owner.
+    Sol history-v1 deliberately includes dense-provider object identity. ComfyUI
+    recursively copies nested transformer-option dictionaries between model calls,
+    so the cache must live on the non-dict ``PartitionedStageRuntime`` owner rather
+    than inside a published stage dictionary. A real inherited-provider change
+    still receives a distinct owner, and low/probe boundaries publish fresh
+    runtime owners.
     """
-    cache = stage.get(PARTITIONED_ATTENTION_CACHE_KEY)
-    if cache is None:
-        cache = {}
-        stage[PARTITIONED_ATTENTION_CACHE_KEY] = cache
+    if not isinstance(runtime, PartitionedStageRuntime):
+        raise RuntimeError("partitioned exact-prefix stage runtime owner is malformed")
+    cache = runtime.attention_provider_cache
     if not isinstance(cache, dict):
         raise RuntimeError("partitioned exact-prefix attention provider cache is malformed")
 
@@ -217,8 +216,8 @@ def partitioned_diffusion_wrapper(
 ):
     """Expose exact target-prefix and low-grid suffix as explicit physical domains."""
     options = transformer_options or {}
-    stage = options.get(PARTITIONED_STAGE_KEY)
-    if stage is None:
+    runtime = options.get(PARTITIONED_STAGE_KEY)
+    if runtime is None:
         return executor(
             x,
             timestep,
@@ -229,13 +228,13 @@ def partitioned_diffusion_wrapper(
         )
     if any(key in options for key in _DEPRECATED_MIXED_GRID_KEYS):
         raise RuntimeError("partitioned exact-prefix refuses deprecated Mixed-Grid stage state")
-    if not isinstance(stage, dict):
-        raise RuntimeError("partitioned exact-prefix stage contract must be a dictionary")
+    if not isinstance(runtime, PartitionedStageRuntime):
+        raise RuntimeError("partitioned exact-prefix stage contract must be a runtime owner object")
 
     import comfy.ldm.minimax.model as native
 
-    plan = stage.get("plan")
-    metrics = stage.get("metrics")
+    plan = runtime.plan
+    metrics = runtime.metrics
     inner = executor.class_obj
     if not isinstance(plan, PartitionedStagePlan) or metrics is None or len(inner.blocks) == 0:
         raise RuntimeError("partitioned exact-prefix requires a valid stage plan and metrics owner")
@@ -294,7 +293,7 @@ def partitioned_diffusion_wrapper(
 
     local = dict(options)
     local["optimized_attention_override"] = _stage_partitioned_attention_override(
-        stage,
+        runtime,
         local.get("optimized_attention_override"),
         metrics,
     )
@@ -400,7 +399,6 @@ def partitioned_diffusion_wrapper(
 
 
 __all__ = [
-    "PARTITIONED_ATTENTION_CACHE_KEY",
     "PARTITIONED_BLOCK_INDEX_KEY",
     "PARTITIONED_WRAPPER_KEY",
     "VDN_PARTITIONED_SEQUENCE_API",
