@@ -22,9 +22,7 @@ class KeylessCompatibilityError(TypeError):
 
 def _field(contract: Any, name: str) -> Any:
     if not hasattr(contract, name):
-        raise KeylessCompatibilityError(
-            f"{KEYLESS_CONTRACT_KEY} is missing required field {name!r}"
-        )
+        raise KeylessCompatibilityError(f"{KEYLESS_CONTRACT_KEY} is missing required field {name!r}")
     return getattr(contract, name)
 
 
@@ -65,9 +63,7 @@ def validate_keyless_contract(inner: Any) -> Any | None:
         if actual != wanted:
             mismatches.append(f"{name}={actual!r} (expected {wanted!r})")
     if mismatches:
-        raise KeylessCompatibilityError(
-            f"unsupported {KEYLESS_CONTRACT_KEY}: " + ", ".join(mismatches)
-        )
+        raise KeylessCompatibilityError(f"unsupported {KEYLESS_CONTRACT_KEY}: " + ", ".join(mismatches))
 
     blocks = getattr(inner, "blocks", None)
     refiners = getattr(getattr(inner, "token_refiner", None), "blocks", None)
@@ -77,9 +73,7 @@ def validate_keyless_contract(inner: Any) -> Any | None:
     except TypeError as exc:
         raise KeylessCompatibilityError("Keyless H3 block topology is not sized") from exc
     if block_count != KEYLESS_CORE_BLOCKS or refiner_count != KEYLESS_TOKEN_REFINER_BLOCKS:
-        raise KeylessCompatibilityError(
-            "Keyless H3 must expose 50 core blocks and two native-QKV token-refiner blocks"
-        )
+        raise KeylessCompatibilityError("Keyless H3 must expose 50 core blocks and two native-QKV token-refiner blocks")
 
     for index, block in enumerate(blocks):
         attention = getattr(block, "attn", None)
@@ -93,17 +87,11 @@ def validate_keyless_contract(inner: Any) -> Any | None:
         weight = getattr(projection, "weight", None)
         shape = tuple(int(value) for value in getattr(weight, "shape", ()))
         if shape != (KEYLESS_QV_ROWS, KEYLESS_HIDDEN_SIZE):
-            raise KeylessCompatibilityError(
-                f"Keyless block {index} does not expose canonical qv_proj.weight geometry"
-            )
+            raise KeylessCompatibilityError(f"Keyless block {index} does not expose canonical qv_proj.weight geometry")
         if not hasattr(attention, "q_norm") or not hasattr(attention, "route_norm"):
-            raise KeylessCompatibilityError(
-                f"Keyless block {index} is missing q_norm/route_norm routing semantics"
-            )
+            raise KeylessCompatibilityError(f"Keyless block {index} is missing q_norm/route_norm routing semantics")
         if int(getattr(attention, "head_dim", KEYLESS_HEAD_DIM)) != KEYLESS_HEAD_DIM:
-            raise KeylessCompatibilityError(
-                f"Keyless block {index} attention head_dim disagrees with the v1 contract"
-            )
+            raise KeylessCompatibilityError(f"Keyless block {index} attention head_dim disagrees with the v1 contract")
 
     identity_fn = getattr(contract, "identity", None)
     if not callable(identity_fn):
