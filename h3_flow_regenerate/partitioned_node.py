@@ -8,14 +8,14 @@ from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
-from .mixed_grid import MIXED_WRAPPER_KEY
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
-from .partitioned_mixed import (
+from .partitioned_outer import partitioned_outer_wrapper
+from .partitioned_scheduler import PARTITIONED_PROGRESSIVE_KEY
+from .partitioned_transformer import (
     PARTITIONED_WRAPPER_KEY,
     VDN_PARTITIONED_SEQUENCE_API,
     partitioned_diffusion_wrapper,
 )
-from .partitioned_outer import partitioned_outer_wrapper
 from .runtime import OUTER_WRAPPER_KEY
 
 
@@ -81,29 +81,29 @@ class H3PartitionedExactPrefixHandoff:
         if int(vdn_api) != VDN_PARTITIONED_SEQUENCE_API:
             raise RuntimeError("Flow and VDN partitioned external-sequence APIs do not match")
 
+        common = dict(
+            handoff_coordinate=handoff_coordinate,
+            handoff_selection=handoff_selection,
+            transfer_mode="learned_3d",
+            learned_upscaler=learned_upscaler,
+            # The released runtime sees only its conservative fallback mode. The
+            # new partitioned scheduler is selected by a separate model-local key
+            # below, so no deprecated Mixed-Grid mode is reinterpreted.
+            exact_prefix_mode="fallback",
+            suffix_dc_bridge=False,
+            suffix_geometric_bridge=False,
+        )
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
                 source_scale=source_scale,
-                handoff_coordinate=handoff_coordinate,
-                handoff_selection=handoff_selection,
-                transfer_mode="learned_3d",
-                learned_upscaler=learned_upscaler,
-                exact_prefix_mode="mixed_grid_low_suffix",
-                suffix_dc_bridge=False,
-                suffix_geometric_bridge=False,
+                **common,
             )
         else:
             source_h, source_w = pixel_to_safe_latent(source_height, source_width)
             progressive = ProgressiveTargetInputConfig(
                 source_latent_h=source_h,
                 source_latent_w=source_w,
-                handoff_coordinate=handoff_coordinate,
-                handoff_selection=handoff_selection,
-                transfer_mode="learned_3d",
-                learned_upscaler=learned_upscaler,
-                exact_prefix_mode="mixed_grid_low_suffix",
-                suffix_dc_bridge=False,
-                suffix_geometric_bridge=False,
+                **common,
             )
         guidance = GuidanceConfig(
             mode=guidance_mode,
@@ -125,30 +125,25 @@ class H3PartitionedExactPrefixHandoff:
             clear_guidance_run_id=True,
             metrics=metrics,
         )
+        patched.model_options[PARTITIONED_PROGRESSIVE_KEY] = progressive
 
-        # Extend only this cloned model's VDN object patches. The old prototype
-        # monkeypatched VDN's module-global external predicate, which could leak
-        # the experimental semantics into unrelated models in the same process.
+        # Extend only this cloned model's VDN object patches. Ordinary VDN calls
+        # still delegate byte-for-byte to the released forward; only the explicit
+        # partition contract selects heterogeneous grouped execution.
         install_partitioned_history_bridge()
         install_partitioned_external_sequence_bridge(patched)
 
         import comfy.patcher_extension
 
-        # Replace the retired Mixed-Grid numerical wrapper installed by the
-        # shared low/probe/high scaffold. No historical Mixed-Grid attention
-        # contract reaches H3 blocks on this node.
-        patched.remove_wrappers_with_key(
-            comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,
-            MIXED_WRAPPER_KEY,
-        )
         _put_wrapper_first(
             patched,
             comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL,
             PARTITIONED_WRAPPER_KEY,
             partitioned_diffusion_wrapper,
         )
-        # Keep Flow outside Spectrum while enabling the same four-tick guided
-        # audio overlap used by the released exact-prefix fallback.
+        # Keep Flow outside Spectrum so low/probe/high sampler lifetimes each
+        # traverse Spectrum independently. The partitioned outer wrapper performs
+        # preflight-only fallback to the released exact target-grid path.
         patched.remove_wrappers_with_key(
             comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
             OUTER_WRAPPER_KEY,
@@ -163,11 +158,12 @@ class H3PartitionedExactPrefixHandoff:
             "partitioned_exact_prefix_installed",
             sol_abi=PARTITIONED_REQUEST_ABI,
             vdn_external_sequence_api=int(vdn_api),
-            low_probe_high_scaffold="mixed_grid_scheduler_only",
-            historical_mixed_grid_attention_active=False,
+            scheduler_contract="partitioned_exact_prefix_v1",
+            deprecated_mixed_grid_contract_active=False,
             vdn_grouped_softmax_preserved=True,
             vdn_variable_grid_linear_enabled=False,
             guided_audio_overlap=True,
+            preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
         return patched, metrics
