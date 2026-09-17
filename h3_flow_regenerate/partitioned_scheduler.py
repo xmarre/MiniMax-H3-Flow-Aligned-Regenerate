@@ -17,7 +17,11 @@ import torch
 
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
-from .partitioned_stage import PARTITIONED_STAGE_KEY, build_partitioned_stage_plan
+from .partitioned_stage import (
+    PARTITIONED_STAGE_KEY,
+    PartitionedStageRuntime,
+    build_partitioned_stage_plan,
+)
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
     PROBE_CONTEXT_KEY,
@@ -42,6 +46,16 @@ from .seam_diagnostics import measure_video_boundary
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
+SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
+PARTITIONED_SOL_REQUIRED_METADATA = {
+    "api": 1,
+    "owner": "comfyui_sol_h3",
+    "exact": True,
+    "backend": "sol",
+    "attention_ownership": "sol",
+    "kernel_contract": "sana-sol-engine-sol-attn-64-rect-sm120-mapped-neighbor-v4",
+    "history_policy": "attention_backend_history_v1",
+}
 
 
 class PartitionedPreflightUnsupported(RuntimeError):
@@ -60,7 +74,12 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         raise RuntimeError("nested partitioned exact-prefix stage is unsupported")
     if "h3_flow_mixed_grid_v1" in transformer or "h3_flow_mixed_grid_attention_measure_v1" in transformer:
         raise RuntimeError("partitioned exact-prefix refuses deprecated Mixed-Grid stage state")
-    transformer[PARTITIONED_STAGE_KEY] = {"plan": plan, "metrics": metrics}
+
+    # This must remain a non-dict leaf. ComfyUI recursively copies nested option
+    # dictionaries between model calls, while scalar/object leaves retain their
+    # identity. The runtime object therefore owns provider identity for exactly
+    # this low/probe sampler-stage lifetime.
+    transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(plan=plan, metrics=metrics)
     try:
         yield
     finally:
@@ -86,6 +105,34 @@ def _validate_partitioned_vdn_compat(patcher: Any) -> None:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
 
 
+def _validate_partitioned_sol_compat(guider: Any) -> None:
+    """Require the Sol request owner before any partitioned sampler lifetime.
+
+    VDN API-4 delegates partitioned sparse attention to Sol's request-owned
+    backend.  Sol intentionally refuses those calls outside its native
+    OUTER_SAMPLE lifecycle, so missing or stale Sol metadata is a preflight
+    fallback condition rather than a mid-sampler runtime failure.
+    """
+    options = getattr(guider, "model_options", None)
+    transformer = options.get("transformer_options") if isinstance(options, dict) else None
+    metadata = transformer.get(SOL_RUNTIME_KEY) if isinstance(transformer, dict) else None
+    if not isinstance(metadata, dict):
+        raise PartitionedPreflightUnsupported(
+            "partitioned exact-prefix requires active Sol-H3 native runtime ownership"
+        )
+
+    mismatches = [
+        f"{name}={metadata.get(name)!r}"
+        for name, expected in PARTITIONED_SOL_REQUIRED_METADATA.items()
+        if metadata.get(name) != expected
+    ]
+    if mismatches:
+        raise PartitionedPreflightUnsupported(
+            "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: "
+            + ", ".join(mismatches)
+        )
+
+
 def _preflight(
     guider: Any,
     config: ProgressiveTargetInputConfig,
@@ -107,6 +154,13 @@ def _preflight(
     target_h, target_w = map(int, latent_shapes[0][-2:])
     if target_h % 2 or target_w % 2:
         raise PartitionedPreflightUnsupported("target H3 geometry is not patch-safe")
+
+    # These two owners are structural prerequisites for the heterogeneous
+    # attention path. Validate them before any sampler lifetime is committed so
+    # unsupported saved workflows use the released exact target-grid fallback.
+    _validate_partitioned_vdn_compat(guider.model_patcher)
+    _validate_partitioned_sol_compat(guider)
+
     try:
         source_h, source_w = config.resolve_source(target_h, target_w)
         internal = _process_latent_in(guider.model_patcher.model, latent_image, latent_shapes)
@@ -120,7 +174,6 @@ def _preflight(
         )
     except (TypeError, ValueError, RuntimeError) as exc:
         raise PartitionedPreflightUnsupported(str(exc)) from exc
-    _validate_partitioned_vdn_compat(guider.model_patcher)
     return source_h, source_w, stage_plan
 
 
@@ -479,6 +532,8 @@ def run_partitioned_progressive(
 
 __all__ = [
     "PARTITIONED_PROGRESSIVE_KEY",
+    "PARTITIONED_SOL_REQUIRED_METADATA",
+    "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
     "run_partitioned_progressive",
 ]
