@@ -87,6 +87,22 @@ Shape-preserving inherited Q/K/V transforms such as Untwisting RoPE must execute
 
 A partitioned path must fail its source-contract gate if Flow, Sol, and VDN disagree about that preprocessing key or if the inherited transform can be applied twice, dropped, or moved after the gather.
 
+### VDN learned linear complement
+
+VDN's released learned linear branch is part of the model semantics and cannot simply be dropped on the heterogeneous stage. Its released implementation assumes one fixed spatial token grid per frame, while the partitioned stage deliberately uses target-grid prefix frames and source-grid suffix frames.
+
+The replacement contract therefore uses VDN external-sequence API 4, `partitioned_attention_variable_grid_linear`. The variable-grid extension preserves the released `vdn_solve` recurrence and raw-feature ownership:
+
+- raw video Q/K/V for the linear branch are captured before Q/K norm and RoPE, exactly as in the released VDN forward;
+- spatial short-convolution runs independently on every frame's real physical grid;
+- temporal short-convolution keeps the released kernel and zero-padding, but a tap that crosses the target/source grid boundary is center-aligned onto the destination frame grid by FP32 bilinear interpolation before applying the temporal weight;
+- target-prefix frame statistics receive the same physical carrier measure `source_rows_per_frame / target_rows_per_frame` used by partitioned softmax, while source-suffix frames retain measure `1`;
+- frame means and alpha gating remain per-frame quantities rather than being multiplied by row-count measure;
+- the released text-state, bidirectional recurrence, alpha bridge, output gate, RMS normalization, anchor-end suppression, and `to_out_linear` ownership remain intact;
+- the learned linear result is added only to physical video rows, as in the released forward.
+
+A homogeneous-grid CPU oracle must reduce this extension to the released fixed-grid readout. A heterogeneous CPU oracle must verify the target-prefix/source-suffix frame contract and physical measure. These source/arithmetic oracles do not replace real CUDA and decoded-media validation.
+
 ### Block state
 
 Protected prefix hidden rows are still propagated through the transformer blocks because their deeper-layer K/V state can influence generated suffix queries. They are not sampler outputs and remain subordinate to the caller-owned exact latent at the external boundary.
@@ -118,6 +134,7 @@ The contract must carry at minimum:
 - immutable physical query-position map inside any VDN-restricted K/V domain;
 - per-domain physical key-measure scale or exact additive log-measure bias;
 - a versioned Sol request ABI identifying single-union key-measure execution;
+- an exact VDN external-sequence API/mode identity for heterogeneous grouped softmax plus variable-grid learned linear state;
 - bounded structural descriptor/cache identity that excludes per-request map contents and runtime bias values;
 - a fail-closed path for unsupported geometry/backend combinations.
 
@@ -143,7 +160,8 @@ Before any media claim:
 - compare the production single-union additive-bias dense reference against the same partition-LSE oracle;
 - include unequal spatial carrier density;
 - verify BF16 production accumulation uses FP32 where required;
-- prove the Flow `attention_preprocess_v1` chain is consumed exactly once by Sol and published under the exact preprocessing key VDN consumes.
+- prove the Flow `attention_preprocess_v1` chain is consumed exactly once by Sol and published under the exact preprocessing key VDN consumes;
+- prove the variable-grid VDN linear branch reduces to the released readout on a homogeneous grid and publishes the exact heterogeneous frame/measure contract on a target-prefix/source-suffix grid.
 
 ### Phase C — real Sol/VDN backend
 
@@ -152,6 +170,7 @@ Before any media claim:
 - extend VDN provider ownership only where its restricted-domain semantics require physical query-position transport;
 - apply inherited preprocessing on the complete physical sequence before VDN gathers;
 - preserve native global/anchor fallbacks and mapped-neighbor v4 local routing;
+- preserve VDN's learned linear complement through the API-4 variable-grid extension instead of dropping it or resizing the exact prefix into the source grid;
 - keep specialization keys structural: runtime descriptor values, request digests, positions, and measure values must not create unbounded kernel specializations.
 
 ### Phase D — production runtime gate
@@ -178,9 +197,10 @@ Structural acceptance includes:
 - four-tick audio overlap preserved;
 - bounded backend descriptors/caches;
 - no duplicated or dropped inherited attention preprocessing;
+- VDN API 4 variable-grid learned linear execution on the heterogeneous low/probe stage whenever the released linear branch is active;
 - no unsupported backend fallback in the matched production run.
 
-The current VDN candidate intentionally disables its geometry-dependent learned linear complement for the heterogeneous stage because the released branch assumes one fixed `tokens_per_frame`. That omission is explicit and remains a promotion gate until either a variable-grid linear oracle/runtime is implemented or a separately documented production decision replaces that requirement. It must not be silently treated as equivalent to full released VDN.
+The API-4 VDN variable-grid linear path has a hosted CPU oracle and homogeneous-grid equivalence coverage, but this is not a production claim. Real CUDA execution, Spectrum/history accounting, performance and decoded media remain required promotion gates.
 
 ### Phase E — media/performance gate
 
@@ -202,4 +222,4 @@ Performance promotion requires a material reduction in later-chunk sampler/model
 
 The eight continuous target-grid steps are the direct consequence of the v0.3.5 conservative exact-prefix fallback. There is no safe configuration toggle that turns the current standard Target Input node back into low/probe/high continuation without selecting one of the previously rejected approximations.
 
-The replacement is a new partitioned exact-prefix progressive backend contract: explicit target-prefix/source-suffix physical domains, dense partition-LSE arithmetic as the semantic oracle, and a production single-union Sol execution that preserves one sparse routing threshold while carrying the exact physical key-measure bias and VDN-owned query-position mapping. It is not a scheduler tweak and not a reactivation of deprecated Mixed-Grid.
+The replacement is a new partitioned exact-prefix progressive backend contract: explicit target-prefix/source-suffix physical domains, dense partition-LSE arithmetic as the semantic oracle, a production single-union Sol execution that preserves one sparse routing threshold while carrying the exact physical key-measure bias and VDN-owned query-position mapping, and VDN API 4 variable-grid learned linear state that preserves the released branch without resizing the authoritative prefix. It is not a scheduler tweak and not a reactivation of deprecated Mixed-Grid.
