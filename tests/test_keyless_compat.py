@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from h3_flow_regenerate.comfy_compat import validate_h3_model
+from h3_flow_regenerate.comfy_compat import _validate_vdn_target_sparse_compat, validate_h3_model
 from h3_flow_regenerate.keyless_compat import (
     KEYLESS_CONTRACT_KEY,
     KeylessCompatibilityError,
@@ -165,3 +165,21 @@ def test_partitioned_keyless_falls_back_before_qkv_owned_sampler_route():
 def test_partitioned_preflight_guard_does_not_change_ordinary_h3():
     patcher = SimpleNamespace(model=SimpleNamespace(diffusion_model=_native_diffusion()))
     _validate_partitioned_keyless_compat(patcher)
+
+
+def _model_patcher_with_vdn(diffusion, *, keyless_base: bool):
+    patcher = _wrapped_model(diffusion, keyless_base=keyless_base)
+    owner = SimpleNamespace(_vdn_forward=True, _vdn_external_sequence_api=4)
+    patcher.object_patches = {"diffusion_model.blocks.0.attn.forward": owner}
+    return patcher
+
+
+def test_keyless_rejects_current_qkv_vdn_owner_before_target_sparse_or_mixed_runtime():
+    patcher = _model_patcher_with_vdn(_keyless_diffusion(), keyless_base=True)
+    with pytest.raises(RuntimeError, match="Keyless-specific value-derived branch/checkpoint"):
+        _validate_vdn_target_sparse_compat(patcher, 50, minimum_api=4)
+
+
+def test_native_vdn_api_check_is_unchanged():
+    patcher = _model_patcher_with_vdn(_native_diffusion(), keyless_base=False)
+    _validate_vdn_target_sparse_compat(patcher, 50, minimum_api=4)
