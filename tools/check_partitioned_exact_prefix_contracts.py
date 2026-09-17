@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
 """CPU-only cross-repo oracle for partitioned exact-prefix development contracts."""
+# ruff: noqa: I001
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 
-def _root(value: str) -> str:
+def _root(value: str) -> Path:
     path = Path(value).resolve()
     if not path.is_dir():
         raise SystemExit(f"missing dependency checkout: {path}")
-    return str(path)
+    return path
+
+
+def _namespace_package(name: str, package_dir: Path) -> None:
+    """Load source-contract modules without executing custom-node __init__.py."""
+    if not package_dir.is_dir():
+        raise SystemExit(f"missing package directory: {package_dir}")
+    package = ModuleType(name)
+    package.__package__ = name
+    package.__path__ = [str(package_dir)]
+    sys.modules[name] = package
 
 
 def main() -> None:
@@ -21,10 +32,12 @@ def main() -> None:
     parser.add_argument("--sol", required=True)
     parser.add_argument("--vdn", required=True)
     args = parser.parse_args()
+    sol_root = _root(args.sol)
+    vdn_root = _root(args.vdn)
     local_root = str(Path(__file__).resolve().parents[1])
-    sys.path.insert(0, _root(args.vdn))
-    sys.path.insert(0, _root(args.sol))
     sys.path.insert(0, local_root)
+    _namespace_package("sol_h3", sol_root / "sol_h3")
+    _namespace_package("vdn_h3", vdn_root / "vdn_h3")
 
     from h3_flow_regenerate.partitioned_mixed import (
         PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
