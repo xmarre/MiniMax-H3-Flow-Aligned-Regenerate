@@ -39,14 +39,14 @@ def main() -> None:
     _namespace_package("sol_h3", sol_root / "sol_h3")
     _namespace_package("vdn_h3", vdn_root / "vdn_h3")
 
-    from h3_flow_regenerate.partitioned_mixed import (
-        PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
-        _vdn_external_contract,
-    )
     from h3_flow_regenerate.partitioned_prefix import (
         PARTITIONED_PREFIX_KEY as FLOW_CONTRACT_KEY,
         PARTITIONED_PREFIX_TOPOLOGY,
         PartitionedExactPrefixPlan,
+    )
+    from h3_flow_regenerate.partitioned_transformer import (
+        PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
+        _vdn_external_contract,
     )
     from sol_h3.mapped_neighbors import compile_descriptor, validate_wire_map
     from sol_h3.partitioned_history import (
