@@ -18,6 +18,7 @@ import torch
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_stage import PARTITIONED_STAGE_KEY, build_partitioned_stage_plan
+from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
     PROBE_CONTEXT_KEY,
     _begin_capture,
@@ -77,8 +78,10 @@ def _validate_partitioned_vdn_compat(patcher: Any) -> None:
         if not getattr(owner, "_vdn_forward", False):
             continue
         matched += 1
-        if int(getattr(owner, "_vdn_external_sequence_api", 0)) < 3:
-            raise PartitionedPreflightUnsupported("VDN partitioned external-sequence API v3 is unavailable")
+        if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
+            raise PartitionedPreflightUnsupported(
+                f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"
+            )
     if matched == 0:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
 
