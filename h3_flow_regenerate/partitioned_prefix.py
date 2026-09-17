@@ -241,10 +241,13 @@ def dense_partition_oracle(
     for k, v in zip(key_partitions, value_partitions, strict=True):
         if k.shape != v.shape or k.ndim != 4 or k.shape[:2] != q.shape[:2] or k.shape[-1] != d:
             raise ValueError("dense partition oracle received incompatible K/V geometry")
-        scores = torch.matmul(
-            q.to(torch.float64),
-            k.to(torch.float64).transpose(-1, -2),
-        ) * effective_scale
+        scores = (
+            torch.matmul(
+                q.to(torch.float64),
+                k.to(torch.float64).transpose(-1, -2),
+            )
+            * effective_scale
+        )
         lse = torch.logsumexp(scores, dim=-1)
         probs = torch.softmax(scores, dim=-1)
         out = torch.matmul(probs, v.to(torch.float64))
