@@ -8,6 +8,7 @@ reinterpreting the retired Mixed-Grid mode.
 from __future__ import annotations
 
 import contextlib
+import copy
 import math
 import time
 from typing import Any
@@ -95,7 +96,9 @@ def _preflight(
     if config.transfer_mode != "learned_3d":
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires learned_3d handoff transfer")
     if config.suffix_dc_bridge or config.suffix_geometric_bridge:
-        raise PartitionedPreflightUnsupported("partitioned exact-prefix does not inherit retired seam-repair heuristics")
+        raise PartitionedPreflightUnsupported(
+            "partitioned exact-prefix does not inherit retired seam-repair heuristics"
+        )
     if denoise_mask is None or not _has_exact_video_protection(denoise_mask, latent_shapes):
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires an exact protected video prefix")
     target_h, target_w = map(int, latent_shapes[0][-2:])
@@ -169,7 +172,7 @@ def run_partitioned_progressive(
     if not isinstance(current_conds, dict):
         raise RuntimeError("partitioned exact-prefix requires ComfyUI guider conditioning state")
     conditioning_template = {
-        key: [entry.copy() if isinstance(entry, dict) else entry for entry in entries]
+        key: [entry.copy() if isinstance(entry, dict) else copy.copy(entry) for entry in entries]
         for key, entries in current_conds.items()
     }
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
