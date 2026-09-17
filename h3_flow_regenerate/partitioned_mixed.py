@@ -1,12 +1,13 @@
 """Partitioned exact-prefix transformer runtime.
 
-The sampler-facing low/probe/high scaffold is intentionally reused from the
-retired Mixed-Grid experiment while this implementation is isolated on a new
-experimental node.  Numerical attention is not Mixed-Grid: every target-prefix
+The sampler-facing low/probe/high scaffold is temporarily reused from the retired
+Mixed-Grid scheduler while this implementation remains isolated on a new
+experimental node. Numerical attention is not Mixed-Grid: every target-prefix
 and source-suffix row is retained, explicit physical key measures are published,
-and Sol evaluates two rectangular K/V domains whose normalized results are
-combined from kernel LSE.
+and the production-shaped Sol path evaluates one K/V union so sparse routing sees
+the same physical domain that the attention call sees.
 """
+
 from __future__ import annotations
 
 import copy
@@ -29,6 +30,7 @@ from .partitioned_prefix import (
 )
 
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
+PARTITIONED_BLOCK_INDEX_KEY = "h3_flow_partitioned_block_index_v1"
 VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
 VDN_PARTITIONED_SEQUENCE_API = 3
 VDN_PARTITIONED_SEQUENCE_MODE = "partitioned_attention_no_linear"
@@ -74,7 +76,13 @@ def _call_provider(provider, original, q, k, v, heads, mask, kw):
 
 
 def make_partitioned_attention_override(previous, metrics):
-    """Create an override that becomes active only under the partition contract."""
+    """Create the no-VDN full-sequence partitioned attention owner.
+
+    VDN's partition-aware forward calls Sol directly after its full-sequence
+    preprocessing and grouped gathers. This override remains necessary for the
+    same heterogeneous sequence when VDN is absent, and it also owns the
+    preprocessing-chain metadata consumed by VDN before those gathers.
+    """
     transforms, terminal = _preprocess_chain(previous)
 
     def apply_preprocess(q, k, v, heads, **kw):
@@ -90,40 +98,41 @@ def make_partitioned_attention_override(previous, metrics):
         if mask is not None or not kw.get("skip_reshape") or kw.get("skip_output_reshape"):
             raise RuntimeError("partitioned exact-prefix attention requires unmasked skip_reshape H3 attention")
         if any(t.ndim != 4 for t in (q, k, v)) or q.shape != k.shape or q.shape != v.shape:
-            raise RuntimeError("partitioned exact-prefix attention requires square BHTD input before K/V split")
+            raise RuntimeError("partitioned exact-prefix attention requires square BHTD input before VDN gathering")
         if q.shape[0] != 1 or q.shape[1] != int(heads) or q.shape[-1] != 128:
             raise RuntimeError("partitioned exact-prefix attention received unsupported H3 head geometry")
         plan = validate_partitioned_contract(raw_contract, sequence_rows=int(q.shape[2]))
-        prefix_start, prefix_end = plan.prefix_range
-        if prefix_start <= 0 or prefix_end >= q.shape[2]:
-            raise RuntimeError("partitioned exact-prefix ranges do not contain both nonvideo and suffix rows")
+        block_index = options.get(PARTITIONED_BLOCK_INDEX_KEY)
+        if type(block_index) is not int or block_index < 0:
+            raise RuntimeError("partitioned exact-prefix attention is missing its block identity")
 
-        # Q keeps every heterogeneous physical row. K/V are split into the dense
-        # target-prefix domain and the measure-1 union of nonvideo + low-grid
-        # generated suffix. This needs two rectangular Sol calls per H3 block,
-        # not one call per query-domain/key-domain Cartesian product.
-        other_k = torch.cat((k[:, :, :prefix_start], k[:, :, prefix_end:]), dim=2)
-        other_v = torch.cat((v[:, :, :prefix_start], v[:, :, prefix_end:]), dim=2)
-        prefix_k = k[:, :, prefix_start:prefix_end]
-        prefix_v = v[:, :, prefix_start:prefix_end]
+        from sol_h3.partitioned_request import partitioned_request_attention
 
-        from sol_h3.partitioned import partitioned_sm120_attention
-
-        output, _lse = partitioned_sm120_attention(
-            q.transpose(1, 2),
-            [other_k.transpose(1, 2), prefix_k.transpose(1, 2)],
-            [other_v.transpose(1, 2), prefix_v.transpose(1, 2)],
-            [0.0, plan.prefix_log_key_measure],
-            sink_ranges=[(0, prefix_start), (0, 0)],
+        q_thd = q[0].transpose(0, 1)
+        k_thd = k[0].transpose(0, 1)
+        v_thd = v[0].transpose(0, 1)
+        output = partitioned_request_attention(
+            q_thd,
+            k_thd,
+            v_thd,
+            transformer_options=options,
+            block_index=block_index,
+            kind="full",
+            scale=q.shape[-1] ** -0.5,
+            sink_rows=plan.video_start,
+            prefix_k_range=plan.prefix_range,
+            prefix_log_key_measure=plan.prefix_log_key_measure,
+            semantic_digest=str(raw_contract["semantic_digest"]),
         )
         metrics.increment("partitioned_attention_calls")
-        metrics.increment("partitioned_sol_kernel_calls", 2)
+        metrics.increment("partitioned_sol_kernel_calls")
         metrics.increment("partitioned_requested_q_rows", int(q.shape[2]))
-        metrics.increment("partitioned_kernel_q_rows", 2 * int(q.shape[2]))
-        metrics.increment("partitioned_kv_rows", int(q.shape[2]))
+        metrics.increment("partitioned_kernel_q_rows", int(q.shape[2]))
+        metrics.increment("partitioned_kv_rows", int(k.shape[2]))
         return output.reshape(q.shape[0], q.shape[2], -1)
 
     if transforms:
+
         def override(original, q, k, v, heads, mask=None, **kw):
             q, k, v = apply_preprocess(q, k, v, heads, **kw)
             return partition_leaf(original, q, k, v, heads, mask=mask, **kw)
@@ -137,10 +146,11 @@ def make_partitioned_attention_override(previous, metrics):
     return override
 
 
-def _partitioned_transformer_options(options, mixed_layout, partition_contract, metrics):
+def _partitioned_transformer_options(options, mixed_layout, partition_contract, metrics, *, block_index):
     block_options = dict(options)
     block_options["minimax_h3_layout"] = mixed_layout
     block_options[PARTITIONED_PREFIX_KEY] = partition_contract
+    block_options[PARTITIONED_BLOCK_INDEX_KEY] = int(block_index)
     existing_vdn = block_options.get(VDN_EXTERNAL_SEQUENCE_KEY)
     expected_vdn = _vdn_external_contract(
         validate_partitioned_contract(
@@ -187,9 +197,7 @@ def partitioned_diffusion_wrapper(
         raise RuntimeError("partitioned exact-prefix requires a valid progressive plan")
     attention_override = options.get("optimized_attention_override")
     if getattr(attention_override, "_h3_flow_attention_override", False):
-        raise RuntimeError(
-            "partitioned exact-prefix does not support uniform-grid Flow Attention Lab overrides"
-        )
+        raise RuntimeError("partitioned exact-prefix does not support uniform-grid Flow Attention Lab overrides")
     if tuple(x[0].shape) != (1, 24, plan.temporal, plan.source_h, plan.source_w):
         raise RuntimeError("stale partitioned exact-prefix plan does not match sampler geometry")
     if plan.prefix_noise is None or tuple(plan.prefix_noise.shape) != tuple(plan.prefix.shape):
@@ -221,9 +229,7 @@ def partitioned_diffusion_wrapper(
         *plan.target_hw,
     )
     keep = layout.img_pos < va
-    mixed_layout.img_pos = torch.cat(
-        (layout.img_pos[keep], torch.arange(va, mixed_layout.seq_len))
-    )
+    mixed_layout.img_pos = torch.cat((layout.img_pos[keep], torch.arange(va, mixed_layout.seq_len)))
     mixed_layout.img_update = torch.cat(
         (layout.img_update[keep], torch.ones(plan.mixed_rows, dtype=torch.bool))
     )
@@ -260,17 +266,10 @@ def partitioned_diffusion_wrapper(
                 # prefix is never presented to the transformer as exact context.
                 aug = float(native.VISUAL_COND_TIMESTEP)
                 prefix = plan.prefix.to(device=img.device, dtype=torch.float32)
-                prefix_noise = plan.prefix_noise.to(
-                    device=img.device,
-                    dtype=torch.float32,
-                )
-                prefix_rows = native.patchify_video(
-                    aug * prefix + (1.0 - aug) * prefix_noise
-                )
+                prefix_noise = plan.prefix_noise.to(device=img.device, dtype=torch.float32)
+                prefix_rows = native.patchify_video(aug * prefix + (1.0 - aug) * prefix_noise)
                 prefix_embed = inner.video_patch_proj(prefix_rows).to(img)
-                img = torch.cat(
-                    (img[:va], prefix_embed, img[va + old_prefix :])
-                )
+                img = torch.cat((img[:va], prefix_embed, img[va + old_prefix :]))
                 metrics.increment("partitioned_transformer_calls")
                 metrics.event(
                     "partitioned_exact_prefix_transformer",
@@ -281,16 +280,14 @@ def partitioned_diffusion_wrapper(
                     prefix_t=int(plan.prefix_t),
                     source_rows_per_frame=int(plan.source_rows),
                     target_rows_per_frame=int(plan.target_rows),
-                    prefix_log_key_measure=float(
-                        partition_plan.prefix_log_key_measure
-                    ),
+                    prefix_log_key_measure=float(partition_plan.prefix_log_key_measure),
                     semantic_digest=partition_contract["semantic_digest"],
                     prefix_exact_latent_resized=False,
                     prefix_target_grid_rope=True,
                     suffix_source_grid_rope=True,
                     low_suffix_real_latent=True,
                     vdn_external_sequence_api=VDN_PARTITIONED_SEQUENCE_API,
-                    sol_rectangular_kv_partitions=2,
+                    sol_single_union=True,
                 )
             if len(img) != mixed_layout.seq_len:
                 raise RuntimeError("partitioned exact-prefix transformer row count mismatch")
@@ -304,24 +301,16 @@ def partitioned_diffusion_wrapper(
                 img=img,
                 layout=mixed_layout,
                 rope_freqs=cached["rope"],
-                mod_segments=mixed_mod_segments(
-                    args["mod_segments"],
-                    plan,
-                    va,
-                    vb,
-                ),
+                mod_segments=mixed_mod_segments(args["mod_segments"], plan, va, vb),
             )
             forwarded["transformer_options"] = _partitioned_transformer_options(
                 args["transformer_options"],
                 mixed_layout,
                 partition_contract,
                 metrics,
+                block_index=layer,
             )
-            output = (
-                previous(forwarded, extra)
-                if previous
-                else extra["original_block"](forwarded)
-            )
+            output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
@@ -341,10 +330,7 @@ def partitioned_diffusion_wrapper(
         return call
 
     for layer in range(len(inner.blocks)):
-        blocks[("double_block", layer)] = wrap(
-            layer,
-            blocks.get(("double_block", layer)),
-        )
+        blocks[("double_block", layer)] = wrap(layer, blocks.get(("double_block", layer)))
     output = executor(
         x,
         timestep,
@@ -359,6 +345,7 @@ def partitioned_diffusion_wrapper(
 
 
 __all__ = [
+    "PARTITIONED_BLOCK_INDEX_KEY",
     "PARTITIONED_WRAPPER_KEY",
     "VDN_PARTITIONED_SEQUENCE_API",
     "VDN_PARTITIONED_SEQUENCE_MODE",
