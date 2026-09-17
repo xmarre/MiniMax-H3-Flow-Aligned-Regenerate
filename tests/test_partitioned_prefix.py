@@ -69,10 +69,7 @@ def test_partitioned_lse_merge_matches_explicit_dense_attention():
         torch.randn((1, 2, 7, 8), generator=generator, dtype=torch.float64),
         torch.randn((1, 2, 4, 8), generator=generator, dtype=torch.float64),
     ]
-    values = [
-        torch.randn(key.shape, generator=generator, dtype=torch.float64)
-        for key in keys
-    ]
+    values = [torch.randn(key.shape, generator=generator, dtype=torch.float64) for key in keys]
     measures = [0.0, math.log(0.4), math.log(1.25)]
 
     full_out, full_lse, merged_out, merged_lse = dense_partition_oracle(
