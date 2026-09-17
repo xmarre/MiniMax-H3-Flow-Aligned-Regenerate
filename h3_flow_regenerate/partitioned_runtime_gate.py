@@ -37,6 +37,10 @@ class RuntimeGateReport:
     high_logical: int
     high_actual: int
     partitioned_transformer_events: int
+    partitioned_provider_creations: int
+    partitioned_provider_reuses: int
+    partitioned_provider_equivalent_rebindings: int
+    partitioned_provider_semantic_transitions: int
     sol_partitioned_requests: int
     sol_mapped_calls: int
     sol_rectangular_calls: int
@@ -157,6 +161,32 @@ def validate_partitioned_runtime_evidence(
         bool(transformer_events),
         "partitioned transformer emitted no physical-domain evidence",
     )
+
+    # Provider stability is part of the numerical-history contract, not merely a
+    # performance counter. Every actual partitioned transformer evaluation binds
+    # exactly one stage-owned provider: either a new semantic owner or a reuse.
+    # 00500/00503/00506/00507 all exposed the pathological signature
+    # creations == transformer_calls and reuses == 0, which forces Sol history to
+    # observe a new numerical provider on every low-stage evaluation and prevents
+    # Spectrum from committing an otherwise-entitled forecast.
+    partitioned_calls = int(counters.get("partitioned_transformer_calls", 0))
+    provider_creations = int(counters.get("partitioned_attention_provider_creations", 0))
+    provider_reuses = int(counters.get("partitioned_attention_provider_reuses", 0))
+    provider_rebindings = int(counters.get("partitioned_attention_equivalent_provider_rebindings", 0))
+    provider_transitions = int(counters.get("partitioned_attention_inherited_provider_transitions", 0))
+    _require(
+        partitioned_calls > 0,
+        "partitioned transformer-call counter is missing or zero",
+    )
+    _require(
+        provider_creations + provider_reuses == partitioned_calls,
+        "partitioned provider binding accounting does not match transformer calls",
+    )
+    if partitioned_calls > 1:
+        _require(
+            provider_reuses > 0,
+            "partitioned provider identity changed on every transformer call",
+        )
     for event in transformer_events:
         fields = _event_fields(event)
         _require(
@@ -381,6 +411,10 @@ def validate_partitioned_runtime_evidence(
         high_logical=high_logical,
         high_actual=high_actual,
         partitioned_transformer_events=len(transformer_events),
+        partitioned_provider_creations=provider_creations,
+        partitioned_provider_reuses=provider_reuses,
+        partitioned_provider_equivalent_rebindings=provider_rebindings,
+        partitioned_provider_semantic_transitions=provider_transitions,
         sol_partitioned_requests=len(sol_records),
         sol_mapped_calls=sol_mapped,
         sol_rectangular_calls=sol_rectangular,
