@@ -1,12 +1,10 @@
 """Experimental production-shaped node for exact-prefix progressive continuation."""
+
 from __future__ import annotations
 
 import copy
 
-from .comfy_compat import (
-    _put_wrapper_first,
-    patch_flow_model,
-)
+from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
@@ -66,11 +64,11 @@ class H3PartitionedExactPrefixHandoff:
         metrics=None,
         temporal_weight=0.20,
     ):
-        # Companion capabilities are installed lazily so ordinary Flow users do
-        # not acquire cross-custom-node import requirements at Comfy startup.
+        # Companion capabilities are imported lazily so ordinary Flow users do
+        # not acquire cross-custom-node requirements at Comfy startup.
         try:
-            from sol_h3.partitioned import PARTITIONED_SM120_ABI
             from sol_h3.partitioned_history import install_partitioned_history_bridge
+            from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
             from vdn_h3.partitioned_runtime import install_partitioned_external_sequence_bridge
             from vdn_h3.partitioned_sequence import VDN_PARTITIONED_SEQUENCE_API as vdn_api
         except ImportError as exc:
@@ -78,12 +76,10 @@ class H3PartitionedExactPrefixHandoff:
                 "partitioned exact-prefix continuation requires the matching Sol-H3 and "
                 "VDN-H3-Plus development branches"
             ) from exc
-        if not isinstance(PARTITIONED_SM120_ABI, str) or not PARTITIONED_SM120_ABI:
+        if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
             raise RuntimeError("Sol-H3 partitioned backend did not publish a valid ABI identity")
         if int(vdn_api) != VDN_PARTITIONED_SEQUENCE_API:
             raise RuntimeError("Flow and VDN partitioned external-sequence APIs do not match")
-        install_partitioned_history_bridge()
-        install_partitioned_external_sequence_bridge()
 
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -130,6 +126,12 @@ class H3PartitionedExactPrefixHandoff:
             metrics=metrics,
         )
 
+        # Extend only this cloned model's VDN object patches. The old prototype
+        # monkeypatched VDN's module-global external predicate, which could leak
+        # the experimental semantics into unrelated models in the same process.
+        install_partitioned_history_bridge()
+        install_partitioned_external_sequence_bridge(patched)
+
         import comfy.patcher_extension
 
         # Replace the retired Mixed-Grid numerical wrapper installed by the
@@ -159,10 +161,12 @@ class H3PartitionedExactPrefixHandoff:
         )
         metrics.event(
             "partitioned_exact_prefix_installed",
-            sol_abi=PARTITIONED_SM120_ABI,
+            sol_abi=PARTITIONED_REQUEST_ABI,
             vdn_external_sequence_api=int(vdn_api),
             low_probe_high_scaffold="mixed_grid_scheduler_only",
             historical_mixed_grid_attention_active=False,
+            vdn_grouped_softmax_preserved=True,
+            vdn_variable_grid_linear_enabled=False,
             guided_audio_overlap=True,
             production_default_changed=False,
         )
