@@ -127,6 +127,12 @@ def test_validate_h3_model_preserves_exact_native_base_admission():
     assert validate_h3_model(_wrapped_model(diffusion, keyless_base=False)) is diffusion
 
 
+def test_validate_h3_model_rejects_malformed_explicit_keyless_advertisement_even_on_native_base():
+    diffusion = _keyless_diffusion(contract=_Contract(routing_source="key"))
+    with pytest.raises(KeylessCompatibilityError, match="routing_source"):
+        validate_h3_model(_wrapped_model(diffusion, keyless_base=False))
+
+
 def test_validate_h3_model_rejects_keyless_contract_on_unrelated_outer_base():
     diffusion = _keyless_diffusion()
     unrelated = type("UnrelatedBase", (), {})()
