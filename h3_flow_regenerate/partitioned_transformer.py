@@ -82,7 +82,9 @@ def _provider_name(provider):
     """Mirror the Sol history-v1 provider implementation naming contract."""
     if provider is None:
         return "comfy.default"
-    return f"{getattr(provider, '__module__', '<unknown>')}.{getattr(provider, '__qualname__', type(provider).__name__)}"
+    module = getattr(provider, "__module__", "<unknown>")
+    qualname = getattr(provider, "__qualname__", type(provider).__name__)
+    return f"{module}.{qualname}"
 
 
 def _inherited_provider_state(previous):
