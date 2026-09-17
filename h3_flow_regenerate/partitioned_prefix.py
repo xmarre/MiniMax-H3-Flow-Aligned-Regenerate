@@ -7,11 +7,11 @@ partition-wise attention can be merged without changing softmax semantics.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 
@@ -201,7 +201,9 @@ def merge_partition_attention(
         else torch.float32
     )
     adjusted_lses = []
-    for index, (output, lse, measure) in enumerate(zip(outputs, lses, log_measures)):
+    for index, (output, lse, measure) in enumerate(
+        zip(outputs, lses, log_measures, strict=True)
+    ):
         if (
             output.shape != reference_output.shape
             or output.dtype != reference_output.dtype
@@ -216,7 +218,7 @@ def merge_partition_attention(
         )
     merged_lse = torch.logsumexp(torch.stack(adjusted_lses, dim=0), dim=0)
     merged = torch.zeros_like(reference_output, dtype=acc_dtype)
-    for output, adjusted in zip(outputs, adjusted_lses):
+    for output, adjusted in zip(outputs, adjusted_lses, strict=True):
         weight = torch.exp(adjusted - merged_lse).unsqueeze(-1)
         merged.add_(output.to(acc_dtype) * weight)
     return merged.to(reference_output.dtype), merged_lse
@@ -245,7 +247,7 @@ def dense_partition_oracle(
     effective_scale = d**-0.5 if scale is None else float(scale)
     outputs = []
     lses = []
-    for k, v in zip(key_partitions, value_partitions):
+    for k, v in zip(key_partitions, value_partitions, strict=True):
         if (
             k.shape != v.shape
             or k.ndim != 4
@@ -277,7 +279,7 @@ def dense_partition_oracle(
                 dtype=torch.float64,
                 device=q.device,
             )
-            for k, log_measure in zip(key_partitions, log_measures)
+            for k, log_measure in zip(key_partitions, log_measures, strict=True)
         )
     )
     full_scores = torch.matmul(
