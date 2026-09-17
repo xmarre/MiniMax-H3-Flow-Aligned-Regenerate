@@ -78,22 +78,65 @@ def _call_provider(provider, original, q, k, v, heads, mask, kw):
     return provider(original, q, k, v, heads, mask=mask, **kw)
 
 
-def make_partitioned_attention_override(previous, metrics):
-    """Create the no-VDN full-sequence partitioned attention owner.
+def _provider_name(provider):
+    """Mirror the Sol history-v1 provider implementation naming contract."""
+    if provider is None:
+        return "comfy.default"
+    return (
+        f"{getattr(provider, '__module__', '<unknown>')}."
+        f"{getattr(provider, '__qualname__', type(provider).__name__)}"
+    )
 
-    VDN's partition-aware forward calls Sol directly after its full-sequence
-    preprocessing and grouped gathers.  This override owns the same heterogeneous
-    sequence when VDN is absent and exposes preprocessing-chain metadata that VDN
-    consumes before those gathers.
+
+def _inherited_provider_state(previous):
+    """Resolve the numerical identity that Sol history-v1 already considers stable.
+
+    Generic attention_preprocess_v1 wrappers are allowed to be rebuilt around
+    the same terminal dense provider. Sol deliberately identifies those transforms
+    by implementation name and the terminal provider by name + object identity.
+    Partitioned Flow must use that same boundary when deciding whether its own
+    visible provider object may remain stable; raw outer-wrapper identity is too
+    strict and caused the 00500/00503/00506/00507 provider transitions.
     """
     transforms, terminal = _preprocess_chain(previous)
+    identity = (
+        tuple(_provider_name(transform) for transform in transforms),
+        _provider_name(terminal),
+        id(terminal),
+    )
+    return identity, transforms, terminal
+
+
+def _runtime_provider_state(runtime: PartitionedStageRuntime):
+    transforms = runtime.attention_provider_transforms
+    terminal = runtime.attention_provider_terminal
+    identity = runtime.attention_provider_identity
+    if not isinstance(transforms, tuple) or not all(callable(item) for item in transforms):
+        raise RuntimeError("partitioned exact-prefix inherited preprocess state is malformed")
+    if terminal is not None and not callable(terminal):
+        raise RuntimeError("partitioned exact-prefix inherited terminal provider is malformed")
+    if not isinstance(identity, tuple) or len(identity) != 3:
+        raise RuntimeError("partitioned exact-prefix inherited provider identity is malformed")
+    return transforms, terminal
+
+
+def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metrics):
+    """Create one partitioned provider for one inherited numerical identity.
+
+    The callable itself stays stable while an equivalent generic preprocess wrapper
+    is reconstructed by an outer model-function wrapper. The runtime owner is
+    rebound to the current call's preprocess functions before H3 executes, so
+    dynamic per-call configuration is never frozen into the cached provider.
+    """
 
     def apply_preprocess(q, k, v, heads, **kw):
+        transforms, _terminal = _runtime_provider_state(runtime)
         for transform in transforms:
             q, k, v = transform(q, k, v, heads=heads, **kw)
         return q, k, v
 
     def partition_leaf(original, q, k, v, heads, mask=None, **kw):
+        _transforms, terminal = _runtime_provider_state(runtime)
         options = kw.get("transformer_options") or {}
         raw_contract = options.get(PARTITIONED_PREFIX_KEY)
         if raw_contract is None:
@@ -147,19 +190,20 @@ def make_partitioned_attention_override(previous, metrics):
         override = partition_leaf
 
     override._h3_flow_partitioned_attention_override = True
-    override._h3_flow_partitioned_previous = previous
+    override._h3_flow_partitioned_previous = None
+    override._h3_flow_partitioned_provider_identity = runtime.attention_provider_identity
     return override
 
 
 def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, previous, metrics):
-    """Return one stable partitioned provider for one sampler-stage lifetime.
+    """Return a stable partitioned provider across equivalent outer wrappers.
 
-    Sol history-v1 deliberately includes dense-provider object identity. ComfyUI
-    recursively copies nested transformer-option dictionaries between model calls,
-    so the cache must live on the non-dict ``PartitionedStageRuntime`` owner rather
-    than inside a published stage dictionary. A real inherited-provider change
-    still receives a distinct owner, and low/probe boundaries publish fresh
-    runtime owners.
+    Sol history-v1 treats generic preprocessing wrappers as part of a semantic
+    chain: transform implementation names are significant, while the terminal
+    dense provider keeps strict object identity. Mirror that exact distinction
+    here. This preserves conservative transitions for genuine provider changes
+    without turning an equivalent per-call Untwist wrapper reconstruction into a
+    new partitioned numerical backend.
     """
     if not isinstance(runtime, PartitionedStageRuntime):
         raise RuntimeError("partitioned exact-prefix stage runtime owner is malformed")
@@ -167,19 +211,30 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     if not isinstance(cache, dict):
         raise RuntimeError("partitioned exact-prefix attention provider cache is malformed")
 
-    key = id(previous)
-    cached = cache.get(key)
-    if cached is not None:
-        if not isinstance(cached, tuple) or len(cached) != 2:
-            raise RuntimeError("partitioned exact-prefix attention provider cache entry is malformed")
-        cached_previous, cached_override = cached
-        if cached_previous is previous and callable(cached_override):
-            metrics.increment("partitioned_attention_provider_reuses")
-            return cached_override
-        cache.pop(key, None)
+    identity, transforms, terminal = _inherited_provider_state(previous)
+    previous_identity = runtime.attention_provider_identity
+    runtime.attention_provider_transforms = transforms
+    runtime.attention_provider_terminal = terminal
+    runtime.attention_provider_identity = identity
 
-    override = make_partitioned_attention_override(previous, metrics)
-    cache[key] = (previous, override)
+    if previous_identity is not None and previous_identity != identity:
+        metrics.increment("partitioned_attention_inherited_provider_transitions")
+
+    cached = cache.get(identity)
+    if cached is not None:
+        if not callable(cached) or not getattr(cached, "_h3_flow_partitioned_attention_override", False):
+            raise RuntimeError("partitioned exact-prefix attention provider cache entry is malformed")
+        if getattr(cached, "_h3_flow_partitioned_previous", None) is not previous:
+            metrics.increment("partitioned_attention_equivalent_provider_rebindings")
+        cached._h3_flow_partitioned_previous = previous
+        cached._h3_flow_partitioned_provider_identity = identity
+        metrics.increment("partitioned_attention_provider_reuses")
+        return cached
+
+    override = make_partitioned_attention_override(runtime, metrics)
+    override._h3_flow_partitioned_previous = previous
+    override._h3_flow_partitioned_provider_identity = identity
+    cache[identity] = override
     metrics.increment("partitioned_attention_provider_creations")
     return override
 
