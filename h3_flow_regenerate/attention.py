@@ -36,7 +36,7 @@ class AttentionConfig:
         if self.max_sequence < 1:
             raise ValueError("max_sequence must be positive")
         if self.vdn_chunk_size < 1 or self.vdn_chunk_radius < 0:
-            raise ValueError("VDN chunk size must be positive and radius must be non-negative")
+            raise ValueError("VDN chunk size must be positive and radius non-negative")
         if self.vdn_anchor_mode not in {"none", "columns", "rows", "both"}:
             raise ValueError(f"unsupported VDN anchor mode {self.vdn_anchor_mode!r}")
 
@@ -47,7 +47,9 @@ def layout_summary(layout: Any) -> dict[str, Any]:
     for start, stop, kind in segments:
         counts[kind] = counts.get(kind, 0) + (stop - start)
     signature = tuple(layout.signature)
-    if not signature or signature[0] != "h3_flow_mixed_grid_v1":
+    if signature and isinstance(signature[0], str):
+        signature = (str(signature[0]), *(int(v) for v in signature[1:]))
+    else:
         signature = tuple(int(v) for v in signature)
     return {
         "signature": signature,
