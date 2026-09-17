@@ -15,8 +15,7 @@ from typing import Any
 
 PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
-    "partitioned exact-prefix: grouped VDN softmax active; "
-    "variable-grid linear complement active"
+    "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap active"
 _SOL_PREFIX = "Sol-H3 "
@@ -67,11 +66,7 @@ def _event_fields(event: Any) -> dict[str, Any]:
 
 
 def _latest_partitioned_window(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    starts = [
-        index
-        for index, event in enumerate(events)
-        if _event_kind(event) == "partitioned_stage_plan"
-    ]
+    starts = [index for index, event in enumerate(events) if _event_kind(event) == "partitioned_stage_plan"]
     if not starts:
         raise RuntimeGateError("Flow metrics contain no partitioned_stage_plan event")
     start = starts[-1]
@@ -105,20 +100,13 @@ def _partitioned_sol_records(records: Iterable[dict[str, Any]]) -> list[dict[str
         gates = record.get("arithmetic_gates", [])
         if not isinstance(gates, list):
             continue
-        if any(
-            isinstance(gate, dict) and gate.get("route") == PARTITIONED_SOL_ABI
-            for gate in gates
-        ):
+        if any(isinstance(gate, dict) and gate.get("route") == PARTITIONED_SOL_ABI for gate in gates):
             selected.append(record)
     return selected
 
 
 def _stage_counts(model_calls: list[dict[str, Any]], stage: str) -> tuple[int, int]:
-    calls = [
-        event
-        for event in model_calls
-        if str(_event_fields(event).get("stage")) == stage
-    ]
+    calls = [event for event in model_calls if str(_event_fields(event).get("stage")) == stage]
     actual = sum(bool(_event_fields(event).get("actual")) for event in calls)
     return len(calls), actual
 
@@ -149,9 +137,7 @@ def validate_partitioned_runtime_evidence(
         "partitioned run fell back to target-grid execution",
     )
 
-    plan = next(
-        event for event in window if _event_kind(event) == "partitioned_stage_plan"
-    )
+    plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
     _require(
         plan_fields.get("input_mode") == "partitioned_exact_prefix",
@@ -166,11 +152,7 @@ def validate_partitioned_runtime_evidence(
         "deprecated Mixed-Grid contract became active",
     )
 
-    transformer_events = [
-        event
-        for event in window
-        if _event_kind(event) == "partitioned_exact_prefix_transformer"
-    ]
+    transformer_events = [event for event in window if _event_kind(event) == "partitioned_exact_prefix_transformer"]
     _require(
         bool(transformer_events),
         "partitioned transformer emitted no physical-domain evidence",
@@ -202,9 +184,7 @@ def validate_partitioned_runtime_evidence(
             "deprecated Mixed-Grid transformer state became active",
         )
 
-    transfers = [
-        event for event in window if _event_kind(event) == "partitioned_transfer"
-    ]
+    transfers = [event for event in window if _event_kind(event) == "partitioned_transfer"]
     _require(bool(transfers), "partitioned handoff emitted no transfer evidence")
     transfer = _event_fields(transfers[-1])
     _require(
@@ -228,11 +208,7 @@ def validate_partitioned_runtime_evidence(
         "deprecated Mixed-Grid seam repair executed",
     )
 
-    completes = [
-        event
-        for event in window
-        if _event_kind(event) == "partitioned_exact_prefix_complete"
-    ]
+    completes = [event for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"]
     _require(bool(completes), "partitioned run emitted no completion proof")
     complete = _event_fields(completes[-1])
     _require(
@@ -248,9 +224,7 @@ def validate_partitioned_runtime_evidence(
         "deprecated Mixed-Grid contract survived completion",
     )
 
-    handoffs = [
-        event for event in window if _event_kind(event) == "handoff_complete"
-    ]
+    handoffs = [event for event in window if _event_kind(event) == "handoff_complete"]
     _require(bool(handoffs), "partitioned run emitted no handoff completion evidence")
     handoff = _event_fields(handoffs[-1])
     _require(
@@ -308,11 +282,7 @@ def validate_partitioned_runtime_evidence(
         probe_logical == 1 and probe_actual == 1,
         "handoff probe must be exactly one actual H3 model call",
     )
-    first_high = next(
-        event
-        for event in model_calls
-        if str(_event_fields(event).get("stage")) == "high"
-    )
+    first_high = next(event for event in model_calls if str(_event_fields(event).get("stage")) == "high")
     _require(
         _event_fields(first_high).get("actual") is True,
         "first high-stage model call was forecast",
@@ -353,18 +323,10 @@ def validate_partitioned_runtime_evidence(
             "VDN square-Q kernel-row accounting is nonzero",
         )
 
-    sol_mapped = sum(
-        int(record.get("vdn_mapped_sol_calls", 0)) for record in sol_records
-    )
-    sol_rectangular = sum(
-        int(record.get("vdn_rectangular_sol_calls", 0)) for record in sol_records
-    )
-    sol_requested = sum(
-        int(record.get("vdn_requested_q_rows", 0)) for record in sol_records
-    )
-    sol_kernel = sum(
-        int(record.get("vdn_kernel_q_rows", 0)) for record in sol_records
-    )
+    sol_mapped = sum(int(record.get("vdn_mapped_sol_calls", 0)) for record in sol_records)
+    sol_rectangular = sum(int(record.get("vdn_rectangular_sol_calls", 0)) for record in sol_records)
+    sol_requested = sum(int(record.get("vdn_requested_q_rows", 0)) for record in sol_records)
+    sol_kernel = sum(int(record.get("vdn_kernel_q_rows", 0)) for record in sol_records)
     _require(
         sol_mapped > 0,
         "partitioned production run exercised no mapped-neighbor Sol local call",
@@ -395,8 +357,7 @@ def validate_partitioned_runtime_evidence(
 
     vdn_linear = VDN_LINEAR_ACTIVE_MARKER in log_text
     audio_overlap = bool(
-        AUDIO_OVERLAP_MARKER in log_text
-        and re.search(r"partitioned audio guided overlap active ticks=4\b", log_text)
+        AUDIO_OVERLAP_MARKER in log_text and re.search(r"partitioned audio guided overlap active ticks=4\b", log_text)
     )
     if require_vdn_linear:
         _require(
