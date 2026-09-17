@@ -243,9 +243,7 @@ def run_partitioned_progressive(
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"), _partitioned_stage_contract(
-                guider, stage_plan, binding.metrics
-            ):
+            with _flow_stage_contract(guider, "low"), _partitioned_stage_contract(guider, stage_plan, binding.metrics):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -418,9 +416,7 @@ def run_partitioned_progressive(
             elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
             partitioned_exact_prefix=True,
         )
-        high_model_calls = [
-            event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"
-        ]
+        high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
         if not high_model_calls:
             raise RuntimeError("partitioned exact-prefix high stage produced no H3 model evaluations")
         first_high_actual = bool(high_model_calls[0].fields.get("actual"))
