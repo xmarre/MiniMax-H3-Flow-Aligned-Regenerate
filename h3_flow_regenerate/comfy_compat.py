@@ -469,7 +469,8 @@ def _validate_vdn_target_sparse_compat(
     object_patches = getattr(model, "object_patches", None)
     if not isinstance(object_patches, dict):
         return
-    keyless = validate_keyless_contract(validate_h3_model(model))
+    diffusion = getattr(getattr(model, "model", None), "diffusion_model", None)
+    keyless = validate_keyless_contract(diffusion)
     for layer in range(num_layers):
         key = f"diffusion_model.blocks.{layer}.attn.forward"
         owner = object_patches.get(key)
