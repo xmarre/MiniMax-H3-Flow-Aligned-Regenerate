@@ -95,9 +95,7 @@ def build_partitioned_stage_plan(
     if not 0 < prefix_t < int(video.shape[2]):
         raise ValueError("partitioned exact-prefix requires a nonempty exact prefix and generated suffix")
     if not bool(protected[:prefix_t].all().item() and generated[prefix_t:].all().item()):
-        raise ValueError(
-            "partitioned exact-prefix requires a contiguous whole-frame zero-prefix/one-suffix mask"
-        )
+        raise ValueError("partitioned exact-prefix requires a contiguous whole-frame zero-prefix/one-suffix mask")
 
     target_h, target_w = map(int, video.shape[-2:])
     if any(n < 2 or n % 2 for n in (source_h, source_w, target_h, target_w)):
