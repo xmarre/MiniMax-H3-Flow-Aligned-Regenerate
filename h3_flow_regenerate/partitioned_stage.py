@@ -75,7 +75,14 @@ class PartitionedStageRuntime:
 
     plan: PartitionedStagePlan
     metrics: object
-    attention_provider_cache: dict[int, tuple[object, object]] = field(default_factory=dict)
+    # Keyed by the same semantic provider identity used by Sol history-v1:
+    # ordered preprocess implementation names plus terminal provider name/object
+    # identity. Generic preprocess wrappers may legitimately be reconstructed per
+    # model call, so raw wrapper-object identity is not a stable numerical key.
+    attention_provider_cache: dict[tuple[object, ...], object] = field(default_factory=dict)
+    attention_provider_transforms: tuple[object, ...] = ()
+    attention_provider_terminal: object = None
+    attention_provider_identity: tuple[object, ...] | None = None
 
 
 def build_partitioned_stage_plan(
