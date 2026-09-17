@@ -8,7 +8,7 @@ cross-repo attention contract is published separately by ``partitioned_prefix``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -60,6 +60,22 @@ class PartitionedStagePlan:
     @property
     def partitioned_rows(self) -> int:
         return self.prefix_rows + self.suffix_rows
+
+
+@dataclass(slots=True)
+class PartitionedStageRuntime:
+    """One mutable owner whose identity is stable for one sampler-stage lifetime.
+
+    ComfyUI recursively copies nested transformer-option dictionaries between
+    model calls.  Publishing the stage itself as a dictionary therefore cannot
+    own identity-sensitive runtime state.  This object is intentionally a
+    non-dict leaf so ComfyUI's options cloning preserves the same owner while the
+    surrounding low/probe sampler lifetime is active.
+    """
+
+    plan: PartitionedStagePlan
+    metrics: object
+    attention_provider_cache: dict[int, tuple[object, object]] = field(default_factory=dict)
 
 
 def build_partitioned_stage_plan(
@@ -169,6 +185,7 @@ def partitioned_mod_segments(segments, plan: PartitionedStagePlan, video_start: 
 __all__ = [
     "PARTITIONED_STAGE_KEY",
     "PartitionedStagePlan",
+    "PartitionedStageRuntime",
     "build_partitioned_stage_plan",
     "partitioned_carrier_layout",
     "partitioned_mod_segments",
