@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
 from .contracts import H3FlowTrajectory
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
+from .keyless_compat import validate_keyless_contract
 from .metrics import H3FlowMetrics
 from .mixed_grid import MIXED_WRAPPER_KEY, mixed_diffusion_wrapper
 from .runtime import (
@@ -55,8 +56,13 @@ def validate_h3_model(model: Any) -> Any:
         "sigma_shift_video": 12.0,
         "sigma_shift_audio": 3.0,
     }
-    if facts != expected or base.__class__.__name__ != "MiniMaxH3":
-        raise TypeError(f"model does not match the supported native MiniMax H3 contract: {facts}")
+    keyless = validate_keyless_contract(diffusion)
+    native_base = base.__class__.__name__ == "MiniMaxH3"
+    keyless_base = keyless is not None and any(
+        cls.__name__ == "MiniMaxH3" for cls in base.__class__.__mro__[1:]
+    )
+    if facts != expected or not (native_base or keyless_base):
+        raise TypeError(f"model does not match the supported native/Keyless MiniMax H3 contract: {facts}")
     return diffusion
 
 
