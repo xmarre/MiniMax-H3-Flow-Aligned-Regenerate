@@ -137,6 +137,7 @@ def main() -> None:
     )
     from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
+    from vdn_h3.partitioned_linear import partitioned_frame_contract
     from vdn_h3.partitioned_sequence import (
         PARTITIONED_PREFIX_KEY as VDN_FLOW_KEY,
         PARTITIONED_PREFIX_TOPOLOGY as VDN_TOPOLOGY,
@@ -187,6 +188,12 @@ def main() -> None:
         or vdn_plan.target_rows != flow.target_rows
     ):
         raise SystemExit("VDN changed Flow partition geometry")
+
+    frame_sizes, measure_scales = partitioned_frame_contract(vdn_plan)
+    if frame_sizes != ((3, 4), (3, 4), (2, 3), (2, 3), (2, 3)):
+        raise SystemExit(f"VDN variable-grid linear frame contract drifted: {frame_sizes!r}")
+    if measure_scales != (0.5, 0.5, 1.0, 1.0, 1.0):
+        raise SystemExit(f"VDN variable-grid linear physical measure drifted: {measure_scales!r}")
 
     flow_external = _vdn_external_contract(flow)
     vdn_external = make_vdn_partitioned_external_contract(vdn_plan)
