@@ -30,8 +30,8 @@ from .partitioned_stage import (
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
 PARTITIONED_BLOCK_INDEX_KEY = "h3_flow_partitioned_block_index_v1"
 VDN_EXTERNAL_SEQUENCE_KEY = "vdn_h3_external_sequence_v1"
-VDN_PARTITIONED_SEQUENCE_API = 3
-VDN_PARTITIONED_SEQUENCE_MODE = "partitioned_attention_no_linear"
+VDN_PARTITIONED_SEQUENCE_API = 4
+VDN_PARTITIONED_SEQUENCE_MODE = "partitioned_attention_variable_grid_linear"
 _PREPROCESS_ATTR = "attention_preprocess_v1"
 _DEPRECATED_MIXED_GRID_KEYS = (
     "h3_flow_mixed_grid_v1",
