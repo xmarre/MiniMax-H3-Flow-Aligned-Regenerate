@@ -45,6 +45,18 @@ def sequence(prefix=12, count=4):
     )
 
 
+class FakeNestedAV:
+    """Minimal Comfy NestedTensor-compatible AV wrapper for contract tests."""
+
+    is_nested = True
+
+    def __init__(self, video, audio):
+        self._members = [video, audio]
+
+    def unbind(self):
+        return tuple(self._members)
+
+
 @pytest.mark.parametrize("prefix", [2, 7, 12])
 def test_exact_context_is_bounded_and_does_not_mutate_accepted_latents(prefix):
     _, latents, plan = sequence(prefix)
@@ -60,6 +72,67 @@ def test_exact_context_is_bounded_and_does_not_mutate_accepted_latents(prefix):
     assert result[-1] is latents[-1]
     assert plan == old_plan
     assert all(torch.equal(x["samples"], v) for x, v in zip(latents, before, strict=True))
+
+
+def test_joint_av_refine_output_is_normalized_to_video_decode_views_without_mutation():
+    _, latents, plan = sequence(count=2)
+    original_videos = [latent["samples"] for latent in latents]
+    audios = [torch.randn(1, 32, 2, 64), torch.randn(1, 32, 2, 64)]
+    audio_before = [audio.clone() for audio in audios]
+    for latent, video, audio in zip(latents, original_videos, audios, strict=True):
+        latent["samples"] = FakeNestedAV(video, audio)
+        latent["noise_mask"] = object()
+    old_plan = copy.deepcopy(plan)
+
+    result, report = prepare_decode_context(latents, plan)
+
+    assert "1/1 exact boundaries" in report
+    assert "Native joint AV inputs normalized for video decode: 2/2" in report
+    assert torch.is_tensor(result[0]["samples"])
+    assert result[0]["samples"].shape[2] == original_videos[0].shape[2] + 5
+    assert torch.equal(result[0]["samples"][:, :, :-5], original_videos[0])
+    assert torch.equal(result[0]["samples"][:, :, -5:], original_videos[1][:, :, 12:17])
+    assert set(result[0]) == {"samples"}
+
+    # The terminal joint-AV chunk needs no extension, but it still must become a
+    # plain video-only LATENT for Video VAE Decode. The tensor view is zero-copy.
+    assert result[1] is not latents[1]
+    assert result[1]["samples"] is original_videos[1]
+    assert set(result[1]) == {"samples"}
+
+    assert plan == old_plan
+    for latent, video, audio, before in zip(latents, original_videos, audios, audio_before, strict=True):
+        members = latent["samples"].unbind()
+        assert members[0] is video
+        assert members[1] is audio
+        assert torch.equal(audio, before)
+        assert "noise_mask" in latent
+
+
+@pytest.mark.parametrize("members", [1, 3])
+def test_malformed_joint_av_member_count_fails_closed(members):
+    _, latents, plan = sequence(count=1)
+    video = latents[0]["samples"]
+    audio = torch.randn(1, 32, 2, 64)
+
+    class BadNested:
+        is_nested = True
+
+        def unbind(self):
+            values = [video, audio, audio]
+            return tuple(values[:members])
+
+    latents[0]["samples"] = BadNested()
+    with pytest.raises(ValueError, match=r"exactly \[video, audio\]"):
+        prepare_decode_context(latents, plan)
+
+
+def test_malformed_joint_av_audio_fails_closed():
+    _, latents, plan = sequence(count=1)
+    video = latents[0]["samples"]
+    latents[0]["samples"] = FakeNestedAV(video, torch.randn(1, 31, 2, 64))
+    with pytest.raises(ValueError, match=r"\[1,32,2,T\]"):
+        prepare_decode_context(latents, plan)
 
 
 def test_nonexact_or_guide_boundary_is_not_silently_replaced():

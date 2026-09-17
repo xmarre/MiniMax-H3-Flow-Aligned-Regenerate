@@ -7,17 +7,70 @@ frames. No sampler input, saved chunk, or audio tensor is changed.
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 _CYCLE = 5
 _CYCLE_FRAMES = 17
 _PREFIX_REMAINDER = 2
+_H3_VIDEO_CHANNELS = 24
+_H3_AUDIO_CHANNELS = 32
+_H3_AUDIO_CHANNELS_PER_SAMPLE = 2
 
 
 def _frames(tokens: int) -> int:
     if tokens < 2 or tokens % _CYCLE != _PREFIX_REMAINDER:
         raise ValueError("Continuum decode context requires H3 video lengths of 5k+2 latents")
     return ((tokens - 2) // _CYCLE) * _CYCLE_FRAMES + 5
+
+
+def _extract_decode_video(samples: Any, index: int) -> tuple[torch.Tensor, bool]:
+    """Resolve split video or native joint H3 AV samples for decode-only use.
+
+    Continuum itself exposes split video/audio LATENTs, while the integrated
+    learned-upscale/refine node must rebuild native ``NestedTensor([video, audio])``
+    samples for sampler 2. Decode Context is intentionally the adapter between
+    those contracts: it accepts either representation and returns video-only
+    decode views without mutating or rewriting the source AV state.
+    """
+    unbind = getattr(samples, "unbind", None)
+    if bool(getattr(samples, "is_nested", False)) and callable(unbind):
+        members = list(unbind())
+        if len(members) != 2:
+            raise ValueError(f"decode group {index + 1} native H3 AV samples require exactly [video, audio]")
+        video, audio = members
+        if (
+            not torch.is_tensor(audio)
+            or audio.ndim != 4
+            or tuple(audio.shape[:3])
+            != (
+                1,
+                _H3_AUDIO_CHANNELS,
+                _H3_AUDIO_CHANNELS_PER_SAMPLE,
+            )
+        ):
+            raise ValueError(f"decode group {index + 1} native H3 AV audio must be [1,32,2,T]")
+        if not audio.is_floating_point():
+            raise ValueError("H3 decode-context audio member must be floating point")
+        joint_av = True
+    else:
+        video = samples
+        joint_av = False
+
+    if (
+        not torch.is_tensor(video)
+        or video.ndim != 5
+        or tuple(video.shape[:2])
+        != (
+            1,
+            _H3_VIDEO_CHANNELS,
+        )
+    ):
+        raise ValueError(f"decode group {index + 1} requires native [1,24,T,H,W] video")
+    if not video.is_floating_point():
+        raise ValueError("H3 decode-context video latents must be floating point")
+    return video, joint_av
 
 
 def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict], str]:
@@ -40,13 +93,13 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
     if not isinstance(groups, list) or not groups or len(groups) != len(latents):
         raise ValueError("decode-context latent count must match physical assembly groups")
 
-    videos = []
+    videos: list[torch.Tensor] = []
+    decode_views: list[dict] = []
+    joint_av_inputs = 0
     for index, (latent, group) in enumerate(zip(latents, groups, strict=True)):
-        video = latent.get("samples") if isinstance(latent, dict) else None
-        if not torch.is_tensor(video) or video.ndim != 5 or tuple(video.shape[:2]) != (1, 24):
-            raise ValueError(f"decode group {index + 1} requires native [1,24,T,H,W] video")
-        if not video.is_floating_point():
-            raise ValueError("H3 decode-context latents must be floating point")
+        samples = latent.get("samples") if isinstance(latent, dict) else None
+        video, joint_av = _extract_decode_video(samples, index)
+        joint_av_inputs += int(joint_av)
         total = _frames(int(video.shape[2]))
         trim = int(group["trim_frames"])
         if total != int(group["total_frames"]) or total - trim != int(group["net_frames"]):
@@ -54,8 +107,12 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         if int(group["expected_video_latent_t"]) != video.shape[2] or trim < 0:
             raise ValueError(f"decode group {index + 1} has stale assembly metadata")
         videos.append(video)
+        # Split Continuum video LATENTs keep their historical identity when no
+        # extension is required. Joint AV sampler outputs cannot be sent to the
+        # video VAE, so expose a minimal decode-only video view instead.
+        decode_views.append({"samples": video} if joint_av else latent)
 
-    output = list(latents)
+    output = list(decode_views)
     reports = []
     joined = 0
     for index in range(len(videos) - 1):
@@ -77,14 +134,20 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         if not torch.equal(left[:, :, -prefix:], right[:, :, :prefix]):
             reports.append(f"boundary {index + 1}: unchanged (protected overlap is not exact)")
             continue
-        # New allocation: accepted CPU chunks remain immutable. Do not forward
-        # stale noise masks or sampling metadata on an extended decode-only tensor.
+        # New allocation: accepted chunks remain immutable. Do not forward stale
+        # noise masks, joint AV wrappers, or sampling metadata on an extended
+        # decode-only tensor.
         output[index] = {"samples": torch.cat((left, right[:, :, prefix : prefix + _CYCLE]), dim=2)}
         joined += 1
         reports.append(f"boundary {index + 1}: supplied 5 real future latents (17 decode-only frames)")
+    representation = (
+        f" Native joint AV inputs normalized for video decode: {joint_av_inputs}/{len(videos)}."
+        if joint_av_inputs
+        else ""
+    )
     report = (
-        f"H3 Continuum decode context: {joined}/{max(0, len(videos) - 1)} exact boundaries. "
-        "Use the original assembly plan; added frames are trimmed by Assemble.\n" + "\n".join(reports)
+        f"H3 Continuum decode context: {joined}/{max(0, len(videos) - 1)} exact boundaries."
+        f"{representation} Use the original assembly plan; added frames are trimmed by Assemble.\n" + "\n".join(reports)
     )
     return output, report
 
@@ -93,9 +156,11 @@ class H3ContinuumDecodeContext:
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Place immediately before Video VAE Decode, after all sampling/refinement/upscaling. "
-        "Supplies the next chunk's real decoder context at exact Continuum overlaps. "
-        "Connect the unchanged assembly plan to Assemble; it trims the extra decode-only frames. "
-        "Works with any progressive sampler. Output is for decoding only, not sampling or storage."
+        "Accepts either Continuum split video LATENTs or native joint H3 AV sampler output, "
+        "normalizing the latter to a decode-only video view. Supplies the next chunk's real "
+        "decoder context at exact Continuum overlaps. Connect the unchanged assembly plan to "
+        "Assemble; it trims the extra decode-only frames. Output is for decoding only, not "
+        "sampling or storage."
     )
     INPUT_IS_LIST = True
     RETURN_TYPES = ("LATENT", "STRING")
