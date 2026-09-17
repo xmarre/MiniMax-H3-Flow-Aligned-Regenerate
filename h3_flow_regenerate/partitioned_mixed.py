@@ -230,9 +230,7 @@ def partitioned_diffusion_wrapper(
     )
     keep = layout.img_pos < va
     mixed_layout.img_pos = torch.cat((layout.img_pos[keep], torch.arange(va, mixed_layout.seq_len)))
-    mixed_layout.img_update = torch.cat(
-        (layout.img_update[keep], torch.ones(plan.mixed_rows, dtype=torch.bool))
-    )
+    mixed_layout.img_update = torch.cat((layout.img_update[keep], torch.ones(plan.mixed_rows, dtype=torch.bool)))
     partition_plan = PartitionedExactPrefixPlan(
         video_start=int(va),
         temporal=int(plan.temporal),
