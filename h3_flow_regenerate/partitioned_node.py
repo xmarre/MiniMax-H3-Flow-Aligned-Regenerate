@@ -161,7 +161,7 @@ class H3PartitionedExactPrefixHandoff:
             scheduler_contract="partitioned_exact_prefix_v1",
             deprecated_mixed_grid_contract_active=False,
             vdn_grouped_softmax_preserved=True,
-            vdn_variable_grid_linear_enabled=False,
+            vdn_variable_grid_linear_enabled=True,
             guided_audio_overlap=True,
             preflight_target_grid_fallback=True,
             production_default_changed=False,
