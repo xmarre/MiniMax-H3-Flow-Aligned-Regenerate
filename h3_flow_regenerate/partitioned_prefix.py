@@ -1,6 +1,6 @@
 """Versioned partitioned exact-prefix attention contract and arithmetic oracle.
 
-This module is intentionally independent from ComfyUI runtime ownership.  It
+This module is intentionally independent from ComfyUI runtime ownership. It
 contains the immutable geometry/measure contract that Flow will publish once the
 runtime path is enabled, plus a small dense reference used to prove that
 partition-wise attention can be merged without changing softmax semantics.
@@ -11,10 +11,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import torch
-import torch.nn.functional as F
 
 PARTITIONED_PREFIX_KEY = "h3_flow_partitioned_exact_prefix_v1"
 PARTITIONED_PREFIX_API = 1
@@ -38,7 +37,7 @@ class PartitionedExactPrefixPlan:
 
     Packed row order is always ``[nonvideo | prefix_target | suffix_source]``.
     Prefix and suffix rows deliberately retain different physical spatial
-    measures.  ``prefix_log_key_measure`` is the additive natural-log softmax
+    measures. ``prefix_log_key_measure`` is the additive natural-log softmax
     bias required to make one target-grid prefix frame carry the same total
     spatial measure as one source-grid suffix frame.
     """
@@ -176,8 +175,12 @@ def merge_partition_attention(
 
     ``outputs[i]`` is the normalized attention result over key partition ``i``;
     ``lses[i]`` is that partition's natural-log normalizer for the same query
-    rows/heads.  ``log_measures[i]`` is an additive natural-log physical key
+    rows/heads. ``log_measures[i]`` is an additive natural-log physical key
     measure applied uniformly to that partition.
+
+    Production BF16/FP16/FP32 inputs accumulate in FP32. The FP64 path exists
+    only for the arithmetic oracle and avoids hiding algebraic errors behind an
+    unnecessary cast.
     """
     if not outputs or len(outputs) != len(lses) or len(outputs) != len(log_measures):
         raise ValueError("partition outputs/LSEs/measures must be non-empty and have equal length")
@@ -185,19 +188,22 @@ def merge_partition_attention(
     reference_lse = lses[0]
     if reference_lse.shape != reference_output.shape[:-1]:
         raise ValueError("partition LSE must match output without the value dimension")
+    acc_dtype = torch.float64 if reference_output.dtype == torch.float64 or reference_lse.dtype == torch.float64 else torch.float32
     adjusted_lses = []
     for index, (output, lse, measure) in enumerate(zip(outputs, lses, log_measures)):
         if output.shape != reference_output.shape or output.dtype != reference_output.dtype or output.device != reference_output.device:
             raise ValueError(f"partition output {index} does not match the first output")
         if lse.shape != reference_lse.shape or lse.device != reference_lse.device:
             raise ValueError(f"partition LSE {index} does not match the first LSE")
-        adjusted_lses.append(lse.to(torch.float32) + torch.as_tensor(measure, device=lse.device, dtype=torch.float32))
+        adjusted_lses.append(
+            lse.to(acc_dtype) + torch.as_tensor(measure, device=lse.device, dtype=acc_dtype)
+        )
     stacked = torch.stack(adjusted_lses, dim=0)
     merged_lse = torch.logsumexp(stacked, dim=0)
-    merged = torch.zeros_like(reference_output, dtype=torch.float32)
+    merged = torch.zeros_like(reference_output, dtype=acc_dtype)
     for output, adjusted in zip(outputs, adjusted_lses):
         weight = torch.exp(adjusted - merged_lse).unsqueeze(-1)
-        merged.add_(output.to(torch.float32) * weight)
+        merged.add_(output.to(acc_dtype) * weight)
     return merged.to(reference_output.dtype), merged_lse
 
 
@@ -211,7 +217,7 @@ def dense_partition_oracle(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return explicit dense and partition-merged attention for tiny test domains.
 
-    Inputs use ``[B, H, T, D]``.  This is a correctness oracle only; production
+    Inputs use ``[B, H, T, D]``. This is a correctness oracle only; production
     execution belongs to the Sol/VDN backend and must not call this helper.
     """
     if q.ndim != 4 or not key_partitions or len(key_partitions) != len(value_partitions):
