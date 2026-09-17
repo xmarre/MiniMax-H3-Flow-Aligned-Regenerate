@@ -21,8 +21,10 @@ def main() -> None:
     parser.add_argument("--sol", required=True)
     parser.add_argument("--vdn", required=True)
     args = parser.parse_args()
+    local_root = str(Path(__file__).resolve().parents[1])
     sys.path.insert(0, _root(args.vdn))
     sys.path.insert(0, _root(args.sol))
+    sys.path.insert(0, local_root)
 
     from h3_flow_regenerate.partitioned_mixed import (
         PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
