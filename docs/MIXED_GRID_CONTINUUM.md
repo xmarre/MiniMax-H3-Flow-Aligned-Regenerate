@@ -1,10 +1,14 @@
-# Mixed-Grid Continuum continuation
+# Mixed-Grid Continuum continuation — deprecated compatibility path
 
-**MiniMax H3 Progressive Mixed-Grid Continuum** is the recommended accelerated exact-prefix Continuum path.
+**MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]** is retained for one compatibility release so existing serialized workflows continue to load with their original semantics.
+
+It is no longer the recommended target-input/Continuum production path. New workflows should use **MiniMax H3 Progressive Handoff (Target Input)**. The old node ID `H3ProgressiveMixedGridHandoff` is intentionally not remapped because that would silently change saved-workflow behavior.
+
+Mixed-Grid is not part of the current production Patcher topology, is not a release/promotion gate, and does not require a compatibility media render during this deprecation window. The implementation details and measurements below are retained as the historical contract of the compatibility node; retirement does not rewrite the behavior or evidence that applied to it.
 
 It requires `handoff_transfer=learned_3d` and a connected companion `H3_LATENT_UPSCALER` provider. Continuum stays configured for the final target geometry.
 
-## Canonical defaults
+## Historical compatibility defaults
 
 ```text
 source_mode             = scale
@@ -38,11 +42,13 @@ The provider node is supplied by [`xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plu
 
 With `guidance_mode=direction+temporal`, `acceleration_weight` and `consistency_weight` are stored but inactive. The runtime activates acceleration only in `direction+acceleration` and consistency only in `downsample_consistency`.
 
-## Why Mixed-Grid exists
+## Historical rationale
 
-The conservative generic Target Input node cannot safely resize an exact protected prefix, so exact-prefix continuation falls back to one target-grid sampler lifetime. The earlier Target-Sparse experiment avoids resizing the prefix but also avoids the learned latent upscale; real decoded-media testing showed cascading quality defects on that path.
+The conservative Target Input node cannot safely resize an exact protected prefix, so exact-prefix continuation falls back to one target-grid sampler lifetime. The earlier Target-Sparse experiment avoids resizing the prefix but also avoids the learned latent upscale; real decoded-media testing showed cascading quality defects on that path.
 
-Mixed-Grid instead keeps the exact target-grid prefix authoritative while generating the new suffix on a genuine smaller sampler grid, then uses the learned 3D latent transfer before target-grid refinement.
+Mixed-Grid instead kept the exact target-grid prefix authoritative while generating the new suffix on a genuine smaller sampler grid, then used the learned 3D latent transfer before target-grid refinement.
+
+The current production choice is the simpler Target Input fallback: exact protected video remains on the final target grid for the complete sampler lifetime, while the bounded four-audio-tick guided overlap handles the carried-audio boundary during sampling and the caller-owned exact AV state remains authoritative at output.
 
 ## Execution contract
 
@@ -133,7 +139,7 @@ The attention-measure contract does **not** change this API-2 contract or VDN ow
 
 ## Attention-measure framing repair
 
-`suffix_geometric_bridge` is the legacy workflow input name for two independent operations and now defaults **on** for Mixed-Grid:
+`suffix_geometric_bridge` is the legacy workflow input name for two independent operations and defaults **on** for the retained Mixed-Grid compatibility implementation:
 
 1. publish the protected-prefix K/V spatial-measure contract during low/probe Mixed-Grid attention;
 2. apply the target exact-overlap representation reconciliation after learned 3D transfer.
@@ -168,7 +174,7 @@ This is independent of the VDN API-2 sequence contract.
 
 Flow does not itself shorten the transformer sequence. A compatible attention backend must validate and consume the measure metadata.
 
-The companion ComfyUI-Sol-H3 implementation:
+The historical companion ComfyUI-Sol-H3 implementation:
 
 - preserves every Q row;
 - preserves all non-video K/V rows;
@@ -189,11 +195,13 @@ K/V: 56029 -> 49741
 
 If no compatible backend consumes the contract, the metadata alone does not normalize K/V.
 
+The weighted Mixed-Grid companion PR line that superseded this older subsampling experiment has also been retired from the active production topology. Both forms remain historical evidence rather than current production dependencies.
+
 ### Decoded-media result
 
 The matched v0.3.3 production validation removed the previous whole-frame shrink/top-edge reveal. The problematic join remained approximately unit-scale both with the validation Spectrum policy and after restoring the ordinary quality schedule. No delayed framing pulse, NFE change, or exact-prefix violation was observed in those matched runs.
 
-This result is why the framing-repair path is now enabled by default. It does not imply that every backend consumes the attention-measure contract; that remains a capability requirement of the selected attention backend.
+This historical result explains why the framing repair became enabled by default on the compatibility node. It does not make Mixed-Grid a current production recommendation.
 
 ## Retired source-trajectory warp
 
@@ -223,7 +231,7 @@ The target bridge never edits the authoritative prefix or target suffix token 1+
 
 Place it immediately before the normal Video VAE Decode when using the native H3 temporal decoder. It changes only the decode-only tensor; accepted sampling latents, continuation state, masks, audio and the assembly plan remain unchanged.
 
-The suffix DC bridge fixes the latent tone flash. The attention-measure path addresses the separate framing discontinuity. Decode Context addresses neither of those sampler-space defects.
+The suffix DC bridge fixes the historical Mixed-Grid latent tone flash. The attention-measure path addresses its separate framing discontinuity. Decode Context addresses neither of those sampler-space defects.
 
 ## Diagnostics
 
@@ -241,11 +249,11 @@ The framing-repair path additionally records:
 - target exact-overlap representation metrics;
 - compatible Sol-H3 external mixed-measure counters, including full Q rows and K/V rows before/after normalization.
 
-For the representative validated mixed call, the expected Sol-side K/V accounting is `56029 -> 49741` while Q remains `56029`.
+For the representative validated mixed call, the expected historical Sol-side K/V accounting is `56029 -> 49741` while Q remains `56029`.
 
-## Preserved contracts
+## Preserved compatibility contracts
 
-The default Mixed-Grid repair path:
+The retained Mixed-Grid implementation:
 
 - never modifies or warps the authoritative target-grid protected prefix;
 - preserves every Mixed-Grid Q row;
@@ -258,4 +266,8 @@ The default Mixed-Grid repair path:
 - does not change Spectrum history, forecasts or NFE accounting;
 - leaves `suffix_dc_bridge` arithmetic unchanged.
 
-These contracts are structurally covered by tests. Decoded-media validation remains necessary when changing geometry, backend combinations, or seam-repair semantics; passing structural tests alone does not establish output quality.
+These contracts are structurally covered by tests during the compatibility window. Decoded-media validation remains necessary if somebody changes Mixed-Grid geometry, backend combinations, or seam-repair semantics; no new compatibility render is required merely to deprecate the unchanged path.
+
+## Removal boundary
+
+After the one-release compatibility window, the remaining Mixed-Grid runtime/measure machinery, suffix bridges, external-sequence integration and dedicated structural tests may be removed in a separate cleanup change. Historical release notes and evidence documents should remain available as records of the architecture that was actually measured.

@@ -1,15 +1,19 @@
-# Mixed-Grid seam repair
+# Mixed-Grid seam repair — historical evidence
 
 ## Current status
 
-The Mixed-Grid exact-prefix seam repair is validated and enabled by default through the legacy workflow input `suffix_geometric_bridge=true`.
+Mixed-Grid is retired from the current production acceptance matrix. The compatibility node remains executable for one deprecation release so existing serialized workflows keep their original behavior, but no new Mixed-Grid compatibility render is required. New target-input/Continuum workflows use **MiniMax H3 Progressive Handoff (Target Input)** and its conservative exact-prefix target-grid fallback.
 
-The name is retained for workflow compatibility. The former source-space affine/trajectory warp family is **retired** and is not applied to the learned-upscaler input. The active repair has two independent pieces:
+The remainder of this document preserves the complete seam-investigation contract and evidence for the deprecated Mixed-Grid path. Historical findings are not rewritten as current workflow recommendations.
+
+The Mixed-Grid exact-prefix seam repair is enabled by default on that compatibility node through the legacy workflow input `suffix_geometric_bridge=true`.
+
+The name is retained for workflow compatibility. The former source-space affine/trajectory warp family is **retired** and is not applied to the learned-upscaler input. The active historical repair has two independent pieces:
 
 1. an upstream Mixed-Grid attention-measure contract during the low/probe H3 transformer stages; and
 2. target exact-overlap representation reconciliation after learned 3D transfer.
 
-The separate `suffix_dc_bridge=true` remains responsible for the one-token spatial-mean/DC correction. Both controls default on in **MiniMax H3 Progressive Mixed-Grid Continuum**.
+The separate `suffix_dc_bridge=true` remains responsible for the one-token spatial-mean/DC correction. Both controls remain on by default for **MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]**.
 
 ## Evidence chain
 
@@ -108,7 +112,7 @@ topology = mixed_grid_low_suffix
 
 The Flow contract describes the native source/target grids, temporal partition, packed-video start row and expected native-density K/V row count. Flow itself does not rewrite attention tensors. A compatible attention backend must explicitly validate and consume the contract.
 
-The companion implementation is in ComfyUI-Sol-H3. It performs the correction after explicit full-domain Q/K/V preprocessing such as Untwisting RoPE and immediately before rectangular Sol-Attn execution.
+The historical companion implementation is in ComfyUI-Sol-H3. It performs the correction after explicit full-domain Q/K/V preprocessing such as Untwisting RoPE and immediately before rectangular Sol-Attn execution.
 
 ### Query domain is unchanged
 
@@ -146,6 +150,8 @@ This converts the protected-prefix K/V integration measure to the same per-frame
 A compatible consumer rejects the measure contract if it disagrees with the already validated Mixed-Grid API-2 stream, including row counts, temporal partition, source/target grids or expected native K/V rows. A malformed measure request is not silently interpreted as the previous square-attention path.
 
 If no compatible consumer is present, the Flow metadata alone does not perform K/V normalization. The target representation stage still executes locally, but the attention-measure portion requires a compatible backend.
+
+The later weighted Mixed-Grid companion PR line represented the same physical-measure requirement without dropping Q/K/V rows. That companion line is also retired from the active production topology; both implementations remain historical evidence.
 
 ## VDN ownership
 
@@ -195,11 +201,11 @@ high:  4 actual / 2 forecast
 probe: 2 actual
 ```
 
-That decoded-media result is the basis for enabling `suffix_geometric_bridge` by default. It remains geometry/backend-specific empirical evidence rather than proof that arbitrary configurations cannot regress.
+That decoded-media result was the basis for enabling `suffix_geometric_bridge` by default on the Mixed-Grid implementation. It remains geometry/backend-specific empirical evidence rather than proof that arbitrary configurations cannot regress, and it is not a current recommendation to use Mixed-Grid.
 
 ## Runtime order
 
-With the default repair enabled, the relevant order is:
+With the retained compatibility repair enabled, the relevant order is:
 
 ```text
 genuine source-grid low-stage continuation
@@ -221,7 +227,7 @@ genuine source-grid low-stage continuation
 
 ## Preserved contracts
 
-The repair:
+The compatibility repair:
 
 - never modifies or warps the authoritative target-grid protected prefix;
 - preserves every Mixed-Grid Q row;
@@ -235,8 +241,14 @@ The repair:
 - does not change Spectrum history, forecast or NFE accounting;
 - leaves `suffix_dc_bridge` arithmetic unchanged.
 
+## Current production path
+
+For exact protected video, **Progressive Handoff (Target Input)** stays on the final target grid and executes one ordinary target-grid sampler lifetime. It adds no private low-grid continuation lifetime, no exact handoff probe, no learned-upscaler call and no mixed-grid attention contract.
+
+Its boundary-specific intervention is the bounded four-audio-tick guided overlap during sampler lifetime. The video mask remains unchanged and the caller-owned exact video/audio state is restored at output.
+
 ## Validation scope
 
 Structural tests cover native/source and cross-repository contracts including representative row accounting, query preservation, exact suffix K/V preservation, deterministic protected-prefix representative selection, native `_frame_grid` coordinate agreement, rectangular Sol-Attn routing, malformed-contract rejection, Untwist ordering, VDN/Spectrum/DiffAid composition, retired source-warp non-mutation, and final exact-prefix/model-call accounting.
 
-Those tests establish execution semantics. Decoded media remains required when changing geometry, attention backends, handoff policy, or repair semantics.
+Those tests establish execution semantics. Decoded media remains required when changing geometry, attention backends, handoff policy, or repair semantics. Deprecating the unchanged Mixed-Grid path does not itself require a fresh compatibility render.

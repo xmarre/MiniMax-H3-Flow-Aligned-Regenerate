@@ -7,31 +7,29 @@ The repository exposes two main generation paths:
 1. **flow-aligned two-pass guidance** — capture a low-resolution H3 trajectory and use it to guide a later high-resolution/refine pass;
 2. **progressive handoff** — keep the early part of one schedule on a smaller video grid, then transition once to the target grid and continue sampling.
 
-For H3 Continuum exact-prefix continuation, **Progressive Mixed-Grid Continuum** is the preferred accelerated topology. It preserves the authoritative target-grid prefix for transformer conditioning, generates the new suffix on a genuine lower-resolution grid, transfers the clean suffix with the learned 3D latent upscaler, restores the exact prefix, and then starts fresh target-grid refinement.
+For target-input workflows, including H3 Continuum exact-prefix continuation, **MiniMax H3 Progressive Handoff (Target Input)** is the standard path. The former Mixed-Grid Continuum path remains executable for one compatibility release but is deprecated and is not part of the production acceptance topology.
 
-## Canonical Mixed-Grid defaults
+## Canonical Target Input defaults
 
-A newly added **MiniMax H3 Progressive Mixed-Grid Continuum** node uses the same defaults as the shipped progressive target-input example:
+**MiniMax H3 Progressive Handoff (Target Input)** uses the same defaults as the shipped progressive target-input example:
 
 ```text
-source_mode             = scale
-source_scale            = 0.70
-source_width            = 864
-source_height           = 640
-handoff_coordinate      = 0.35
-handoff_selection       = fixed
-guidance_mode           = direction+temporal
-direction_weight        = 0.25
-acceleration_weight     = 0.25
-consistency_weight      = 0.25
-low_frequency_cutoff    = 0.25
-temporal_weight         = 0.20
-handoff_transfer        = learned_3d
-suffix_dc_bridge        = true
-suffix_geometric_bridge = true
+source_mode          = scale
+source_scale         = 0.70
+source_width         = 864
+source_height        = 640
+handoff_coordinate   = 0.35
+handoff_selection    = fixed
+guidance_mode        = direction+temporal
+direction_weight     = 0.25
+acceleration_weight  = 0.25
+consistency_weight   = 0.25
+low_frequency_cutoff = 0.25
+temporal_weight      = 0.20
+handoff_transfer     = learned_3d
 ```
 
-The required learned-transfer side input comes from **MiniMax H3 Latent Upscaler Provider (3D) [Experimental]** in [`xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus`](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus). The shipped example configures:
+The learned-transfer side input comes from **MiniMax H3 Latent Upscaler Provider (3D) [Experimental]** in [`xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus`](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus). The shipped example configures:
 
 ```text
 model_name             = minimax_h3_latent_upscaler_3d_bf16.safetensors
@@ -64,7 +62,7 @@ Guidance and progressive handoff match states by H3's shared flow coordinate rat
 
 H3 is a joint audio/video model. The progressive path changes only the **video spatial grid**. Audio is never spatially resized and remains on the native joint H3 path.
 
-## Progressive Mixed-Grid Continuum
+## Progressive Handoff (Target Input)
 
 ### Wiring with Continuum
 
@@ -74,36 +72,47 @@ Use this order for the model patch chain:
 DiffAid
   -> Untwisting RoPE
   -> Spectrum
-  -> Progressive Mixed-Grid Continuum
+  -> Progressive Handoff (Target Input)
   -> Continuum
 ```
 
-Create one **Flow Trajectory** and connect it to **Progressive Mixed-Grid Continuum**. Connect the 3D learned-upscaler provider to `learned_upscaler`.
+Create one **Flow Trajectory** and connect it to **Progressive Handoff (Target Input)**. Connect the 3D learned-upscaler provider to `learned_upscaler` when using `handoff_transfer=learned_3d`.
 
-Do **not** add a separate Trajectory Capture node on this path. The progressive wrapper captures the private low-grid trajectory internally.
+Do **not** add a separate Trajectory Capture node on this path. The progressive wrapper captures the private low-grid trajectory internally when the normal progressive path is eligible.
 
-Continuum remains configured for the final target width/height. On exact-prefix continuation, Mixed-Grid keeps the protected target-grid prefix authoritative, generates only the new suffix on the lower source grid, performs the learned handoff, restores the exact prefix, and continues on the final grid.
+Continuum remains configured for the final target width/height.
 
-The detailed exact-prefix contract, VDN API-2 behavior, Sol-H3 attention-measure consumer, and seam-repair ordering are documented in [MIXED_GRID_CONTINUUM.md](MIXED_GRID_CONTINUUM.md).
+### Exact protected video fallback
 
-### Exact-prefix suffix bridges
+If the prepared video denoise mask contains any exact-zero values, the exact native-masked contract takes precedence over progressive resizing. Flow forwards the original target noise, latent, mask, schedule, sampler, callback, conditioning and shape metadata through one ordinary target-grid sampler lifetime.
 
-Mixed-Grid exposes both suffix seam controls and currently enables both by default:
+That path performs:
 
-- `suffix_dc_bridge=true` applies the validated one-token per-channel DC correction using the discarded learned-upscaler prefix as calibration;
-- `suffix_geometric_bridge=true` is the legacy input name for the validated v0.3.3 Mixed-Grid framing-repair path. The former source-space warp is retired. The active path publishes the protected-prefix K/V attention-measure contract and applies the independent target exact-overlap representation reconciliation.
+```text
+private low-grid sampler       = no
+exact handoff probe            = no
+learned-upscaler calls         = 0
+geometry boundary              = no
+progressive history boundary   = no
+progressive guidance           = no
+```
 
-A compatible Sol-H3 revision is required to consume the K/V measure contract. If no compatible backend consumes that metadata, publishing it alone does not modify attention. The exact-overlap representation reconciliation remains local to Flow.
+A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not independently trigger the video fallback, and fractional video masks remain intentional blends rather than exact protection.
 
-Neither bridge edits the authoritative prefix, changes audio or masks, or adds an H3 transformer evaluation.
+On a canonical exact-prefix continuation, only the last four carried **audio latent ticks** are guided during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact ramp values are:
 
-## Generic Progressive Handoff (Target Input)
+```text
+0.203125
+0.40234375
+0.6015625
+0.80078125
+```
 
-The generic **MiniMax H3 Progressive Handoff (Target Input)** remains available for non-Continuum and compatibility workflows. The shipped target-input example now uses the learned 3D handoff/provider because the older dependency-free bicubic example could expose visible outline/body artifacts on aggressive I2V handoffs.
+The video mask is byte-for-byte unchanged. The caller-owned original exact mask remains authoritative and every originally protected video/audio value is restored exactly at the sampler boundary.
 
-If the prepared video denoise mask contains any exact-zero values, the generic node's exact native-masked contract takes precedence over progressive resizing. Flow forwards the original target noise, latent, mask, schedule, sampler, callback, and shape metadata through one ordinary target-grid sampler lifetime. No private noise, spatial transfer, exact probe, history boundary, or progressive guidance is used. A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not trigger it, and fractional video masks remain intentional blends rather than exact protection.
+All-generated first chunks, fully protected audio, and exact prefixes too short to retain at least one fully protected audio tick are no-ops. Other non-canonical partially protected audio layouts fail closed rather than being guessed.
 
-The generic node does not expose `suffix_dc_bridge` or `suffix_geometric_bridge`; those are Continuum-specific exact-prefix controls.
+`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Values 1-16 are accepted when deliberately testing a different width.
 
 ### What happens at an unprotected handoff
 
@@ -172,7 +181,7 @@ Partial low-sigma refinement schedules are rejected for progressive sampling bec
 
 ### `learned_3d`
 
-`learned_3d` is the intended transfer for the shipped target-input workflow and is mandatory for Mixed-Grid Continuum. It uses the companion repository:
+`learned_3d` is the intended transfer for the shipped target-input workflow. It uses the companion repository:
 
 https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus
 
@@ -198,9 +207,11 @@ One learned CNN inference is added per physical chunk and it adds no H3 transfor
 
 Provider mode fails instead of silently falling back if the configured learned-upscaler device/model is unavailable.
 
+The deprecated Mixed-Grid compatibility path also requires `learned_3d`; that requirement is part of the old serialized-workflow contract, not the current exact-prefix Target Input fallback.
+
 ### `bicubic`
 
-`bicubic` remains available on the generic Target Input node as a dependency-free compatibility/control transfer. It resizes the exact-probe predicted-clean video state directly to the target grid before target-state reconstruction. It is not supported by Mixed-Grid Continuum, which requires `learned_3d`.
+`bicubic` remains available on Target Input as a dependency-free compatibility/control transfer. It resizes the exact-probe predicted-clean video state directly to the target grid before target-state reconstruction. It is not supported by the deprecated Mixed-Grid compatibility path, which retains its historical `learned_3d` requirement.
 
 ### Learned-transfer evidence
 
@@ -229,7 +240,26 @@ See [BENCHMARKS.md](BENCHMARKS.md) and [PERFORMANCE.md](PERFORMANCE.md) for the 
 - a target scale; or
 - explicit target pixel dimensions.
 
-Use this variant when the surrounding workflow can legitimately begin at source geometry. It remains a generic/source-input path rather than the exact-prefix Continuum path.
+Use this variant when the surrounding workflow can legitimately begin at source geometry.
+
+## Mixed-Grid compatibility window
+
+**MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]** remains registered for one compatibility release.
+
+The old node ID `H3ProgressiveMixedGridHandoff` is intentionally preserved as a **distinct implementation**. It is not aliased or remapped to Target Input because doing so would silently change existing serialized workflow behavior.
+
+During this window:
+
+- old serialized workflows still load with their original Mixed-Grid semantics;
+- Mixed-Grid is not recommended for new workflows;
+- Mixed-Grid is not part of the production Patcher topology;
+- its weighted attention/external-sequence companions are not release gates;
+- no Mixed-Grid compatibility render is required;
+- runtime machinery remains only so compatibility is real rather than a broken placeholder.
+
+The old path retains its low-grid suffix, exact target-prefix transformer conditioning, learned 3D transfer, VDN external-sequence API 2, suffix DC bridge and attention-measure/exact-overlap seam-repair semantics. Detailed historical contracts and evidence remain in [MIXED_GRID_CONTINUUM.md](MIXED_GRID_CONTINUUM.md) and [mixed-grid-seam-repair.md](mixed-grid-seam-repair.md).
+
+Runtime/measure machinery is scheduled for removal after the compatibility window. Historical evidence remains historical evidence after that cleanup.
 
 ## Flow-aligned two-pass guidance
 
@@ -277,11 +307,11 @@ Adds HiFlow-inspired adjacent denoising-time velocity-change alignment.
 
 The H3 implementation reconstructs native flow velocity from the predicted-clean relationship and preserves the previous **distinct-coordinate** anchor across same-coordinate PECE predictor/corrector calls.
 
-Historical matched decoded-media testing did not show a consistent quality advantage over direction-only. The current Mixed-Grid default still stores `acceleration_weight=0.25`, but that value is inactive while the selected mode is `direction+temporal`.
+Historical matched decoded-media testing did not show a consistent quality advantage over direction-only. The current Target Input defaults still store `acceleration_weight=0.25`, but that value is inactive while the selected mode is `direction+temporal`.
 
 ### `direction+temporal`
 
-Adds bounded local adjacent-frame correspondence on captured low-grid H3 clean-state video latents. This is the current Mixed-Grid default mode.
+Adds bounded local adjacent-frame correspondence on captured low-grid H3 clean-state video latents. This is the current Target Input default mode.
 
 The matcher uses:
 
@@ -297,7 +327,7 @@ An earlier matched direction+temporal smoke had extremely sparse valid support a
 
 Downsamples the target predicted-clean state to the low-grid reference geometry, measures the mismatch, and lifts the correction back to target resolution.
 
-The term was measurable in historical telemetry but did not produce a useful decoded-media improvement in the matched smoke. `consistency_weight=0.25` in the current Mixed-Grid defaults is inactive unless this mode is explicitly selected.
+The term was measurable in historical telemetry but did not produce a useful decoded-media improvement in the matched smoke. `consistency_weight=0.25` in the current Target Input defaults is inactive unless this mode is explicitly selected.
 
 ### `off`
 
@@ -323,11 +353,11 @@ low_frequency_cutoff = 0.25
 
 That benchmark resolved roughly `736x736 -> 896x896` and improved subjectively from 10 to 12 to 14 SA-Solver-PECE outer steps.
 
-These values are retained because they describe the measured run. They are not the current Mixed-Grid node defaults.
+These values are retained because they describe the measured run. They are not the current Target Input node defaults.
 
 ## Resolution-aware refine SIGMAS
 
-This is a separate downstream learned-refine experiment. It is **not** part of the recommended progressive handoff path.
+This is a separate downstream learned-refine experiment. It is **not** part of the standard progressive handoff path.
 
 Correct wiring:
 
@@ -381,7 +411,7 @@ Metrics establish whether the intended path executed. They do not replace decode
 
 ### Spectrum
 
-Spectrum can remain upstream of the progressive wrapper. Across the handoff, feature-history state is reset because cached transformer features from one spatial shape cannot be reused at another. The first target-grid call is forced actual.
+Spectrum can remain upstream of the progressive wrapper. Across an actual geometry handoff, feature-history state is reset because cached transformer features from one spatial shape cannot be reused at another. The first target-grid call is forced actual. The exact protected-video fallback has no geometry handoff and therefore creates no progressive history boundary.
 
 ### SA-Solver/PECE and other samplers
 
@@ -395,7 +425,9 @@ Keep these patches upstream of the progressive wrapper. The target-grid stage pu
 
 ### Continuum masks and chunks
 
-Mixed-Grid keeps Continuum-facing geometry at the final target size and preserves the authoritative exact prefix. The generic Target Input node instead falls back to a normal target-grid sampler lifetime when exact video protection is present.
+Target Input keeps Continuum-facing geometry at the final target size. Exact protected video takes the conservative one-sampler target-grid fallback; unprotected/fractional-mask calls may use the normal private low-grid handoff.
+
+The deprecated Mixed-Grid compatibility node preserves its historical target-prefix/source-suffix mixed-sequence behavior only for existing workflows during the deprecation window.
 
 ### Private low-grid noise
 
@@ -439,4 +471,6 @@ For exact runs and measured outcomes, use the dedicated evidence documents rathe
 - [BENCHMARKS.md](BENCHMARKS.md) — decoded-media smoke ledger, tested operating points, topology, metrics, and optional formal matrix;
 - [PERFORMANCE.md](PERFORMANCE.md) — observed progressive learned-handoff versus proper two-pass timing comparison;
 - [RESEARCH.md](RESEARCH.md) — research-transfer rationale and conclusions;
+- [MIXED_GRID_CONTINUUM.md](MIXED_GRID_CONTINUUM.md) — deprecated Mixed-Grid compatibility contract and historical implementation details;
+- [mixed-grid-seam-repair.md](mixed-grid-seam-repair.md) — historical Mixed-Grid seam investigation;
 - [../CREDITS.md](../CREDITS.md) — full research and implementation provenance.

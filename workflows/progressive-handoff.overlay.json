@@ -1,17 +1,17 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Canonical Continuum Mixed-Grid progressive H3 topology and defaults, with historical validation references retained separately.",
+  "purpose": "Canonical target-input progressive H3 topology and defaults. Mixed-Grid is retained only as a deprecated compatibility path; historical validation records remain preserved separately.",
   "placement": {
     "chain": [
       "DiffAid",
       "Untwist",
       "Spectrum",
-      "H3ProgressiveMixedGridHandoff",
+      "H3ProgressiveTargetInputHandoff",
       "Continuum"
     ],
-    "trajectory_capture": "internal to H3ProgressiveMixedGridHandoff; no separate H3TrajectoryCapture node is required",
-    "learned_upscaler": "MinimaxH3LatentUpscaler3DProvider.learned_upscaler -> H3ProgressiveMixedGridHandoff.learned_upscaler"
+    "trajectory_capture": "internal to H3ProgressiveTargetInputHandoff; no separate H3TrajectoryCapture node is required",
+    "learned_upscaler": "MinimaxH3LatentUpscaler3DProvider.learned_upscaler -> H3ProgressiveTargetInputHandoff.learned_upscaler"
   },
   "shared_handle": {
     "node": "H3FlowTrajectory",
@@ -44,8 +44,6 @@
     "low_frequency_cutoff": 0.25,
     "temporal_weight": 0.20,
     "handoff_transfer": "learned_3d",
-    "suffix_dc_bridge": true,
-    "suffix_geometric_bridge": true,
     "weight_semantics": "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values only; apply_guidance does not use them unless the corresponding guidance mode is selected."
   },
   "historical_direction_only_reference": {
@@ -146,15 +144,56 @@
       "media": "corrected PECE implementation showed no clear quality improvement"
     }
   },
+  "unprotected_progressive_contract": {
+    "early_stage": "private lower-resolution video grid",
+    "handoff_probe": "one exact low-grid H3 probe at the selected boundary",
+    "video_transfer": "learned_3d by default; bicubic remains a compatibility/control option",
+    "audio": "never spatially resized",
+    "history": "fresh sampler and Spectrum lifetime across the geometry boundary",
+    "first_target_call": "mandatory actual H3 evaluation"
+  },
+  "exact_prefix_contract": {
+    "trigger": "any exact-zero prepared video denoise-mask value",
+    "mode": "conservative target-grid fallback",
+    "sampler_invocations": 1,
+    "private_low_grid_sampler": false,
+    "handoff_probe": false,
+    "learned_upscaler_calls": 0,
+    "geometry_boundary": false,
+    "history_boundary": false,
+    "video_mask_modified_during_sampling": false,
+    "audio_guided_overlap": {
+      "default_ticks": 4,
+      "audio_latent_rate_hz": 40,
+      "approx_duration_ms": 100,
+      "mask_grid": "ceil_1_over_256",
+      "ramp": [0.203125, 0.40234375, 0.6015625, 0.80078125],
+      "scope": "tail of a canonical carried audio prefix during sampler lifetime only",
+      "final_exact_restore": true,
+      "disable_hook": "H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0"
+    },
+    "caller_owned_output": "original exact video/audio mask semantics remain authoritative at the sampler return boundary"
+  },
+  "deprecated_compatibility": {
+    "node_id": "H3ProgressiveMixedGridHandoff",
+    "display_name": "MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]",
+    "status": "compatibility-only for one release",
+    "remapped_to_target_input": false,
+    "production_recommended": false,
+    "release_gate": false,
+    "compatibility_render_required": false,
+    "planned_removal": "after the compatibility window",
+    "reason_for_preserving_id": "existing serialized workflows must keep their original semantics rather than silently changing to Target Input"
+  },
+  "target_sparse_status": {
+    "node_id": "H3ProgressiveTargetSparseHandoff",
+    "status": "experimental research/control only",
+    "production_recommended": false
+  },
   "invariants": {
-    "continuum_grid": "final target grid for the whole sequence",
-    "audio": "caller audio noise/latent/mask preserved; no spatial transform",
-    "conditioning": "target-grid conditioning is rebuilt after handoff",
-    "exact_probe": "one explicit low-grid H3 probe per physical chunk",
-    "high_grid_actual_anchor": "mandatory first high-stage actual H3 evaluation",
-    "history_reset": "fresh sampler/Spectrum lifetime across the geometry boundary",
-    "native_masked_continuation": "target-grid session/native-mask geometry remains unchanged",
-    "run_storage": "off for matched validation unless persistence itself is the test",
-    "decoded_media_required": true
+    "continuum_grid": "final target grid for the whole external session",
+    "audio": "no spatial transform",
+    "exact_protection_precedence": true,
+    "decoded_media_required_for_new_behavioral_claims": true
   }
 }
