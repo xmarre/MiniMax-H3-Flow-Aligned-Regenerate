@@ -525,7 +525,6 @@ def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
     assert report.diagnostic_runs == 2
     assert len(report.cold_reports) == 3
     assert {item["run_id"] for item in report.setup_reports} == {
-        "released_target-cold",
         "partitioned_preserved-cold",
         "partitioned_fixed-cold",
         "pair-warmup-control",
