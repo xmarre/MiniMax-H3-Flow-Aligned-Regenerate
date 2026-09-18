@@ -516,7 +516,7 @@ def test_campaign_gate_rejects_source_stack_drift(tmp_path, monkeypatch):
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
-        match="source stack|different source stack",
+        match=r"source stack|different source stack",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
