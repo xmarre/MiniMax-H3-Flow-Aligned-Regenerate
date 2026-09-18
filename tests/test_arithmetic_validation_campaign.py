@@ -177,6 +177,45 @@ def _source_stack(implementation: str) -> dict:
     }
 
 
+def _source_provenance(implementation: str) -> dict:
+    stack = _source_stack(implementation)
+    repositories = {}
+    module_paths = {
+        "flow": ("h3_flow_regenerate.runtime", "h3_flow_regenerate/runtime.py"),
+        "sol": ("sol_h3.runtime", "sol_h3/runtime.py"),
+        "vdn": ("vdn_h3.partitioned_runtime", "vdn_h3/partitioned_runtime.py"),
+        "continuum": ("continuum.v3.driving_nodes", "v3/driving_nodes.py"),
+    }
+    for name, head in stack.items():
+        module, relative = module_paths[name]
+        digest = hashlib.sha256(f"{head}:{relative}".encode()).hexdigest()
+        repositories[name] = {
+            "root": f"/installed/{name}",
+            "head": head,
+            "dirty": False,
+            "working_tree_sha256": "f" * 64,
+            "remote": f"https://github.com/example/{name}.git",
+            "loaded_files": [
+                {
+                    "module": module,
+                    "path": f"/installed/{name}/{relative}",
+                    "relative_path": relative,
+                    "sha256": digest,
+                    "head_sha256": digest,
+                    "tracked": True,
+                    "matches_head": True,
+                }
+            ],
+        }
+    return {
+        "schema_version": 1,
+        "kind": "h3_arithmetic_validation_source_provenance_v1",
+        "python_executable": "/python",
+        "overlay_order": ["continuum", "flow", "vdn", "sol"],
+        "repositories": repositories,
+    }
+
+
 def _add_run(
     tmp_path: Path,
     runs: list[dict],
@@ -311,6 +350,17 @@ def _add_run(
 def _manifest(tmp_path: Path) -> dict:
     identity = _identity()
     identity_digest = campaign._canonical_sha256(identity)
+    source_provenance = {}
+    for implementation in campaign.IMPLEMENTATIONS:
+        path = tmp_path / f"{implementation}.source-provenance.json"
+        path.write_text(
+            json.dumps(_source_provenance(implementation)),
+            encoding="utf-8",
+        )
+        source_provenance[implementation] = {
+            "path": path.name,
+            "sha256": _sha256(path),
+        }
     runs: list[dict] = []
     sequence = 0
 
@@ -436,6 +486,7 @@ def _manifest(tmp_path: Path) -> dict:
         "schema_version": 1,
         "kind": campaign.CAMPAIGN_KIND,
         "frozen_identity": identity,
+        "source_provenance": source_provenance,
         "runs": runs,
     }
 
@@ -789,5 +840,49 @@ def test_campaign_gate_rejects_pair_warmup_after_measurement(tmp_path, monkeypat
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="lacks pre-measurement warmup of both control and fixed modes",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_loaded_source_file_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    entry = manifest["source_provenance"]["partitioned_fixed"]
+    path = tmp_path / entry["path"]
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    loaded = provenance["repositories"]["sol"]["loaded_files"][0]
+    loaded["matches_head"] = False
+    path.write_text(json.dumps(provenance), encoding="utf-8")
+    entry["sha256"] = _sha256(path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="loaded file differs from HEAD",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_source_provenance_head_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    entry = manifest["source_provenance"]["partitioned_fixed"]
+    path = tmp_path / entry["path"]
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    provenance["repositories"]["flow"]["head"] = "9" * 40
+    path.write_text(json.dumps(provenance), encoding="utf-8")
+    entry["sha256"] = _sha256(path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="HEAD disagrees with run source_stack",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
