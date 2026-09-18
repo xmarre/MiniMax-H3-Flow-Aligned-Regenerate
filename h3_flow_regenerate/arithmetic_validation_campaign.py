@@ -45,6 +45,7 @@ REQUIRED_IDENTITY = {
     "device_identity",
     "driver",
     "python",
+    "platform",
     "torch",
     "torch_cuda",
     "cutlass_dsl",
@@ -142,6 +143,7 @@ def _runtime_environment(value: Any) -> dict[str, Any]:
     _require(isinstance(value, dict), "Sol compiler environment is missing")
     required = {
         "python",
+        "platform",
         "torch",
         "torch_cuda",
         "triton",
@@ -153,6 +155,7 @@ def _runtime_environment(value: Any) -> dict[str, Any]:
     _require(not missing, f"Sol compiler environment is missing {sorted(missing)}")
     return {
         "python": value["python"],
+        "platform": value["platform"],
         "torch": value["torch"],
         "torch_cuda": value["torch_cuda"],
         "cutlass_dsl": value["nvidia_cutlass_dsl"],
@@ -387,12 +390,17 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _source_digest(run: dict[str, Any]) -> str:
     stack = run.get("source_stack")
+    dirty = run.get("source_dirty")
     _require(isinstance(stack, dict), f"run {run.get('id')!r} has no source_stack")
+    _require(isinstance(dirty, dict), f"run {run.get('id')!r} has no source_dirty map")
     required = {"flow", "sol", "vdn", "continuum"}
     _require(required.issubset(stack), f"source_stack is missing {sorted(required - set(stack))}")
+    _require(required.issubset(dirty), f"source_dirty is missing {sorted(required - set(dirty))}")
     for name in required:
         _require(_hex_digest(stack.get(name), 40), f"source_stack.{name} is not a full Git SHA")
-    return _canonical_sha256(stack)
+        _require(type(dirty.get(name)) is bool, f"source_dirty.{name} is not boolean")
+        _require(not dirty[name], f"run {run.get('id')!r} uses dirty {name} source")
+    return _canonical_sha256({"source_stack": stack, "source_dirty": dirty})
 
 
 def _media(run: dict[str, Any]) -> None:
