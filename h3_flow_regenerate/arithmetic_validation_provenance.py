@@ -37,6 +37,16 @@ def _canonical_sha256(value: Any) -> str:
     return _sha256_bytes(payload)
 
 
+def _sha256_digest(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
 def _git(root: Path, *args: str, check: bool = True) -> bytes:
     try:
         result = subprocess.run(
@@ -200,8 +210,8 @@ def validate_source_provenance(
             head_digest = item.get("head_sha256")
             _require(isinstance(module, str) and module, f"source provenance {name} module label is missing")
             _require(isinstance(relative, str) and relative, f"source provenance {name} relative path is missing")
-            _require(isinstance(digest, str) and len(digest) == 64, f"source provenance {name} SHA-256 is invalid")
-            _require(isinstance(head_digest, str) and len(head_digest) == 64, f"source provenance {name} HEAD SHA-256 is invalid")
+            _require(_sha256_digest(digest), f"source provenance {name} SHA-256 is invalid")
+            _require(_sha256_digest(head_digest), f"source provenance {name} HEAD SHA-256 is invalid")
             _require(item.get("tracked") is True, f"source provenance {name} loaded file is untracked")
             _require(item.get("matches_head") is True, f"source provenance {name} loaded file differs from HEAD")
             _require(digest == head_digest, f"source provenance {name} loaded-file digest mismatch")
