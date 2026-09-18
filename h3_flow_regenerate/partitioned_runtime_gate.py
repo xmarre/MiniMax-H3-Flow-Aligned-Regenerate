@@ -348,14 +348,10 @@ def validate_partitioned_runtime_evidence(
     accounting_rows = []
     if isinstance(stage_accounting, list) and request_id is not None:
         accounting_rows = [
-            row
-            for row in stage_accounting
-            if isinstance(row, dict) and row.get("request_id") == request_id
+            row for row in stage_accounting if isinstance(row, dict) and row.get("request_id") == request_id
         ]
     accounting_unknown = sum(
-        row.get("wall_ms") is None
-        or row.get("model_ms") is None
-        or row.get("remainder_ms") is None
+        row.get("wall_ms") is None or row.get("model_ms") is None or row.get("remainder_ms") is None
         for row in accounting_rows
     )
     if require_performance_accounting:
