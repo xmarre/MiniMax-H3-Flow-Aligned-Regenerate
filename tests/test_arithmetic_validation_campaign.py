@@ -171,15 +171,12 @@ def _add_run(
         "timing": {"sampler_s": sampler_s, "e2e_s": e2e_s},
         "fresh_process": condition == "cold",
         "fresh_sol_requests": condition != "cold",
-        "changed_contract_revalidated": condition in {
+        "changed_contract_revalidated": condition
+        in {
             "numerical_invalidated",
             "geometry_bias_mutated",
         },
-        "compiler_cache_state": (
-            "isolated_empty"
-            if condition == "cold"
-            else "retained_same_process"
-        ),
+        "compiler_cache_state": ("isolated_empty" if condition == "cold" else "retained_same_process"),
         "diagnostic_mode": diagnostic_mode,
         "decoded_media": {
             "video_pass": True,
@@ -198,16 +195,8 @@ def _add_run(
     }
     if condition in {"numerical_invalidated", "geometry_bias_mutated"}:
         run["mutation"] = {
-            "kind": (
-                "geometry"
-                if condition == "geometry_bias_mutated"
-                else "preprocess_generation"
-            ),
-            "base_field": (
-                "geometry_sha256"
-                if condition == "geometry_bias_mutated"
-                else "conditioning_sha256"
-            ),
+            "kind": ("geometry" if condition == "geometry_bias_mutated" else "preprocess_generation"),
+            "base_field": ("geometry_sha256" if condition == "geometry_bias_mutated" else "conditioning_sha256"),
             "before_sha256": "a" * 64,
             "after_sha256": "c" * 64,
         }
@@ -304,8 +293,7 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
     log_path = tmp_path / target["artifacts"]["log"]["path"]
     log_path.write_text(
-        _sol_log(compile_misses=1, condition="primed")
-        + "\n[INFO] Prompt executed in 330.00 seconds",
+        _sol_log(compile_misses=1, condition="primed") + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
     )
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
@@ -338,8 +326,7 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
     target["timing"]["e2e_s"] = 400.0
     log_path = tmp_path / target["artifacts"]["log"]["path"]
     log_path.write_text(
-        _sol_log(compile_misses=0, condition="primed")
-        + "\n[INFO] Prompt executed in 400.00 seconds",
+        _sol_log(compile_misses=0, condition="primed") + "\n[INFO] Prompt executed in 400.00 seconds",
         encoding="utf-8",
     )
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
@@ -358,8 +345,7 @@ def test_campaign_gate_rejects_source_stack_drift(tmp_path, monkeypatch):
     target = next(
         run
         for run in manifest["runs"]
-        if run["implementation"] == "partitioned_fixed"
-        and run["condition"] == "geometry_bias_mutated"
+        if run["implementation"] == "partitioned_fixed" and run["condition"] == "geometry_bias_mutated"
     )
     target["source_stack"]["sol"] = "f" * 40
 
