@@ -37,10 +37,12 @@ paths from the running ComfyUI process and capture each repository independently
 
 ```bash
 python tools/capture_arithmetic_validation_provenance.py \
+  --repo comfyui=/path/to/ComfyUI \
   --repo flow=/path/to/MiniMax-H3-Flow-Aligned-Regenerate \
   --repo sol=/path/to/ComfyUI-Sol-H3 \
   --repo vdn=/path/to/ComfyUI-VDN-H3-Plus \
   --repo continuum=/path/to/ComfyUI-H3-Continuum-Plus \
+  --loaded-file comfyui:comfy.model_management=/actual/ComfyUI/comfy/model_management.py \
   --loaded-file flow:h3_flow_regenerate.runtime=/actual/flow/runtime.py \
   --loaded-file sol:sol_h3.runtime=/actual/sol/runtime.py \
   --loaded-file vdn:vdn_h3.partitioned_runtime=/actual/vdn/partitioned_runtime.py \
@@ -50,8 +52,9 @@ python tools/capture_arithmetic_validation_provenance.py \
 ```
 
 The `--loaded-file` paths above are placeholders for the real `__file__`
-receipts; do not infer them from repository names. The capture records HEAD,
-dirty-state fingerprints, loaded-file raw/canonical SHA-256 values,
+receipts; do not infer them from repository names. ComfyUI core is recorded as
+a source repository but is not part of the custom-node overlay-order list. The
+capture records HEAD, dirty-state fingerprints, loaded-file raw/canonical SHA-256 values,
 corresponding HEAD-file SHA-256 values, match mode and overlay order. Loaded
 files must be tracked and match HEAD exactly, except that Git-for-Windows
 CRLF materialization may canonicalize CRLF to LF before comparison. No other
@@ -196,12 +199,14 @@ A run has this shape:
   "pair_id": "pair-01",
   "frozen_identity_sha256": "<64 hex>",
   "source_stack": {
+    "comfyui": "<40 hex>",
     "flow": "<40 hex>",
     "sol": "<40 hex>",
     "vdn": "<40 hex>",
     "continuum": "<40 hex>"
   },
   "source_dirty": {
+    "comfyui": false,
     "flow": false,
     "sol": false,
     "vdn": false,
