@@ -21,10 +21,11 @@ The manifest kind is `h3_arithmetic_validation_campaign_v1`. It must contain
 one frozen identity covering workflow, prompt, reference media, model/adapter/
 patch stacks, decoder, sampler/conditioning/geometry settings, seed, Continuum
 revision, device/driver and compiler/runtime versions. The device field is the
-SHA-256 of Sol's stable CUDA identity (device/index/name/memory/SM/driver/context,
-excluding PID and process nonce). Python/platform, PyTorch, CUDA, Triton, nvidia-cutlass-dsl,
-cuda-python and apache-tvm-ffi values are copied from Sol's runtime lease. Every
-run references the canonical SHA-256 of that identity.
+SHA-256 of Sol's stable CUDA identity
+(device/index/name/UUID/memory/SM/driver/context, excluding PID and process
+nonce). Python/platform, PyTorch, CUDA, Triton, nvidia-cutlass-dsl, cuda-python
+and apache-tvm-ffi values are copied from Sol's runtime lease. Every run
+references the canonical SHA-256 of that identity.
 
 Three implementation arms are required:
 
@@ -88,14 +89,23 @@ python custom_nodes/ComfyUI-Sol-H3/tools/check_arithmetic_validation_diagnostics
 The paired promotion timings are intentionally separate low-overhead runs:
 CUDA/replay diagnostics must be disabled. Each implementation first needs an
 **unpaired same-arm primed repeat** after its own cold run; this proves the
-cold→primed lifetime independently of performance pairing. At least three
-additional `released_target` + `partitioned_fixed` timing pairs are then
-required. The two members of each timing pair must be adjacent in the
-**complete** declared campaign order, use the same exact
-Flow/Sol/VDN/Continuum source stack, and carry the same Sol process ID +
-process-generation nonce. This permits both timing modes to alternate inside
-one already-primed ComfyUI process instead of requiring two resident model
-processes on one GPU. A timing-only fixed run may therefore name the control
+cold→primed lifetime independently of performance pairing.
+
+Before measured pairing, the shared timing process must then execute one
+`pair_warmup` run of **both** `released_target` and `partitioned_fixed`.
+These warmups are recorded campaign runs but are never used as benchmark
+measurements; compiler misses are allowed there because their purpose is to
+make both mode-specific executable sets resident. At least three additional
+`released_target` + `partitioned_fixed` primed timing pairs are then
+required, and measured runs must report zero compilation misses.
+
+The two members of each timing pair must be adjacent in the **complete**
+declared campaign order, use the same exact Flow/Sol/VDN/Continuum source
+stack, and carry the same Sol process ID + process-generation nonce. All
+measured pairs must also share that one warmed process/source identity. This
+permits both timing modes to alternate inside one already-primed ComfyUI
+process instead of requiring two resident model processes on one GPU. A
+timing-only fixed run and its `pair_warmup` may therefore name the control
 process's earlier cold anchor; non-paired primed/invalidation evidence must
 still anchor to the cold run of its own implementation. Every run records a
 `source_dirty` map for those repositories and promotion rejects any dirty
