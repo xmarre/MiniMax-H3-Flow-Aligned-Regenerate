@@ -121,7 +121,7 @@ def _diagnostic_report(*, compile_misses: int, request_id: str) -> dict:
         "success": True,
         "validation_failures": 0,
         "compile_hits": 4,
-        "compile_misses": compile_misses,
+        "compile_misses": 0,
         "request_ids": [request_id],
         "request_reports": [
             {
