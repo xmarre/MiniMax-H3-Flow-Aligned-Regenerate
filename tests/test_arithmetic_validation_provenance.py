@@ -113,7 +113,9 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
                     "module": f"{name}.runtime",
                     "relative_path": "runtime.py",
                     "sha256": digest,
+                    "canonical_sha256": digest,
                     "head_sha256": digest,
+                    "match_mode": "exact",
                     "tracked": True,
                     "matches_head": True,
                 }
