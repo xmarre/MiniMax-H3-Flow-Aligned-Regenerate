@@ -617,7 +617,7 @@ def test_campaign_gate_rejects_source_stack_drift(tmp_path, monkeypatch):
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
-        match=r"source stack|different source stack",
+        match=r"HEAD disagrees with run source_stack|source stack|different source stack",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
@@ -682,6 +682,7 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
             process_id=4242,
             process_generation="a" * 32,
             source_verify_count=0,
+            request_serial=2,
         )
     )
     totals = campaign._sol_totals(campaign._sol_records(text))
