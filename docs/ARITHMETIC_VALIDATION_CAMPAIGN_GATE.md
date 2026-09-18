@@ -32,10 +32,13 @@ Three implementation arms are required:
 
 Each arm must provide `cold`, `primed`, `numerical_invalidated`, and
 `geometry_bias_mutated` evidence. Cold runs must use a fresh process and an
-explicit isolated compiler-cache state. Non-cold runs must retain the same
-process/compiler cache while forcing fresh Sol Requests. Mutation runs must
-identify the changed contract with distinct before/after SHA-256 values and
-must report revalidation.
+explicit isolated compiler-cache state. Every non-cold run names its cold
+`process_anchor_run_id`; the gate reads Sol's Request-owned runtime lease from
+the log and requires the CUDA/device `process` identity to match that anchor.
+This makes the same-process claim artifact-derived rather than trusting only a
+manifest boolean. Non-cold runs must retain that process/compiler cache while
+forcing fresh Sol Requests. Mutation runs must identify the changed contract
+with distinct before/after SHA-256 values and must report revalidation.
 
 Every run provides hash-pinned metrics, full log, decoded video and decoded
 audio artifacts. The sampler time declared in the manifest is checked against
@@ -119,6 +122,7 @@ A run has this shape:
   },
   "fresh_process": false,
   "fresh_sol_requests": true,
+  "process_anchor_run_id": "partitioned_fixed-cold",
   "compiler_cache_state": "retained_same_process",
   "diagnostic_mode": false,
   "decoded_media": {
@@ -144,9 +148,13 @@ A run has this shape:
 ```
 
 Diagnostic runs add a hash-pinned `sol_diagnostics` artifact. Mutation runs add
-a `mutation` object with `kind`, `before_sha256`, and `after_sha256`.
-Supported mutation kinds are `lora_strength`, `preprocess_generation`,
-`geometry`, `bias`, and `geometry_and_bias`.
+a `mutation` object with `kind`, `base_field`, `before_sha256`, and
+`after_sha256`. The named `base_field` must be one of the frozen SHA-256
+identity fields and `before_sha256` must equal that frozen digest, so the
+mutation is anchored to the actual campaign base rather than a free-standing
+claim. Supported mutation kinds are `lora_strength`,
+`preprocess_generation`, `geometry`, `bias`, and
+`geometry_and_bias`.
 
 This gate is specific to the frozen arithmetic-validation campaign. The
 18/14/4 benchmark expectation is not part of generic Flow runtime policy.
