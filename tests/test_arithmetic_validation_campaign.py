@@ -99,7 +99,7 @@ def _identity() -> dict:
 
 def _source_stack(implementation: str) -> dict:
     marker = {
-        "released_target": "1",
+        "released_target": "3",
         "partitioned_preserved": "2",
         "partitioned_fixed": "3",
     }[implementation]
@@ -169,18 +169,42 @@ def _add_run(
         "source_stack": _source_stack(implementation),
         "timing": {"sampler_s": sampler_s, "e2e_s": e2e_s},
         "fresh_process": condition == "cold",
-        "fresh_sol_requests": condition == "primed",
+        "fresh_sol_requests": condition != "cold",
         "changed_contract_revalidated": condition in {
             "numerical_invalidated",
             "geometry_bias_mutated",
         },
         "compiler_cache_state": (
-            "isolated_empty" if condition == "cold" else "retained"
+            "isolated_empty"
+            if condition == "cold"
+            else "retained_same_process"
         ),
         "diagnostic_mode": diagnostic_mode,
-        "decoded_media": {"video_pass": True, "audio_pass": True},
+        "decoded_media": {
+            "video_pass": True,
+            "audio_pass": True,
+            "checks": {
+                "motion": True,
+                "continuity": True,
+                "prefix_seam": True,
+                "prompt_adherence": True,
+                "texture_artifacts": True,
+                "audio_seam": True,
+                "audio_intelligibility": True,
+            },
+        },
         "artifacts": artifacts,
     }
+    if condition in {"numerical_invalidated", "geometry_bias_mutated"}:
+        run["mutation"] = {
+            "kind": (
+                "geometry"
+                if condition == "geometry_bias_mutated"
+                else "preprocess_generation"
+            ),
+            "before_sha256": "b" * 64,
+            "after_sha256": "c" * 64,
+        }
     runs.append(run)
 
 
