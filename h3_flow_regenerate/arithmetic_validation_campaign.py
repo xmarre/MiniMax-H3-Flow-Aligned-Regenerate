@@ -91,6 +91,8 @@ class CampaignReport:
     decoded_video_passes: int
     decoded_audio_passes: int
     implementation_source_digests: dict[str, str]
+    cold_reports: tuple[dict[str, Any], ...]
+    setup_reports: tuple[dict[str, Any], ...]
     pair_reports: tuple[dict[str, Any], ...]
 
     def as_dict(self) -> dict[str, Any]:
@@ -260,6 +262,9 @@ def _sampler_s(metrics: dict[str, Any]) -> float:
             isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool),
             "sampler_wall elapsed_ms is invalid",
         )
+        failed = fields.get("failed") if isinstance(fields, dict) else None
+        _require(type(failed) is bool, "sampler_wall failed marker is missing")
+        _require(not failed, "campaign contains a failed sampler_wall interval")
         values.append(float(elapsed) / 1000.0)
     _require(values, "metrics contain no sampler_wall events")
     return sum(values)
@@ -659,6 +664,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(type(fresh_process) is bool, f"run {run_id!r} fresh_process is not boolean")
         _require(type(diagnostic_mode) is bool, f"run {run_id!r} diagnostic_mode is not boolean")
         if condition == PAIR_WARMUP_CONDITION:
+            _require(
+                implementation in {"released_target", "partitioned_fixed"},
+                f"run {run_id!r} pair warmup uses unsupported implementation {implementation!r}",
+            )
             _require(not diagnostic_mode, f"run {run_id!r} pair warmup must use low-overhead mode")
             _require(not run.get("pair_id"), f"run {run_id!r} pair warmup must not carry a measurement pair_id")
         cache_state = run.get("compiler_cache_state")
@@ -723,6 +732,8 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         entry["_provenance_identity"] = provenance_identity
         entry["_process_id"] = sol["process_id"]
         entry["_process_generation"] = sol["process_generation"]
+        entry["_compile_misses"] = sol["compile_misses"]
+        entry["_validation_misses"] = sol["validation_misses"]
         validated.append(entry)
         by_impl_condition.setdefault((implementation, condition), []).append(entry)
 
@@ -869,9 +880,34 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
                 "control_run": control["id"],
                 "fixed_run": fixed["id"],
                 "sampler_delta_s": sampler_delta,
+                "sampler_delta_pct": sampler_delta / control["_sampler_s"] * 100.0,
                 "e2e_delta_s": e2e_delta,
+                "e2e_delta_pct": e2e_delta / control["_e2e_s"] * 100.0,
             }
         )
+
+    def run_report(run):
+        return {
+            "run_id": run["id"],
+            "implementation": run["implementation"],
+            "condition": run["condition"],
+            "sampler_s": run["_sampler_s"],
+            "e2e_s": run["_e2e_s"],
+            "diagnostic_mode": run["diagnostic_mode"],
+            "compile_misses": run["_compile_misses"],
+            "validation_misses": run["_validation_misses"],
+        }
+
+    cold_reports = tuple(
+        run_report(run)
+        for run in sorted(validated, key=lambda item: item["sequence"])
+        if run["condition"] == "cold"
+    )
+    setup_reports = tuple(
+        run_report(run)
+        for run in sorted(validated, key=lambda item: item["sequence"])
+        if run["diagnostic_mode"] or run["condition"] == PAIR_WARMUP_CONDITION
+    )
 
     return CampaignReport(
         frozen_identity_sha256=identity_digest,
@@ -885,6 +921,8 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         decoded_video_passes=len(validated),
         decoded_audio_passes=len(validated),
         implementation_source_digests={name: next(iter(source_digests[name])) for name in IMPLEMENTATIONS},
+        cold_reports=cold_reports,
+        setup_reports=setup_reports,
         pair_reports=tuple(pair_reports),
     )
 
