@@ -392,9 +392,7 @@ def validate_partitioned_runtime_evidence(
         components = fields.get("host_component_s")
         if isinstance(components, dict):
             host_component_names.update(
-                name
-                for name, value in components.items()
-                if isinstance(name, str) and isinstance(value, (int, float))
+                name for name, value in components.items() if isinstance(name, str) and isinstance(value, (int, float))
             )
     if require_performance_accounting:
         _require(
@@ -468,8 +466,7 @@ def validate_partitioned_runtime_evidence(
                     continue
                 vdn_cuda_samples.append(sample)
                 vdn_cuda_component_names.update(
-                    name for name, value in spans.items()
-                    if isinstance(name, str) and isinstance(value, (int, float))
+                    name for name, value in spans.items() if isinstance(name, str) and isinstance(value, (int, float))
                 )
     if require_performance_accounting:
         _require(
