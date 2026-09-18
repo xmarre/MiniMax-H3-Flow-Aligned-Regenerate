@@ -959,24 +959,12 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     fixed_cold_sampler = float(
         statistics.median(run["_sampler_s"] for run in production_cold_by_impl["partitioned_fixed"])
     )
-    control_cold_e2e = float(
-        statistics.median(run["_e2e_s"] for run in production_cold_by_impl["released_target"])
-    )
-    fixed_cold_e2e = float(
-        statistics.median(run["_e2e_s"] for run in production_cold_by_impl["partitioned_fixed"])
-    )
+    control_cold_e2e = float(statistics.median(run["_e2e_s"] for run in production_cold_by_impl["released_target"]))
+    fixed_cold_e2e = float(statistics.median(run["_e2e_s"] for run in production_cold_by_impl["partitioned_fixed"]))
     cold_sampler_penalty = fixed_cold_sampler - control_cold_sampler
     cold_e2e_penalty = fixed_cold_e2e - control_cold_e2e
-    sampler_break_even = (
-        math.ceil(cold_sampler_penalty / median_sampler_advantage)
-        if cold_sampler_penalty > 0.0
-        else 0
-    )
-    e2e_break_even = (
-        math.ceil(cold_e2e_penalty / median_e2e_advantage)
-        if cold_e2e_penalty > 0.0
-        else 0
-    )
+    sampler_break_even = math.ceil(cold_sampler_penalty / median_sampler_advantage) if cold_sampler_penalty > 0.0 else 0
+    e2e_break_even = math.ceil(cold_e2e_penalty / median_e2e_advantage) if cold_e2e_penalty > 0.0 else 0
     calculated_break_even = max(sampler_break_even, e2e_break_even)
 
     cold_behavior = manifest.get("cold_behavior")

@@ -137,9 +137,7 @@ def capture_running_comfyui_source_receipt() -> dict[str, Any]:
         len({str(entry[2]) for entry in matched.values()}) == len(OVERLAY_REPOSITORIES),
         "running ComfyUI custom-node roots are not distinct",
     )
-    overlay_order = [
-        name for name, _entry in sorted(matched.items(), key=lambda item: item[1][0])
-    ]
+    overlay_order = [name for name, _entry in sorted(matched.items(), key=lambda item: item[1][0])]
 
     raw_nodes_file = getattr(comfy_nodes, "__file__", None)
     _require(isinstance(raw_nodes_file, str) and raw_nodes_file, "running ComfyUI nodes.__file__ is missing")
@@ -187,9 +185,7 @@ def capture_running_comfyui_source_receipt() -> dict[str, Any]:
             raise SourceProvenanceError(
                 f"runtime module {module_name} resolved outside ComfyUI root: {module_file}"
             ) from exc
-        repositories["comfyui"]["loaded_files"].append(
-            _runtime_file_receipt(module_name, module_file)
-        )
+        repositories["comfyui"]["loaded_files"].append(_runtime_file_receipt(module_name, module_file))
 
     return {
         "schema_version": 1,
@@ -281,9 +277,7 @@ def validate_runtime_source_receipt(
         len(set(loader_indices.values())) == len(loader_indices),
         "runtime receipt custom-node loader indices are not unique",
     )
-    derived_overlay = [
-        name for name, _index in sorted(loader_indices.items(), key=lambda item: item[1])
-    ]
+    derived_overlay = [name for name, _index in sorted(loader_indices.items(), key=lambda item: item[1])]
     _require(overlay == derived_overlay, "runtime receipt overlay order disagrees with loader indices")
     return {
         "overlay_order": list(overlay),
@@ -412,21 +406,12 @@ def capture_repository(root: Path, loaded_files: list[tuple[str, Path]]) -> dict
 
 def capture_source_provenance(*, runtime_receipt: dict[str, Any]) -> dict[str, Any]:
     runtime = validate_runtime_source_receipt(runtime_receipt, verify_files=True)
-    repositories = {
-        name: Path(runtime["repositories"][name]["root"])
-        for name in REPOSITORIES
-    }
+    repositories = {name: Path(runtime["repositories"][name]["root"]) for name in REPOSITORIES}
     loaded_files = {
-        name: [
-            (item["module"], Path(item["path"]))
-            for item in runtime["repositories"][name]["loaded_files"]
-        ]
+        name: [(item["module"], Path(item["path"])) for item in runtime["repositories"][name]["loaded_files"]]
         for name in REPOSITORIES
     }
-    captured = {
-        name: capture_repository(repositories[name], loaded_files[name])
-        for name in REPOSITORIES
-    }
+    captured = {name: capture_repository(repositories[name], loaded_files[name]) for name in REPOSITORIES}
     return {
         "schema_version": 2,
         "kind": SOURCE_PROVENANCE_KIND,
@@ -449,8 +434,7 @@ def validate_source_provenance(
     runtime_receipt = value.get("runtime_receipt")
     runtime_receipt_sha256 = value.get("runtime_receipt_sha256")
     _require(
-        _sha256_digest(runtime_receipt_sha256)
-        and runtime_receipt_sha256 == _canonical_sha256(runtime_receipt),
+        _sha256_digest(runtime_receipt_sha256) and runtime_receipt_sha256 == _canonical_sha256(runtime_receipt),
         "source provenance runtime receipt digest is invalid",
     )
     runtime = validate_runtime_source_receipt(runtime_receipt, verify_files=False)
@@ -507,8 +491,7 @@ def validate_source_provenance(
         _require(isinstance(loaded, list) and loaded, f"source provenance {name} has no loaded module files")
         identity_files = []
         runtime_files = {
-            (item["module"], item["path"], item["sha256"])
-            for item in runtime["repositories"][name]["loaded_files"]
+            (item["module"], item["path"], item["sha256"]) for item in runtime["repositories"][name]["loaded_files"]
         }
         captured_runtime_files = set()
         for item in loaded:

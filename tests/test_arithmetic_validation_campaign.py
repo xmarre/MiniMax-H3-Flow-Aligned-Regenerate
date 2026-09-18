@@ -684,9 +684,7 @@ def test_campaign_gate_rejects_diagnostic_cold_as_production_cold(tmp_path, monk
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    manifest["runs"] = [
-        run for run in manifest["runs"] if run["id"] != "partitioned_fixed-cold"
-    ]
+    manifest["runs"] = [run for run in manifest["runs"] if run["id"] != "partitioned_fixed-cold"]
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
