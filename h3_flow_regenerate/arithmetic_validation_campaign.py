@@ -504,8 +504,11 @@ def _diagnostic(run: dict[str, Any], report: dict[str, Any], sol: dict[str, Any]
                     int(item.get("first_compile_misses", 0)) > 0,
                     f"replay target {target!r} observed no first-executable compilation",
                 )
-    if run["condition"] == "cold" and run.get("compiler_cache_state") == "isolated_empty":
-        _require(int(report.get("compile_misses", 0)) > 0, "empty cold cache observed no compilation")
+    # Replay runs before the live arithmetic gate. On an isolated-empty
+    # executable cache, its first arm may perform the compilation and leave the
+    # live Request summary with zero compile misses. Cold executable evidence is
+    # therefore the per-target first replay arm checked above, not the aggregate
+    # live validation counter.
 
 
 def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> CampaignReport:
