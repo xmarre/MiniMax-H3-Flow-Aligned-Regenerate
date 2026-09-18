@@ -405,6 +405,8 @@ def validate_partitioned_runtime_evidence(
             "vdn_gather_host_wall_s",
             "vdn_softmax_host_wall_s",
             "vdn_linear_readout_total_host_wall_s",
+            "vdn_linear_gate_host_wall_s",
+            "vdn_linear_epsilon_scalar_host_wall_s",
         }
         _require(
             required_host_components.issubset(host_component_names),
@@ -483,7 +485,9 @@ def validate_partitioned_runtime_evidence(
             "vdn_linear_features",
             "vdn_linear_statistics",
             "vdn_linear_scans",
+            "vdn_linear_gate",
             "vdn_linear_gather",
+            "vdn_linear_epsilon_scalar",
             "vdn_linear_output",
             "vdn_linear_projection",
         }
