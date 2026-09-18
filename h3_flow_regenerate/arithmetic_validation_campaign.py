@@ -21,6 +21,7 @@ from .partitioned_runtime_gate import RuntimeGateError, validate_partitioned_run
 CAMPAIGN_KIND = "h3_arithmetic_validation_campaign_v1"
 IMPLEMENTATIONS = ("released_target", "partitioned_preserved", "partitioned_fixed")
 CONDITIONS = ("cold", "primed", "numerical_invalidated", "geometry_bias_mutated")
+RELEASED_TARGET_WHOLE_COUNTS = (17, 13, 4)
 PARTITIONED_WHOLE_COUNTS = (18, 14, 4)
 PARTITIONED_LATEST_COUNTS = (9, 7, 2)
 REPLAY_TARGETS = {
@@ -225,6 +226,7 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "validation_failures": 0,
         "miss_reasons": {},
         "process_ids": set(),
+        "process_generations": set(),
         "source_verified_requests": 0,
     }
     for record in records:
@@ -243,6 +245,22 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
             "Sol Request source verification count is outside the request-owned contract",
         )
         result["source_verified_requests"] += source_verify_count
+        if source_verify_count == 1:
+            device_identity = lease.get("device_identity")
+            _require(
+                isinstance(device_identity, dict),
+                "source-verified Sol Request omitted device identity",
+            )
+            _require(
+                device_identity.get("process") == int(match.group(1)),
+                "Sol request ID and device process identity disagree",
+            )
+            process_generation = device_identity.get("process_generation")
+            _require(
+                _hex_digest(process_generation, 32),
+                "source-verified Sol Request omitted process-generation provenance",
+            )
+            result["process_generations"].add(process_generation)
         result["compile_hits"] += int(validation.get("compile_hits", 0))
         result["compile_misses"] += int(validation.get("compile_misses", 0))
         result["validation_hits"] += int(validation.get("hits", 0))
@@ -262,7 +280,12 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         len(result["process_ids"]) == 1,
         "one run log contains Sol Requests from multiple process identities",
     )
+    _require(
+        len(result["process_generations"]) == 1,
+        "one run log contains source-verified Sol Requests from multiple process generations",
+    )
     result["process_id"] = next(iter(result.pop("process_ids")))
+    result["process_generation"] = next(iter(result.pop("process_generations")))
     return result
 
 
@@ -401,8 +424,15 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(abs(measured_sampler - sampler) <= 0.005, f"run {run_id!r} sampler timing disagrees with metrics")
 
         counts = _counts(metrics)
-        if implementation != "released_target":
-            _require(counts == PARTITIONED_WHOLE_COUNTS, f"run {run_id!r} whole-run counts are {counts}")
+        expected_counts = (
+            RELEASED_TARGET_WHOLE_COUNTS
+            if implementation == "released_target"
+            else PARTITIONED_WHOLE_COUNTS
+        )
+        _require(
+            counts == expected_counts,
+            f"run {run_id!r} whole-run counts are {counts}, expected {expected_counts}",
+        )
 
         sol = _sol_totals(_sol_records(text))
         fresh_process = run.get("fresh_process")
@@ -465,6 +495,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         entry["_e2e_s"] = e2e
         entry["_source_digest"] = run_source_digest
         entry["_process_id"] = sol["process_id"]
+        entry["_process_generation"] = sol["process_generation"]
         validated.append(entry)
         by_impl_condition.setdefault((implementation, condition), []).append(entry)
 
@@ -497,7 +528,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         )
         _require(
             anchor["_process_id"] == run["_process_id"],
-            f"run {run['id']!r} is not from the same process as its cold anchor",
+            f"run {run['id']!r} is not from the same process ID as its cold anchor",
+        )
+        _require(
+            anchor["_process_generation"] == run["_process_generation"],
+            f"run {run['id']!r} is not from the same process generation as its cold anchor",
         )
 
     for implementation in IMPLEMENTATIONS:
