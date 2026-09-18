@@ -420,7 +420,7 @@ def _source_digest(run: dict[str, Any]) -> str:
     dirty = run.get("source_dirty")
     _require(isinstance(stack, dict), f"run {run.get('id')!r} has no source_stack")
     _require(isinstance(dirty, dict), f"run {run.get('id')!r} has no source_dirty map")
-    required = {"flow", "sol", "vdn", "continuum"}
+    required = {"comfyui", "flow", "sol", "vdn", "continuum"}
     _require(required.issubset(stack), f"source_stack is missing {sorted(required - set(stack))}")
     _require(required.issubset(dirty), f"source_dirty is missing {sorted(required - set(dirty))}")
     for name in required:
