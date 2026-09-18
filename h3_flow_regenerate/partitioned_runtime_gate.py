@@ -52,7 +52,11 @@ class RuntimeGateReport:
     correlated_model_calls: int
     stage_accounting_rows: int
     stage_accounting_unknown_rows: int
+    partitioned_component_summary_events: int
+    partitioned_host_component_names: tuple[str, ...]
     sol_correlation_records: int
+    vdn_cuda_samples: int
+    vdn_cuda_component_names: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -377,6 +381,36 @@ def validate_partitioned_runtime_evidence(
             "partitioned stage accounting does not identify low/probe/high walls",
         )
 
+    component_summaries = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_stage_runtime_summary"
+        and _event_fields(event).get("request_id") == request_id
+    ]
+    host_component_names = set()
+    for fields in component_summaries:
+        components = fields.get("host_component_s")
+        if isinstance(components, dict):
+            host_component_names.update(
+                name
+                for name, value in components.items()
+                if isinstance(name, str) and isinstance(value, (int, float))
+            )
+    if require_performance_accounting:
+        _require(
+            bool(component_summaries),
+            "partitioned Flow metrics contain no correlated VDN component summary",
+        )
+        required_host_components = {
+            "vdn_gather_host_wall_s",
+            "vdn_softmax_host_wall_s",
+            "vdn_linear_readout_total_host_wall_s",
+        }
+        _require(
+            required_host_components.issubset(host_component_names),
+            "partitioned VDN host attribution is incomplete",
+        )
+
     sol_records = _partitioned_sol_records(_parse_sol_records(log_text))
     _require(
         bool(sol_records),
@@ -411,6 +445,51 @@ def validate_partitioned_runtime_evidence(
         _require(
             sol_correlation_records > 0,
             "no Sol arithmetic-validation record correlates to the partitioned Flow request",
+        )
+
+    vdn_cuda_samples = []
+    vdn_cuda_component_names = set()
+    if request_id is not None:
+        for record in sol_records:
+            diagnostics = record.get("cuda_diagnostics")
+            details = diagnostics.get("details") if isinstance(diagnostics, dict) else None
+            if not isinstance(details, list):
+                continue
+            for sample in details:
+                if not isinstance(sample, dict) or sample.get("kind") != "vdn_partitioned_components":
+                    continue
+                context = sample.get("context")
+                if not isinstance(context, dict) or context.get("flow_request_id") != request_id:
+                    continue
+                spans = sample.get("cuda_event_ms")
+                if not isinstance(spans, dict):
+                    continue
+                vdn_cuda_samples.append(sample)
+                vdn_cuda_component_names.update(
+                    name for name, value in spans.items()
+                    if isinstance(name, str) and isinstance(value, (int, float))
+                )
+    if require_performance_accounting:
+        _require(
+            bool(vdn_cuda_samples),
+            "Sol CUDA diagnostics contain no correlated VDN partitioned component sample",
+        )
+        required_cuda_components = {
+            "vdn_preprocess",
+            "vdn_gather",
+            "vdn_softmax",
+            "vdn_weights",
+            "vdn_softmax_epilogue",
+            "vdn_linear_features",
+            "vdn_linear_statistics",
+            "vdn_linear_scans",
+            "vdn_linear_gather",
+            "vdn_linear_output",
+            "vdn_linear_projection",
+        }
+        _require(
+            required_cuda_components.issubset(vdn_cuda_component_names),
+            "partitioned VDN CUDA attribution is incomplete",
         )
 
     for record in sol_records:
@@ -512,7 +591,11 @@ def validate_partitioned_runtime_evidence(
         correlated_model_calls=correlated_model_calls,
         stage_accounting_rows=len(accounting_rows),
         stage_accounting_unknown_rows=accounting_unknown,
+        partitioned_component_summary_events=len(component_summaries),
+        partitioned_host_component_names=tuple(sorted(host_component_names)),
         sol_correlation_records=sol_correlation_records,
+        vdn_cuda_samples=len(vdn_cuda_samples),
+        vdn_cuda_component_names=tuple(sorted(vdn_cuda_component_names)),
     )
 
 
