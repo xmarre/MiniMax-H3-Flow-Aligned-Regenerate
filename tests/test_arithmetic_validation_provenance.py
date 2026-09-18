@@ -171,3 +171,21 @@ def test_loaded_file_match_accepts_only_crlf_transport_normalization():
     assert matches is False
     assert mode == "mismatch"
     assert canonical == hashlib.sha256(b"first\rsecond\n").hexdigest()
+
+
+
+def test_capture_repository_hashes_untracked_file_without_loading_contract_changes(tmp_path):
+    root, path = _repo(tmp_path, "flow", "pkg/runtime.py")
+    scratch = root / "scratch.bin"
+    payload = b"0123456789abcdef" * 8192
+    scratch.write_bytes(payload)
+
+    receipt = capture_repository(root, [("pkg.runtime", path)])
+
+    assert receipt["dirty"] is True
+    assert receipt["working_tree"]["untracked"] == [
+        {
+            "path": "scratch.bin",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    ]
