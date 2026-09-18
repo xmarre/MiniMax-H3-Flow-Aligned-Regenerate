@@ -155,7 +155,6 @@ def test_capture_cli_is_stdlib_only():
     assert result.returncode == 0, result.stderr
 
 
-
 def test_loaded_file_match_accepts_only_crlf_transport_normalization():
     head = b"first\nsecond\n"
     matches, mode, canonical = _loaded_file_match(
@@ -173,7 +172,6 @@ def test_loaded_file_match_accepts_only_crlf_transport_normalization():
     assert matches is False
     assert mode == "mismatch"
     assert canonical == hashlib.sha256(b"first\rsecond\n").hexdigest()
-
 
 
 def test_capture_repository_hashes_untracked_file_without_loading_contract_changes(tmp_path):
