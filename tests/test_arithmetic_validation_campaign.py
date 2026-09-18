@@ -472,7 +472,6 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
     assert totals["source_verified_requests"] == 1
 
 
-
 def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
     tmp_path,
     monkeypatch,
