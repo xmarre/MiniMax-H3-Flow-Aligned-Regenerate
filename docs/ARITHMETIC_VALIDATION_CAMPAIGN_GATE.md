@@ -20,8 +20,11 @@ complete. It is not a substitute for the recorded runs or decoded-media review.
 The manifest kind is `h3_arithmetic_validation_campaign_v1`. It must contain
 one frozen identity covering workflow, prompt, reference media, model/adapter/
 patch stacks, decoder, sampler/conditioning/geometry settings, seed, Continuum
-revision, device/driver and compiler/runtime versions. Every run references the
-canonical SHA-256 of that identity.
+revision, device/driver and compiler/runtime versions. The device field is the
+SHA-256 of Sol's stable CUDA identity (device/index/name/memory/SM/driver/context,
+excluding PID and process nonce). Python, PyTorch, CUDA, Triton,
+nvidia-cutlass-dsl, cuda-python and apache-tvm-ffi values are copied from Sol's
+runtime lease. Every run references the canonical SHA-256 of that identity.
 
 Three implementation arms are required:
 
@@ -36,7 +39,10 @@ explicit isolated compiler-cache state. Every non-cold run names its cold
 `process_anchor_run_id`; the gate reads Sol's Request-owned runtime lease from
 the log and requires both the OS process ID and Sol's random per-process
 generation nonce to match that anchor. This makes the same-process claim
-artifact-derived and remains valid even if the OS later recycles a PID.
+artifact-derived and remains valid even if the OS later recycles a PID. The
+gate also derives the stable CUDA-device fingerprint and compiler/runtime
+versions from every source-verified Sol Request and requires them to equal the
+frozen campaign identity; manifest-only version claims are insufficient.
 Non-cold runs must retain that process/compiler cache while forcing fresh Sol
 Requests. Mutation runs must identify the changed contract
 with distinct before/after SHA-256 values and must report revalidation.
