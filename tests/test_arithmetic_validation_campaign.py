@@ -42,6 +42,7 @@ def _sol_log(
     process_id: int,
     process_generation: str,
     source_verify_count: int = 1,
+    request_serial: int = 1,
 ) -> str:
     reasons = {"new_request": 1}
     if condition == "geometry_bias_mutated":
@@ -58,7 +59,9 @@ def _sol_log(
         },
         "runtime_lease": {
             "source_verify_count": source_verify_count,
-            "request_id": f"sol-h3-{process_id}-1",
+            "request_id": f"sol-h3-{process_id}-{request_serial}",
+            "source_generation": "d" * 64 if source_verify_count else None,
+            "implementation_generation": "e" * 64 if source_verify_count else None,
             "device_identity": (
                 {
                     "type": "cuda",
@@ -74,7 +77,7 @@ def _sol_log(
     return "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True)
 
 
-def _diagnostic_report(*, compile_misses: int) -> dict:
+def _diagnostic_report(*, compile_misses: int, request_id: str) -> dict:
     replay = {
         target: {
             "first_compile_misses": 1,
@@ -86,9 +89,22 @@ def _diagnostic_report(*, compile_misses: int) -> dict:
     }
     return {
         "status": "pass",
+        "success": True,
         "validation_failures": 0,
         "compile_hits": 4,
         "compile_misses": compile_misses,
+        "request_ids": [request_id],
+        "request_reports": [
+            {
+                "summary_index": 0,
+                "targets": sorted(campaign.REPLAY_TARGETS),
+                "request_id": request_id,
+                "source_generation": "d" * 64,
+                "implementation_generation": "e" * 64,
+                "compile_hits": 4,
+                "compile_misses": compile_misses,
+            }
+        ],
         "replay_reports": replay,
     }
 
@@ -187,7 +203,12 @@ def _add_run(
     if diagnostic_mode:
         diagnostics_path = tmp_path / f"{run_id}.diagnostics.json"
         diagnostics_path.write_text(
-            json.dumps(_diagnostic_report(compile_misses=compile_misses)),
+            json.dumps(
+                _diagnostic_report(
+                    compile_misses=compile_misses,
+                    request_id=f"sol-h3-{process_id}-1",
+                )
+            ),
             encoding="utf-8",
         )
         artifacts["sol_diagnostics"] = {
@@ -243,8 +264,25 @@ def _manifest(tmp_path: Path) -> dict:
     identity = _identity()
     identity_digest = campaign._canonical_sha256(identity)
     runs: list[dict] = []
-
     sequence = 0
+
+    # Each implementation starts with its fresh-process cold anchor.
+    for implementation in campaign.IMPLEMENTATIONS:
+        _add_run(
+            tmp_path,
+            runs,
+            run_id=f"{implementation}-cold",
+            implementation=implementation,
+            condition="cold",
+            sequence=sequence,
+            identity_digest=identity_digest,
+            sampler_s=290.0,
+            e2e_s=340.0,
+            diagnostic_mode=implementation != "released_target",
+        )
+        sequence += 1
+
+    # Promotion timing pairs are adjacent in the complete declared order.
     for pair in range(3):
         _add_run(
             tmp_path,
@@ -273,14 +311,23 @@ def _manifest(tmp_path: Path) -> dict:
         )
         sequence += 1
 
+    # Preserved partitioned still needs a same-process primed control.
+    _add_run(
+        tmp_path,
+        runs,
+        run_id="partitioned_preserved-primed",
+        implementation="partitioned_preserved",
+        condition="primed",
+        sequence=sequence,
+        identity_digest=identity_digest,
+        sampler_s=290.0,
+        e2e_s=340.0,
+    )
+    sequence += 1
+
+    # Invalidation cases remain in the process anchored by each cold run.
     for implementation in campaign.IMPLEMENTATIONS:
-        for condition in campaign.CONDITIONS:
-            if condition == "primed" and implementation in {
-                "released_target",
-                "partitioned_fixed",
-            }:
-                continue
-            diagnostic = condition == "cold" and implementation != "released_target"
+        for condition in ("numerical_invalidated", "geometry_bias_mutated"):
             _add_run(
                 tmp_path,
                 runs,
@@ -291,7 +338,6 @@ def _manifest(tmp_path: Path) -> dict:
                 identity_digest=identity_digest,
                 sampler_s=290.0,
                 e2e_s=340.0,
-                diagnostic_mode=diagnostic,
             )
             sequence += 1
 
@@ -469,6 +515,7 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
     totals = campaign._sol_totals(campaign._sol_records(text))
 
     assert totals["process_id"] == 4242
+    assert totals["process_generation"] == "a" * 32
     assert totals["source_verified_requests"] == 1
 
 
