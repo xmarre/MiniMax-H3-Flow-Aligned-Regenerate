@@ -51,9 +51,13 @@ python tools/capture_arithmetic_validation_provenance.py \
 
 The `--loaded-file` paths above are placeholders for the real `__file__`
 receipts; do not infer them from repository names. The capture records HEAD,
-dirty-state fingerprints, loaded-file SHA-256 values, corresponding HEAD-file
-SHA-256 values and overlay order. Loaded files must be tracked and byte-identical
-to HEAD for promotion. The campaign manifest hash-pins one provenance artifact
+dirty-state fingerprints, loaded-file raw/canonical SHA-256 values,
+corresponding HEAD-file SHA-256 values, match mode and overlay order. Loaded
+files must be tracked and match HEAD exactly, except that Git-for-Windows
+CRLF materialization may canonicalize CRLF to LF before comparison. No other
+byte normalization is accepted. Write the receipt outside all four repositories
+so a previous receipt cannot make a later source capture dirty. The campaign
+manifest hash-pins one provenance artifact
 for each implementation arm:
 
 ```json
