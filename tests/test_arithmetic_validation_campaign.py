@@ -158,6 +158,7 @@ def _identity() -> dict:
         "device_identity": campaign._stable_device_fingerprint(device),
         "driver": device["cuda_driver_version"],
         "python": environment["python"],
+        "platform": environment["platform"],
         "torch": environment["torch"],
         "torch_cuda": environment["torch_cuda"],
         "cutlass_dsl": environment["nvidia_cutlass_dsl"],
@@ -258,6 +259,12 @@ def _add_run(
         "pair_id": pair_id,
         "frozen_identity_sha256": identity_digest,
         "source_stack": _source_stack(implementation),
+        "source_dirty": {
+            "flow": False,
+            "sol": False,
+            "vdn": False,
+            "continuum": False,
+        },
         "timing": {"sampler_s": sampler_s, "e2e_s": e2e_s},
         "fresh_process": condition == "cold",
         "fresh_sol_requests": condition != "cold",
@@ -696,5 +703,22 @@ def test_campaign_gate_rejects_runtime_environment_drift(
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="runtime triton differs",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_dirty_source_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    manifest["runs"][0]["source_dirty"]["sol"] = True
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="uses dirty sol source",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
