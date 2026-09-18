@@ -195,20 +195,33 @@ def _add_run(
     e2e_s: float,
     pair_id: str | None = None,
     diagnostic_mode: bool = False,
+    process_id_override: int | None = None,
+    process_generation_override: str | None = None,
+    process_anchor_run_id: str | None = None,
 ) -> None:
     partitioned = implementation != "released_target"
     logical, actual = (18, 14) if partitioned else (17, 13)
     compile_misses = 0 if condition == "primed" else 1
-    process_id = {
+    default_process_id = {
         "released_target": 1001,
         "partitioned_preserved": 1002,
         "partitioned_fixed": 1003,
     }[implementation]
-    process_generation = {
+    default_process_generation = {
         "released_target": "1" * 32,
         "partitioned_preserved": "2" * 32,
         "partitioned_fixed": "3" * 32,
     }[implementation]
+    process_id = (
+        default_process_id
+        if process_id_override is None
+        else process_id_override
+    )
+    process_generation = (
+        default_process_generation
+        if process_generation_override is None
+        else process_generation_override
+    )
 
     metrics_path = tmp_path / f"{run_id}.metrics.json"
     metrics_path.write_text(
@@ -274,7 +287,15 @@ def _add_run(
             "geometry_bias_mutated",
         },
         "compiler_cache_state": ("isolated_empty" if condition == "cold" else "retained_same_process"),
-        "process_anchor_run_id": (None if condition == "cold" else f"{implementation}-cold"),
+        "process_anchor_run_id": (
+            None
+            if condition == "cold"
+            else (
+                process_anchor_run_id
+                if process_anchor_run_id is not None
+                else f"{implementation}-cold"
+            )
+        ),
         "diagnostic_mode": diagnostic_mode,
         "decoded_media": {
             "video_pass": True,
@@ -323,7 +344,24 @@ def _manifest(tmp_path: Path) -> dict:
         )
         sequence += 1
 
-    # Promotion timing pairs are adjacent in the complete declared order.
+    # Each arm also has a canonical same-arm primed repeat after its own cold run.
+    for implementation in campaign.IMPLEMENTATIONS:
+        _add_run(
+            tmp_path,
+            runs,
+            run_id=f"{implementation}-primed",
+            implementation=implementation,
+            condition="primed",
+            sequence=sequence,
+            identity_digest=identity_digest,
+            sampler_s=290.0,
+            e2e_s=340.0,
+        )
+        sequence += 1
+
+    # Promotion timing pairs share one already-primed process and are adjacent
+    # in the complete declared order. The fixed arm may therefore anchor to the
+    # control cold process for these timing-only repetitions.
     for pair in range(3):
         _add_run(
             tmp_path,
@@ -336,6 +374,9 @@ def _manifest(tmp_path: Path) -> dict:
             sampler_s=300.0 + pair,
             e2e_s=350.0 + pair,
             pair_id=f"pair-{pair}",
+            process_id_override=1001,
+            process_generation_override="1" * 32,
+            process_anchor_run_id="released_target-cold",
         )
         sequence += 1
         _add_run(
@@ -349,22 +390,11 @@ def _manifest(tmp_path: Path) -> dict:
             sampler_s=280.0 + pair,
             e2e_s=330.0 + pair,
             pair_id=f"pair-{pair}",
+            process_id_override=1001,
+            process_generation_override="1" * 32,
+            process_anchor_run_id="released_target-cold",
         )
         sequence += 1
-
-    # Preserved partitioned still needs a same-process primed control.
-    _add_run(
-        tmp_path,
-        runs,
-        run_id="partitioned_preserved-primed",
-        implementation="partitioned_preserved",
-        condition="primed",
-        sequence=sequence,
-        identity_digest=identity_digest,
-        sampler_s=290.0,
-        e2e_s=340.0,
-    )
-    sequence += 1
 
     # Invalidation cases remain in the process anchored by each cold run.
     for implementation in campaign.IMPLEMENTATIONS:
@@ -419,8 +449,8 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
         _sol_log(
             compile_misses=1,
             condition="primed",
-            process_id=1003,
-            process_generation="3" * 32,
+            process_id=1001,
+            process_generation="1" * 32,
         )
         + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
@@ -458,8 +488,8 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
         _sol_log(
             compile_misses=0,
             condition="primed",
-            process_id=1003,
-            process_generation="3" * 32,
+            process_id=1001,
+            process_generation="1" * 32,
         )
         + "\n[INFO] Prompt executed in 400.00 seconds",
         encoding="utf-8",
@@ -576,7 +606,7 @@ def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
         _sol_log(
             compile_misses=0,
             condition="primed",
-            process_id=1003,
+            process_id=1001,
             process_generation="f" * 32,
         )
         + "\n[INFO] Prompt executed in 330.00 seconds",
