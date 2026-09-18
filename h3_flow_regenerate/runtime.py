@@ -396,9 +396,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     request_id = None if binding is None else binding.active_request_id
     evaluation_id = None
     previous_evaluation_id = None
-    if binding is not None:
-        if request_id is None:
-            raise RuntimeError("H3 Flow model call executed outside its request correlation lifetime")
+    if binding is not None and request_id is not None:
         evaluation_id = f"{request_id}:{binding.evaluation_serial}"
         binding.evaluation_serial += 1
         if isinstance(transformer, dict):
@@ -408,7 +406,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     try:
         result = executor(x, timestep, model_options, seed)
     finally:
-        if binding is not None and isinstance(transformer, dict):
+        if binding is not None and evaluation_id is not None and isinstance(transformer, dict):
             if previous_evaluation_id is None:
                 transformer.pop(FLOW_EVALUATION_ID_KEY, None)
             else:
