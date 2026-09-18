@@ -563,9 +563,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         "campaign source_provenance must identify every implementation exactly once",
     )
     provenance_cache: dict[str, dict[str, Any]] = {}
-    provenance_identities: dict[str, set[str]] = {
-        name: set() for name in IMPLEMENTATIONS
-    }
+    provenance_identities: dict[str, set[str]] = {name: set() for name in IMPLEMENTATIONS}
 
     runs = manifest.get("runs")
     _require(isinstance(runs, list) and runs, "campaign contains no runs")
@@ -614,9 +612,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
                 expected_dirty=run["source_dirty"],
             )
         except SourceProvenanceError as exc:
-            raise CampaignEvidenceError(
-                f"run {run_id!r} failed source provenance validation: {exc}"
-            ) from exc
+            raise CampaignEvidenceError(f"run {run_id!r} failed source provenance validation: {exc}") from exc
         provenance_identities[implementation].add(provenance_identity)
 
         for name in REQUIRED_ARTIFACTS:
@@ -899,9 +895,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         }
 
     cold_reports = tuple(
-        run_report(run)
-        for run in sorted(validated, key=lambda item: item["sequence"])
-        if run["condition"] == "cold"
+        run_report(run) for run in sorted(validated, key=lambda item: item["sequence"]) if run["condition"] == "cold"
     )
     setup_reports = tuple(
         run_report(run)
