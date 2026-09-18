@@ -35,7 +35,13 @@ def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
     return {"schema_version": 1, "events": events, "counters": {}}
 
 
-def _sol_log(*, compile_misses: int, condition: str, process_id: int) -> str:
+def _sol_log(
+    *,
+    compile_misses: int,
+    condition: str,
+    process_id: int,
+    source_verify_count: int = 1,
+) -> str:
     reasons = {"new_request": 1}
     if condition == "geometry_bias_mutated":
         reasons = {"new_geometry": 1}
@@ -50,7 +56,7 @@ def _sol_log(*, compile_misses: int, condition: str, process_id: int) -> str:
             "miss_reasons": reasons,
         },
         "runtime_lease": {
-            "source_verify_count": 1,
+            "source_verify_count": source_verify_count,
             "request_id": f"sol-h3-{process_id}-1",
             "device_identity": {
                 "type": "cuda",
@@ -425,3 +431,26 @@ def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
         match="is not from the same process as its cold anchor",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_sol_totals_accept_dense_only_request_without_source_binding():
+    text = (
+        _sol_log(
+            compile_misses=1,
+            condition="cold",
+            process_id=4242,
+            source_verify_count=1,
+        )
+        + "\n"
+        + _sol_log(
+            compile_misses=0,
+            condition="cold",
+            process_id=4242,
+            source_verify_count=0,
+        )
+    )
+    totals = campaign._sol_totals(campaign._sol_records(text))
+
+    assert totals["process_id"] == 4242
+    assert totals["source_verified_requests"] == 1
