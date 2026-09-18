@@ -20,7 +20,9 @@ from .partitioned_runtime_gate import RuntimeGateError, validate_partitioned_run
 
 CAMPAIGN_KIND = "h3_arithmetic_validation_campaign_v1"
 IMPLEMENTATIONS = ("released_target", "partitioned_preserved", "partitioned_fixed")
-CONDITIONS = ("cold", "primed", "numerical_invalidated", "geometry_bias_mutated")
+EVIDENCE_CONDITIONS = ("cold", "primed", "numerical_invalidated", "geometry_bias_mutated")
+PAIR_WARMUP_CONDITION = "pair_warmup"
+CONDITIONS = (*EVIDENCE_CONDITIONS, PAIR_WARMUP_CONDITION)
 RELEASED_TARGET_WHOLE_COUNTS = (17, 13, 4)
 PARTITIONED_WHOLE_COUNTS = (18, 14, 4)
 PARTITIONED_LATEST_COUNTS = (9, 7, 2)
@@ -597,6 +599,9 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         diagnostic_mode = run.get("diagnostic_mode")
         _require(type(fresh_process) is bool, f"run {run_id!r} fresh_process is not boolean")
         _require(type(diagnostic_mode) is bool, f"run {run_id!r} diagnostic_mode is not boolean")
+        if condition == PAIR_WARMUP_CONDITION:
+            _require(not diagnostic_mode, f"run {run_id!r} pair warmup must use low-overhead mode")
+            _require(not run.get("pair_id"), f"run {run_id!r} pair warmup must not carry a measurement pair_id")
         cache_state = run.get("compiler_cache_state")
         _require(isinstance(cache_state, str) and cache_state, f"run {run_id!r} compiler_cache_state is missing")
 
@@ -686,7 +691,8 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             and isinstance(run.get("pair_id"), str)
             and bool(run.get("pair_id"))
         )
-        if not timing_pair_run:
+        shared_pair_process_run = timing_pair_run or run["condition"] == PAIR_WARMUP_CONDITION
+        if not shared_pair_process_run:
             _require(
                 anchor["implementation"] == run["implementation"],
                 f"run {run['id']!r} process anchor belongs to a different implementation",
@@ -710,7 +716,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
 
     for implementation in IMPLEMENTATIONS:
         _require(len(source_digests[implementation]) == 1, f"{implementation} source stack changed within campaign")
-        for condition in CONDITIONS:
+        for condition in EVIDENCE_CONDITIONS:
             _require(
                 by_impl_condition.get((implementation, condition)),
                 f"missing {implementation}/{condition} evidence",
@@ -738,6 +744,28 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     _require(len(pair_ids) >= 3, "promotion requires at least three paired primed repetitions")
     _require(all(not run["diagnostic_mode"] for run in paired), "paired timing runs must use low-overhead mode")
     ordered = sorted(paired, key=lambda run: run["sequence"])
+    paired_processes = {
+        (run["_process_id"], run["_process_generation"], run["_source_digest"])
+        for run in paired
+    }
+    _require(
+        len(paired_processes) == 1,
+        "all measured timing pairs must share one already-primed process/source stack",
+    )
+    pair_process = next(iter(paired_processes))
+    first_pair_sequence = min(run["sequence"] for run in paired)
+    pair_warmups = [
+        run
+        for run in validated
+        if run["condition"] == PAIR_WARMUP_CONDITION
+        and (run["_process_id"], run["_process_generation"], run["_source_digest"]) == pair_process
+        and run["sequence"] < first_pair_sequence
+    ]
+    warmup_implementations = {run["implementation"] for run in pair_warmups}
+    _require(
+        {"released_target", "partitioned_fixed"}.issubset(warmup_implementations),
+        "measured timing process lacks pre-measurement warmup of both control and fixed modes",
+    )
 
     pair_reports = []
     sampler_deltas = []
