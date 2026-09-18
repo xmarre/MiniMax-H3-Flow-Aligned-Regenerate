@@ -873,6 +873,7 @@ def test_campaign_gate_rejects_pair_warmup_after_measurement(tmp_path, monkeypat
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
+
 def test_campaign_gate_rejects_loaded_source_file_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
