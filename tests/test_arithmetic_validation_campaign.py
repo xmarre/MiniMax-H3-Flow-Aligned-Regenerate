@@ -136,7 +136,8 @@ def _add_run(
     )
     log_path = tmp_path / f"{run_id}.log.txt"
     log_path.write_text(
-        _sol_log(compile_misses=compile_misses, condition=condition),
+        _sol_log(compile_misses=compile_misses, condition=condition)
+        + f"\n[INFO] Prompt executed in {e2e_s:.2f} seconds",
         encoding="utf-8",
     )
     video_path = tmp_path / f"{run_id}.video.bin"
@@ -202,7 +203,12 @@ def _add_run(
                 if condition == "geometry_bias_mutated"
                 else "preprocess_generation"
             ),
-            "before_sha256": "b" * 64,
+            "base_field": (
+                "geometry_sha256"
+                if condition == "geometry_bias_mutated"
+                else "conditioning_sha256"
+            ),
+            "before_sha256": "a" * 64,
             "after_sha256": "c" * 64,
         }
     runs.append(run)
@@ -298,7 +304,8 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
     log_path = tmp_path / target["artifacts"]["log"]["path"]
     log_path.write_text(
-        _sol_log(compile_misses=1, condition="primed"),
+        _sol_log(compile_misses=1, condition="primed")
+        + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
     )
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
