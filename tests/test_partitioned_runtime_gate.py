@@ -387,11 +387,7 @@ def test_partitioned_runtime_gate_rejects_missing_vdn_cuda_attribution():
 
 def test_partitioned_runtime_gate_rejects_incomplete_vdn_host_attribution():
     metrics = _correlated_metrics()
-    summary = next(
-        event
-        for event in metrics["events"]
-        if event["kind"] == "partitioned_stage_runtime_summary"
-    )
+    summary = next(event for event in metrics["events"] if event["kind"] == "partitioned_stage_runtime_summary")
     del summary["fields"]["host_component_s"]["vdn_linear_readout_total_host_wall_s"]
     for event in metrics["events"]:
         if event["kind"] == "partitioned_stage_runtime_summary":
