@@ -121,6 +121,7 @@ def _stable_device_identity(value: Any) -> dict[str, Any]:
             "type",
             "index",
             "name",
+            "uuid",
             "total_memory",
             "multi_processor_count",
             "sm",
@@ -824,4 +825,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     )
 
 
-__all__ = ["CAMPAIGN_KIND", "CampaignEvidenceError", "CampaignReport", "validate_campaign_manifest"]
+__all__ = [
+    "CAMPAIGN_KIND",
+    "PAIR_WARMUP_CONDITION",
+    "CampaignEvidenceError",
+    "CampaignReport",
+    "validate_campaign_manifest",
+]
