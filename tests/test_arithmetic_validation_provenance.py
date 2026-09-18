@@ -74,6 +74,7 @@ def test_capture_repository_rejects_loaded_file_outside_repo(tmp_path):
 
 def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
     heads = {
+        "comfyui": "0" * 40,
         "flow": "1" * 40,
         "sol": "2" * 40,
         "vdn": "3" * 40,
@@ -96,6 +97,7 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
         ).encode()
     ).hexdigest()
     digests = {
+        "comfyui": "9" * 64,
         "flow": "a" * 64,
         "sol": "b" * 64,
         "vdn": "c" * 64,
