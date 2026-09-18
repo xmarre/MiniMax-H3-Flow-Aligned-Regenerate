@@ -60,7 +60,10 @@ ordinary-continuation-high and partitioned-suffix replay targets, with no
 primed recompilation and a retained-proof hit. Progressive low/probe/high
 execution spans separate Sol Request lifetimes, so generate this report with
 Sol's `--all-requests` mode; continuation-high is correlated to the same Flow
-request as the partitioned suffix rather than inferred from summary order. An
+request as the partitioned suffix rather than inferred from summary order.
+The promotion gate then cross-checks every diagnostic request ID plus its Sol
+source/implementation generation against the hash-pinned run log, so a report
+from another prompt or source generation cannot satisfy the campaign. An
 `isolated_empty` cold run must actually observe first-executable compilation.
 
 For example:
@@ -79,8 +82,10 @@ python custom_nodes/ComfyUI-Sol-H3/tools/check_arithmetic_validation_diagnostics
 The paired promotion timings are intentionally separate low-overhead runs:
 CUDA/replay diagnostics must be disabled. At least three primed
 `released_target` + `partitioned_fixed` pairs are required and each pair must
-be adjacent in the declared benchmark order. The two runs in a pair must use
-the same exact Flow/Sol/VDN/Continuum source stack.
+be adjacent in the **complete** declared campaign order; unrelated runs may not
+be hidden between a pair. The two runs in a pair must use the same exact
+Flow/Sol/VDN/Continuum source stack. Every primed/invalidation run must appear
+after the cold run named by its `process_anchor_run_id`.
 
 The promotion boundary is deliberately strict: every supplied pair must show a
 net advantage for the fixed partitioned run in both sampler wall and E2E wall.
