@@ -217,7 +217,9 @@ def _source_provenance(implementation: str) -> dict:
                     "path": f"/installed/{name}/{relative}",
                     "relative_path": relative,
                     "sha256": digest,
+                    "canonical_sha256": digest,
                     "head_sha256": digest,
+                    "match_mode": "exact",
                     "tracked": True,
                     "matches_head": True,
                 }
