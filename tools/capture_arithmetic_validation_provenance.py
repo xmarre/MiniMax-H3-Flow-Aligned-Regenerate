@@ -49,7 +49,7 @@ def main() -> None:
         "--repo",
         action="append",
         required=True,
-        help="Repository root as NAME=PATH; repeat for flow, sol, vdn and continuum.",
+        help="Repository root as NAME=PATH; repeat for comfyui, flow, sol, vdn and continuum.",
     )
     parser.add_argument(
         "--loaded-file",
@@ -60,7 +60,7 @@ def main() -> None:
     parser.add_argument(
         "--overlay-order",
         required=True,
-        help="Comma-separated runtime overlay order containing flow,sol,vdn,continuum exactly once.",
+        help="Comma-separated custom-node overlay order containing flow,sol,vdn,continuum exactly once.",
     )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
