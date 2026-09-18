@@ -4,19 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from h3_flow_regenerate.arithmetic_validation_provenance import (  # noqa: E402
-    REPOSITORIES,
-    SourceProvenanceError,
-    capture_source_provenance,
+MODULE_PATH = ROOT / "h3_flow_regenerate" / "arithmetic_validation_provenance.py"
+SPEC = importlib.util.spec_from_file_location(
+    "_h3_arithmetic_validation_provenance",
+    MODULE_PATH,
 )
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load source-provenance module from {MODULE_PATH}")
+_PROVENANCE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(_PROVENANCE)
+
+REPOSITORIES = _PROVENANCE.REPOSITORIES
+SourceProvenanceError = _PROVENANCE.SourceProvenanceError
+capture_source_provenance = _PROVENANCE.capture_source_provenance
 
 
 def _named_path(value: str, *, option: str) -> tuple[str, Path]:
