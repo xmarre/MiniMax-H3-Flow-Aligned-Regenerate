@@ -35,7 +35,7 @@ def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
     return {"schema_version": 1, "events": events, "counters": {}}
 
 
-def _sol_log(*, compile_misses: int, condition: str) -> str:
+def _sol_log(*, compile_misses: int, condition: str, process_id: int) -> str:
     reasons = {"new_request": 1}
     if condition == "geometry_bias_mutated":
         reasons = {"new_geometry": 1}
@@ -49,7 +49,15 @@ def _sol_log(*, compile_misses: int, condition: str) -> str:
             "failures": 0,
             "miss_reasons": reasons,
         },
-        "runtime_lease": {"source_verify_count": 1},
+        "runtime_lease": {
+            "source_verify_count": 1,
+            "request_id": f"sol-h3-{process_id}-1",
+            "device_identity": {
+                "type": "cuda",
+                "index": 0,
+                "process": process_id,
+            },
+        },
     }
     return "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True)
 
@@ -128,6 +136,11 @@ def _add_run(
     partitioned = implementation != "released_target"
     logical, actual = (18, 14) if partitioned else (17, 13)
     compile_misses = 0 if condition == "primed" else 1
+    process_id = {
+        "released_target": 1001,
+        "partitioned_preserved": 1002,
+        "partitioned_fixed": 1003,
+    }[implementation]
 
     metrics_path = tmp_path / f"{run_id}.metrics.json"
     metrics_path.write_text(
@@ -136,7 +149,11 @@ def _add_run(
     )
     log_path = tmp_path / f"{run_id}.log.txt"
     log_path.write_text(
-        _sol_log(compile_misses=compile_misses, condition=condition)
+        _sol_log(
+            compile_misses=compile_misses,
+            condition=condition,
+            process_id=process_id,
+        )
         + f"\n[INFO] Prompt executed in {e2e_s:.2f} seconds",
         encoding="utf-8",
     )
@@ -177,6 +194,9 @@ def _add_run(
             "geometry_bias_mutated",
         },
         "compiler_cache_state": ("isolated_empty" if condition == "cold" else "retained_same_process"),
+        "process_anchor_run_id": (
+            None if condition == "cold" else f"{implementation}-cold"
+        ),
         "diagnostic_mode": diagnostic_mode,
         "decoded_media": {
             "video_pass": True,
@@ -293,7 +313,12 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
     log_path = tmp_path / target["artifacts"]["log"]["path"]
     log_path.write_text(
-        _sol_log(compile_misses=1, condition="primed") + "\n[INFO] Prompt executed in 330.00 seconds",
+        _sol_log(
+            compile_misses=1,
+            condition="primed",
+            process_id=1003,
+        )
+        + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
     )
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
@@ -326,7 +351,12 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
     target["timing"]["e2e_s"] = 400.0
     log_path = tmp_path / target["artifacts"]["log"]["path"]
     log_path.write_text(
-        _sol_log(compile_misses=0, condition="primed") + "\n[INFO] Prompt executed in 400.00 seconds",
+        _sol_log(
+            compile_misses=0,
+            condition="primed",
+            process_id=1003,
+        )
+        + "\n[INFO] Prompt executed in 400.00 seconds",
         encoding="utf-8",
     )
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
@@ -363,4 +393,35 @@ def test_campaign_gate_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
     manifest["runs"][0]["artifacts"]["video"]["sha256"] = "0" * 64
 
     with pytest.raises(campaign.CampaignEvidenceError, match="hash mismatch"):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    log_path.write_text(
+        _sol_log(
+            compile_misses=0,
+            condition="primed",
+            process_id=9999,
+        )
+        + "\n[INFO] Prompt executed in 330.00 seconds",
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="is not from the same process as its cold anchor",
+    ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
