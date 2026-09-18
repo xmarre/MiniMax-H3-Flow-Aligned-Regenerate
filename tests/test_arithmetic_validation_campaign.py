@@ -232,11 +232,49 @@ def _source_provenance(implementation: str) -> dict:
                 }
             ],
         }
-    return {
+    overlay = ["continuum", "flow", "vdn", "sol"]
+    loader_indices = {name: index for index, name in enumerate(overlay)}
+    runtime_repositories = {}
+    for name in repositories:
+        runtime_loaded = [
+            {
+                "module": item["module"],
+                "path": item["path"],
+                "sha256": item["sha256"],
+            }
+            for item in repositories[name]["loaded_files"]
+        ]
+        runtime_repositories[name] = {
+            "root": repositories[name]["root"],
+            "loader_name": "nodes" if name == "comfyui" else f"loader-{name}",
+            "loader_index": None if name == "comfyui" else loader_indices[name],
+            "loaded_files": runtime_loaded,
+        }
+    runtime_receipt = {
         "schema_version": 1,
-        "kind": "h3_arithmetic_validation_source_provenance_v1",
+        "kind": "h3_arithmetic_validation_runtime_source_receipt_v1",
+        "capture_origin": "running_comfyui_process",
+        "registry_source": "nodes.LOADED_MODULE_DIRS",
+        "process_id": 1234,
         "python_executable": "/python",
-        "overlay_order": ["continuum", "flow", "vdn", "sol"],
+        "overlay_order": overlay,
+        "repositories": runtime_repositories,
+    }
+    runtime_receipt_sha256 = hashlib.sha256(
+        json.dumps(
+            runtime_receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
+    return {
+        "schema_version": 2,
+        "kind": "h3_arithmetic_validation_source_provenance_v2",
+        "python_executable": "/python",
+        "runtime_receipt": runtime_receipt,
+        "runtime_receipt_sha256": runtime_receipt_sha256,
+        "overlay_order": overlay,
         "repositories": repositories,
     }
 

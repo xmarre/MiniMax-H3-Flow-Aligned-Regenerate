@@ -31,37 +31,41 @@ references the canonical SHA-256 of that identity.
 
 ## Installed source provenance
 
-Do not populate `source_stack` from branch names or expected checkouts alone.
-Before the hardware campaign, obtain the actual loaded module `__file__`
-paths from the running ComfyUI process and capture each repository independently:
+Do not populate `source_stack`, loaded module paths, or custom-node order from
+branch names, expected checkouts, or manually typed `__file__` values. The
+campaign uses a two-stage v2 provenance receipt.
+
+First, in the **running ComfyUI process that loaded the campaign stack**, execute
+the **MiniMax H3 Arithmetic Validation Runtime Source Receipt** output node once.
+The node reads `nodes.LOADED_MODULE_DIRS` in insertion order, resolves the Flow,
+Sol, VDN and Continuum roots from repository-specific runtime signatures, and
+records the actual loaded custom-node entrypoint `__file__` paths. It also
+records loaded critical runtime modules when they are already present. The
+receipt is written to the ComfyUI output directory, outside the source trees.
+If the running registry is absent or ambiguous, capture fails closed.
+
+Then, outside benchmark timing, convert that runtime receipt into the
+hash-pinned Git/source receipt:
 
 ```bash
 python tools/capture_arithmetic_validation_provenance.py \
-  --repo comfyui=/path/to/ComfyUI \
-  --repo flow=/path/to/MiniMax-H3-Flow-Aligned-Regenerate \
-  --repo sol=/path/to/ComfyUI-Sol-H3 \
-  --repo vdn=/path/to/ComfyUI-VDN-H3-Plus \
-  --repo continuum=/path/to/ComfyUI-H3-Continuum-Plus \
-  --loaded-file comfyui:comfy.model_management=/actual/ComfyUI/comfy/model_management.py \
-  --loaded-file flow:h3_flow_regenerate.runtime=/actual/flow/runtime.py \
-  --loaded-file sol:sol_h3.runtime=/actual/sol/runtime.py \
-  --loaded-file vdn:vdn_h3.partitioned_runtime=/actual/vdn/partitioned_runtime.py \
-  --loaded-file continuum:continuum.runtime=/actual/continuum/runtime_file.py \
-  --overlay-order continuum,flow,vdn,sol \
+  --runtime-receipt /path/to/arithmetic_validation_runtime_source_00001_.json \
   --output candidate.source-provenance.json
 ```
 
-The `--loaded-file` paths above are placeholders for the real `__file__`
-receipts; do not infer them from repository names. ComfyUI core is recorded as
-a source repository but is not part of the custom-node overlay-order list. The
-capture records HEAD, dirty-state fingerprints, loaded-file raw/canonical SHA-256 values,
-corresponding HEAD-file SHA-256 values, match mode and overlay order. Loaded
-files must be tracked and match HEAD exactly, except that Git-for-Windows
-CRLF materialization may canonicalize CRLF to LF before comparison. No other
-byte normalization is accepted. Write the receipt outside all five repositories
-so a previous receipt cannot make a later source capture dirty. The campaign
-manifest hash-pins one provenance artifact
-for each implementation arm:
+The offline capture accepts no manual repository roots, loaded-file paths, or
+overlay-order argument. It reopens the exact roots and files named by the
+running-process receipt, requires their bytes to be unchanged since runtime
+capture, records each Git HEAD and complete dirty-state fingerprint, and
+requires every loaded file to be tracked and match HEAD exactly. The only
+accepted transport normalization is Git-for-Windows CRLF materialization to LF.
+The source-provenance v2 artifact embeds and hashes the runtime receipt; the
+campaign gate rejects legacy v1/manual-path receipts and cross-checks every
+captured root/file against the embedded running-process evidence.
+
+Write the source receipt outside all five repositories so the receipt itself
+cannot dirty a later capture. The campaign manifest hash-pins one provenance
+artifact for each implementation arm:
 
 ```json
 {
@@ -76,46 +80,8 @@ for each implementation arm:
 The gate cross-checks those receipts against every run's `source_stack` and
 `source_dirty` declarations. Released Target Input and the fixed partitioned
 timing arm must resolve to the same canonical installed-source identity. The
-absolute checkout path is not part of that identity; repository HEAD, overlay
-order and loaded relative-file bytes are.
-
-Three implementation arms are required:
-
-- `released_target`: released Target Input semantics executed on the same
-  candidate source stack used by the fixed partitioned arm;
-- `partitioned_preserved`: the preserved partitioned implementation;
-- `partitioned_fixed`: the candidate staged implementation.
-
-Each arm must provide `cold`, `primed`, `numerical_invalidated`, and
-`geometry_bias_mutated` evidence. Every arm must include a diagnostics-off,
-`isolated_empty` production-cold run whose Sol summary observes at least one
-first-executable compile miss. The partitioned arms additionally require a
-separate diagnostic/replay `isolated_empty` cold run; diagnostic replay is
-setup evidence and cannot substitute for production-cold wall time. Every
-non-cold run names its cold
-`process_anchor_run_id`; the gate reads Sol's Request-owned runtime lease from
-the log and requires both the OS process ID and Sol's random per-process
-generation nonce to match that anchor. This makes the same-process claim
-artifact-derived and remains valid even if the OS later recycles a PID. The
-gate also derives the stable CUDA-device fingerprint and compiler/runtime
-versions from every source-verified Sol Request and requires them to equal the
-frozen campaign identity; manifest-only version claims are insufficient.
-Non-cold runs must retain that process/compiler cache while forcing fresh Sol
-Requests. Mutation runs must identify the changed contract with distinct
-before/after SHA-256 values and must report revalidation. A
-`numerical_invalidated` run must also contain an actual Sol invalidation and a
-`numerical_transition` validation miss; an ordinary `new_request` miss does
-not satisfy numerical invalidation evidence.
-
-Every run provides hash-pinned metrics, one complete single-prompt log
-segment, decoded video and decoded audio artifacts. The log segment must contain
-exactly one final `Prompt executed in ... seconds` receipt while preserving all
-Sol Request summaries emitted by that prompt. The sampler time declared in the
-manifest is checked against the metrics `sampler_wall` events. Released Target
-Input runs must preserve 17 logical / 13 actual / 4 forecast whole-run calls;
-partitioned runs must preserve 18 / 14 / 4 and pass the existing partitioned
-runtime gate. Diagnostic partitioned runs additionally require the correlated
-host/CUDA performance-accounting evidence.
+runtime receipt is a preflight/source-freeze artifact; it is never included in
+sampler or E2E timing.
 
 ## Diagnostic versus measured runs
 

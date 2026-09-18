@@ -11,6 +11,7 @@ from h3_flow_regenerate.arithmetic_validation_provenance import (
     SourceProvenanceError,
     _loaded_file_match,
     capture_repository,
+    validate_runtime_source_receipt,
     validate_source_provenance,
 )
 
@@ -123,10 +124,49 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
                 }
             ],
         }
-    value = {
+    overlay = ["continuum", "flow", "vdn", "sol"]
+    runtime_repositories = {}
+    loader_indices = {name: index for index, name in enumerate(overlay)}
+    for name in heads:
+        path = f"/installed/{name}/runtime.py"
+        runtime_repositories[name] = {
+            "root": f"/installed/{name}",
+            "loader_name": "nodes" if name == "comfyui" else f"loader-{name}",
+            "loader_index": None if name == "comfyui" else loader_indices[name],
+            "loaded_files": [
+                {
+                    "module": f"{name}.runtime",
+                    "path": path,
+                    "sha256": digests[name],
+                }
+            ],
+        }
+        repositories[name]["root"] = f"/installed/{name}"
+        repositories[name]["loaded_files"][0]["path"] = path
+    runtime_receipt = {
         "schema_version": 1,
-        "kind": "h3_arithmetic_validation_source_provenance_v1",
-        "overlay_order": ["continuum", "flow", "vdn", "sol"],
+        "kind": "h3_arithmetic_validation_runtime_source_receipt_v1",
+        "capture_origin": "running_comfyui_process",
+        "registry_source": "nodes.LOADED_MODULE_DIRS",
+        "process_id": 1234,
+        "python_executable": "/python",
+        "overlay_order": overlay,
+        "repositories": runtime_repositories,
+    }
+    runtime_receipt_sha256 = hashlib.sha256(
+        json.dumps(
+            runtime_receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
+    value = {
+        "schema_version": 2,
+        "kind": "h3_arithmetic_validation_source_provenance_v2",
+        "runtime_receipt": runtime_receipt,
+        "runtime_receipt_sha256": runtime_receipt_sha256,
+        "overlay_order": overlay,
         "repositories": repositories,
     }
 
@@ -137,6 +177,63 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
     )
 
     assert len(identity) == 64
+
+
+def test_validate_source_provenance_rejects_legacy_manual_paths():
+    with pytest.raises(SourceProvenanceError, match="unsupported source provenance schema"):
+        validate_source_provenance(
+            {
+                "schema_version": 1,
+                "kind": "h3_arithmetic_validation_source_provenance_v1",
+                "overlay_order": ["continuum", "flow", "vdn", "sol"],
+                "repositories": {},
+            },
+            expected_stack={},
+            expected_dirty={},
+        )
+
+
+def test_runtime_source_receipt_rejects_overlay_not_derived_from_loader_indices():
+    overlay = ["continuum", "flow", "vdn", "sol"]
+    repositories = {}
+    for index, name in enumerate(("flow", "sol", "vdn", "continuum")):
+        repositories[name] = {
+            "root": f"/installed/{name}",
+            "loader_name": f"loader-{name}",
+            "loader_index": index,
+            "loaded_files": [
+                {
+                    "module": f"{name}.runtime",
+                    "path": f"/installed/{name}/runtime.py",
+                    "sha256": "a" * 64,
+                }
+            ],
+        }
+    repositories["comfyui"] = {
+        "root": "/installed/comfyui",
+        "loader_name": "nodes",
+        "loader_index": None,
+        "loaded_files": [
+            {
+                "module": "nodes",
+                "path": "/installed/comfyui/nodes.py",
+                "sha256": "b" * 64,
+            }
+        ],
+    }
+    value = {
+        "schema_version": 1,
+        "kind": "h3_arithmetic_validation_runtime_source_receipt_v1",
+        "capture_origin": "running_comfyui_process",
+        "registry_source": "nodes.LOADED_MODULE_DIRS",
+        "process_id": 1234,
+        "python_executable": "/python",
+        "overlay_order": overlay,
+        "repositories": repositories,
+    }
+
+    with pytest.raises(SourceProvenanceError, match="overlay order disagrees with loader indices"):
+        validate_runtime_source_receipt(value, verify_files=False)
 
 
 def test_capture_cli_is_stdlib_only():
