@@ -200,9 +200,7 @@ def _add_run(
             "geometry_bias_mutated",
         },
         "compiler_cache_state": ("isolated_empty" if condition == "cold" else "retained_same_process"),
-        "process_anchor_run_id": (
-            None if condition == "cold" else f"{implementation}-cold"
-        ),
+        "process_anchor_run_id": (None if condition == "cold" else f"{implementation}-cold"),
         "diagnostic_mode": diagnostic_mode,
         "decoded_media": {
             "video_pass": True,
@@ -402,7 +400,6 @@ def test_campaign_gate_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
 
-
 def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
     tmp_path,
     monkeypatch,
@@ -431,7 +428,6 @@ def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
         match="is not from the same process as its cold anchor",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
-
 
 
 def test_sol_totals_accept_dense_only_request_without_source_binding():
