@@ -32,6 +32,14 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _canonical_sha256(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     return _sha256_bytes(payload)
@@ -91,12 +99,17 @@ def _untracked_fingerprint(root: Path) -> list[dict[str, str]]:
     for name in names:
         path = root / name
         if path.is_symlink():
-            payload = ("symlink:" + str(path.readlink())).encode("utf-8", errors="surrogateescape")
+            digest = _sha256_bytes(
+                ("symlink:" + str(path.readlink())).encode(
+                    "utf-8",
+                    errors="surrogateescape",
+                )
+            )
         elif path.is_file():
-            payload = path.read_bytes()
+            digest = _sha256_file(path)
         else:
-            payload = b"other"
-        result.append({"path": name, "sha256": _sha256_bytes(payload)})
+            digest = _sha256_bytes(b"other")
+        result.append({"path": name, "sha256": digest})
     return result
 
 
