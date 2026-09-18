@@ -69,9 +69,7 @@ def _git(root: Path, *args: str, check: bool = True) -> bytes:
         raise SourceProvenanceError(f"cannot execute git for {root}: {exc}") from exc
     if check and result.returncode != 0:
         error = result.stderr.decode("utf-8", errors="replace").strip()
-        raise SourceProvenanceError(
-            f"git {' '.join(args)} failed for {root}: {error or result.returncode}"
-        )
+        raise SourceProvenanceError(f"git {' '.join(args)} failed for {root}: {error or result.returncode}")
     return result.stdout
 
 
@@ -151,9 +149,7 @@ def capture_repository(root: Path, loaded_files: list[tuple[str, Path]]) -> dict
         )
 
     _require(captured_files, f"repository {root} has no loaded module file receipt")
-    remote = _git(root, "remote", "get-url", "origin", check=False).decode(
-        "utf-8", errors="replace"
-    ).strip()
+    remote = _git(root, "remote", "get-url", "origin", check=False).decode("utf-8", errors="replace").strip()
     return {
         "root": str(root),
         "head": head,
@@ -173,14 +169,10 @@ def capture_source_provenance(
 ) -> dict[str, Any]:
     _require(set(repositories) == set(REPOSITORIES), "provenance requires flow/sol/vdn/continuum repositories")
     _require(
-        len(overlay_order) == len(REPOSITORIES)
-        and set(overlay_order) == set(REPOSITORIES),
+        len(overlay_order) == len(REPOSITORIES) and set(overlay_order) == set(REPOSITORIES),
         "overlay order must contain flow/sol/vdn/continuum exactly once",
     )
-    captured = {
-        name: capture_repository(repositories[name], loaded_files.get(name, []))
-        for name in REPOSITORIES
-    }
+    captured = {name: capture_repository(repositories[name], loaded_files.get(name, [])) for name in REPOSITORIES}
     return {
         "schema_version": 1,
         "kind": SOURCE_PROVENANCE_KIND,
@@ -201,9 +193,7 @@ def validate_source_provenance(
     _require(value.get("kind") == SOURCE_PROVENANCE_KIND, "unexpected source provenance kind")
     overlay = value.get("overlay_order")
     _require(
-        isinstance(overlay, list)
-        and len(overlay) == len(REPOSITORIES)
-        and set(overlay) == set(REPOSITORIES),
+        isinstance(overlay, list) and len(overlay) == len(REPOSITORIES) and set(overlay) == set(REPOSITORIES),
         "source provenance overlay order is incomplete or ambiguous",
     )
     repositories = value.get("repositories")
@@ -223,8 +213,7 @@ def validate_source_provenance(
             f"source provenance {name} working-tree receipt is missing",
         )
         _require(
-            _sha256_digest(working_tree_sha256)
-            and working_tree_sha256 == _canonical_sha256(working_tree),
+            _sha256_digest(working_tree_sha256) and working_tree_sha256 == _canonical_sha256(working_tree),
             f"source provenance {name} working-tree digest is invalid",
         )
         _require(type(dirty) is bool, f"source provenance {name} dirty state is invalid")
