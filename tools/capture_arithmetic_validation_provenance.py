@@ -28,24 +28,18 @@ def _named_path(value: str, *, option: str) -> tuple[str, Path]:
     name, separator, raw_path = value.partition("=")
     if not separator or name not in REPOSITORIES or not raw_path:
         choices = ",".join(REPOSITORIES)
-        raise argparse.ArgumentTypeError(
-            f"{option} must use NAME=PATH with NAME in {choices}"
-        )
+        raise argparse.ArgumentTypeError(f"{option} must use NAME=PATH with NAME in {choices}")
     return name, Path(raw_path)
 
 
 def _loaded_file(value: str) -> tuple[str, str, Path]:
     name_and_module, separator, raw_path = value.partition("=")
     if not separator or not raw_path:
-        raise argparse.ArgumentTypeError(
-            "--loaded-file must use REPO:MODULE=PATH"
-        )
+        raise argparse.ArgumentTypeError("--loaded-file must use REPO:MODULE=PATH")
     name, separator, module = name_and_module.partition(":")
     if not separator or name not in REPOSITORIES or not module:
         choices = ",".join(REPOSITORIES)
-        raise argparse.ArgumentTypeError(
-            f"--loaded-file repository must be one of {choices}"
-        )
+        raise argparse.ArgumentTypeError(f"--loaded-file repository must be one of {choices}")
     return name, module, Path(raw_path)
 
 
@@ -61,10 +55,7 @@ def main() -> None:
         "--loaded-file",
         action="append",
         required=True,
-        help=(
-            "Actual loaded module __file__ as REPO:MODULE=PATH. "
-            "Repeat at least once per repository."
-        ),
+        help=("Actual loaded module __file__ as REPO:MODULE=PATH. Repeat at least once per repository."),
     )
     parser.add_argument(
         "--overlay-order",
