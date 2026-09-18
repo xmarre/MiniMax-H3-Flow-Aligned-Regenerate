@@ -372,8 +372,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         measured_e2e = _e2e_s(text)
         _require(
             abs(measured_e2e - e2e) <= 0.02,
-            f"run {run_id!r} E2E timing disagrees with its ComfyUI log "
-            f"({e2e:.6f}s vs {measured_e2e:.6f}s)",
+            f"run {run_id!r} E2E timing disagrees with its ComfyUI log ({e2e:.6f}s vs {measured_e2e:.6f}s)",
         )
         measured_sampler = _sampler_s(metrics)
         _require(abs(measured_sampler - sampler) <= 0.005, f"run {run_id!r} sampler timing disagrees with metrics")
@@ -459,7 +458,8 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         )
 
     paired = [
-        run for run in validated
+        run
+        for run in validated
         if run["condition"] == "primed"
         and run["implementation"] in {"released_target", "partitioned_fixed"}
         and isinstance(run.get("pair_id"), str)
