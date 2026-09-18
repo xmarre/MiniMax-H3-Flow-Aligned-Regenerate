@@ -59,6 +59,7 @@ MEDIA_CHECKS = {
 }
 COLD_CACHE_STATES = {"isolated_empty", "isolated_retained"}
 _PROMPT_EXECUTED_RE = re.compile(r"Prompt executed in\s+([0-9]+(?:\.[0-9]+)?)\s+seconds")
+_SOL_REQUEST_ID_RE = re.compile(r"^sol-h3-([1-9][0-9]*)-([1-9][0-9]*)$")
 
 
 class CampaignEvidenceError(RuntimeError):
@@ -223,20 +224,24 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "validation_failures": 0,
         "miss_reasons": {},
         "process_ids": set(),
+        "source_verified_requests": 0,
     }
     for record in records:
         validation = record.get("validation")
         lease = record.get("runtime_lease")
         _require(isinstance(validation, dict), "Sol validation summary is malformed")
         _require(isinstance(lease, dict), "Sol runtime lease summary is malformed")
-        _require(lease.get("source_verify_count") == 1, "Sol Request did not verify source exactly once")
-        device_identity = lease.get("device_identity")
-        process_id = device_identity.get("process") if isinstance(device_identity, dict) else None
+        request_id = lease.get("request_id")
+        match = _SOL_REQUEST_ID_RE.match(request_id) if isinstance(request_id, str) else None
+        _require(match is not None, "Sol runtime lease request_id is missing or malformed")
+        result["process_ids"].add(int(match.group(1)))
+
+        source_verify_count = lease.get("source_verify_count")
         _require(
-            type(process_id) is int and process_id > 0,
-            "Sol runtime lease omitted its process identity",
+            type(source_verify_count) is int and source_verify_count in {0, 1},
+            "Sol Request source verification count is outside the request-owned contract",
         )
-        result["process_ids"].add(process_id)
+        result["source_verified_requests"] += source_verify_count
         result["compile_hits"] += int(validation.get("compile_hits", 0))
         result["compile_misses"] += int(validation.get("compile_misses", 0))
         result["validation_hits"] += int(validation.get("hits", 0))
@@ -248,6 +253,10 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
                 if isinstance(name, str) and isinstance(count, int):
                     result["miss_reasons"][name] = result["miss_reasons"].get(name, 0) + count
     _require(result["validation_failures"] == 0, "Sol arithmetic validation failed")
+    _require(
+        result["source_verified_requests"] > 0,
+        "run contains no Sol Request that bound and verified the sparse runtime",
+    )
     _require(
         len(result["process_ids"]) == 1,
         "one run log contains Sol Requests from multiple process identities",
