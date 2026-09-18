@@ -86,14 +86,20 @@ python custom_nodes/ComfyUI-Sol-H3/tools/check_arithmetic_validation_diagnostics
 ```
 
 The paired promotion timings are intentionally separate low-overhead runs:
-CUDA/replay diagnostics must be disabled. At least three primed
-`released_target` + `partitioned_fixed` pairs are required and each pair must
-be adjacent in the **complete** declared campaign order; unrelated runs may not
-be hidden between a pair. The two runs in a pair must use the same exact
-Flow/Sol/VDN/Continuum source stack. Every run records a `source_dirty` map for
-those repositories and promotion rejects any dirty checkout; a commit SHA alone
-is not accepted as complete source identity. Every primed/invalidation run must
-appear after the cold run named by its `process_anchor_run_id`.
+CUDA/replay diagnostics must be disabled. Each implementation first needs an
+**unpaired same-arm primed repeat** after its own cold run; this proves the
+cold→primed lifetime independently of performance pairing. At least three
+additional `released_target` + `partitioned_fixed` timing pairs are then
+required. The two members of each timing pair must be adjacent in the
+**complete** declared campaign order, use the same exact
+Flow/Sol/VDN/Continuum source stack, and carry the same Sol process ID +
+process-generation nonce. This permits both timing modes to alternate inside
+one already-primed ComfyUI process instead of requiring two resident model
+processes on one GPU. A timing-only fixed run may therefore name the control
+process's earlier cold anchor; non-paired primed/invalidation evidence must
+still anchor to the cold run of its own implementation. Every run records a
+`source_dirty` map for those repositories and promotion rejects any dirty
+checkout; a commit SHA alone is not accepted as complete source identity.
 
 The promotion boundary is deliberately strict: every supplied pair must show a
 net advantage for the fixed partitioned run in both sampler wall and E2E wall.
