@@ -422,6 +422,7 @@ def capture_source_provenance(*, runtime_receipt: dict[str, Any]) -> dict[str, A
         "repositories": captured,
     }
 
+
 def validate_source_provenance(
     value: dict[str, Any],
     *,
