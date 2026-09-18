@@ -1,0 +1,428 @@
+"""Fail-closed promotion gate for the staged arithmetic-validation campaign.
+
+This validator is offline. It consumes already-produced metrics, logs, decoded
+media, and diagnostic reports. It does not execute H3/CUDA or alter runtime
+policy.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import statistics
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .partitioned_runtime_gate import RuntimeGateError, validate_partitioned_runtime_evidence
+
+CAMPAIGN_KIND = "h3_arithmetic_validation_campaign_v1"
+IMPLEMENTATIONS = ("released_target", "partitioned_preserved", "partitioned_fixed")
+CONDITIONS = ("cold", "primed", "numerical_invalidated", "geometry_bias_mutated")
+PARTITIONED_WHOLE_COUNTS = (18, 14, 4)
+PARTITIONED_LATEST_COUNTS = (9, 7, 2)
+REPLAY_TARGETS = {
+    "ordinary_low",
+    "ordinary_continuation_high",
+    "partitioned_suffix",
+}
+REQUIRED_IDENTITY = {
+    "workflow_sha256",
+    "prompt_sha256",
+    "reference_media_sha256",
+    "model_stack_sha256",
+    "adapter_stack_sha256",
+    "patch_stack_sha256",
+    "decoder_sha256",
+    "sampler_settings_sha256",
+    "conditioning_sha256",
+    "geometry_sha256",
+    "seed",
+    "continuum_revision",
+    "device_identity",
+    "driver",
+    "torch",
+    "torch_cuda",
+    "cutlass_dsl",
+    "triton",
+}
+REQUIRED_ARTIFACTS = ("metrics", "log", "video", "audio")
+
+
+class CampaignEvidenceError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignReport:
+    frozen_identity_sha256: str
+    runs: int
+    diagnostic_runs: int
+    pair_count: int
+    sampler_pair_wins: int
+    e2e_pair_wins: int
+    sampler_median_delta_s: float
+    e2e_median_delta_s: float
+    decoded_video_passes: int
+    decoded_audio_passes: int
+    implementation_source_digests: dict[str, str]
+    pair_reports: tuple[dict[str, Any], ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise CampaignEvidenceError(message)
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _hex_digest(value: Any, length: int) -> bool:
+    if not isinstance(value, str) or len(value) != length:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _positive(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CampaignEvidenceError(f"{label} is missing or not numeric")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise CampaignEvidenceError(f"{label} must be finite and positive")
+    return number
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact(run: dict[str, Any], name: str, root: Path) -> Path:
+    artifacts = run.get("artifacts")
+    _require(isinstance(artifacts, dict), f"run {run.get('id')!r} has no artifacts object")
+    entry = artifacts.get(name)
+    _require(isinstance(entry, dict), f"run {run.get('id')!r} is missing artifact {name!r}")
+    raw_path = entry.get("path")
+    expected = entry.get("sha256")
+    _require(isinstance(raw_path, str) and raw_path, f"artifact {name!r} has no path")
+    _require(_hex_digest(expected, 64), f"artifact {name!r} has invalid SHA-256")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    _require(path.is_file(), f"artifact {name!r} is missing: {path}")
+    _require(_file_sha256(path) == expected, f"artifact {name!r} hash mismatch")
+    return path
+
+
+def _json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CampaignEvidenceError(f"cannot read {label} {path}: {exc}") from exc
+    _require(isinstance(value, dict), f"{label} root must be an object")
+    return value
+
+
+def _log(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise CampaignEvidenceError(f"cannot read log {path}: {exc}") from exc
+
+
+def _sampler_s(metrics: dict[str, Any]) -> float:
+    events = metrics.get("events")
+    _require(isinstance(events, list), "metrics events must be a list")
+    values = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("kind") != "sampler_wall":
+            continue
+        fields = event.get("fields")
+        elapsed = fields.get("elapsed_ms") if isinstance(fields, dict) else None
+        _require(
+            isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool),
+            "sampler_wall elapsed_ms is invalid",
+        )
+        values.append(float(elapsed) / 1000.0)
+    _require(values, "metrics contain no sampler_wall events")
+    return sum(values)
+
+
+def _counts(metrics: dict[str, Any]) -> tuple[int, int, int]:
+    events = metrics.get("events")
+    _require(isinstance(events, list), "metrics events must be a list")
+    calls = [event for event in events if isinstance(event, dict) and event.get("kind") == "model_call"]
+    _require(calls, "metrics contain no model_call events")
+    actual = 0
+    for event in calls:
+        fields = event.get("fields")
+        _require(isinstance(fields, dict), "model_call fields are invalid")
+        marker = fields.get("actual")
+        _require(type(marker) is bool, "model_call actual marker is missing")
+        actual += int(marker)
+    return len(calls), actual, len(calls) - actual
+
+
+def _sol_records(text: str) -> list[dict[str, Any]]:
+    marker = "Sol-H3 "
+    records = []
+    for line in text.splitlines():
+        at = line.find(marker)
+        if at < 0:
+            continue
+        try:
+            value = json.loads(line[at + len(marker) :].strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("validation"), dict):
+            records.append(value)
+    _require(records, "run log contains no Sol-H3 validation summaries")
+    return records
+
+
+def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
+    result = {
+        "compile_hits": 0,
+        "compile_misses": 0,
+        "validation_hits": 0,
+        "validation_misses": 0,
+        "validation_failures": 0,
+        "miss_reasons": {},
+    }
+    for record in records:
+        validation = record.get("validation")
+        lease = record.get("runtime_lease")
+        _require(isinstance(validation, dict), "Sol validation summary is malformed")
+        _require(isinstance(lease, dict), "Sol runtime lease summary is malformed")
+        _require(lease.get("source_verify_count") == 1, "Sol Request did not verify source exactly once")
+        result["compile_hits"] += int(validation.get("compile_hits", 0))
+        result["compile_misses"] += int(validation.get("compile_misses", 0))
+        result["validation_hits"] += int(validation.get("hits", 0))
+        result["validation_misses"] += int(validation.get("misses", 0))
+        result["validation_failures"] += int(validation.get("failures", 0))
+        reasons = validation.get("miss_reasons")
+        if isinstance(reasons, dict):
+            for name, count in reasons.items():
+                if isinstance(name, str) and isinstance(count, int):
+                    result["miss_reasons"][name] = result["miss_reasons"].get(name, 0) + count
+    _require(result["validation_failures"] == 0, "Sol arithmetic validation failed")
+    return result
+
+
+def _source_digest(run: dict[str, Any]) -> str:
+    stack = run.get("source_stack")
+    _require(isinstance(stack, dict), f"run {run.get('id')!r} has no source_stack")
+    required = {"flow", "sol", "vdn", "continuum"}
+    _require(required.issubset(stack), f"source_stack is missing {sorted(required - set(stack))}")
+    for name in required:
+        _require(_hex_digest(stack.get(name), 40), f"source_stack.{name} is not a full Git SHA")
+    return _canonical_sha256(stack)
+
+
+def _media(run: dict[str, Any]) -> None:
+    acceptance = run.get("decoded_media")
+    _require(isinstance(acceptance, dict), f"run {run.get('id')!r} has no decoded_media result")
+    _require(acceptance.get("video_pass") is True, f"run {run.get('id')!r} failed decoded video")
+    _require(acceptance.get("audio_pass") is True, f"run {run.get('id')!r} failed decoded audio")
+
+
+def _diagnostic(run: dict[str, Any], report: dict[str, Any]) -> None:
+    _require(report.get("status") == "pass", f"run {run.get('id')!r} diagnostics are not marked pass")
+    _require(int(report.get("validation_failures", 0)) == 0, "diagnostic report has validation failures")
+    if run["implementation"] in {"partitioned_preserved", "partitioned_fixed"}:
+        replay = report.get("replay_reports")
+        _require(isinstance(replay, dict) and REPLAY_TARGETS.issubset(replay), "required replay targets are missing")
+        for target in REPLAY_TARGETS:
+            item = replay[target]
+            _require(isinstance(item, dict), f"replay target {target!r} is malformed")
+            _require(int(item.get("primed_compile_misses", -1)) == 0, f"replay target {target!r} recompiled when primed")
+            _require(item.get("retained_proof_hit") is True, f"replay target {target!r} did not reuse proof")
+    if run["condition"] == "cold" and run.get("compiler_cache_state") == "isolated_empty":
+        _require(int(report.get("compile_misses", 0)) > 0, "empty cold cache observed no compilation")
+
+
+def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> CampaignReport:
+    _require(isinstance(manifest, dict), "campaign root must be an object")
+    _require(manifest.get("schema_version") == 1, "unsupported campaign schema")
+    _require(manifest.get("kind") == CAMPAIGN_KIND, "unexpected campaign kind")
+
+    identity = manifest.get("frozen_identity")
+    _require(isinstance(identity, dict), "frozen_identity is missing")
+    missing = REQUIRED_IDENTITY - set(identity)
+    _require(not missing, f"frozen_identity is missing {sorted(missing)}")
+    for name in REQUIRED_IDENTITY:
+        if name.endswith("_sha256"):
+            _require(_hex_digest(identity.get(name), 64), f"frozen_identity.{name} is invalid")
+    _require(type(identity.get("seed")) is int, "frozen_identity.seed must be an integer")
+    identity_digest = _canonical_sha256(identity)
+
+    runs = manifest.get("runs")
+    _require(isinstance(runs, list) and runs, "campaign contains no runs")
+    ids: set[str] = set()
+    sequences: set[int] = set()
+    source_digests = {name: set() for name in IMPLEMENTATIONS}
+    by_impl_condition: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    validated = []
+    diagnostics = 0
+
+    for run in runs:
+        _require(isinstance(run, dict), "campaign run is not an object")
+        run_id = run.get("id")
+        implementation = run.get("implementation")
+        condition = run.get("condition")
+        sequence = run.get("sequence")
+        _require(isinstance(run_id, str) and run_id, "campaign run has no id")
+        _require(run_id not in ids, f"duplicate run id {run_id!r}")
+        ids.add(run_id)
+        _require(implementation in IMPLEMENTATIONS, f"run {run_id!r} has unknown implementation")
+        _require(condition in CONDITIONS, f"run {run_id!r} has unknown condition")
+        _require(type(sequence) is int and sequence >= 0, f"run {run_id!r} has invalid sequence")
+        _require(sequence not in sequences, f"duplicate sequence {sequence}")
+        sequences.add(sequence)
+        _require(run.get("frozen_identity_sha256") == identity_digest, f"run {run_id!r} frozen identity mismatch")
+        source_digests[implementation].add(_source_digest(run))
+
+        for name in REQUIRED_ARTIFACTS:
+            _artifact(run, name, root)
+        metrics = _json(_artifact(run, "metrics", root), f"run {run_id} metrics")
+        text = _log(_artifact(run, "log", root))
+        timing = run.get("timing")
+        _require(isinstance(timing, dict), f"run {run_id!r} has no timing")
+        sampler = _positive(timing.get("sampler_s"), f"{run_id}.sampler_s")
+        e2e = _positive(timing.get("e2e_s"), f"{run_id}.e2e_s")
+        _require(e2e >= sampler, f"run {run_id!r} E2E is shorter than sampler")
+        measured_sampler = _sampler_s(metrics)
+        _require(abs(measured_sampler - sampler) <= 0.005, f"run {run_id!r} sampler timing disagrees with metrics")
+
+        counts = _counts(metrics)
+        if implementation != "released_target":
+            _require(counts == PARTITIONED_WHOLE_COUNTS, f"run {run_id!r} whole-run counts are {counts}")
+
+        sol = _sol_totals(_sol_records(text))
+        fresh_process = run.get("fresh_process")
+        diagnostic_mode = run.get("diagnostic_mode")
+        _require(type(fresh_process) is bool, f"run {run_id!r} fresh_process is not boolean")
+        _require(type(diagnostic_mode) is bool, f"run {run_id!r} diagnostic_mode is not boolean")
+        cache_state = run.get("compiler_cache_state")
+        _require(isinstance(cache_state, str) and cache_state, f"run {run_id!r} compiler_cache_state is missing")
+
+        if condition == "cold":
+            _require(fresh_process, f"run {run_id!r} cold condition is not a fresh process")
+        elif condition == "primed":
+            _require(not fresh_process, f"run {run_id!r} primed condition claims a fresh process")
+            _require(run.get("fresh_sol_requests") is True, f"run {run_id!r} did not force fresh Sol Requests")
+            _require(sol["compile_misses"] == 0, f"run {run_id!r} primed condition observed compiler misses")
+        else:
+            _require(run.get("changed_contract_revalidated") is True, f"run {run_id!r} lacks revalidation receipt")
+            _require(sol["validation_misses"] > 0, f"run {run_id!r} changed contract produced no validation miss")
+        if condition == "geometry_bias_mutated":
+            reasons = sol["miss_reasons"]
+            _require(
+                int(reasons.get("new_geometry", 0)) + int(reasons.get("new_bias", 0)) > 0,
+                f"run {run_id!r} geometry/bias mutation produced no matching miss reason",
+            )
+
+        if diagnostic_mode:
+            diagnostics += 1
+            _diagnostic(run, _json(_artifact(run, "sol_diagnostics", root), f"run {run_id} diagnostics"))
+
+        if implementation != "released_target":
+            try:
+                validate_partitioned_runtime_evidence(
+                    metrics,
+                    text,
+                    expected_logical=PARTITIONED_LATEST_COUNTS[0],
+                    expected_actual=PARTITIONED_LATEST_COUNTS[1],
+                    expected_forecast=PARTITIONED_LATEST_COUNTS[2],
+                    require_performance_accounting=diagnostic_mode,
+                )
+            except RuntimeGateError as exc:
+                raise CampaignEvidenceError(f"run {run_id!r} failed partitioned runtime gate: {exc}") from exc
+
+        _media(run)
+        entry = dict(run)
+        entry["_sampler_s"] = sampler
+        entry["_e2e_s"] = e2e
+        validated.append(entry)
+        by_impl_condition.setdefault((implementation, condition), []).append(entry)
+
+    for implementation in IMPLEMENTATIONS:
+        _require(len(source_digests[implementation]) == 1, f"{implementation} source stack changed within campaign")
+        for condition in CONDITIONS:
+            _require(by_impl_condition.get((implementation, condition)), f"missing {implementation}/{condition} evidence")
+    for implementation in ("partitioned_preserved", "partitioned_fixed"):
+        _require(
+            any(run["implementation"] == implementation and run["diagnostic_mode"] for run in validated),
+            f"missing diagnostic replay/CUDA evidence for {implementation}",
+        )
+
+    paired = [
+        run for run in validated
+        if run["condition"] == "primed"
+        and run["implementation"] in {"released_target", "partitioned_fixed"}
+        and isinstance(run.get("pair_id"), str)
+        and run["pair_id"]
+    ]
+    pair_ids = sorted({run["pair_id"] for run in paired})
+    _require(len(pair_ids) >= 3, "promotion requires at least three paired primed repetitions")
+    _require(all(not run["diagnostic_mode"] for run in paired), "paired timing runs must use low-overhead mode")
+    ordered = sorted(paired, key=lambda run: run["sequence"])
+
+    pair_reports = []
+    sampler_deltas = []
+    e2e_deltas = []
+    for pair_id in pair_ids:
+        group = [run for run in paired if run["pair_id"] == pair_id]
+        _require(len(group) == 2, f"pair {pair_id!r} must contain exactly two runs")
+        by_impl = {run["implementation"]: run for run in group}
+        _require(set(by_impl) == {"released_target", "partitioned_fixed"}, f"pair {pair_id!r} is incomplete")
+        positions = sorted(ordered.index(run) for run in group)
+        _require(positions[1] == positions[0] + 1, f"pair {pair_id!r} is not adjacent in interleaved order")
+        control = by_impl["released_target"]
+        fixed = by_impl["partitioned_fixed"]
+        sampler_delta = control["_sampler_s"] - fixed["_sampler_s"]
+        e2e_delta = control["_e2e_s"] - fixed["_e2e_s"]
+        _require(sampler_delta > 0.0, f"pair {pair_id!r} has no sampler advantage")
+        _require(e2e_delta > 0.0, f"pair {pair_id!r} has no E2E advantage")
+        sampler_deltas.append(sampler_delta)
+        e2e_deltas.append(e2e_delta)
+        pair_reports.append(
+            {
+                "pair_id": pair_id,
+                "control_run": control["id"],
+                "fixed_run": fixed["id"],
+                "sampler_delta_s": sampler_delta,
+                "e2e_delta_s": e2e_delta,
+            }
+        )
+
+    return CampaignReport(
+        frozen_identity_sha256=identity_digest,
+        runs=len(validated),
+        diagnostic_runs=diagnostics,
+        pair_count=len(pair_ids),
+        sampler_pair_wins=len(pair_ids),
+        e2e_pair_wins=len(pair_ids),
+        sampler_median_delta_s=float(statistics.median(sampler_deltas)),
+        e2e_median_delta_s=float(statistics.median(e2e_deltas)),
+        decoded_video_passes=len(validated),
+        decoded_audio_passes=len(validated),
+        implementation_source_digests={name: next(iter(source_digests[name])) for name in IMPLEMENTATIONS},
+        pair_reports=tuple(pair_reports),
+    )
+
+
+__all__ = ["CAMPAIGN_KIND", "CampaignEvidenceError", "CampaignReport", "validate_campaign_manifest"]
