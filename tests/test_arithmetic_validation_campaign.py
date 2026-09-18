@@ -192,10 +192,15 @@ def _add_run(
     process_id_override: int | None = None,
     process_generation_override: str | None = None,
     process_anchor_run_id: str | None = None,
+    compile_misses_override: int | None = None,
 ) -> None:
     partitioned = implementation != "released_target"
     logical, actual = (18, 14) if partitioned else (17, 13)
-    compile_misses = 0 if condition == "primed" else 1
+    compile_misses = (
+        (0 if condition == "primed" else 1)
+        if compile_misses_override is None
+        else compile_misses_override
+    )
     default_process_id = {
         "released_target": 1001,
         "partitioned_preserved": 1002,
@@ -343,9 +348,43 @@ def _manifest(tmp_path: Path) -> dict:
         )
         sequence += 1
 
-    # Promotion timing pairs share one already-primed process and are adjacent
-    # in the complete declared order. The fixed arm may therefore anchor to the
-    # control cold process for these timing-only repetitions.
+    # Prime both timing modes in the same process before measured pairs. The
+    # control warmup should already hit its executable cache; the first fixed
+    # warmup may populate partitioned-specific executable keys.
+    _add_run(
+        tmp_path,
+        runs,
+        run_id="pair-warmup-control",
+        implementation="released_target",
+        condition=campaign.PAIR_WARMUP_CONDITION,
+        sequence=sequence,
+        identity_digest=identity_digest,
+        sampler_s=290.0,
+        e2e_s=340.0,
+        process_id_override=1001,
+        process_generation_override="1" * 32,
+        process_anchor_run_id="released_target-cold",
+        compile_misses_override=0,
+    )
+    sequence += 1
+    _add_run(
+        tmp_path,
+        runs,
+        run_id="pair-warmup-fixed",
+        implementation="partitioned_fixed",
+        condition=campaign.PAIR_WARMUP_CONDITION,
+        sequence=sequence,
+        identity_digest=identity_digest,
+        sampler_s=290.0,
+        e2e_s=340.0,
+        process_id_override=1001,
+        process_generation_override="1" * 32,
+        process_anchor_run_id="released_target-cold",
+        compile_misses_override=1,
+    )
+    sequence += 1
+
+    # Promotion timing pairs now alternate after both modes are resident.
     for pair in range(3):
         _add_run(
             tmp_path,
@@ -719,5 +758,44 @@ def test_campaign_gate_rejects_dirty_source_state(tmp_path, monkeypatch):
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="uses dirty sol source",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_missing_shared_process_fixed_warmup(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    manifest["runs"] = [
+        run
+        for run in manifest["runs"]
+        if run["id"] != "pair-warmup-fixed"
+    ]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="lacks pre-measurement warmup of both control and fixed modes",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_pair_warmup_after_measurement(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    warmup = next(run for run in manifest["runs"] if run["id"] == "pair-warmup-fixed")
+    first_pair = next(run for run in manifest["runs"] if run["id"] == "control-p0")
+    warmup["sequence"], first_pair["sequence"] = first_pair["sequence"], warmup["sequence"]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="lacks pre-measurement warmup of both control and fixed modes",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
