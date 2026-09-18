@@ -136,8 +136,6 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
 
     assert len(identity) == 64
 
-
-
 def test_capture_cli_is_stdlib_only():
     root = __import__("pathlib").Path(__file__).resolve().parents[1]
     result = subprocess.run(
