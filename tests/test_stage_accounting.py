@@ -46,7 +46,6 @@ def test_stage_accounting_correlates_model_time_without_inventing_missing_values
     assert accounting[1]["remainder_ms"] is None
 
 
-
 def test_predict_correlation_uses_actual_empty_transformer_options(monkeypatch):
     binding = runtime.FlowBinding()
     binding.active_request_id = "flow-test"
