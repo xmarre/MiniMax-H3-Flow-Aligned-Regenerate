@@ -47,6 +47,17 @@ def _sha256_digest(value: Any) -> bool:
     return True
 
 
+def _loaded_file_match(working: bytes, head: bytes) -> tuple[bool, str, str]:
+    """Return canonical tracked-file identity while preserving Windows CRLF transport."""
+    raw_digest = _sha256_bytes(working)
+    head_digest = _sha256_bytes(head)
+    if raw_digest == head_digest:
+        return True, "exact", head_digest
+    if b"\r\n" in working and _sha256_bytes(working.replace(b"\r\n", b"\n")) == head_digest:
+        return True, "crlf_to_lf", head_digest
+    return False, "mismatch", raw_digest
+
+
 def _git(root: Path, *args: str, check: bool = True) -> bytes:
     try:
         result = subprocess.run(
@@ -116,16 +127,27 @@ def capture_repository(root: Path, loaded_files: list[tuple[str, Path]]) -> dict
         working = path.read_bytes()
         head_bytes = _git(root, "show", f"HEAD:{relative}", check=False)
         tracked = bool(_git(root, "ls-files", "--error-unmatch", "--", relative, check=False))
+        raw_sha256 = _sha256_bytes(working)
         head_sha256 = _sha256_bytes(head_bytes) if tracked else None
+        matches_head = False
+        match_mode = "untracked"
+        canonical_sha256 = raw_sha256
+        if tracked:
+            matches_head, match_mode, canonical_sha256 = _loaded_file_match(
+                working,
+                head_bytes,
+            )
         captured_files.append(
             {
                 "module": module_name,
                 "path": str(path),
                 "relative_path": relative,
-                "sha256": _sha256_bytes(working),
+                "sha256": raw_sha256,
+                "canonical_sha256": canonical_sha256,
                 "head_sha256": head_sha256,
+                "match_mode": match_mode,
                 "tracked": tracked,
-                "matches_head": bool(tracked and head_sha256 == _sha256_bytes(working)),
+                "matches_head": matches_head,
             }
         )
 
@@ -228,19 +250,34 @@ def validate_source_provenance(
             module = item.get("module")
             relative = item.get("relative_path")
             digest = item.get("sha256")
+            canonical_digest = item.get("canonical_sha256")
             head_digest = item.get("head_sha256")
+            match_mode = item.get("match_mode")
             _require(isinstance(module, str) and module, f"source provenance {name} module label is missing")
             _require(isinstance(relative, str) and relative, f"source provenance {name} relative path is missing")
             _require(_sha256_digest(digest), f"source provenance {name} SHA-256 is invalid")
+            _require(_sha256_digest(canonical_digest), f"source provenance {name} canonical SHA-256 is invalid")
             _require(_sha256_digest(head_digest), f"source provenance {name} HEAD SHA-256 is invalid")
             _require(item.get("tracked") is True, f"source provenance {name} loaded file is untracked")
             _require(item.get("matches_head") is True, f"source provenance {name} loaded file differs from HEAD")
-            _require(digest == head_digest, f"source provenance {name} loaded-file digest mismatch")
+            _require(
+                match_mode in {"exact", "crlf_to_lf"},
+                f"source provenance {name} loaded-file match mode is invalid",
+            )
+            _require(
+                canonical_digest == head_digest,
+                f"source provenance {name} canonical loaded-file digest mismatch",
+            )
+            if match_mode == "exact":
+                _require(
+                    digest == head_digest,
+                    f"source provenance {name} exact loaded-file digest mismatch",
+                )
             identity_files.append(
                 {
                     "module": module,
                     "relative_path": relative,
-                    "sha256": digest,
+                    "sha256": canonical_digest,
                 }
             )
         identity_repositories[name] = {
