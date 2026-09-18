@@ -74,8 +74,14 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
         "continuum": "4" * 40,
     }
     repositories = {}
+    digests = {
+        "flow": "a" * 64,
+        "sol": "b" * 64,
+        "vdn": "c" * 64,
+        "continuum": "d" * 64,
+    }
     for name, head in heads.items():
-        digest = (name[0] * 64)[:64]
+        digest = digests[name]
         repositories[name] = {
             "head": head,
             "dirty": False,
