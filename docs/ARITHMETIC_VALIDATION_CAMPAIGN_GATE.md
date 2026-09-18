@@ -34,18 +34,22 @@ Each arm must provide `cold`, `primed`, `numerical_invalidated`, and
 `geometry_bias_mutated` evidence. Cold runs must use a fresh process and an
 explicit isolated compiler-cache state. Every non-cold run names its cold
 `process_anchor_run_id`; the gate reads Sol's Request-owned runtime lease from
-the log and requires the CUDA/device `process` identity to match that anchor.
-This makes the same-process claim artifact-derived rather than trusting only a
-manifest boolean. Non-cold runs must retain that process/compiler cache while
-forcing fresh Sol Requests. Mutation runs must identify the changed contract
+the log and requires both the OS process ID and Sol's random per-process
+generation nonce to match that anchor. This makes the same-process claim
+artifact-derived and remains valid even if the OS later recycles a PID.
+Non-cold runs must retain that process/compiler cache while forcing fresh Sol
+Requests. Mutation runs must identify the changed contract
 with distinct before/after SHA-256 values and must report revalidation.
 
-Every run provides hash-pinned metrics, full log, decoded video and decoded
-audio artifacts. The sampler time declared in the manifest is checked against
-the metrics `sampler_wall` events. Partitioned runs must preserve the frozen
-18 logical / 14 actual / 4 forecast whole-run count and pass the existing
-partitioned runtime gate; diagnostic partitioned runs additionally require the
-correlated host/CUDA performance-accounting evidence.
+Every run provides hash-pinned metrics, one complete single-prompt log
+segment, decoded video and decoded audio artifacts. The log segment must contain
+exactly one final `Prompt executed in ... seconds` receipt while preserving all
+Sol Request summaries emitted by that prompt. The sampler time declared in the
+manifest is checked against the metrics `sampler_wall` events. Released Target
+Input runs must preserve 17 logical / 13 actual / 4 forecast whole-run calls;
+partitioned runs must preserve 18 / 14 / 4 and pass the existing partitioned
+runtime gate. Diagnostic partitioned runs additionally require the correlated
+host/CUDA performance-accounting evidence.
 
 ## Diagnostic versus measured runs
 
@@ -157,4 +161,5 @@ claim. Supported mutation kinds are `lora_strength`,
 `geometry_and_bias`.
 
 This gate is specific to the frozen arithmetic-validation campaign. The
-18/14/4 benchmark expectation is not part of generic Flow runtime policy.
+17/13/4 control and 18/14/4 partitioned expectations are campaign acceptance
+criteria, not generic Flow runtime policy.
