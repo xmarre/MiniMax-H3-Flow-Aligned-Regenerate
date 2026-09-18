@@ -24,6 +24,8 @@ from .partitioned_stage import (
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
+    FLOW_REQUEST_ID_KEY,
+    FLOW_STAGE_ID_KEY,
     PROBE_CONTEXT_KEY,
     _begin_capture,
     _conditioning_signature,
@@ -63,7 +65,7 @@ class PartitionedPreflightUnsupported(RuntimeError):
 
 
 @contextlib.contextmanager
-def _partitioned_stage_contract(guider: Any, plan, metrics):
+def _partitioned_stage_contract(guider: Any, plan, metrics, *, owner_generation=None):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
         raise RuntimeError("partitioned exact-prefix requires mutable model options")
@@ -79,10 +81,27 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
     # dictionaries between model calls, while scalar/object leaves retain their
     # identity. The runtime object therefore owns provider identity for exactly
     # this low/probe sampler-stage lifetime.
-    transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(plan=plan, metrics=metrics)
+    runtime = PartitionedStageRuntime(
+        plan=plan,
+        metrics=metrics,
+        owner_generation=None if owner_generation is None else str(owner_generation),
+    )
+    transformer[PARTITIONED_STAGE_KEY] = runtime
+    metrics.event(
+        "partitioned_stage_runtime_begin",
+        request_id=transformer.get(FLOW_REQUEST_ID_KEY),
+        stage_id=transformer.get(FLOW_STAGE_ID_KEY),
+        owner_generation=runtime.owner_generation,
+    )
     try:
-        yield
+        yield runtime
     finally:
+        metrics.event(
+            "partitioned_stage_runtime_summary",
+            request_id=transformer.get(FLOW_REQUEST_ID_KEY),
+            stage_id=transformer.get(FLOW_STAGE_ID_KEY),
+            **runtime.component_summary(),
+        )
         transformer.pop(PARTITIONED_STAGE_KEY, None)
 
 
@@ -260,6 +279,7 @@ def run_partitioned_progressive(
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
         "partitioned_stage_plan",
+        request_id=binding.active_request_id,
         index=index,
         sigma=sigma,
         coordinate=float(normalized_coordinate(sigma, video_shift=video_shift)),
@@ -298,7 +318,15 @@ def run_partitioned_progressive(
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"), _partitioned_stage_contract(guider, stage_plan, binding.metrics):
+            with (
+                _flow_stage_contract(guider, "low") as low_stage_id,
+                _partitioned_stage_contract(
+                    guider,
+                    stage_plan,
+                    binding.metrics,
+                    owner_generation=low_stage_id,
+                ),
+            ):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -313,6 +341,8 @@ def run_partitioned_progressive(
         finally:
             binding.metrics.event(
                 "low_stage_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("low_stage_id"),
                 elapsed_ms=(time.perf_counter() - low_started) * 1000.0,
                 partitioned_exact_prefix=True,
             )
@@ -334,9 +364,14 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             binding.metrics.increment("progressive_history_boundaries")
             with (
-                _flow_stage_contract(guider, "probe"),
+                _flow_stage_contract(guider, "probe") as probe_stage_id,
                 _high_stage_contract(guider),
-                _partitioned_stage_contract(guider, stage_plan, binding.metrics),
+                _partitioned_stage_contract(
+                    guider,
+                    stage_plan,
+                    binding.metrics,
+                    owner_generation=probe_stage_id,
+                ),
             ):
                 source_x0 = executor(
                     probe_noise,
@@ -356,6 +391,8 @@ def run_partitioned_progressive(
                 transformer[PROBE_CONTEXT_KEY] = previous_probe
             binding.metrics.event(
                 "handoff_probe_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("probe_stage_id"),
                 elapsed_ms=(time.perf_counter() - probe_started) * 1000.0,
                 partitioned_exact_prefix=True,
             )
@@ -454,7 +491,7 @@ def run_partitioned_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high") as high_stage_id, _high_stage_contract(guider):
             result = executor(
                 target_noise,
                 latent_image,
@@ -468,6 +505,8 @@ def run_partitioned_progressive(
             )
         binding.metrics.event(
             "high_stage_wall",
+            request_id=binding.active_request_id,
+            stage_id=high_stage_id,
             elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
             partitioned_exact_prefix=True,
         )

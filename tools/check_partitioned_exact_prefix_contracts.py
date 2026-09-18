@@ -108,6 +108,25 @@ def _validate_preprocess_transport() -> None:
         raise SystemExit("Flow->Sol->VDN preprocessing changed V unexpectedly")
 
 
+def _validate_sol_process_generation() -> None:
+    """Require artifact-stable process identity used by campaign same-process gates."""
+    from sol_h3.validation import _device_identity
+
+    first = _device_identity("cpu")
+    second = _device_identity("cpu")
+    if first.get("process") != second.get("process"):
+        raise SystemExit("Sol runtime process identity changed within one process")
+    generation = first.get("process_generation")
+    if generation != second.get("process_generation"):
+        raise SystemExit("Sol runtime process generation changed within one process")
+    if not isinstance(generation, str) or len(generation) != 32:
+        raise SystemExit("Sol runtime process-generation provenance is missing")
+    try:
+        int(generation, 16)
+    except ValueError as exc:
+        raise SystemExit("Sol runtime process-generation provenance is not hexadecimal") from exc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sol", required=True)
@@ -172,6 +191,7 @@ def main() -> None:
         raise SystemExit("Sol partitioned request ABI is missing")
 
     _validate_preprocess_transport()
+    _validate_sol_process_generation()
 
     flow = PartitionedExactPrefixPlan(
         video_start=7,
