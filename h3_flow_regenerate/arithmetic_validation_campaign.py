@@ -304,7 +304,10 @@ def _diagnostic(run: dict[str, Any], report: dict[str, Any]) -> None:
         for target in REPLAY_TARGETS:
             item = replay[target]
             _require(isinstance(item, dict), f"replay target {target!r} is malformed")
-            _require(int(item.get("primed_compile_misses", -1)) == 0, f"replay target {target!r} recompiled when primed")
+            _require(
+                int(item.get("primed_compile_misses", -1)) == 0,
+                f"replay target {target!r} recompiled when primed",
+            )
             _require(item.get("retained_proof_hit") is True, f"replay target {target!r} did not reuse proof")
             if run["condition"] == "cold" and run.get("compiler_cache_state") == "isolated_empty":
                 _require(
@@ -445,7 +448,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     for implementation in IMPLEMENTATIONS:
         _require(len(source_digests[implementation]) == 1, f"{implementation} source stack changed within campaign")
         for condition in CONDITIONS:
-            _require(by_impl_condition.get((implementation, condition)), f"missing {implementation}/{condition} evidence")
+            _require(
+                by_impl_condition.get((implementation, condition)),
+                f"missing {implementation}/{condition} evidence",
+            )
     for implementation in ("partitioned_preserved", "partitioned_fixed"):
         _require(
             any(run["implementation"] == implementation and run["diagnostic_mode"] for run in validated),
