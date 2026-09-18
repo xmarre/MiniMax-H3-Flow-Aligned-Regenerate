@@ -916,7 +916,6 @@ def test_campaign_gate_rejects_source_provenance_head_mismatch(tmp_path, monkeyp
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
 
-
 def test_campaign_gate_rejects_failed_sampler_wall(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
