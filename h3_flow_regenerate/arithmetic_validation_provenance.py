@@ -137,6 +137,7 @@ def capture_repository(root: Path, loaded_files: list[tuple[str, Path]]) -> dict
         "root": str(root),
         "head": head,
         "dirty": bool(status),
+        "working_tree": worktree_receipt,
         "working_tree_sha256": _canonical_sha256(worktree_receipt),
         "remote": remote or None,
         "loaded_files": captured_files,
@@ -193,12 +194,32 @@ def validate_source_provenance(
         _require(isinstance(entry, dict), f"source provenance is missing repository {name}")
         head = entry.get("head")
         dirty = entry.get("dirty")
+        working_tree = entry.get("working_tree")
+        working_tree_sha256 = entry.get("working_tree_sha256")
         _require(head == expected_stack.get(name), f"source provenance {name} HEAD disagrees with run source_stack")
+        _require(
+            isinstance(working_tree, dict),
+            f"source provenance {name} working-tree receipt is missing",
+        )
+        _require(
+            _sha256_digest(working_tree_sha256)
+            and working_tree_sha256 == _canonical_sha256(working_tree),
+            f"source provenance {name} working-tree digest is invalid",
+        )
         _require(type(dirty) is bool, f"source provenance {name} dirty state is invalid")
         _require(
             dirty == expected_dirty.get(name),
             f"source provenance {name} dirty state disagrees with run source_dirty",
         )
+        if not dirty:
+            empty_digest = _sha256_bytes(b"")
+            _require(
+                working_tree.get("status_sha256") == empty_digest
+                and working_tree.get("tracked_diff_sha256") == empty_digest
+                and working_tree.get("staged_diff_sha256") == empty_digest
+                and working_tree.get("untracked") == [],
+                f"source provenance {name} claims clean state with nonempty working-tree evidence",
+            )
         loaded = entry.get("loaded_files")
         _require(isinstance(loaded, list) and loaded, f"source provenance {name} has no loaded module files")
         identity_files = []
