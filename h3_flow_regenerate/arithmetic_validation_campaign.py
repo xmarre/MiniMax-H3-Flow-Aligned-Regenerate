@@ -683,10 +683,17 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             anchor["condition"] == "cold",
             f"run {run['id']!r} process anchor {anchor_id!r} is not cold evidence",
         )
-        _require(
-            anchor["implementation"] == run["implementation"],
-            f"run {run['id']!r} process anchor belongs to a different implementation",
+        timing_pair_run = (
+            run["condition"] == "primed"
+            and run["implementation"] in {"released_target", "partitioned_fixed"}
+            and isinstance(run.get("pair_id"), str)
+            and bool(run.get("pair_id"))
         )
+        if not timing_pair_run:
+            _require(
+                anchor["implementation"] == run["implementation"],
+                f"run {run['id']!r} process anchor belongs to a different implementation",
+            )
         _require(
             anchor["_source_digest"] == run["_source_digest"],
             f"run {run['id']!r} process anchor uses a different source stack",
@@ -711,6 +718,15 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
                 by_impl_condition.get((implementation, condition)),
                 f"missing {implementation}/{condition} evidence",
             )
+        canonical_primed = [
+            run
+            for run in by_impl_condition[(implementation, "primed")]
+            if not run.get("pair_id")
+        ]
+        _require(
+            canonical_primed,
+            f"missing unpaired same-arm primed evidence for {implementation}",
+        )
     for implementation in ("partitioned_preserved", "partitioned_fixed"):
         _require(
             any(run["implementation"] == implementation and run["diagnostic_mode"] for run in validated),
@@ -749,6 +765,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(
             control["_source_digest"] == fixed["_source_digest"],
             f"pair {pair_id!r} control/fixed source stacks differ",
+        )
+        _require(
+            control["_process_id"] == fixed["_process_id"]
+            and control["_process_generation"] == fixed["_process_generation"],
+            f"pair {pair_id!r} was not measured in one shared primed process",
         )
         sampler_delta = control["_sampler_s"] - fixed["_sampler_s"]
         e2e_delta = control["_e2e_s"] - fixed["_e2e_s"]
