@@ -306,7 +306,7 @@ def test_partitioned_runtime_gate_never_treats_missing_timing_as_zero():
 
 
 def test_partitioned_runtime_gate_rejects_cross_request_sol_correlation():
-    with pytest.raises(RuntimeGateError, match="correlates"):
+    with pytest.raises(RuntimeGateError, match="different Flow request"):
         validate_partitioned_runtime_evidence(
             _correlated_metrics(),
             _log(_correlated_sol_record("different-request")),
