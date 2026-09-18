@@ -392,7 +392,12 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
-    transformer = (model_options or {}).get("transformer_options") or {}
+    transformer_options = (
+        model_options.get("transformer_options")
+        if isinstance(model_options, dict)
+        else None
+    )
+    transformer = transformer_options if isinstance(transformer_options, dict) else {}
     request_id = None if binding is None else binding.active_request_id
     evaluation_id = None
     previous_evaluation_id = None
