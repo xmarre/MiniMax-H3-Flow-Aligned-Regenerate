@@ -8,15 +8,12 @@ import pytest
 
 from h3_flow_regenerate import arithmetic_validation_campaign as campaign
 
-
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
 
 def _write(path: Path, data: bytes) -> dict:
     path.write_bytes(data)
     return {"path": path.name, "sha256": _sha256(path)}
-
 
 def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
     events = [
@@ -34,7 +31,6 @@ def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
         )
     return {"schema_version": 1, "events": events, "counters": {}}
 
-
 def _runtime_device_identity(process_id: int, process_generation: str) -> dict:
     return {
         "type": "cuda",
@@ -50,7 +46,6 @@ def _runtime_device_identity(process_id: int, process_generation: str) -> dict:
         "context_scope": "pytorch-primary-process-device",
     }
 
-
 def _runtime_environment() -> dict:
     return {
         "python": "3.12.0",
@@ -62,7 +57,6 @@ def _runtime_environment() -> dict:
         "cuda_python": "13.0.0",
         "apache_tvm_ffi": "0.1.0",
     }
-
 
 def _sol_log(
     *,
@@ -92,19 +86,12 @@ def _sol_log(
             "source_generation": "d" * 64 if source_verify_count else None,
             "implementation_generation": "e" * 64 if source_verify_count else None,
             "device_identity": (
-                _runtime_device_identity(process_id, process_generation)
-                if source_verify_count
-                else None
+                _runtime_device_identity(process_id, process_generation) if source_verify_count else None
             ),
-            "compiler_environment": (
-                _runtime_environment()
-                if source_verify_count
-                else {}
-            ),
+            "compiler_environment": (_runtime_environment() if source_verify_count else {}),
         },
     }
     return "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True)
-
 
 def _diagnostic_report(*, compile_misses: int, request_id: str) -> dict:
     replay = {
@@ -137,7 +124,6 @@ def _diagnostic_report(*, compile_misses: int, request_id: str) -> dict:
         "replay_reports": replay,
     }
 
-
 def _identity() -> dict:
     digest = "a" * 64
     environment = _runtime_environment()
@@ -167,7 +153,6 @@ def _identity() -> dict:
         "apache_tvm_ffi": environment["apache_tvm_ffi"],
     }
 
-
 def _source_stack(implementation: str) -> dict:
     marker = {
         "released_target": "3",
@@ -180,7 +165,6 @@ def _source_stack(implementation: str) -> dict:
         "vdn": marker * 40,
         "continuum": "4" * 40,
     }
-
 
 def _add_run(
     tmp_path: Path,
@@ -212,15 +196,9 @@ def _add_run(
         "partitioned_preserved": "2" * 32,
         "partitioned_fixed": "3" * 32,
     }[implementation]
-    process_id = (
-        default_process_id
-        if process_id_override is None
-        else process_id_override
-    )
+    process_id = default_process_id if process_id_override is None else process_id_override
     process_generation = (
-        default_process_generation
-        if process_generation_override is None
-        else process_generation_override
+        default_process_generation if process_generation_override is None else process_generation_override
     )
 
     metrics_path = tmp_path / f"{run_id}.metrics.json"
@@ -290,11 +268,7 @@ def _add_run(
         "process_anchor_run_id": (
             None
             if condition == "cold"
-            else (
-                process_anchor_run_id
-                if process_anchor_run_id is not None
-                else f"{implementation}-cold"
-            )
+            else (process_anchor_run_id if process_anchor_run_id is not None else f"{implementation}-cold")
         ),
         "diagnostic_mode": diagnostic_mode,
         "decoded_media": {
@@ -320,7 +294,6 @@ def _add_run(
             "after_sha256": "c" * 64,
         }
     runs.append(run)
-
 
 def _manifest(tmp_path: Path) -> dict:
     identity = _identity()
@@ -419,7 +392,6 @@ def _manifest(tmp_path: Path) -> dict:
         "runs": runs,
     }
 
-
 def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
@@ -434,7 +406,6 @@ def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
     assert report.sampler_median_delta_s == pytest.approx(20.0)
     assert report.e2e_median_delta_s == pytest.approx(20.0)
     assert report.diagnostic_runs == 2
-
 
 def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(
@@ -460,7 +431,6 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     with pytest.raises(campaign.CampaignEvidenceError, match="primed condition observed compiler misses"):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_campaign_gate_rejects_media_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
@@ -472,7 +442,6 @@ def test_campaign_gate_rejects_media_failure(tmp_path, monkeypatch):
 
     with pytest.raises(campaign.CampaignEvidenceError, match="failed decoded audio"):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
-
 
 def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch):
     monkeypatch.setattr(
@@ -499,7 +468,6 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
     with pytest.raises(campaign.CampaignEvidenceError, match="has no E2E advantage"):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_campaign_gate_rejects_source_stack_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
@@ -520,7 +488,6 @@ def test_campaign_gate_rejects_source_stack_drift(tmp_path, monkeypatch):
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_campaign_gate_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
@@ -532,7 +499,6 @@ def test_campaign_gate_rejects_artifact_hash_mismatch(tmp_path, monkeypatch):
 
     with pytest.raises(campaign.CampaignEvidenceError, match="hash mismatch"):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
-
 
 def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
     tmp_path,
@@ -564,7 +530,6 @@ def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_sol_totals_accept_dense_only_request_without_source_binding():
     text = (
         _sol_log(
@@ -588,7 +553,6 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
     assert totals["process_id"] == 4242
     assert totals["process_generation"] == "a" * 32
     assert totals["source_verified_requests"] == 1
-
 
 def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
     tmp_path,
@@ -620,8 +584,6 @@ def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
-
 def test_campaign_gate_rejects_diagnostic_from_different_sol_request(
     tmp_path,
     monkeypatch,
@@ -632,11 +594,7 @@ def test_campaign_gate_rejects_diagnostic_from_different_sol_request(
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    target = next(
-        run
-        for run in manifest["runs"]
-        if run["id"] == "partitioned_fixed-cold"
-    )
+    target = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
     diagnostics_path = tmp_path / target["artifacts"]["sol_diagnostics"]["path"]
     report = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     report["request_ids"] = ["sol-h3-1003-999"]
@@ -650,7 +608,6 @@ def test_campaign_gate_rejects_diagnostic_from_different_sol_request(
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
     tmp_path,
     monkeypatch,
@@ -663,11 +620,7 @@ def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
     manifest = _manifest(tmp_path)
     control = next(run for run in manifest["runs"] if run["id"] == "control-p0")
     fixed = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
-    preserved = next(
-        run
-        for run in manifest["runs"]
-        if run["id"] == "partitioned_preserved-primed"
-    )
+    preserved = next(run for run in manifest["runs"] if run["id"] == "partitioned_preserved-primed")
     original_fixed_sequence = fixed["sequence"]
     for run in manifest["runs"]:
         if run["sequence"] >= original_fixed_sequence:
@@ -681,7 +634,6 @@ def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
-
 def test_campaign_gate_rejects_run_before_cold_anchor(
     tmp_path,
     monkeypatch,
@@ -692,11 +644,7 @@ def test_campaign_gate_rejects_run_before_cold_anchor(
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    cold = next(
-        run
-        for run in manifest["runs"]
-        if run["id"] == "partitioned_fixed-cold"
-    )
+    cold = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
     primed = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
     cold["sequence"], primed["sequence"] = primed["sequence"], cold["sequence"]
 
@@ -705,8 +653,6 @@ def test_campaign_gate_rejects_run_before_cold_anchor(
         match="appears before its cold process anchor",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
-
-
 
 def test_campaign_gate_rejects_runtime_environment_drift(
     tmp_path,
@@ -735,8 +681,6 @@ def test_campaign_gate_rejects_runtime_environment_drift(
         match="runtime triton differs",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
-
-
 
 def test_campaign_gate_rejects_dirty_source_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
