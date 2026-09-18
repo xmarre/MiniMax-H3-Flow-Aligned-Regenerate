@@ -197,11 +197,7 @@ def _add_run(
 ) -> None:
     partitioned = implementation != "released_target"
     logical, actual = (18, 14) if partitioned else (17, 13)
-    compile_misses = (
-        (0 if condition == "primed" else 1)
-        if compile_misses_override is None
-        else compile_misses_override
-    )
+    compile_misses = (0 if condition == "primed" else 1) if compile_misses_override is None else compile_misses_override
     default_process_id = {
         "released_target": 1001,
         "partitioned_preserved": 1002,
@@ -771,11 +767,7 @@ def test_campaign_gate_rejects_missing_shared_process_fixed_warmup(tmp_path, mon
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    manifest["runs"] = [
-        run
-        for run in manifest["runs"]
-        if run["id"] != "pair-warmup-fixed"
-    ]
+    manifest["runs"] = [run for run in manifest["runs"] if run["id"] != "pair-warmup-fixed"]
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
