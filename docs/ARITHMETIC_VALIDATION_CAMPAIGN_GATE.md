@@ -112,9 +112,13 @@ python custom_nodes/ComfyUI-Sol-H3/tools/check_arithmetic_validation_diagnostics
 ```
 
 The paired promotion timings are intentionally separate low-overhead runs:
-CUDA/replay diagnostics must be disabled. Each implementation first needs an
-**unpaired same-arm primed repeat** after its own cold run; this proves the
-cold→primed lifetime independently of performance pairing.
+CUDA/replay diagnostics must be disabled. This is artifact-derived, not a
+manifest assertion: every Sol summary in a run must report both
+`cuda_diagnostics.enabled=false` and `replay_diagnostics.enabled=false` when
+`diagnostic_mode=false`; diagnostic campaign runs must report both enabled.
+Each implementation first needs an **unpaired same-arm primed repeat** after
+its own cold run; this proves the cold→primed lifetime independently of
+performance pairing.
 
 Before measured pairing, the shared timing process must then execute one
 `pair_warmup` run of **both** `released_target` and `partitioned_fixed`.

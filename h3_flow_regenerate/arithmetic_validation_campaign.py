@@ -319,6 +319,8 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "request_provenance": {},
         "runtime_environments": {},
         "device_identities": {},
+        "cuda_diagnostic_modes": set(),
+        "replay_diagnostic_modes": set(),
     }
     for record in records:
         validation = record.get("validation")
@@ -386,6 +388,18 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         result["validation_misses"] += int(validation.get("misses", 0))
         result["validation_failures"] += int(validation.get("failures", 0))
         result["invalidations"] += int(validation.get("invalidations", 0))
+        cuda_diagnostics = record.get("cuda_diagnostics")
+        replay_diagnostics = record.get("replay_diagnostics")
+        _require(
+            isinstance(cuda_diagnostics, dict) and type(cuda_diagnostics.get("enabled")) is bool,
+            "Sol summary omitted CUDA-diagnostics enabled state",
+        )
+        _require(
+            isinstance(replay_diagnostics, dict) and type(replay_diagnostics.get("enabled")) is bool,
+            "Sol summary omitted replay-diagnostics enabled state",
+        )
+        result["cuda_diagnostic_modes"].add(cuda_diagnostics["enabled"])
+        result["replay_diagnostic_modes"].add(replay_diagnostics["enabled"])
         reasons = validation.get("miss_reasons")
         if isinstance(reasons, dict):
             for name, count in reasons.items():
@@ -412,6 +426,16 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         len(result["runtime_environments"]) == 1,
         "one run log contains multiple source-verified compiler environments",
     )
+    _require(
+        len(result["cuda_diagnostic_modes"]) == 1,
+        "one run log mixes enabled and disabled CUDA diagnostics",
+    )
+    _require(
+        len(result["replay_diagnostic_modes"]) == 1,
+        "one run log mixes enabled and disabled replay diagnostics",
+    )
+    result["cuda_diagnostics_enabled"] = next(iter(result.pop("cuda_diagnostic_modes")))
+    result["replay_diagnostics_enabled"] = next(iter(result.pop("replay_diagnostic_modes")))
     result["process_id"] = next(iter(result.pop("process_ids")))
     result["process_generation"] = next(iter(result.pop("process_generations")))
     result["device_fingerprint"], result["device_identity"] = next(iter(result.pop("device_identities").items()))
@@ -663,6 +687,14 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         diagnostic_mode = run.get("diagnostic_mode")
         _require(type(fresh_process) is bool, f"run {run_id!r} fresh_process is not boolean")
         _require(type(diagnostic_mode) is bool, f"run {run_id!r} diagnostic_mode is not boolean")
+        _require(
+            sol["cuda_diagnostics_enabled"] is diagnostic_mode,
+            f"run {run_id!r} diagnostic_mode disagrees with Sol CUDA diagnostics state",
+        )
+        _require(
+            sol["replay_diagnostics_enabled"] is diagnostic_mode,
+            f"run {run_id!r} diagnostic_mode disagrees with Sol replay diagnostics state",
+        )
         if condition == PAIR_WARMUP_CONDITION:
             _require(
                 implementation in {"released_target", "partitioned_fixed"},

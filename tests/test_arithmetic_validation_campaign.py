@@ -73,6 +73,7 @@ def _sol_log(
     process_generation: str,
     source_verify_count: int = 1,
     request_serial: int = 1,
+    diagnostics_enabled: bool = False,
 ) -> str:
     reasons = {"new_request": 1}
     invalidations = 0
@@ -92,6 +93,8 @@ def _sol_log(
             "invalidations": invalidations,
             "miss_reasons": reasons,
         },
+        "cuda_diagnostics": {"enabled": diagnostics_enabled},
+        "replay_diagnostics": {"enabled": diagnostics_enabled},
         "runtime_lease": {
             "source_verify_count": source_verify_count,
             "request_id": f"sol-h3-{process_id}-{request_serial}",
@@ -327,6 +330,7 @@ def _add_run(
             condition=condition,
             process_id=process_id,
             process_generation=process_generation,
+            diagnostics_enabled=diagnostic_mode,
         )
         + f"\n[INFO] Prompt executed in {e2e_s:.2f} seconds",
         encoding="utf-8",
@@ -767,6 +771,32 @@ def test_campaign_gate_rejects_understated_cold_amortization(tmp_path, monkeypat
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="understates the measured break-even primed reuse count",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_manifest_only_low_overhead_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    line, e2e = log_path.read_text(encoding="utf-8").split("\n", 1)
+    record = json.loads(line.split("Sol-H3 ", 1)[1])
+    record["cuda_diagnostics"]["enabled"] = True
+    record["replay_diagnostics"]["enabled"] = True
+    log_path.write_text(
+        "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True) + "\n" + e2e,
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="diagnostic_mode disagrees with Sol CUDA diagnostics state",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
