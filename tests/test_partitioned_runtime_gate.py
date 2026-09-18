@@ -60,7 +60,17 @@ def _metrics() -> dict:
             high_stage_first_call_actual=True,
         ),
     ]
-    return {"schema_version": 1, "counters": {}, "events": events}
+    return {
+        "schema_version": 1,
+        "counters": {
+            "partitioned_transformer_calls": 2,
+            "partitioned_attention_provider_creations": 2,
+            "partitioned_attention_provider_reuses": 1,
+            "partitioned_attention_equivalent_provider_rebindings": 1,
+            "partitioned_attention_inherited_provider_transitions": 0,
+        },
+        "events": events,
+    }
 
 
 def _sol_record(**overrides) -> dict:
@@ -118,11 +128,54 @@ def test_partitioned_runtime_gate_accepts_complete_evidence():
     assert report.probe_actual == 1
     assert report.high_logical == 2
     assert report.high_actual == 1
+    assert report.partitioned_provider_creations == 2
+    assert report.partitioned_provider_reuses == 1
+    assert report.partitioned_provider_equivalent_rebindings == 1
+    assert report.partitioned_provider_semantic_transitions == 0
     assert report.sol_mapped_calls == 3
     assert report.sol_rectangular_calls == 3
     assert report.sol_requested_q_rows == report.sol_kernel_q_rows == 192
     assert report.vdn_variable_grid_linear_active is True
     assert report.audio_guided_overlap_active is True
+
+
+def test_partitioned_runtime_gate_rejects_provider_recreation_on_every_call():
+    metrics = _metrics()
+    metrics["counters"].update(
+        partitioned_attention_provider_creations=3,
+        partitioned_attention_provider_reuses=0,
+        partitioned_attention_equivalent_provider_rebindings=0,
+    )
+    with pytest.raises(RuntimeGateError, match="provider identity changed on every logical low/probe call"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_rejects_provider_binding_accounting_drift():
+    metrics = _metrics()
+    metrics["counters"]["partitioned_attention_provider_reuses"] = 0
+    with pytest.raises(RuntimeGateError, match="provider binding accounting"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_distinguishes_forecast_binding_from_actual_transformer_execution():
+    metrics = _metrics()
+
+    # Three logical low/probe calls bind a provider, but one low call is a
+    # Spectrum forecast and therefore only two of them execute H3.
+    assert metrics["counters"]["partitioned_transformer_calls"] == 2
+    assert metrics["counters"]["partitioned_attention_provider_creations"] == 2
+    assert metrics["counters"]["partitioned_attention_provider_reuses"] == 1
+
+    report = validate_partitioned_runtime_evidence(metrics, _log())
+    assert report.low_logical + report.probe_logical == 3
+    assert report.low_actual + report.probe_actual == 2
+
+
+def test_partitioned_runtime_gate_rejects_transformer_actual_accounting_drift():
+    metrics = _metrics()
+    metrics["counters"]["partitioned_transformer_calls"] = 3
+    with pytest.raises(RuntimeGateError, match="transformer-call accounting"):
+        validate_partitioned_runtime_evidence(metrics, _log())
 
 
 def test_partitioned_runtime_gate_rejects_square_q_expansion():
