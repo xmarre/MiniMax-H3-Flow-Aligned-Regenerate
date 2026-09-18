@@ -126,7 +126,10 @@ These warmups are recorded campaign runs but are never used as benchmark
 measurements; compiler misses are allowed there because their purpose is to
 make both mode-specific executable sets resident. At least three additional
 `released_target` + `partitioned_fixed` primed timing pairs are then
-required, and measured runs must report zero compilation misses.
+required, and measured runs must report zero compilation misses. The complete
+pair set must contain both control-first and fixed-first member order; a campaign
+that always measures one implementation second is rejected rather than allowing
+systematic within-pair thermal/cache/drift bias.
 
 The two members of each timing pair must be adjacent in the **complete**
 declared campaign order, use the same exact Flow/Sol/VDN/Continuum source

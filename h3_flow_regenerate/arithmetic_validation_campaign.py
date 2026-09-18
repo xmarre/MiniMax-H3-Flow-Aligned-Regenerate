@@ -907,6 +907,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     pair_reports = []
     sampler_deltas = []
     e2e_deltas = []
+    pair_orders = set()
     for pair_id in pair_ids:
         group = [run for run in paired if run["pair_id"] == pair_id]
         _require(len(group) == 2, f"pair {pair_id!r} must contain exactly two runs")
@@ -919,6 +920,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(
             abs(int(control["sequence"]) - int(fixed["sequence"])) == 1,
             f"pair {pair_id!r} is not adjacent in the complete campaign order",
+        )
+        pair_orders.add(
+            ("released_target", "partitioned_fixed")
+            if int(control["sequence"]) < int(fixed["sequence"])
+            else ("partitioned_fixed", "released_target")
         )
         _require(
             control["_source_digest"] == fixed["_source_digest"],
@@ -944,12 +950,22 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
                 "pair_id": pair_id,
                 "control_run": control["id"],
                 "fixed_run": fixed["id"],
+                "execution_order": (
+                    ["released_target", "partitioned_fixed"]
+                    if int(control["sequence"]) < int(fixed["sequence"])
+                    else ["partitioned_fixed", "released_target"]
+                ),
                 "sampler_delta_s": sampler_delta,
                 "sampler_delta_pct": sampler_delta / control["_sampler_s"] * 100.0,
                 "e2e_delta_s": e2e_delta,
                 "e2e_delta_pct": e2e_delta / control["_e2e_s"] * 100.0,
             }
         )
+
+    _require(
+        len(pair_orders) >= 2,
+        "measured timing pairs must include both control-first and fixed-first execution order",
+    )
 
     median_sampler_advantage = float(statistics.median(sampler_deltas))
     median_e2e_advantage = float(statistics.median(e2e_deltas))

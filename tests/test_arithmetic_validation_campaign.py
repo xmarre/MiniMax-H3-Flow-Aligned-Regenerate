@@ -521,40 +521,37 @@ def _manifest(tmp_path: Path) -> dict:
     )
     sequence += 1
 
-    # Promotion timing pairs now alternate after both modes are resident.
+    # Promotion timing pairs alternate member order after both modes are resident
+    # so one implementation is not systematically favored by within-pair drift.
     for pair in range(3):
-        _add_run(
-            tmp_path,
-            runs,
-            run_id=f"control-p{pair}",
-            implementation="released_target",
-            condition="primed",
-            sequence=sequence,
-            identity_digest=identity_digest,
-            sampler_s=300.0 + pair,
-            e2e_s=350.0 + pair,
-            pair_id=f"pair-{pair}",
-            process_id_override=1001,
-            process_generation_override="1" * 32,
-            process_anchor_run_id="released_target-cold",
+        specs = (
+            (
+                ("released_target", f"control-p{pair}", 300.0 + pair, 350.0 + pair),
+                ("partitioned_fixed", f"fixed-p{pair}", 280.0 + pair, 330.0 + pair),
+            )
+            if pair % 2 == 0
+            else (
+                ("partitioned_fixed", f"fixed-p{pair}", 280.0 + pair, 330.0 + pair),
+                ("released_target", f"control-p{pair}", 300.0 + pair, 350.0 + pair),
+            )
         )
-        sequence += 1
-        _add_run(
-            tmp_path,
-            runs,
-            run_id=f"fixed-p{pair}",
-            implementation="partitioned_fixed",
-            condition="primed",
-            sequence=sequence,
-            identity_digest=identity_digest,
-            sampler_s=280.0 + pair,
-            e2e_s=330.0 + pair,
-            pair_id=f"pair-{pair}",
-            process_id_override=1001,
-            process_generation_override="1" * 32,
-            process_anchor_run_id="released_target-cold",
-        )
-        sequence += 1
+        for implementation, run_id, sampler_s, e2e_s in specs:
+            _add_run(
+                tmp_path,
+                runs,
+                run_id=run_id,
+                implementation=implementation,
+                condition="primed",
+                sequence=sequence,
+                identity_digest=identity_digest,
+                sampler_s=sampler_s,
+                e2e_s=e2e_s,
+                pair_id=f"pair-{pair}",
+                process_id_override=1001,
+                process_generation_override="1" * 32,
+                process_anchor_run_id="released_target-cold",
+            )
+            sequence += 1
 
     # Invalidation cases remain in the process anchored by each cold run.
     for implementation in campaign.IMPLEMENTATIONS:
@@ -1038,6 +1035,25 @@ def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="not adjacent in the complete campaign order",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_one_sided_pair_execution_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    fixed = next(run for run in manifest["runs"] if run["id"] == "fixed-p1")
+    control = next(run for run in manifest["runs"] if run["id"] == "control-p1")
+    assert fixed["sequence"] < control["sequence"]
+    fixed["sequence"], control["sequence"] = control["sequence"], fixed["sequence"]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="must include both control-first and fixed-first execution order",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
