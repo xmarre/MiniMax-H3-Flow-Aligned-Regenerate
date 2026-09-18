@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 SOURCE_PROVENANCE_KIND = "h3_arithmetic_validation_source_provenance_v1"
-REPOSITORIES = ("flow", "sol", "vdn", "continuum")
+REPOSITORIES = ("comfyui", "flow", "sol", "vdn", "continuum")
+OVERLAY_REPOSITORIES = ("flow", "sol", "vdn", "continuum")
 
 
 class SourceProvenanceError(RuntimeError):
@@ -180,9 +181,13 @@ def capture_source_provenance(
     loaded_files: dict[str, list[tuple[str, Path]]],
     overlay_order: list[str],
 ) -> dict[str, Any]:
-    _require(set(repositories) == set(REPOSITORIES), "provenance requires flow/sol/vdn/continuum repositories")
     _require(
-        len(overlay_order) == len(REPOSITORIES) and set(overlay_order) == set(REPOSITORIES),
+        set(repositories) == set(REPOSITORIES),
+        "provenance requires comfyui/flow/sol/vdn/continuum repositories",
+    )
+    _require(
+        len(overlay_order) == len(OVERLAY_REPOSITORIES)
+        and set(overlay_order) == set(OVERLAY_REPOSITORIES),
         "overlay order must contain flow/sol/vdn/continuum exactly once",
     )
     captured = {name: capture_repository(repositories[name], loaded_files.get(name, [])) for name in REPOSITORIES}
@@ -206,8 +211,10 @@ def validate_source_provenance(
     _require(value.get("kind") == SOURCE_PROVENANCE_KIND, "unexpected source provenance kind")
     overlay = value.get("overlay_order")
     _require(
-        isinstance(overlay, list) and len(overlay) == len(REPOSITORIES) and set(overlay) == set(REPOSITORIES),
-        "source provenance overlay order is incomplete or ambiguous",
+        isinstance(overlay, list)
+        and len(overlay) == len(OVERLAY_REPOSITORIES)
+        and set(overlay) == set(OVERLAY_REPOSITORIES),
+        "source provenance custom-node overlay order is incomplete or ambiguous",
     )
     repositories = value.get("repositories")
     _require(isinstance(repositories, dict), "source provenance repositories are missing")
@@ -298,6 +305,7 @@ def validate_source_provenance(
 
 
 __all__ = [
+    "OVERLAY_REPOSITORIES",
     "REPOSITORIES",
     "SOURCE_PROVENANCE_KIND",
     "SourceProvenanceError",
