@@ -613,20 +613,6 @@ def flow_outer_wrapper(
         )
     if not isinstance(latent_shapes, list):
         raise RuntimeError("H3 flow wrapper requires mutable packed latent shape metadata")
-    if binding.active_request_id is not None:
-        raise RuntimeError("nested H3 Flow request correlation lifetimes are unsupported")
-    request_id = f"flow-{uuid.uuid4().hex}"
-    binding.active_request_id = request_id
-    binding.evaluation_serial = 0
-    model_options_root = getattr(guider, "model_options", None)
-    request_transformer = (
-        model_options_root.setdefault("transformer_options", {}) if isinstance(model_options_root, dict) else None
-    )
-    if not isinstance(request_transformer, dict):
-        binding.active_request_id = None
-        raise RuntimeError("H3 flow request tracking requires mutable transformer options")
-    previous_request_id = request_transformer.get(FLOW_REQUEST_ID_KEY)
-    request_transformer[FLOW_REQUEST_ID_KEY] = request_id
     binding.guidance_state.reset()
     binding.active_guidance_run = None
     progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
@@ -649,6 +635,24 @@ def flow_outer_wrapper(
         binding.active_guidance_run = run
     if not is_progressive:
         _begin_capture(binding, guider, sampler, sigmas, latent_shapes)
+
+    # Correlation state begins only after setup that can fail before sampling.
+    # From here onward the existing execution finally block owns teardown.
+    if binding.active_request_id is not None:
+        raise RuntimeError("nested H3 Flow request correlation lifetimes are unsupported")
+    request_id = f"flow-{uuid.uuid4().hex}"
+    binding.active_request_id = request_id
+    binding.evaluation_serial = 0
+    model_options_root = getattr(guider, "model_options", None)
+    request_transformer = (
+        model_options_root.setdefault("transformer_options", {}) if isinstance(model_options_root, dict) else None
+    )
+    if not isinstance(request_transformer, dict):
+        binding.active_request_id = None
+        raise RuntimeError("H3 flow request tracking requires mutable transformer options")
+    previous_request_id = request_transformer.get(FLOW_REQUEST_ID_KEY)
+    request_transformer[FLOW_REQUEST_ID_KEY] = request_id
+
     error: BaseException | None = None
     try:
         if is_progressive:
