@@ -180,6 +180,21 @@ def _source_stack(implementation: str) -> dict:
 def _source_provenance(implementation: str) -> dict:
     stack = _source_stack(implementation)
     repositories = {}
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    working_tree = {
+        "status_sha256": empty_digest,
+        "tracked_diff_sha256": empty_digest,
+        "staged_diff_sha256": empty_digest,
+        "untracked": [],
+    }
+    working_tree_sha256 = hashlib.sha256(
+        json.dumps(
+            working_tree,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
     module_paths = {
         "flow": ("h3_flow_regenerate.runtime", "h3_flow_regenerate/runtime.py"),
         "sol": ("sol_h3.runtime", "sol_h3/runtime.py"),
@@ -193,7 +208,8 @@ def _source_provenance(implementation: str) -> dict:
             "root": f"/installed/{name}",
             "head": head,
             "dirty": False,
-            "working_tree_sha256": "f" * 64,
+            "working_tree": working_tree,
+            "working_tree_sha256": working_tree_sha256,
             "remote": f"https://github.com/example/{name}.git",
             "loaded_files": [
                 {
