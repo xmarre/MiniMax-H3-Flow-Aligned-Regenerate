@@ -336,6 +336,13 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
     manifest = _manifest(tmp_path)
     target = next(run for run in manifest["runs"] if run["id"] == "fixed-p1")
     target["timing"]["e2e_s"] = 400.0
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    log_path.write_text(
+        _sol_log(compile_misses=0, condition="primed")
+        + "\n[INFO] Prompt executed in 400.00 seconds",
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
 
     with pytest.raises(campaign.CampaignEvidenceError, match="has no E2E advantage"):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
