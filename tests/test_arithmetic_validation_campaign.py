@@ -684,7 +684,37 @@ def test_campaign_gate_rejects_diagnostic_cold_as_production_cold(tmp_path, monk
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    manifest["runs"] = [run for run in manifest["runs"] if run["id"] != "partitioned_fixed-cold"]
+    target = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    target["diagnostic_mode"] = True
+
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    log_path.write_text(
+        _sol_log(
+            compile_misses=1,
+            condition="cold",
+            process_id=1003,
+            process_generation="3" * 32,
+            diagnostics_enabled=True,
+        )
+        + "\n[INFO] Prompt executed in 340.00 seconds",
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    diagnostics_path = tmp_path / "partitioned_fixed-cold.diagnostics.json"
+    diagnostics_path.write_text(
+        json.dumps(
+            _diagnostic_report(
+                compile_misses=1,
+                request_id="sol-h3-1003-1",
+            )
+        ),
+        encoding="utf-8",
+    )
+    target["artifacts"]["sol_diagnostics"] = {
+        "path": diagnostics_path.name,
+        "sha256": _sha256(diagnostics_path),
+    }
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
