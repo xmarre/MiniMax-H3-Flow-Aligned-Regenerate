@@ -87,8 +87,12 @@ Three implementation arms are required:
 - `partitioned_fixed`: the candidate staged implementation.
 
 Each arm must provide `cold`, `primed`, `numerical_invalidated`, and
-`geometry_bias_mutated` evidence. Cold runs must use a fresh process and an
-explicit isolated compiler-cache state. Every non-cold run names its cold
+`geometry_bias_mutated` evidence. Every arm must include a diagnostics-off,
+`isolated_empty` production-cold run whose Sol summary observes at least one
+first-executable compile miss. The partitioned arms additionally require a
+separate diagnostic/replay `isolated_empty` cold run; diagnostic replay is
+setup evidence and cannot substitute for production-cold wall time. Every
+non-cold run names its cold
 `process_anchor_run_id`; the gate reads Sol's Request-owned runtime lease from
 the log and requires both the OS process ID and Sol's random per-process
 generation nonce to match that anchor. This makes the same-process claim
@@ -97,8 +101,11 @@ gate also derives the stable CUDA-device fingerprint and compiler/runtime
 versions from every source-verified Sol Request and requires them to equal the
 frozen campaign identity; manifest-only version claims are insufficient.
 Non-cold runs must retain that process/compiler cache while forcing fresh Sol
-Requests. Mutation runs must identify the changed contract
-with distinct before/after SHA-256 values and must report revalidation.
+Requests. Mutation runs must identify the changed contract with distinct
+before/after SHA-256 values and must report revalidation. A
+`numerical_invalidated` run must also contain an actual Sol invalidation and a
+`numerical_transition` validation miss; an ordinary `new_request` miss does
+not satisfy numerical invalidation evidence.
 
 Every run provides hash-pinned metrics, one complete single-prompt log
 segment, decoded video and decoded audio artifacts. The log segment must contain

@@ -92,6 +92,7 @@ class CampaignReport:
     decoded_audio_passes: int
     implementation_source_digests: dict[str, str]
     cold_reports: tuple[dict[str, Any], ...]
+    production_cold_reports: tuple[dict[str, Any], ...]
     setup_reports: tuple[dict[str, Any], ...]
     pair_reports: tuple[dict[str, Any], ...]
 
@@ -309,6 +310,7 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "validation_hits": 0,
         "validation_misses": 0,
         "validation_failures": 0,
+        "invalidations": 0,
         "miss_reasons": {},
         "process_ids": set(),
         "process_generations": set(),
@@ -382,6 +384,7 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         result["validation_hits"] += int(validation.get("hits", 0))
         result["validation_misses"] += int(validation.get("misses", 0))
         result["validation_failures"] += int(validation.get("failures", 0))
+        result["invalidations"] += int(validation.get("invalidations", 0))
         reasons = validation.get("miss_reasons")
         if isinstance(reasons, dict):
             for name, count in reasons.items():
@@ -692,6 +695,15 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             )
             _require(run.get("changed_contract_revalidated") is True, f"run {run_id!r} lacks revalidation receipt")
             _require(sol["validation_misses"] > 0, f"run {run_id!r} changed contract produced no validation miss")
+        if condition == "numerical_invalidated":
+            _require(
+                sol["invalidations"] > 0,
+                f"run {run_id!r} numerical invalidation did not record an arithmetic-validation invalidation",
+            )
+            _require(
+                int(sol["miss_reasons"].get("numerical_transition", 0)) > 0,
+                f"run {run_id!r} numerical invalidation produced no numerical_transition miss",
+            )
         if condition == "geometry_bias_mutated":
             reasons = sol["miss_reasons"]
             _require(
@@ -797,10 +809,34 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             canonical_primed,
             f"missing unpaired same-arm primed evidence for {implementation}",
         )
+    production_cold_by_impl: dict[str, list[dict[str, Any]]] = {}
+    for implementation in IMPLEMENTATIONS:
+        production_cold = [
+            run
+            for run in by_impl_condition[(implementation, "cold")]
+            if not run["diagnostic_mode"] and run["compiler_cache_state"] == "isolated_empty"
+        ]
+        _require(
+            production_cold,
+            f"missing low-overhead isolated-empty production cold evidence for {implementation}",
+        )
+        for run in production_cold:
+            _require(
+                run["_compile_misses"] > 0,
+                f"run {run['id']!r} production cold observed no first-executable compilation",
+            )
+        production_cold_by_impl[implementation] = production_cold
+
     for implementation in ("partitioned_preserved", "partitioned_fixed"):
         _require(
-            any(run["implementation"] == implementation and run["diagnostic_mode"] for run in validated),
-            f"missing diagnostic replay/CUDA evidence for {implementation}",
+            any(
+                run["implementation"] == implementation
+                and run["condition"] == "cold"
+                and run["diagnostic_mode"]
+                and run["compiler_cache_state"] == "isolated_empty"
+                for run in validated
+            ),
+            f"missing separate diagnostic isolated-empty cold replay evidence for {implementation}",
         )
 
     paired = [
@@ -897,6 +933,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     cold_reports = tuple(
         run_report(run) for run in sorted(validated, key=lambda item: item["sequence"]) if run["condition"] == "cold"
     )
+    production_cold_reports = tuple(
+        run_report(run)
+        for implementation in IMPLEMENTATIONS
+        for run in sorted(production_cold_by_impl[implementation], key=lambda item: item["sequence"])
+    )
     setup_reports = tuple(
         run_report(run)
         for run in sorted(validated, key=lambda item: item["sequence"])
@@ -916,6 +957,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         decoded_audio_passes=len(validated),
         implementation_source_digests={name: next(iter(source_digests[name])) for name in IMPLEMENTATIONS},
         cold_reports=cold_reports,
+        production_cold_reports=production_cold_reports,
         setup_reports=setup_reports,
         pair_reports=tuple(pair_reports),
     )

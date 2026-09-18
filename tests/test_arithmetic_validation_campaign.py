@@ -75,7 +75,11 @@ def _sol_log(
     request_serial: int = 1,
 ) -> str:
     reasons = {"new_request": 1}
-    if condition == "geometry_bias_mutated":
+    invalidations = 0
+    if condition == "numerical_invalidated":
+        reasons = {"numerical_transition": 1}
+        invalidations = 1
+    elif condition == "geometry_bias_mutated":
         reasons = {"new_geometry": 1}
     record = {
         "success": True,
@@ -85,6 +89,7 @@ def _sol_log(
             "hits": 1,
             "misses": 1,
             "failures": 0,
+            "invalidations": invalidations,
             "miss_reasons": reasons,
         },
         "runtime_lease": {
@@ -385,7 +390,7 @@ def _manifest(tmp_path: Path) -> dict:
     runs: list[dict] = []
     sequence = 0
 
-    # Each implementation starts with its fresh-process cold anchor.
+    # Each implementation starts with a diagnostics-off production cold anchor.
     for implementation in campaign.IMPLEMENTATIONS:
         _add_run(
             tmp_path,
@@ -397,7 +402,29 @@ def _manifest(tmp_path: Path) -> dict:
             identity_digest=identity_digest,
             sampler_s=290.0,
             e2e_s=340.0,
-            diagnostic_mode=implementation != "released_target",
+            diagnostic_mode=False,
+        )
+        sequence += 1
+
+    # Partitioned arms separately retain diagnostic/replay cold evidence. It is
+    # never substituted for the production-cold timing sample.
+    for implementation, process_id, process_generation in (
+        ("partitioned_preserved", 2002, "4" * 32),
+        ("partitioned_fixed", 2003, "5" * 32),
+    ):
+        _add_run(
+            tmp_path,
+            runs,
+            run_id=f"{implementation}-diagnostic-cold",
+            implementation=implementation,
+            condition="cold",
+            sequence=sequence,
+            identity_digest=identity_digest,
+            sampler_s=290.0,
+            e2e_s=340.0,
+            diagnostic_mode=True,
+            process_id_override=process_id,
+            process_generation_override=process_generation,
         )
         sequence += 1
 
@@ -526,10 +553,15 @@ def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
     assert report.sampler_median_delta_s == pytest.approx(20.0)
     assert report.e2e_median_delta_s == pytest.approx(20.0)
     assert report.diagnostic_runs == 2
-    assert len(report.cold_reports) == 3
-    assert {item["run_id"] for item in report.setup_reports} == {
+    assert len(report.cold_reports) == 5
+    assert {item["run_id"] for item in report.production_cold_reports} == {
+        "released_target-cold",
         "partitioned_preserved-cold",
         "partitioned_fixed-cold",
+    }
+    assert {item["run_id"] for item in report.setup_reports} == {
+        "partitioned_preserved-diagnostic-cold",
+        "partitioned_fixed-diagnostic-cold",
         "pair-warmup-control",
         "pair-warmup-fixed",
     }
@@ -559,6 +591,56 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
     target["artifacts"]["log"]["sha256"] = _sha256(log_path)
 
     with pytest.raises(campaign.CampaignEvidenceError, match="primed condition observed compiler misses"):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_numerical_invalidation_without_transition_miss(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(
+        run
+        for run in manifest["runs"]
+        if run["implementation"] == "partitioned_fixed" and run["condition"] == "numerical_invalidated"
+    )
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    log_path.write_text(
+        _sol_log(
+            compile_misses=1,
+            condition="cold",
+            process_id=1003,
+            process_generation="3" * 32,
+        )
+        + "\n[INFO] Prompt executed in 340.00 seconds",
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match=r"did not record an arithmetic-validation invalidation|no numerical_transition miss",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_diagnostic_cold_as_production_cold(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    manifest["runs"] = [
+        run for run in manifest["runs"] if run["id"] != "partitioned_fixed-cold"
+    ]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="missing low-overhead isolated-empty production cold evidence for partitioned_fixed",
+    ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
 
@@ -733,7 +815,7 @@ def test_campaign_gate_rejects_diagnostic_from_different_sol_request(
         lambda *args, **kwargs: object(),
     )
     manifest = _manifest(tmp_path)
-    target = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    target = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-diagnostic-cold")
     diagnostics_path = tmp_path / target["artifacts"]["sol_diagnostics"]["path"]
     report = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     report["request_ids"] = ["sol-h3-1003-999"]
