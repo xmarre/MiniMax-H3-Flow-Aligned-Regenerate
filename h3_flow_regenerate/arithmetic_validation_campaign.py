@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .arithmetic_validation_provenance import (
+    SourceProvenanceError,
+    validate_source_provenance,
+)
 from .partitioned_runtime_gate import RuntimeGateError, validate_partitioned_runtime_evidence
 
 CAMPAIGN_KIND = "h3_arithmetic_validation_campaign_v1"
@@ -200,6 +204,21 @@ def _artifact(run: dict[str, Any], name: str, root: Path) -> Path:
     path = path.resolve()
     _require(path.is_file(), f"artifact {name!r} is missing: {path}")
     _require(_file_sha256(path) == expected, f"artifact {name!r} hash mismatch")
+    return path
+
+
+def _artifact_entry(entry: Any, *, label: str, root: Path) -> Path:
+    _require(isinstance(entry, dict), f"{label} artifact entry is missing")
+    raw_path = entry.get("path")
+    expected = entry.get("sha256")
+    _require(isinstance(raw_path, str) and raw_path, f"{label} artifact has no path")
+    _require(_hex_digest(expected, 64), f"{label} artifact has invalid SHA-256")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    _require(path.is_file(), f"{label} artifact is missing: {path}")
+    _require(_file_sha256(path) == expected, f"{label} artifact hash mismatch")
     return path
 
 
@@ -529,6 +548,20 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     _require(type(identity.get("seed")) is int, "frozen_identity.seed must be an integer")
     identity_digest = _canonical_sha256(identity)
 
+    provenance_entries = manifest.get("source_provenance")
+    _require(
+        isinstance(provenance_entries, dict),
+        "campaign source_provenance map is missing",
+    )
+    _require(
+        set(provenance_entries) == set(IMPLEMENTATIONS),
+        "campaign source_provenance must identify every implementation exactly once",
+    )
+    provenance_cache: dict[str, dict[str, Any]] = {}
+    provenance_identities: dict[str, set[str]] = {
+        name: set() for name in IMPLEMENTATIONS
+    }
+
     runs = manifest.get("runs")
     _require(isinstance(runs, list) and runs, "campaign contains no runs")
     ids: set[str] = set()
@@ -555,6 +588,31 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(run.get("frozen_identity_sha256") == identity_digest, f"run {run_id!r} frozen identity mismatch")
         run_source_digest = _source_digest(run)
         source_digests[implementation].add(run_source_digest)
+
+        provenance_path = _artifact_entry(
+            provenance_entries[implementation],
+            label=f"{implementation} source provenance",
+            root=root,
+        )
+        provenance_key = str(provenance_path)
+        provenance = provenance_cache.get(provenance_key)
+        if provenance is None:
+            provenance = _json(
+                provenance_path,
+                f"{implementation} source provenance",
+            )
+            provenance_cache[provenance_key] = provenance
+        try:
+            provenance_identity = validate_source_provenance(
+                provenance,
+                expected_stack=run["source_stack"],
+                expected_dirty=run["source_dirty"],
+            )
+        except SourceProvenanceError as exc:
+            raise CampaignEvidenceError(
+                f"run {run_id!r} failed source provenance validation: {exc}"
+            ) from exc
+        provenance_identities[implementation].add(provenance_identity)
 
         for name in REQUIRED_ARTIFACTS:
             _artifact(run, name, root)
@@ -662,6 +720,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         entry["_sampler_s"] = sampler
         entry["_e2e_s"] = e2e
         entry["_source_digest"] = run_source_digest
+        entry["_provenance_identity"] = provenance_identity
         entry["_process_id"] = sol["process_id"]
         entry["_process_generation"] = sol["process_generation"]
         validated.append(entry)
@@ -716,6 +775,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         )
 
     for implementation in IMPLEMENTATIONS:
+        _require(
+            len(provenance_identities[implementation]) == 1,
+            f"{implementation} installed source provenance changed within campaign",
+        )
         _require(len(source_digests[implementation]) == 1, f"{implementation} source stack changed within campaign")
         for condition in EVIDENCE_CONDITIONS:
             _require(
@@ -784,6 +847,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(
             control["_source_digest"] == fixed["_source_digest"],
             f"pair {pair_id!r} control/fixed source stacks differ",
+        )
+        _require(
+            control["_provenance_identity"] == fixed["_provenance_identity"],
+            f"pair {pair_id!r} control/fixed installed source provenance differs",
         )
         _require(
             control["_process_id"] == fixed["_process_id"]
