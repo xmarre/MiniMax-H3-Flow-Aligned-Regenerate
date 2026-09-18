@@ -35,6 +35,35 @@ def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
     return {"schema_version": 1, "events": events, "counters": {}}
 
 
+def _runtime_device_identity(process_id: int, process_generation: str) -> dict:
+    return {
+        "type": "cuda",
+        "index": 0,
+        "current_device": 0,
+        "name": "Test SM120",
+        "total_memory": 96 * 1024**3,
+        "multi_processor_count": 188,
+        "sm": [12, 0],
+        "cuda_driver_version": 13000,
+        "process": process_id,
+        "process_generation": process_generation,
+        "context_scope": "pytorch-primary-process-device",
+    }
+
+
+def _runtime_environment() -> dict:
+    return {
+        "python": "3.12.0",
+        "platform": "Linux",
+        "torch": "2.10.0",
+        "torch_cuda": "13.0",
+        "triton": "3.6.0",
+        "nvidia_cutlass_dsl": "4.3.2",
+        "cuda_python": "13.0.0",
+        "apache_tvm_ffi": "0.1.0",
+    }
+
+
 def _sol_log(
     *,
     compile_misses: int,
@@ -63,14 +92,14 @@ def _sol_log(
             "source_generation": "d" * 64 if source_verify_count else None,
             "implementation_generation": "e" * 64 if source_verify_count else None,
             "device_identity": (
-                {
-                    "type": "cuda",
-                    "index": 0,
-                    "process": process_id,
-                    "process_generation": process_generation,
-                }
+                _runtime_device_identity(process_id, process_generation)
                 if source_verify_count
                 else None
+            ),
+            "compiler_environment": (
+                _runtime_environment()
+                if source_verify_count
+                else {}
             ),
         },
     }
@@ -111,6 +140,8 @@ def _diagnostic_report(*, compile_misses: int, request_id: str) -> dict:
 
 def _identity() -> dict:
     digest = "a" * 64
+    environment = _runtime_environment()
+    device = _runtime_device_identity(1, "0" * 32)
     return {
         "workflow_sha256": digest,
         "prompt_sha256": digest,
@@ -124,12 +155,15 @@ def _identity() -> dict:
         "geometry_sha256": digest,
         "seed": 1,
         "continuum_revision": "continuum-fixed",
-        "device_identity": "cuda:0-sm120",
-        "driver": "driver-fixed",
-        "torch": "torch-fixed",
-        "torch_cuda": "cuda-fixed",
-        "cutlass_dsl": "cutlass-fixed",
-        "triton": "triton-fixed",
+        "device_identity": campaign._stable_device_fingerprint(device),
+        "driver": device["cuda_driver_version"],
+        "python": environment["python"],
+        "torch": environment["torch"],
+        "torch_cuda": environment["torch_cuda"],
+        "cutlass_dsl": environment["nvidia_cutlass_dsl"],
+        "triton": environment["triton"],
+        "cuda_python": environment["cuda_python"],
+        "apache_tvm_ffi": environment["apache_tvm_ffi"],
     }
 
 
@@ -632,5 +666,35 @@ def test_campaign_gate_rejects_run_before_cold_anchor(
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="appears before its cold process anchor",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_runtime_environment_drift(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    text = log_path.read_text(encoding="utf-8")
+    line, e2e = text.split("\n", 1)
+    record = json.loads(line.split("Sol-H3 ", 1)[1])
+    record["runtime_lease"]["compiler_environment"]["triton"] = "different"
+    log_path.write_text(
+        "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True) + "\n" + e2e,
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="runtime triton differs",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
