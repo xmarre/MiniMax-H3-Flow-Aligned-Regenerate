@@ -4,6 +4,7 @@ This validator is offline. It consumes already-produced metrics, logs, decoded
 media, and diagnostic reports. It does not execute H3/CUDA or alter runtime
 policy.
 """
+
 from __future__ import annotations
 
 import hashlib
