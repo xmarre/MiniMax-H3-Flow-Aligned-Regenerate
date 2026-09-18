@@ -222,6 +222,7 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "validation_misses": 0,
         "validation_failures": 0,
         "miss_reasons": {},
+        "process_ids": set(),
     }
     for record in records:
         validation = record.get("validation")
@@ -229,6 +230,13 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         _require(isinstance(validation, dict), "Sol validation summary is malformed")
         _require(isinstance(lease, dict), "Sol runtime lease summary is malformed")
         _require(lease.get("source_verify_count") == 1, "Sol Request did not verify source exactly once")
+        device_identity = lease.get("device_identity")
+        process_id = device_identity.get("process") if isinstance(device_identity, dict) else None
+        _require(
+            type(process_id) is int and process_id > 0,
+            "Sol runtime lease omitted its process identity",
+        )
+        result["process_ids"].add(process_id)
         result["compile_hits"] += int(validation.get("compile_hits", 0))
         result["compile_misses"] += int(validation.get("compile_misses", 0))
         result["validation_hits"] += int(validation.get("hits", 0))
@@ -240,6 +248,11 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
                 if isinstance(name, str) and isinstance(count, int):
                     result["miss_reasons"][name] = result["miss_reasons"].get(name, 0) + count
     _require(result["validation_failures"] == 0, "Sol arithmetic validation failed")
+    _require(
+        len(result["process_ids"]) == 1,
+        "one run log contains Sol Requests from multiple process identities",
+    )
+    result["process_id"] = next(iter(result.pop("process_ids")))
     return result
 
 
@@ -441,8 +454,41 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         entry["_sampler_s"] = sampler
         entry["_e2e_s"] = e2e
         entry["_source_digest"] = run_source_digest
+        entry["_process_id"] = sol["process_id"]
         validated.append(entry)
         by_impl_condition.setdefault((implementation, condition), []).append(entry)
+
+    by_run_id = {run["id"]: run for run in validated}
+    for run in validated:
+        if run["condition"] == "cold":
+            _require(
+                run.get("process_anchor_run_id") in {None, ""},
+                f"run {run['id']!r} cold condition must not point at another process anchor",
+            )
+            continue
+        anchor_id = run.get("process_anchor_run_id")
+        _require(
+            isinstance(anchor_id, str) and anchor_id,
+            f"run {run['id']!r} non-cold condition has no cold process anchor",
+        )
+        anchor = by_run_id.get(anchor_id)
+        _require(anchor is not None, f"run {run['id']!r} process anchor {anchor_id!r} does not exist")
+        _require(
+            anchor["condition"] == "cold",
+            f"run {run['id']!r} process anchor {anchor_id!r} is not cold evidence",
+        )
+        _require(
+            anchor["implementation"] == run["implementation"],
+            f"run {run['id']!r} process anchor belongs to a different implementation",
+        )
+        _require(
+            anchor["_source_digest"] == run["_source_digest"],
+            f"run {run['id']!r} process anchor uses a different source stack",
+        )
+        _require(
+            anchor["_process_id"] == run["_process_id"],
+            f"run {run['id']!r} is not from the same process as its cold anchor",
+        )
 
     for implementation in IMPLEMENTATIONS:
         _require(len(source_digests[implementation]) == 1, f"{implementation} source stack changed within campaign")
