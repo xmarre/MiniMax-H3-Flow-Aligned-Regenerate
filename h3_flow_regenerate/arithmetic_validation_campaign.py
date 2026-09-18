@@ -464,11 +464,7 @@ def _diagnostic(run: dict[str, Any], report: dict[str, Any], sol: dict[str, Any]
             isinstance(request_reports, list) and len(request_reports) == len(request_ids),
             f"run {run.get('id')!r} multi-request diagnostic request_reports do not match request_ids",
         )
-        diagnostic_ids = {
-            item.get("request_id")
-            for item in request_reports
-            if isinstance(item, dict)
-        }
+        diagnostic_ids = {item.get("request_id") for item in request_reports if isinstance(item, dict)}
         _require(
             diagnostic_ids == set(request_ids),
             f"run {run.get('id')!r} multi-request diagnostic request report identities disagree",
@@ -576,9 +572,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
 
         counts = _counts(metrics)
         expected_counts = (
-            RELEASED_TARGET_WHOLE_COUNTS
-            if implementation == "released_target"
-            else PARTITIONED_WHOLE_COUNTS
+            RELEASED_TARGET_WHOLE_COUNTS if implementation == "released_target" else PARTITIONED_WHOLE_COUNTS
         )
         _require(
             counts == expected_counts,
@@ -721,11 +715,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
                 by_impl_condition.get((implementation, condition)),
                 f"missing {implementation}/{condition} evidence",
             )
-        canonical_primed = [
-            run
-            for run in by_impl_condition[(implementation, "primed")]
-            if not run.get("pair_id")
-        ]
+        canonical_primed = [run for run in by_impl_condition[(implementation, "primed")] if not run.get("pair_id")]
         _require(
             canonical_primed,
             f"missing unpaired same-arm primed evidence for {implementation}",
