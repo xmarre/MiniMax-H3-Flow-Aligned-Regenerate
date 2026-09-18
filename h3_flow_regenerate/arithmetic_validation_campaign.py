@@ -403,7 +403,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         if condition == "primed":
             _require(sol["compile_misses"] == 0, f"run {run_id!r} primed condition observed compiler misses")
         elif condition in {"numerical_invalidated", "geometry_bias_mutated"}:
-                _mutation(run)
+            _mutation(run)
             _require(
                 run["mutation"]["before_sha256"] == identity[run["mutation"]["base_field"]],
                 f"run {run_id!r} mutation before_sha256 does not match its frozen base field",
