@@ -759,7 +759,6 @@ def test_campaign_gate_rejects_dirty_source_state(tmp_path, monkeypatch):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
 
-
 def test_campaign_gate_rejects_missing_shared_process_fixed_warmup(tmp_path, monkeypatch):
     monkeypatch.setattr(
         campaign,
