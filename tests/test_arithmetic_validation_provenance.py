@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 
 import pytest
@@ -74,6 +76,21 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
         "continuum": "4" * 40,
     }
     repositories = {}
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    working_tree = {
+        "status_sha256": empty_digest,
+        "tracked_diff_sha256": empty_digest,
+        "staged_diff_sha256": empty_digest,
+        "untracked": [],
+    }
+    working_tree_sha256 = hashlib.sha256(
+        json.dumps(
+            working_tree,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
     digests = {
         "flow": "a" * 64,
         "sol": "b" * 64,
@@ -85,6 +102,8 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
         repositories[name] = {
             "head": head,
             "dirty": False,
+            "working_tree": working_tree,
+            "working_tree_sha256": working_tree_sha256,
             "loaded_files": [
                 {
                     "module": f"{name}.runtime",
