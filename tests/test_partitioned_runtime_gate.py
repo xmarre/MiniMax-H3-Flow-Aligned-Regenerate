@@ -231,6 +231,27 @@ def _correlated_metrics() -> dict:
                 evaluation_id=f"{request_id}:{serial}",
             )
             serial += 1
+    for stage in ("low", "probe"):
+        metrics["events"].append(
+            {
+                "kind": "partitioned_stage_runtime_summary",
+                "fields": {
+                    "request_id": request_id,
+                    "stage_id": stage_ids[stage],
+                    "owner_generation": stage_ids[stage],
+                    "host_component_s": {
+                        "vdn_gather_host_wall_s": 0.01,
+                        "vdn_softmax_host_wall_s": 0.02,
+                        "vdn_linear_readout_total_host_wall_s": 0.03,
+                    },
+                    "host_component_calls": {
+                        "vdn_gather_host_wall_s": 1,
+                        "vdn_softmax_host_wall_s": 1,
+                        "vdn_linear_readout_total_host_wall_s": 1,
+                    },
+                },
+            }
+        )
     metrics["stage_accounting"] = [
         {
             "kind": "low_stage_wall",
@@ -277,6 +298,35 @@ def _correlated_sol_record(request_id="flow-request-1") -> dict:
             }
         ]
     }
+    record["cuda_diagnostics"] = {
+        "enabled": True,
+        "details": [
+            {
+                "kind": "vdn_partitioned_components",
+                "context": {
+                    "flow_request_id": request_id,
+                    "flow_stage": "low",
+                    "flow_stage_id": "low-1",
+                    "flow_evaluation_id": f"{request_id}:0",
+                    "block_index": 0,
+                    "plan_digest": "a" * 64,
+                },
+                "cuda_event_ms": {
+                    "vdn_preprocess": 0.1,
+                    "vdn_gather": 0.2,
+                    "vdn_softmax": 0.3,
+                    "vdn_weights": 0.1,
+                    "vdn_softmax_epilogue": 0.2,
+                    "vdn_linear_features": 0.2,
+                    "vdn_linear_statistics": 0.2,
+                    "vdn_linear_scans": 0.2,
+                    "vdn_linear_gather": 0.2,
+                    "vdn_linear_output": 0.2,
+                    "vdn_linear_projection": 0.1,
+                },
+            }
+        ],
+    }
     return record
 
 
@@ -290,7 +340,11 @@ def test_partitioned_runtime_gate_accepts_complete_performance_correlation():
     assert report.correlated_model_calls == report.logical_calls
     assert report.stage_accounting_rows == 3
     assert report.stage_accounting_unknown_rows == 0
+    assert report.partitioned_component_summary_events == 2
+    assert "vdn_linear_readout_total_host_wall_s" in report.partitioned_host_component_names
     assert report.sol_correlation_records == 1
+    assert report.vdn_cuda_samples == 1
+    assert "vdn_linear_output" in report.vdn_cuda_component_names
 
 
 def test_partitioned_runtime_gate_never_treats_missing_timing_as_zero():
@@ -310,5 +364,38 @@ def test_partitioned_runtime_gate_rejects_cross_request_sol_correlation():
         validate_partitioned_runtime_evidence(
             _correlated_metrics(),
             _log(_correlated_sol_record("different-request")),
+            require_performance_accounting=True,
+        )
+
+
+def test_partitioned_runtime_gate_rejects_missing_vdn_cuda_attribution():
+    record = _correlated_sol_record()
+    record["cuda_diagnostics"]["details"] = []
+    with pytest.raises(RuntimeGateError, match="no correlated VDN"):
+        validate_partitioned_runtime_evidence(
+            _correlated_metrics(),
+            _log(record),
+            require_performance_accounting=True,
+        )
+
+
+def test_partitioned_runtime_gate_rejects_incomplete_vdn_host_attribution():
+    metrics = _correlated_metrics()
+    summary = next(
+        event
+        for event in metrics["events"]
+        if event["kind"] == "partitioned_stage_runtime_summary"
+    )
+    del summary["fields"]["host_component_s"]["vdn_linear_readout_total_host_wall_s"]
+    for event in metrics["events"]:
+        if event["kind"] == "partitioned_stage_runtime_summary":
+            event["fields"]["host_component_s"].pop(
+                "vdn_linear_readout_total_host_wall_s",
+                None,
+            )
+    with pytest.raises(RuntimeGateError, match="host attribution is incomplete"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(_correlated_sol_record()),
             require_performance_accounting=True,
         )
