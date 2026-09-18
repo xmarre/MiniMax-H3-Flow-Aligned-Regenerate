@@ -44,10 +44,13 @@ REQUIRED_IDENTITY = {
     "continuum_revision",
     "device_identity",
     "driver",
+    "python",
     "torch",
     "torch_cuda",
     "cutlass_dsl",
     "triton",
+    "cuda_python",
+    "apache_tvm_ffi",
 }
 REQUIRED_ARTIFACTS = ("metrics", "log", "video", "audio")
 MEDIA_CHECKS = {
@@ -105,6 +108,58 @@ def _hex_digest(value: Any, length: int) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _stable_device_identity(value: Any) -> dict[str, Any]:
+    _require(isinstance(value, dict), "Sol device identity is missing")
+    stable = {
+        name: value.get(name)
+        for name in (
+            "type",
+            "index",
+            "name",
+            "total_memory",
+            "multi_processor_count",
+            "sm",
+            "cuda_driver_version",
+            "context_scope",
+        )
+    }
+    _require(stable["type"] == "cuda", "campaign requires a CUDA Sol runtime")
+    _require(stable["sm"] == [12, 0], f"campaign requires SM120, got {stable['sm']!r}")
+    _require(
+        isinstance(stable["cuda_driver_version"], int),
+        "Sol device identity omitted CUDA driver version",
+    )
+    return stable
+
+
+def _stable_device_fingerprint(value: Any) -> str:
+    return _canonical_sha256(_stable_device_identity(value))
+
+
+def _runtime_environment(value: Any) -> dict[str, Any]:
+    _require(isinstance(value, dict), "Sol compiler environment is missing")
+    required = {
+        "python",
+        "torch",
+        "torch_cuda",
+        "triton",
+        "nvidia_cutlass_dsl",
+        "cuda_python",
+        "apache_tvm_ffi",
+    }
+    missing = required - set(value)
+    _require(not missing, f"Sol compiler environment is missing {sorted(missing)}")
+    return {
+        "python": value["python"],
+        "torch": value["torch"],
+        "torch_cuda": value["torch_cuda"],
+        "cutlass_dsl": value["nvidia_cutlass_dsl"],
+        "triton": value["triton"],
+        "cuda_python": value["cuda_python"],
+        "apache_tvm_ffi": value["apache_tvm_ffi"],
+    }
 
 
 def _positive(value: Any, label: str) -> float:
@@ -229,6 +284,8 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "process_generations": set(),
         "source_verified_requests": 0,
         "request_provenance": {},
+        "runtime_environments": {},
+        "device_identities": {},
     }
     for record in records:
         validation = record.get("validation")
@@ -266,6 +323,12 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "source-verified Sol Request omitted process-generation provenance",
             )
             result["process_generations"].add(process_generation)
+            stable_device = _stable_device_identity(device_identity)
+            device_digest = _canonical_sha256(stable_device)
+            result["device_identities"][device_digest] = stable_device
+            runtime_environment = _runtime_environment(lease.get("compiler_environment"))
+            environment_digest = _canonical_sha256(runtime_environment)
+            result["runtime_environments"][environment_digest] = runtime_environment
             source_generation = lease.get("source_generation")
             implementation_generation = lease.get("implementation_generation")
             _require(
@@ -307,8 +370,18 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         len(result["process_generations"]) == 1,
         "one run log contains source-verified Sol Requests from multiple process generations",
     )
+    _require(
+        len(result["device_identities"]) == 1,
+        "one run log contains multiple source-verified device identities",
+    )
+    _require(
+        len(result["runtime_environments"]) == 1,
+        "one run log contains multiple source-verified compiler environments",
+    )
     result["process_id"] = next(iter(result.pop("process_ids")))
     result["process_generation"] = next(iter(result.pop("process_generations")))
+    result["device_fingerprint"], result["device_identity"] = next(iter(result.pop("device_identities").items()))
+    _, result["runtime_environment"] = next(iter(result.pop("runtime_environments").items()))
     return result
 
 
@@ -439,6 +512,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     for name in REQUIRED_IDENTITY:
         if name.endswith("_sha256"):
             _require(_hex_digest(identity.get(name), 64), f"frozen_identity.{name} is invalid")
+    _require(
+        _hex_digest(identity.get("device_identity"), 64),
+        "frozen_identity.device_identity must be the stable Sol device SHA-256",
+    )
     _require(type(identity.get("seed")) is int, "frozen_identity.seed must be an integer")
     identity_digest = _canonical_sha256(identity)
 
@@ -498,6 +575,19 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         )
 
         sol = _sol_totals(_sol_records(text))
+        _require(
+            sol["device_fingerprint"] == identity["device_identity"],
+            f"run {run_id!r} device identity differs from the frozen campaign device",
+        )
+        _require(
+            sol["device_identity"]["cuda_driver_version"] == identity["driver"],
+            f"run {run_id!r} CUDA driver differs from the frozen campaign driver",
+        )
+        for name, value in sol["runtime_environment"].items():
+            _require(
+                identity.get(name) == value,
+                f"run {run_id!r} runtime {name} differs from the frozen campaign environment",
+            )
         fresh_process = run.get("fresh_process")
         diagnostic_mode = run.get("diagnostic_mode")
         _require(type(fresh_process) is bool, f"run {run_id!r} fresh_process is not boolean")
