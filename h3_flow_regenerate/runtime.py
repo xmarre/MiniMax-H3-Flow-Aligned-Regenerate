@@ -1523,7 +1523,10 @@ def _run_progressive(
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"), _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics):
+            with (
+                _flow_stage_contract(guider, "low") as low_stage_id,
+                _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics),
+            ):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -1536,7 +1539,12 @@ def _run_progressive(
                     latent_shapes=source_shapes,
                 )
         finally:
-            binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
+            binding.metrics.event(
+                "low_stage_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("low_stage_id"),
+                elapsed_ms=(time.perf_counter() - low_started) * 1000.0,
+            )
         base_model = guider.model_patcher.model
         source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
         source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
@@ -1562,7 +1570,7 @@ def _run_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             binding.metrics.increment("progressive_history_boundaries")
             with (
-                _flow_stage_contract(guider, "probe"),
+                _flow_stage_contract(guider, "probe") as probe_stage_id,
                 _high_stage_contract(guider),
                 _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics),
             ):
@@ -1582,7 +1590,12 @@ def _run_progressive(
                 transformer.pop(PROBE_CONTEXT_KEY, None)
             else:
                 transformer[PROBE_CONTEXT_KEY] = previous_probe
-            binding.metrics.event("handoff_probe_wall", elapsed_ms=(time.perf_counter() - probe_started) * 1000.0)
+            binding.metrics.event(
+                "handoff_probe_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("probe_stage_id"),
+                elapsed_ms=(time.perf_counter() - probe_started) * 1000.0,
+            )
     except BaseException as exc:
         _finish_capture(binding, error=exc)
         raise
@@ -1804,7 +1817,7 @@ def _run_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high") as high_stage_id, _high_stage_contract(guider):
             result = executor(
                 target_noise,
                 target_latent_image,
@@ -1816,7 +1829,12 @@ def _run_progressive(
                 seed,
                 latent_shapes=latent_shapes,
             )
-        binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
+        binding.metrics.event(
+            "high_stage_wall",
+            request_id=binding.active_request_id,
+            stage_id=high_stage_id,
+            elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
+        )
         high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
         if not high_model_calls:
             raise RuntimeError("progressive high stage produced no H3 model evaluations")

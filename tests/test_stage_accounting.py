@@ -80,3 +80,36 @@ def test_predict_correlation_uses_actual_empty_transformer_options(monkeypatch):
     assert runtime.FLOW_EVALUATION_ID_KEY not in model_options["transformer_options"]
     model_call = next(event for event in binding.metrics.events if event.kind == "model_call")
     assert model_call.fields["evaluation_id"] == "flow-test:0"
+
+
+def test_stage_accounting_requires_matching_request_and_stage_identity():
+    metrics = H3FlowMetrics()
+    request_id = "flow-request"
+    stages = {"low": "low-1", "probe": "probe-1", "high": "high-1"}
+    walls = {
+        "low": ("low_stage_wall", 12.0),
+        "probe": ("handoff_probe_wall", 8.0),
+        "high": ("high_stage_wall", 15.0),
+    }
+    for serial, stage in enumerate(("low", "probe", "high")):
+        metrics.event(
+            "model_call",
+            request_id=request_id,
+            stage=stage,
+            stage_id=stages[stage],
+            evaluation_id=f"{request_id}:{serial}",
+            elapsed_ms=5.0,
+        )
+        kind, wall_ms = walls[stage]
+        metrics.event(
+            kind,
+            request_id=request_id,
+            stage_id=stages[stage],
+            elapsed_ms=wall_ms,
+        )
+
+    accounting = metrics.snapshot()["stage_accounting"]
+    assert [row["request_id"] for row in accounting] == [request_id] * 3
+    assert [row["stage_id"] for row in accounting] == ["low-1", "probe-1", "high-1"]
+    assert [row["model_ms"] for row in accounting] == [5.0, 5.0, 5.0]
+    assert [row["remainder_ms"] for row in accounting] == [7.0, 3.0, 10.0]
