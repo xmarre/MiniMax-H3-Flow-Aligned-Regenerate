@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 
 import pytest
 
@@ -129,3 +130,21 @@ def test_validate_source_provenance_uses_loaded_bytes_and_overlay_order():
     )
 
     assert len(identity) == 64
+
+
+
+def test_capture_cli_is_stdlib_only():
+    root = __import__("pathlib").Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(root / "tools" / "capture_arithmetic_validation_provenance.py"),
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
