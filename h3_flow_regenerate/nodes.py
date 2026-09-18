@@ -795,8 +795,9 @@ class H3ArithmeticValidationRuntimeSourceReceipt:
     )
 
     def capture(self, filename_prefix="h3_flow_regenerate/arithmetic_validation_runtime_source"):
-        import folder_paths
         import json
+
+        import folder_paths
 
         from .arithmetic_validation_provenance import capture_running_comfyui_source_receipt
 
