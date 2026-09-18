@@ -9,6 +9,7 @@ import pytest
 
 from h3_flow_regenerate.arithmetic_validation_provenance import (
     SourceProvenanceError,
+    _loaded_file_match,
     capture_repository,
     validate_source_provenance,
 )
@@ -47,7 +48,9 @@ def test_capture_repository_proves_loaded_file_matches_head(tmp_path):
     assert loaded["relative_path"] == "pkg/runtime.py"
     assert loaded["tracked"] is True
     assert loaded["matches_head"] is True
+    assert loaded["match_mode"] == "exact"
     assert loaded["sha256"] == loaded["head_sha256"]
+    assert loaded["canonical_sha256"] == loaded["head_sha256"]
 
 
 def test_capture_repository_detects_dirty_loaded_file(tmp_path):
@@ -148,3 +151,23 @@ def test_capture_cli_is_stdlib_only():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+
+def test_loaded_file_match_accepts_only_crlf_transport_normalization():
+    head = b"first\nsecond\n"
+    matches, mode, canonical = _loaded_file_match(
+        b"first\r\nsecond\r\n",
+        head,
+    )
+    assert matches is True
+    assert mode == "crlf_to_lf"
+    assert canonical == hashlib.sha256(head).hexdigest()
+
+    matches, mode, canonical = _loaded_file_match(
+        b"first\rsecond\n",
+        head,
+    )
+    assert matches is False
+    assert mode == "mismatch"
+    assert canonical == hashlib.sha256(b"first\rsecond\n").hexdigest()
