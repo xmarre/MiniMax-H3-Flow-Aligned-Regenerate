@@ -24,6 +24,8 @@ from .partitioned_stage import (
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
+    FLOW_REQUEST_ID_KEY,
+    FLOW_STAGE_ID_KEY,
     PROBE_CONTEXT_KEY,
     _begin_capture,
     _conditioning_signature,
@@ -87,6 +89,8 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, owner_generation=
     transformer[PARTITIONED_STAGE_KEY] = runtime
     metrics.event(
         "partitioned_stage_runtime_begin",
+        request_id=transformer.get(FLOW_REQUEST_ID_KEY),
+        stage_id=transformer.get(FLOW_STAGE_ID_KEY),
         owner_generation=runtime.owner_generation,
     )
     try:
@@ -94,6 +98,8 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, owner_generation=
     finally:
         metrics.event(
             "partitioned_stage_runtime_summary",
+            request_id=transformer.get(FLOW_REQUEST_ID_KEY),
+            stage_id=transformer.get(FLOW_STAGE_ID_KEY),
             **runtime.component_summary(),
         )
         transformer.pop(PARTITIONED_STAGE_KEY, None)
@@ -273,6 +279,7 @@ def run_partitioned_progressive(
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
         "partitioned_stage_plan",
+        request_id=binding.active_request_id,
         index=index,
         sigma=sigma,
         coordinate=float(normalized_coordinate(sigma, video_shift=video_shift)),

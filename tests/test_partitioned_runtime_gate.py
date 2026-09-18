@@ -213,3 +213,102 @@ def test_partitioned_runtime_gate_uses_latest_partitioned_window():
     report = validate_partitioned_runtime_evidence(metrics, _log())
 
     assert report.logical_calls == 5
+
+
+def _correlated_metrics() -> dict:
+    metrics = _metrics()
+    request_id = "flow-request-1"
+    serial = 0
+    stage_ids = {"low": "low-1", "probe": "probe-1", "high": "high-1"}
+    for event in metrics["events"]:
+        if event["kind"] == "partitioned_stage_plan":
+            event["fields"]["request_id"] = request_id
+        if event["kind"] == "model_call":
+            stage = event["fields"]["stage"]
+            event["fields"].update(
+                request_id=request_id,
+                stage_id=stage_ids[stage],
+                evaluation_id=f"{request_id}:{serial}",
+            )
+            serial += 1
+    metrics["stage_accounting"] = [
+        {
+            "kind": "low_stage_wall",
+            "request_id": request_id,
+            "stage_id": stage_ids["low"],
+            "wall_ms": 20.0,
+            "model_ms": 18.0,
+            "model_calls": 2,
+            "remainder_ms": 2.0,
+        },
+        {
+            "kind": "handoff_probe_wall",
+            "request_id": request_id,
+            "stage_id": stage_ids["probe"],
+            "wall_ms": 10.0,
+            "model_ms": 9.0,
+            "model_calls": 1,
+            "remainder_ms": 1.0,
+        },
+        {
+            "kind": "high_stage_wall",
+            "request_id": request_id,
+            "stage_id": stage_ids["high"],
+            "wall_ms": 21.0,
+            "model_ms": 19.0,
+            "model_calls": 2,
+            "remainder_ms": 2.0,
+        },
+    ]
+    return metrics
+
+
+def _correlated_sol_record(request_id="flow-request-1") -> dict:
+    record = _sol_record()
+    record["validation"] = {
+        "examples": [
+            {
+                "mode": "partitioned_mapped_weighted_v1",
+                "context": {
+                    "flow_request_id": request_id,
+                    "flow_stage_id": "low-1",
+                    "flow_evaluation_id": f"{request_id}:0",
+                },
+            }
+        ]
+    }
+    return record
+
+
+def test_partitioned_runtime_gate_accepts_complete_performance_correlation():
+    report = validate_partitioned_runtime_evidence(
+        _correlated_metrics(),
+        _log(_correlated_sol_record()),
+        require_performance_accounting=True,
+    )
+    assert report.request_id == "flow-request-1"
+    assert report.correlated_model_calls == report.logical_calls
+    assert report.stage_accounting_rows == 3
+    assert report.stage_accounting_unknown_rows == 0
+    assert report.sol_correlation_records == 1
+
+
+def test_partitioned_runtime_gate_never_treats_missing_timing_as_zero():
+    metrics = _correlated_metrics()
+    metrics["stage_accounting"][1]["model_ms"] = None
+    metrics["stage_accounting"][1]["remainder_ms"] = None
+    with pytest.raises(RuntimeGateError, match="unknown timing"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(_correlated_sol_record()),
+            require_performance_accounting=True,
+        )
+
+
+def test_partitioned_runtime_gate_rejects_cross_request_sol_correlation():
+    with pytest.raises(RuntimeGateError, match="correlates"):
+        validate_partitioned_runtime_evidence(
+            _correlated_metrics(),
+            _log(_correlated_sol_record("different-request")),
+            require_performance_accounting=True,
+        )
