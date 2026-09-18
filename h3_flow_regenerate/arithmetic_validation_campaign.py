@@ -228,6 +228,7 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "process_ids": set(),
         "process_generations": set(),
         "source_verified_requests": 0,
+        "request_provenance": {},
     }
     for record in records:
         validation = record.get("validation")
@@ -238,6 +239,10 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         match = _SOL_REQUEST_ID_RE.match(request_id) if isinstance(request_id, str) else None
         _require(match is not None, "Sol runtime lease request_id is missing or malformed")
         result["process_ids"].add(int(match.group(1)))
+        _require(
+            request_id not in result["request_provenance"],
+            f"duplicate Sol runtime lease request_id {request_id!r}",
+        )
 
         source_verify_count = lease.get("source_verify_count")
         _require(
@@ -261,6 +266,24 @@ def _sol_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "source-verified Sol Request omitted process-generation provenance",
             )
             result["process_generations"].add(process_generation)
+            source_generation = lease.get("source_generation")
+            implementation_generation = lease.get("implementation_generation")
+            _require(
+                _hex_digest(source_generation, 64),
+                "source-verified Sol Request omitted source-generation provenance",
+            )
+            _require(
+                _hex_digest(implementation_generation, 64),
+                "source-verified Sol Request omitted implementation-generation provenance",
+            )
+        else:
+            source_generation = lease.get("source_generation")
+            implementation_generation = lease.get("implementation_generation")
+        result["request_provenance"][request_id] = {
+            "source_verify_count": source_verify_count,
+            "source_generation": source_generation,
+            "implementation_generation": implementation_generation,
+        }
         result["compile_hits"] += int(validation.get("compile_hits", 0))
         result["compile_misses"] += int(validation.get("compile_misses", 0))
         result["validation_hits"] += int(validation.get("hits", 0))
@@ -341,10 +364,50 @@ def _mutation(run: dict[str, Any]) -> None:
         )
 
 
-def _diagnostic(run: dict[str, Any], report: dict[str, Any]) -> None:
+def _diagnostic(run: dict[str, Any], report: dict[str, Any], sol: dict[str, Any]) -> None:
     _require(report.get("status") == "pass", f"run {run.get('id')!r} diagnostics are not marked pass")
+    _require(report.get("success") is True, f"run {run.get('id')!r} diagnostics do not report success")
     _require(int(report.get("validation_failures", 0)) == 0, "diagnostic report has validation failures")
     if run["implementation"] in {"partitioned_preserved", "partitioned_fixed"}:
+        request_ids = report.get("request_ids")
+        request_reports = report.get("request_reports")
+        _require(
+            isinstance(request_ids, list) and request_ids,
+            f"run {run.get('id')!r} multi-request diagnostic omitted request_ids",
+        )
+        _require(
+            len(request_ids) == len(set(request_ids)),
+            f"run {run.get('id')!r} multi-request diagnostic contains duplicate request_ids",
+        )
+        _require(
+            isinstance(request_reports, list) and len(request_reports) == len(request_ids),
+            f"run {run.get('id')!r} multi-request diagnostic request_reports do not match request_ids",
+        )
+        diagnostic_ids = {
+            item.get("request_id")
+            for item in request_reports
+            if isinstance(item, dict)
+        }
+        _require(
+            diagnostic_ids == set(request_ids),
+            f"run {run.get('id')!r} multi-request diagnostic request report identities disagree",
+        )
+        for item in request_reports:
+            _require(isinstance(item, dict), "diagnostic request report is malformed")
+            request_id = item.get("request_id")
+            log_provenance = sol["request_provenance"].get(request_id)
+            _require(
+                log_provenance is not None,
+                f"run {run.get('id')!r} diagnostics reference Sol Request {request_id!r} absent from the run log",
+            )
+            _require(
+                item.get("source_generation") == log_provenance.get("source_generation"),
+                f"run {run.get('id')!r} diagnostic source generation disagrees with the run log",
+            )
+            _require(
+                item.get("implementation_generation") == log_provenance.get("implementation_generation"),
+                f"run {run.get('id')!r} diagnostic implementation generation disagrees with the run log",
+            )
         replay = report.get("replay_reports")
         _require(isinstance(replay, dict) and REPLAY_TARGETS.issubset(replay), "required replay targets are missing")
         for target in REPLAY_TARGETS:
@@ -474,7 +537,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
 
         if diagnostic_mode:
             diagnostics += 1
-            _diagnostic(run, _json(_artifact(run, "sol_diagnostics", root), f"run {run_id} diagnostics"))
+            _diagnostic(
+                run,
+                _json(_artifact(run, "sol_diagnostics", root), f"run {run_id} diagnostics"),
+                sol,
+            )
 
         if implementation != "released_target":
             try:
@@ -527,6 +594,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             f"run {run['id']!r} process anchor uses a different source stack",
         )
         _require(
+            anchor["sequence"] < run["sequence"],
+            f"run {run['id']!r} appears before its cold process anchor",
+        )
+        _require(
             anchor["_process_id"] == run["_process_id"],
             f"run {run['id']!r} is not from the same process ID as its cold anchor",
         )
@@ -570,9 +641,13 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         by_impl = {run["implementation"]: run for run in group}
         _require(set(by_impl) == {"released_target", "partitioned_fixed"}, f"pair {pair_id!r} is incomplete")
         positions = sorted(ordered.index(run) for run in group)
-        _require(positions[1] == positions[0] + 1, f"pair {pair_id!r} is not adjacent in interleaved order")
+        _require(positions[1] == positions[0] + 1, f"pair {pair_id!r} is not adjacent among paired timing runs")
         control = by_impl["released_target"]
         fixed = by_impl["partitioned_fixed"]
+        _require(
+            abs(int(control["sequence"]) - int(fixed["sequence"])) == 1,
+            f"pair {pair_id!r} is not adjacent in the complete campaign order",
+        )
         _require(
             control["_source_digest"] == fixed["_source_digest"],
             f"pair {pair_id!r} control/fixed source stacks differ",
