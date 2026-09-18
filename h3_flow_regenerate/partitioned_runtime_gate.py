@@ -163,12 +163,12 @@ def validate_partitioned_runtime_evidence(
     )
 
     # Provider stability is part of the numerical-history contract, not merely a
-    # performance counter. Every actual partitioned transformer evaluation binds
-    # exactly one stage-owned provider: either a new semantic owner or a reuse.
-    # 00500/00503/00506/00507 all exposed the pathological signature
-    # creations == transformer_calls and reuses == 0, which forces Sol history to
-    # observe a new numerical provider on every low-stage evaluation and prevents
-    # Spectrum from committing an otherwise-entitled forecast.
+    # performance counter. Provider selection happens when the model wrapper is
+    # entered, before Spectrum may satisfy that logical model call from a forecast.
+    # Therefore provider bindings correspond to logical low/probe calls, whereas
+    # partitioned_transformer_calls counts only actual H3 executions. 00508 proved
+    # this distinction with 6 bindings (2 creations + 4 reuses) but only 5 actual
+    # partitioned transformer executions.
     partitioned_calls = int(counters.get("partitioned_transformer_calls", 0))
     provider_creations = int(counters.get("partitioned_attention_provider_creations", 0))
     provider_reuses = int(counters.get("partitioned_attention_provider_reuses", 0))
@@ -178,15 +178,6 @@ def validate_partitioned_runtime_evidence(
         partitioned_calls > 0,
         "partitioned transformer-call counter is missing or zero",
     )
-    _require(
-        provider_creations + provider_reuses == partitioned_calls,
-        "partitioned provider binding accounting does not match transformer calls",
-    )
-    if partitioned_calls > 1:
-        _require(
-            provider_reuses > 0,
-            "partitioned provider identity changed on every transformer call",
-        )
     for event in transformer_events:
         fields = _event_fields(event)
         _require(
@@ -312,6 +303,23 @@ def validate_partitioned_runtime_evidence(
         probe_logical == 1 and probe_actual == 1,
         "handoff probe must be exactly one actual H3 model call",
     )
+
+    partitioned_logical = low_logical + probe_logical
+    partitioned_actual = low_actual + probe_actual
+    _require(
+        partitioned_calls == partitioned_actual,
+        "partitioned transformer-call accounting does not match actual low/probe calls",
+    )
+    _require(
+        provider_creations + provider_reuses == partitioned_logical,
+        "partitioned provider binding accounting does not match logical low/probe calls",
+    )
+    if partitioned_logical > 1:
+        _require(
+            provider_reuses > 0,
+            "partitioned provider identity changed on every logical low/probe call",
+        )
+
     first_high = next(event for event in model_calls if str(_event_fields(event).get("stage")) == "high")
     _require(
         _event_fields(first_high).get("actual") is True,
