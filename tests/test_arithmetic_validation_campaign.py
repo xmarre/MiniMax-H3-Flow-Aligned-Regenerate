@@ -40,6 +40,7 @@ def _sol_log(
     compile_misses: int,
     condition: str,
     process_id: int,
+    process_generation: str,
     source_verify_count: int = 1,
 ) -> str:
     reasons = {"new_request": 1}
@@ -58,11 +59,16 @@ def _sol_log(
         "runtime_lease": {
             "source_verify_count": source_verify_count,
             "request_id": f"sol-h3-{process_id}-1",
-            "device_identity": {
-                "type": "cuda",
-                "index": 0,
-                "process": process_id,
-            },
+            "device_identity": (
+                {
+                    "type": "cuda",
+                    "index": 0,
+                    "process": process_id,
+                    "process_generation": process_generation,
+                }
+                if source_verify_count
+                else None
+            ),
         },
     }
     return "INFO comfy.sol_h3 Sol-H3 " + json.dumps(record, sort_keys=True)
@@ -147,6 +153,11 @@ def _add_run(
         "partitioned_preserved": 1002,
         "partitioned_fixed": 1003,
     }[implementation]
+    process_generation = {
+        "released_target": "1" * 32,
+        "partitioned_preserved": "2" * 32,
+        "partitioned_fixed": "3" * 32,
+    }[implementation]
 
     metrics_path = tmp_path / f"{run_id}.metrics.json"
     metrics_path.write_text(
@@ -159,6 +170,7 @@ def _add_run(
             compile_misses=compile_misses,
             condition=condition,
             process_id=process_id,
+            process_generation=process_generation,
         )
         + f"\n[INFO] Prompt executed in {e2e_s:.2f} seconds",
         encoding="utf-8",
@@ -321,6 +333,7 @@ def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
             compile_misses=1,
             condition="primed",
             process_id=1003,
+            process_generation="3" * 32,
         )
         + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
@@ -359,6 +372,7 @@ def test_campaign_gate_rejects_nonrepeatable_e2e_advantage(tmp_path, monkeypatch
             compile_misses=0,
             condition="primed",
             process_id=1003,
+            process_generation="3" * 32,
         )
         + "\n[INFO] Prompt executed in 400.00 seconds",
         encoding="utf-8",
@@ -420,6 +434,7 @@ def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
             compile_misses=0,
             condition="primed",
             process_id=9999,
+            process_generation="9" * 32,
         )
         + "\n[INFO] Prompt executed in 330.00 seconds",
         encoding="utf-8",
@@ -428,7 +443,7 @@ def test_campaign_gate_rejects_same_process_claim_when_runtime_pid_differs(
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
-        match="is not from the same process as its cold anchor",
+        match="is not from the same process ID as its cold anchor",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 
@@ -439,6 +454,7 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
             compile_misses=1,
             condition="cold",
             process_id=4242,
+            process_generation="a" * 32,
             source_verify_count=1,
         )
         + "\n"
@@ -446,6 +462,7 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
             compile_misses=0,
             condition="cold",
             process_id=4242,
+            process_generation="a" * 32,
             source_verify_count=0,
         )
     )
@@ -453,3 +470,35 @@ def test_sol_totals_accept_dense_only_request_without_source_binding():
 
     assert totals["process_id"] == 4242
     assert totals["source_verified_requests"] == 1
+
+
+
+def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
+    log_path = tmp_path / target["artifacts"]["log"]["path"]
+    log_path.write_text(
+        _sol_log(
+            compile_misses=0,
+            condition="primed",
+            process_id=1003,
+            process_generation="f" * 32,
+        )
+        + "\n[INFO] Prompt executed in 330.00 seconds",
+        encoding="utf-8",
+    )
+    target["artifacts"]["log"]["sha256"] = _sha256(log_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="same process generation",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
