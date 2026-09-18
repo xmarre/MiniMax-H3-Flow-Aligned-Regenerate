@@ -597,7 +597,12 @@ def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
         for run in manifest["runs"]
         if run["id"] == "partitioned_preserved-primed"
     )
-    preserved["sequence"], fixed["sequence"] = fixed["sequence"], preserved["sequence"]
+    original_fixed_sequence = fixed["sequence"]
+    for run in manifest["runs"]:
+        if run["sequence"] >= original_fixed_sequence:
+            run["sequence"] += 1
+    preserved["sequence"] = original_fixed_sequence
+    assert fixed["sequence"] - control["sequence"] == 2
 
     with pytest.raises(
         campaign.CampaignEvidenceError,
