@@ -144,6 +144,30 @@ run, every diagnostic/warmup setup run, absolute and percentage paired timing
 deltas, and the paired median deltas. Setup and cold costs therefore remain
 visible; they are not subtracted from a claimed E2E improvement.
 
+The manifest must also include an explicit `cold_behavior` policy:
+
+```json
+{
+  "cold_behavior": {
+    "speedup_claim_scope": "unconditional",
+    "minimum_primed_reuses": 0,
+    "amortization_note": "No production-cold penalty was observed."
+  }
+}
+```
+
+The gate compares diagnostics-off `isolated_empty` production-cold medians for
+the released Target Input control and fixed partitioned arm. If either fixed
+sampler wall or fixed E2E is slower, `speedup_claim_scope` must be
+`"amortized_only"`; an unconditional speedup claim is rejected. The gate
+computes the conservative break-even reuse count as the larger of the sampler
+and E2E cold penalties divided by their measured paired-primed median savings,
+rounded up. `minimum_primed_reuses` may not understate that measured
+break-even, and `amortization_note` must document the scope. This enforces the
+design's cold-amortization boundary without inventing a separate numerical
+"non-pathological" threshold. The report preserves the cold medians, penalties,
+calculated break-even and declared claim scope for product review.
+
 ## Decoded-media acceptance
 
 Every run must explicitly pass all decoded checks:

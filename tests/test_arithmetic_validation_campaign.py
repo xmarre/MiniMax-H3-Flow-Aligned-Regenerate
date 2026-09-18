@@ -573,6 +573,11 @@ def _manifest(tmp_path: Path) -> dict:
         "kind": campaign.CAMPAIGN_KIND,
         "frozen_identity": identity,
         "source_provenance": source_provenance,
+        "cold_behavior": {
+            "speedup_claim_scope": "unconditional",
+            "minimum_primed_reuses": 0,
+            "amortization_note": "No production-cold penalty in the synthetic fixture.",
+        },
         "runs": runs,
     }
 
@@ -597,6 +602,10 @@ def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
         "partitioned_preserved-cold",
         "partitioned_fixed-cold",
     }
+    assert report.cold_performance["sampler_penalty_s"] == pytest.approx(0.0)
+    assert report.cold_performance["e2e_penalty_s"] == pytest.approx(0.0)
+    assert report.cold_performance["calculated_break_even_primed_reuses"] == 0
+    assert report.cold_performance["speedup_claim_scope"] == "unconditional"
     assert {item["run_id"] for item in report.setup_reports} == {
         "partitioned_preserved-diagnostic-cold",
         "partitioned_fixed-diagnostic-cold",
@@ -678,6 +687,86 @@ def test_campaign_gate_rejects_diagnostic_cold_as_production_cold(tmp_path, monk
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="missing low-overhead isolated-empty production cold evidence for partitioned_fixed",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def _retime_run(tmp_path: Path, run: dict, *, sampler_s: float, e2e_s: float) -> None:
+    metrics_path = tmp_path / run["artifacts"]["metrics"]["path"]
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["events"][0]["fields"]["elapsed_ms"] = sampler_s * 1000.0
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    run["artifacts"]["metrics"]["sha256"] = _sha256(metrics_path)
+
+    log_path = tmp_path / run["artifacts"]["log"]["path"]
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    lines[-1] = f"[INFO] Prompt executed in {e2e_s:.2f} seconds"
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+    run["artifacts"]["log"]["sha256"] = _sha256(log_path)
+    run["timing"] = {"sampler_s": sampler_s, "e2e_s": e2e_s}
+
+
+def test_campaign_gate_rejects_unconditional_claim_when_production_cold_is_slower(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    fixed_cold = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    _retime_run(tmp_path, fixed_cold, sampler_s=300.0, e2e_s=350.0)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="production cold is slower; unconditional speedup claim is forbidden",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_accepts_measured_cold_amortization_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    fixed_cold = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    _retime_run(tmp_path, fixed_cold, sampler_s=310.0, e2e_s=360.0)
+    manifest["cold_behavior"] = {
+        "speedup_claim_scope": "amortized_only",
+        "minimum_primed_reuses": 1,
+        "amortization_note": "Cold compile penalty is recovered by one measured primed reuse.",
+    }
+
+    report = campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+    assert report.cold_performance["sampler_penalty_s"] == pytest.approx(20.0)
+    assert report.cold_performance["e2e_penalty_s"] == pytest.approx(20.0)
+    assert report.cold_performance["calculated_break_even_primed_reuses"] == 1
+    assert report.cold_performance["speedup_claim_scope"] == "amortized_only"
+
+
+def test_campaign_gate_rejects_understated_cold_amortization(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    fixed_cold = next(run for run in manifest["runs"] if run["id"] == "partitioned_fixed-cold")
+    _retime_run(tmp_path, fixed_cold, sampler_s=335.0, e2e_s=385.0)
+    manifest["cold_behavior"] = {
+        "speedup_claim_scope": "amortized_only",
+        "minimum_primed_reuses": 2,
+        "amortization_note": "Intentionally understates the measured break-even.",
+    }
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="understates the measured break-even primed reuse count",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
 

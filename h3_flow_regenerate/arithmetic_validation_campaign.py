@@ -93,6 +93,7 @@ class CampaignReport:
     implementation_source_digests: dict[str, str]
     cold_reports: tuple[dict[str, Any], ...]
     production_cold_reports: tuple[dict[str, Any], ...]
+    cold_performance: dict[str, Any]
     setup_reports: tuple[dict[str, Any], ...]
     pair_reports: tuple[dict[str, Any], ...]
 
@@ -918,6 +919,75 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
             }
         )
 
+    median_sampler_advantage = float(statistics.median(sampler_deltas))
+    median_e2e_advantage = float(statistics.median(e2e_deltas))
+    control_cold_sampler = float(
+        statistics.median(run["_sampler_s"] for run in production_cold_by_impl["released_target"])
+    )
+    fixed_cold_sampler = float(
+        statistics.median(run["_sampler_s"] for run in production_cold_by_impl["partitioned_fixed"])
+    )
+    control_cold_e2e = float(
+        statistics.median(run["_e2e_s"] for run in production_cold_by_impl["released_target"])
+    )
+    fixed_cold_e2e = float(
+        statistics.median(run["_e2e_s"] for run in production_cold_by_impl["partitioned_fixed"])
+    )
+    cold_sampler_penalty = fixed_cold_sampler - control_cold_sampler
+    cold_e2e_penalty = fixed_cold_e2e - control_cold_e2e
+    sampler_break_even = (
+        math.ceil(cold_sampler_penalty / median_sampler_advantage)
+        if cold_sampler_penalty > 0.0
+        else 0
+    )
+    e2e_break_even = (
+        math.ceil(cold_e2e_penalty / median_e2e_advantage)
+        if cold_e2e_penalty > 0.0
+        else 0
+    )
+    calculated_break_even = max(sampler_break_even, e2e_break_even)
+
+    cold_behavior = manifest.get("cold_behavior")
+    _require(isinstance(cold_behavior, dict), "campaign cold_behavior policy is missing")
+    claim_scope = cold_behavior.get("speedup_claim_scope")
+    _require(
+        claim_scope in {"unconditional", "amortized_only"},
+        "campaign cold_behavior speedup_claim_scope is invalid",
+    )
+    minimum_primed_reuses = cold_behavior.get("minimum_primed_reuses")
+    _require(
+        type(minimum_primed_reuses) is int and minimum_primed_reuses >= 0,
+        "campaign cold_behavior minimum_primed_reuses must be a non-negative integer",
+    )
+    amortization_note = cold_behavior.get("amortization_note")
+    _require(
+        isinstance(amortization_note, str) and amortization_note.strip(),
+        "campaign cold_behavior amortization_note is missing",
+    )
+    cold_slower = cold_sampler_penalty > 0.0 or cold_e2e_penalty > 0.0
+    if cold_slower:
+        _require(
+            claim_scope == "amortized_only",
+            "fixed partitioned production cold is slower; unconditional speedup claim is forbidden",
+        )
+        _require(
+            minimum_primed_reuses >= calculated_break_even,
+            "campaign cold amortization understates the measured break-even primed reuse count",
+        )
+
+    cold_performance = {
+        "control_sampler_median_s": control_cold_sampler,
+        "fixed_sampler_median_s": fixed_cold_sampler,
+        "sampler_penalty_s": cold_sampler_penalty,
+        "control_e2e_median_s": control_cold_e2e,
+        "fixed_e2e_median_s": fixed_cold_e2e,
+        "e2e_penalty_s": cold_e2e_penalty,
+        "calculated_break_even_primed_reuses": calculated_break_even,
+        "speedup_claim_scope": claim_scope,
+        "minimum_primed_reuses": minimum_primed_reuses,
+        "amortization_note": amortization_note.strip(),
+    }
+
     def run_report(run):
         return {
             "run_id": run["id"],
@@ -951,13 +1021,14 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         pair_count=len(pair_ids),
         sampler_pair_wins=len(pair_ids),
         e2e_pair_wins=len(pair_ids),
-        sampler_median_delta_s=float(statistics.median(sampler_deltas)),
-        e2e_median_delta_s=float(statistics.median(e2e_deltas)),
+        sampler_median_delta_s=median_sampler_advantage,
+        e2e_median_delta_s=median_e2e_advantage,
         decoded_video_passes=len(validated),
         decoded_audio_passes=len(validated),
         implementation_source_digests={name: next(iter(source_digests[name])) for name in IMPLEMENTATIONS},
         cold_reports=cold_reports,
         production_cold_reports=production_cold_reports,
+        cold_performance=cold_performance,
         setup_reports=setup_reports,
         pair_reports=tuple(pair_reports),
     )
