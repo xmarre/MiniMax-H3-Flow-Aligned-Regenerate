@@ -620,9 +620,7 @@ def flow_outer_wrapper(
     binding.evaluation_serial = 0
     model_options_root = getattr(guider, "model_options", None)
     request_transformer = (
-        model_options_root.setdefault("transformer_options", {})
-        if isinstance(model_options_root, dict)
-        else None
+        model_options_root.setdefault("transformer_options", {}) if isinstance(model_options_root, dict) else None
     )
     if not isinstance(request_transformer, dict):
         binding.active_request_id = None

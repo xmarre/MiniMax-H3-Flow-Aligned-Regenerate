@@ -70,26 +70,30 @@ class H3FlowMetrics:
             stage_id = event.fields.get("stage_id")
             elapsed = event.fields.get("elapsed_ms")
             if not isinstance(stage_id, str) or not isinstance(elapsed, (int, float)):
-                rows.append({
+                rows.append(
+                    {
+                        "kind": event.kind,
+                        "request_id": event.fields.get("request_id"),
+                        "stage_id": stage_id,
+                        "wall_ms": None if not isinstance(elapsed, (int, float)) else float(elapsed),
+                        "model_ms": None,
+                        "model_calls": None,
+                        "remainder_ms": None,
+                    }
+                )
+                continue
+            model_ms = model_by_stage.get(stage_id)
+            rows.append(
+                {
                     "kind": event.kind,
                     "request_id": event.fields.get("request_id"),
                     "stage_id": stage_id,
-                    "wall_ms": None if not isinstance(elapsed, (int, float)) else float(elapsed),
-                    "model_ms": None,
-                    "model_calls": None,
-                    "remainder_ms": None,
-                })
-                continue
-            model_ms = model_by_stage.get(stage_id)
-            rows.append({
-                "kind": event.kind,
-                "request_id": event.fields.get("request_id"),
-                "stage_id": stage_id,
-                "wall_ms": float(elapsed),
-                "model_ms": model_ms,
-                "model_calls": int(calls_by_stage.get(stage_id, 0)),
-                "remainder_ms": None if model_ms is None else float(elapsed) - model_ms,
-            })
+                    "wall_ms": float(elapsed),
+                    "model_ms": model_ms,
+                    "model_calls": int(calls_by_stage.get(stage_id, 0)),
+                    "remainder_ms": None if model_ms is None else float(elapsed) - model_ms,
+                }
+            )
         return rows
 
     def snapshot(self) -> dict[str, Any]:
