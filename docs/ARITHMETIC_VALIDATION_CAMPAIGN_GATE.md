@@ -22,9 +22,9 @@ one frozen identity covering workflow, prompt, reference media, model/adapter/
 patch stacks, decoder, sampler/conditioning/geometry settings, seed, Continuum
 revision, device/driver and compiler/runtime versions. The device field is the
 SHA-256 of Sol's stable CUDA identity (device/index/name/memory/SM/driver/context,
-excluding PID and process nonce). Python, PyTorch, CUDA, Triton,
-nvidia-cutlass-dsl, cuda-python and apache-tvm-ffi values are copied from Sol's
-runtime lease. Every run references the canonical SHA-256 of that identity.
+excluding PID and process nonce). Python/platform, PyTorch, CUDA, Triton, nvidia-cutlass-dsl,
+cuda-python and apache-tvm-ffi values are copied from Sol's runtime lease. Every
+run references the canonical SHA-256 of that identity.
 
 Three implementation arms are required:
 
@@ -90,8 +90,10 @@ CUDA/replay diagnostics must be disabled. At least three primed
 `released_target` + `partitioned_fixed` pairs are required and each pair must
 be adjacent in the **complete** declared campaign order; unrelated runs may not
 be hidden between a pair. The two runs in a pair must use the same exact
-Flow/Sol/VDN/Continuum source stack. Every primed/invalidation run must appear
-after the cold run named by its `process_anchor_run_id`.
+Flow/Sol/VDN/Continuum source stack. Every run records a `source_dirty` map for
+those repositories and promotion rejects any dirty checkout; a commit SHA alone
+is not accepted as complete source identity. Every primed/invalidation run must
+appear after the cold run named by its `process_anchor_run_id`.
 
 The promotion boundary is deliberately strict: every supplied pair must show a
 net advantage for the fixed partitioned run in both sampler wall and E2E wall.
@@ -130,6 +132,12 @@ A run has this shape:
     "sol": "<40 hex>",
     "vdn": "<40 hex>",
     "continuum": "<40 hex>"
+  },
+  "source_dirty": {
+    "flow": false,
+    "sol": false,
+    "vdn": false,
+    "continuum": false
   },
   "timing": {
     "sampler_s": 0.0,
