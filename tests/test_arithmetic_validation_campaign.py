@@ -22,7 +22,7 @@ def _metrics(logical: int, actual: int, sampler_s: float) -> dict:
     events = [
         {
             "kind": "sampler_wall",
-            "fields": {"elapsed_ms": sampler_s * 1000.0},
+            "fields": {"elapsed_ms": sampler_s * 1000.0, "failed": False},
         }
     ]
     for index in range(logical):
@@ -523,6 +523,16 @@ def test_campaign_gate_accepts_complete_matched_evidence(tmp_path, monkeypatch):
     assert report.sampler_median_delta_s == pytest.approx(20.0)
     assert report.e2e_median_delta_s == pytest.approx(20.0)
     assert report.diagnostic_runs == 2
+    assert len(report.cold_reports) == 3
+    assert {item["run_id"] for item in report.setup_reports} == {
+        "released_target-cold",
+        "partitioned_preserved-cold",
+        "partitioned_fixed-cold",
+        "pair-warmup-control",
+        "pair-warmup-fixed",
+    }
+    assert report.pair_reports[0]["sampler_delta_pct"] > 0.0
+    assert report.pair_reports[0]["e2e_delta_pct"] > 0.0
 
 
 def test_campaign_gate_rejects_primed_compile_miss(tmp_path, monkeypatch):
@@ -902,5 +912,45 @@ def test_campaign_gate_rejects_source_provenance_head_mismatch(tmp_path, monkeyp
     with pytest.raises(
         campaign.CampaignEvidenceError,
         match="HEAD disagrees with run source_stack",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_failed_sampler_wall(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "control-p0")
+    metrics_path = tmp_path / target["artifacts"]["metrics"]["path"]
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["events"][0]["fields"]["failed"] = True
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    target["artifacts"]["metrics"]["sha256"] = _sha256(metrics_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="failed sampler_wall interval",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_preserved_pair_warmup(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(run for run in manifest["runs"] if run["id"] == "pair-warmup-fixed")
+    target["implementation"] = "partitioned_preserved"
+    target["source_stack"] = _source_stack("partitioned_preserved")
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="pair warmup uses unsupported implementation",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
