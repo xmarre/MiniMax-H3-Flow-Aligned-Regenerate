@@ -14,6 +14,8 @@ python tools/check_arithmetic_validation_campaign.py \
 
 A passing report is evidence that the supplied campaign is structurally
 complete. It is not a substitute for the recorded runs or decoded-media review.
+The source-provenance capture is a preflight artifact and is not included in
+sampler/E2E benchmark timing.
 
 ## Required campaign shape
 
@@ -26,6 +28,49 @@ SHA-256 of Sol's stable CUDA identity
 nonce). Python/platform, PyTorch, CUDA, Triton, nvidia-cutlass-dsl, cuda-python
 and apache-tvm-ffi values are copied from Sol's runtime lease. Every run
 references the canonical SHA-256 of that identity.
+
+## Installed source provenance
+
+Do not populate `source_stack` from branch names or expected checkouts alone.
+Before the hardware campaign, obtain the actual loaded module `__file__`
+paths from the running ComfyUI process and capture each repository independently:
+
+```bash
+python tools/capture_arithmetic_validation_provenance.py \
+  --repo flow=/path/to/MiniMax-H3-Flow-Aligned-Regenerate \
+  --repo sol=/path/to/ComfyUI-Sol-H3 \
+  --repo vdn=/path/to/ComfyUI-VDN-H3-Plus \
+  --repo continuum=/path/to/ComfyUI-H3-Continuum-Plus \
+  --loaded-file flow:h3_flow_regenerate.runtime=/actual/flow/runtime.py \
+  --loaded-file sol:sol_h3.runtime=/actual/sol/runtime.py \
+  --loaded-file vdn:vdn_h3.partitioned_runtime=/actual/vdn/partitioned_runtime.py \
+  --loaded-file continuum:continuum.runtime=/actual/continuum/runtime_file.py \
+  --overlay-order continuum,flow,vdn,sol \
+  --output candidate.source-provenance.json
+```
+
+The `--loaded-file` paths above are placeholders for the real `__file__`
+receipts; do not infer them from repository names. The capture records HEAD,
+dirty-state fingerprints, loaded-file SHA-256 values, corresponding HEAD-file
+SHA-256 values and overlay order. Loaded files must be tracked and byte-identical
+to HEAD for promotion. The campaign manifest hash-pins one provenance artifact
+for each implementation arm:
+
+```json
+{
+  "source_provenance": {
+    "released_target": {"path": "candidate.source-provenance.json", "sha256": "<64 hex>"},
+    "partitioned_preserved": {"path": "preserved.source-provenance.json", "sha256": "<64 hex>"},
+    "partitioned_fixed": {"path": "candidate.source-provenance.json", "sha256": "<64 hex>"}
+  }
+}
+```
+
+The gate cross-checks those receipts against every run's `source_stack` and
+`source_dirty` declarations. Released Target Input and the fixed partitioned
+timing arm must resolve to the same canonical installed-source identity. The
+absolute checkout path is not part of that identity; repository HEAD, overlay
+order and loaded relative-file bytes are.
 
 Three implementation arms are required:
 
