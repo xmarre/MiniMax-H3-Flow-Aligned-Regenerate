@@ -745,10 +745,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
     _require(len(pair_ids) >= 3, "promotion requires at least three paired primed repetitions")
     _require(all(not run["diagnostic_mode"] for run in paired), "paired timing runs must use low-overhead mode")
     ordered = sorted(paired, key=lambda run: run["sequence"])
-    paired_processes = {
-        (run["_process_id"], run["_process_generation"], run["_source_digest"])
-        for run in paired
-    }
+    paired_processes = {(run["_process_id"], run["_process_generation"], run["_source_digest"]) for run in paired}
     _require(
         len(paired_processes) == 1,
         "all measured timing pairs must share one already-primed process/source stack",
