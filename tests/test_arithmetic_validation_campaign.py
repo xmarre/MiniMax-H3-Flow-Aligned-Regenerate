@@ -170,6 +170,7 @@ def _source_stack(implementation: str) -> dict:
         "partitioned_fixed": "3",
     }[implementation]
     return {
+        "comfyui": "5" * 40,
         "flow": marker * 40,
         "sol": marker * 40,
         "vdn": marker * 40,
@@ -196,6 +197,7 @@ def _source_provenance(implementation: str) -> dict:
         ).encode()
     ).hexdigest()
     module_paths = {
+        "comfyui": ("comfy.model_management", "comfy/model_management.py"),
         "flow": ("h3_flow_regenerate.runtime", "h3_flow_regenerate/runtime.py"),
         "sol": ("sol_h3.runtime", "sol_h3/runtime.py"),
         "vdn": ("vdn_h3.partitioned_runtime", "vdn_h3/partitioned_runtime.py"),
@@ -320,6 +322,7 @@ def _add_run(
         "frozen_identity_sha256": identity_digest,
         "source_stack": _source_stack(implementation),
         "source_dirty": {
+            "comfyui": False,
             "flow": False,
             "sol": False,
             "vdn": False,
