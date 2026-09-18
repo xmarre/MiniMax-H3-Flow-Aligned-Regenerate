@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 SOURCE_PROVENANCE_KIND = "h3_arithmetic_validation_source_provenance_v1"
@@ -63,8 +63,7 @@ def _git(root: Path, *args: str, check: bool = True) -> bytes:
         result = subprocess.run(
             ["git", "-C", str(root), *args],
             check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
     except OSError as exc:
         raise SourceProvenanceError(f"cannot execute git for {root}: {exc}") from exc
