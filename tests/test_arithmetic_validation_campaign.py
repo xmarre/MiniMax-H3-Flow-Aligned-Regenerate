@@ -548,3 +548,84 @@ def test_campaign_gate_rejects_recycled_pid_with_new_process_generation(
         match="same process generation",
     ):
         campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+
+def test_campaign_gate_rejects_diagnostic_from_different_sol_request(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    target = next(
+        run
+        for run in manifest["runs"]
+        if run["id"] == "partitioned_fixed-cold"
+    )
+    diagnostics_path = tmp_path / target["artifacts"]["sol_diagnostics"]["path"]
+    report = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    report["request_ids"] = ["sol-h3-1003-999"]
+    report["request_reports"][0]["request_id"] = "sol-h3-1003-999"
+    diagnostics_path.write_text(json.dumps(report), encoding="utf-8")
+    target["artifacts"]["sol_diagnostics"]["sha256"] = _sha256(diagnostics_path)
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="absent from the run log",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_nonadjacent_pair_in_complete_order(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    control = next(run for run in manifest["runs"] if run["id"] == "control-p0")
+    fixed = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
+    preserved = next(
+        run
+        for run in manifest["runs"]
+        if run["id"] == "partitioned_preserved-primed"
+    )
+    preserved["sequence"], fixed["sequence"] = fixed["sequence"], preserved["sequence"]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="not adjacent in the complete campaign order",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
+
+
+def test_campaign_gate_rejects_run_before_cold_anchor(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        campaign,
+        "validate_partitioned_runtime_evidence",
+        lambda *args, **kwargs: object(),
+    )
+    manifest = _manifest(tmp_path)
+    cold = next(
+        run
+        for run in manifest["runs"]
+        if run["id"] == "partitioned_fixed-cold"
+    )
+    primed = next(run for run in manifest["runs"] if run["id"] == "fixed-p0")
+    cold["sequence"], primed["sequence"] = primed["sequence"], cold["sequence"]
+
+    with pytest.raises(
+        campaign.CampaignEvidenceError,
+        match="appears before its cold process anchor",
+    ):
+        campaign.validate_campaign_manifest(manifest, root=tmp_path)
