@@ -163,7 +163,10 @@ checkout; a commit SHA alone is not accepted as complete source identity.
 The promotion boundary is deliberately strict: every supplied pair must show a
 net advantage for the fixed partitioned run in both sampler wall and E2E wall.
 If variability breaks that condition, collect more evidence rather than
-promoting from a noisy aggregate.
+promoting from a noisy aggregate. The passing JSON report includes every cold
+run, every diagnostic/warmup setup run, absolute and percentage paired timing
+deltas, and the paired median deltas. Setup and cold costs therefore remain
+visible; they are not subtracted from a claimed E2E improvement.
 
 ## Decoded-media acceptance
 
