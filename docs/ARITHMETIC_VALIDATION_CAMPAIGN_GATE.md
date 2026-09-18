@@ -50,8 +50,24 @@ Diagnostic runs enable Sol CUDA attribution and same-input replay. At least one
 diagnostic run is required for both `partitioned_preserved` and
 `partitioned_fixed`. Its Sol diagnostic report must contain the ordinary-low,
 ordinary-continuation-high and partitioned-suffix replay targets, with no
-primed recompilation and a retained-proof hit. An `isolated_empty` cold run
-must actually observe first-executable compilation.
+primed recompilation and a retained-proof hit. Progressive low/probe/high
+execution spans separate Sol Request lifetimes, so generate this report with
+Sol's `--all-requests` mode; continuation-high is correlated to the same Flow
+request as the partitioned suffix rather than inferred from summary order. An
+`isolated_empty` cold run must actually observe first-executable compilation.
+
+For example:
+
+```bash
+python custom_nodes/ComfyUI-Sol-H3/tools/check_arithmetic_validation_diagnostics.py \
+  --log /path/to/run.log \
+  --all-requests \
+  --require-replay-target ordinary_low \
+  --require-replay-target ordinary_continuation_high \
+  --require-replay-target partitioned_suffix \
+  --require-replay-cold-miss \
+  > /path/to/run.sol-diagnostics.json
+```
 
 The paired promotion timings are intentionally separate low-overhead runs:
 CUDA/replay diagnostics must be disabled. At least three primed
