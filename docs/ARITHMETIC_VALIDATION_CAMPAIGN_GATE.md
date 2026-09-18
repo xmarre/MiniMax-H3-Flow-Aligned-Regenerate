@@ -58,7 +58,7 @@ capture records HEAD, dirty-state fingerprints, loaded-file raw/canonical SHA-25
 corresponding HEAD-file SHA-256 values, match mode and overlay order. Loaded
 files must be tracked and match HEAD exactly, except that Git-for-Windows
 CRLF materialization may canonicalize CRLF to LF before comparison. No other
-byte normalization is accepted. Write the receipt outside all four repositories
+byte normalization is accepted. Write the receipt outside all five repositories
 so a previous receipt cannot make a later source capture dirty. The campaign
 manifest hash-pins one provenance artifact
 for each implementation arm:
