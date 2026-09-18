@@ -186,8 +186,7 @@ def capture_source_provenance(
         "provenance requires comfyui/flow/sol/vdn/continuum repositories",
     )
     _require(
-        len(overlay_order) == len(OVERLAY_REPOSITORIES)
-        and set(overlay_order) == set(OVERLAY_REPOSITORIES),
+        len(overlay_order) == len(OVERLAY_REPOSITORIES) and set(overlay_order) == set(OVERLAY_REPOSITORIES),
         "overlay order must contain flow/sol/vdn/continuum exactly once",
     )
     captured = {name: capture_repository(repositories[name], loaded_files.get(name, [])) for name in REPOSITORIES}
