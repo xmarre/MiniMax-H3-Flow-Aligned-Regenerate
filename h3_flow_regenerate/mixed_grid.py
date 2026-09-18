@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import torch
 
 from .geometry import unpack_streams
+from .keyless_compat import validate_keyless_contract
 
 MIXED_GRID_KEY = "h3_flow_mixed_grid_v1"
 MIXED_WRAPPER_KEY = "h3_flow_regenerate.mixed_grid.v1"
@@ -206,6 +207,22 @@ def _mixed_transformer_options(options, mixed_layout):
     return block_options
 
 
+def _validate_keyless_mixed_measure(inner, plan: MixedGridPlan) -> None:
+    """Reject the retired K/V-only reduction when the model is Keyless.
+
+    Ordinary Mixed-Grid keeps one physical hidden sequence, so a Keyless model can
+    derive routing from V normally. The optional legacy attention-measure repair
+    is different: it selects a reduced K/V domain after projection. Keyless must
+    select V once and derive routing from that exact selected value domain; this
+    deprecated contract cannot express that ownership and therefore fails closed.
+    """
+    if plan.attention_measure and validate_keyless_contract(inner) is not None:
+        raise RuntimeError(
+            "deprecated Mixed-Grid attention-measure reduction is not Keyless-compatible; "
+            "routing must be derived from the exact selected V domain"
+        )
+
+
 def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=None, minimax_payload=None, **kwargs):
     options = transformer_options or {}
     contract = options.get(MIXED_GRID_KEY)
@@ -218,6 +235,7 @@ def mixed_diffusion_wrapper(executor, x, timestep, context, transformer_options=
     inner = executor.class_obj
     if not isinstance(plan, MixedGridPlan) or len(inner.blocks) == 0:
         raise RuntimeError("mixed-grid requires a valid plan and native transformer blocks")
+    _validate_keyless_mixed_measure(inner, plan)
     attention_override = options.get("optimized_attention_override")
     if getattr(attention_override, "_h3_flow_attention_override", False):
         raise RuntimeError("mixed-grid continuation does not support uniform-grid Flow Attention Lab overrides")
