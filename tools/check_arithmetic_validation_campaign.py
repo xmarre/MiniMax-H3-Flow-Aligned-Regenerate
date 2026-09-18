@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate a complete staged arithmetic-validation hardware campaign."""
+
 from __future__ import annotations
 
 import argparse
