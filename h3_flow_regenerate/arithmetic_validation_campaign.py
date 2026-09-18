@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,7 @@ MEDIA_CHECKS = {
     "audio_intelligibility",
 }
 COLD_CACHE_STATES = {"isolated_empty", "isolated_retained"}
+_PROMPT_EXECUTED_RE = re.compile(r"Prompt executed in\s+([0-9]+(?:\.[0-9]+)?)\s+seconds")
 
 
 class CampaignEvidenceError(RuntimeError):
@@ -151,6 +153,15 @@ def _log(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise CampaignEvidenceError(f"cannot read log {path}: {exc}") from exc
+
+
+def _e2e_s(text: str) -> float:
+    matches = [float(value) for value in _PROMPT_EXECUTED_RE.findall(text)]
+    _require(
+        len(matches) == 1,
+        f"run log must contain exactly one 'Prompt executed in ... seconds' receipt; got {len(matches)}",
+    )
+    return matches[0]
 
 
 def _sampler_s(metrics: dict[str, Any]) -> float:
@@ -267,6 +278,11 @@ def _mutation(run: dict[str, Any]) -> None:
         "geometry_and_bias",
     }
     _require(kind in allowed, f"run {run.get('id')!r} has unsupported mutation kind {kind!r}")
+    base_field = mutation.get("base_field")
+    _require(
+        isinstance(base_field, str) and base_field in REQUIRED_IDENTITY and base_field.endswith("_sha256"),
+        f"run {run.get('id')!r} mutation base_field does not name a frozen digest field",
+    )
     before = mutation.get("before_sha256")
     after = mutation.get("after_sha256")
     _require(_hex_digest(before, 64), f"run {run.get('id')!r} mutation before_sha256 is invalid")
@@ -350,6 +366,12 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         sampler = _positive(timing.get("sampler_s"), f"{run_id}.sampler_s")
         e2e = _positive(timing.get("e2e_s"), f"{run_id}.e2e_s")
         _require(e2e >= sampler, f"run {run_id!r} E2E is shorter than sampler")
+        measured_e2e = _e2e_s(text)
+        _require(
+            abs(measured_e2e - e2e) <= 0.02,
+            f"run {run_id!r} E2E timing disagrees with its ComfyUI log "
+            f"({e2e:.6f}s vs {measured_e2e:.6f}s)",
+        )
         measured_sampler = _sampler_s(metrics)
         _require(abs(measured_sampler - sampler) <= 0.005, f"run {run_id!r} sampler timing disagrees with metrics")
 
@@ -381,7 +403,11 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         if condition == "primed":
             _require(sol["compile_misses"] == 0, f"run {run_id!r} primed condition observed compiler misses")
         elif condition in {"numerical_invalidated", "geometry_bias_mutated"}:
-            _mutation(run)
+                _mutation(run)
+            _require(
+                run["mutation"]["before_sha256"] == identity[run["mutation"]["base_field"]],
+                f"run {run_id!r} mutation before_sha256 does not match its frozen base field",
+            )
             _require(run.get("changed_contract_revalidated") is True, f"run {run_id!r} lacks revalidation receipt")
             _require(sol["validation_misses"] > 0, f"run {run_id!r} changed contract produced no validation miss")
         if condition == "geometry_bias_mutated":
