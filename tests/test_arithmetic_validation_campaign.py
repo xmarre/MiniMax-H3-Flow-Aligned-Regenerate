@@ -41,6 +41,7 @@ def _runtime_device_identity(process_id: int, process_generation: str) -> dict:
         "index": 0,
         "current_device": 0,
         "name": "Test SM120",
+        "uuid": "GPU-test-sm120",
         "total_memory": 96 * 1024**3,
         "multi_processor_count": 188,
         "sm": [12, 0],
