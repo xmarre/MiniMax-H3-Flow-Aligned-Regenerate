@@ -47,6 +47,16 @@ REQUIRED_IDENTITY = {
     "triton",
 }
 REQUIRED_ARTIFACTS = ("metrics", "log", "video", "audio")
+MEDIA_CHECKS = {
+    "motion",
+    "continuity",
+    "prefix_seam",
+    "prompt_adherence",
+    "texture_artifacts",
+    "audio_seam",
+    "audio_intelligibility",
+}
+COLD_CACHE_STATES = {"isolated_empty", "isolated_retained"}
 
 
 class CampaignEvidenceError(RuntimeError):
@@ -237,6 +247,36 @@ def _media(run: dict[str, Any]) -> None:
     _require(isinstance(acceptance, dict), f"run {run.get('id')!r} has no decoded_media result")
     _require(acceptance.get("video_pass") is True, f"run {run.get('id')!r} failed decoded video")
     _require(acceptance.get("audio_pass") is True, f"run {run.get('id')!r} failed decoded audio")
+    checks = acceptance.get("checks")
+    _require(isinstance(checks, dict), f"run {run.get('id')!r} has no decoded-media check detail")
+    missing = MEDIA_CHECKS - set(checks)
+    _require(not missing, f"run {run.get('id')!r} decoded-media checks are missing {sorted(missing)}")
+    failed = sorted(name for name in MEDIA_CHECKS if checks.get(name) is not True)
+    _require(not failed, f"run {run.get('id')!r} failed decoded-media checks {failed}")
+
+
+def _mutation(run: dict[str, Any]) -> None:
+    mutation = run.get("mutation")
+    _require(isinstance(mutation, dict), f"run {run.get('id')!r} has no explicit mutation receipt")
+    kind = mutation.get("kind")
+    allowed = {
+        "lora_strength",
+        "preprocess_generation",
+        "geometry",
+        "bias",
+        "geometry_and_bias",
+    }
+    _require(kind in allowed, f"run {run.get('id')!r} has unsupported mutation kind {kind!r}")
+    before = mutation.get("before_sha256")
+    after = mutation.get("after_sha256")
+    _require(_hex_digest(before, 64), f"run {run.get('id')!r} mutation before_sha256 is invalid")
+    _require(_hex_digest(after, 64), f"run {run.get('id')!r} mutation after_sha256 is invalid")
+    _require(before != after, f"run {run.get('id')!r} mutation did not change its contract digest")
+    if run["condition"] == "geometry_bias_mutated":
+        _require(
+            kind in {"geometry", "bias", "geometry_and_bias"},
+            f"run {run.get('id')!r} geometry/bias condition has unrelated mutation kind",
+        )
 
 
 def _diagnostic(run: dict[str, Any], report: dict[str, Any]) -> None:
@@ -250,6 +290,11 @@ def _diagnostic(run: dict[str, Any], report: dict[str, Any]) -> None:
             _require(isinstance(item, dict), f"replay target {target!r} is malformed")
             _require(int(item.get("primed_compile_misses", -1)) == 0, f"replay target {target!r} recompiled when primed")
             _require(item.get("retained_proof_hit") is True, f"replay target {target!r} did not reuse proof")
+            if run["condition"] == "cold" and run.get("compiler_cache_state") == "isolated_empty":
+                _require(
+                    int(item.get("first_compile_misses", 0)) > 0,
+                    f"replay target {target!r} observed no first-executable compilation",
+                )
     if run["condition"] == "cold" and run.get("compiler_cache_state") == "isolated_empty":
         _require(int(report.get("compile_misses", 0)) > 0, "empty cold cache observed no compilation")
 
@@ -293,7 +338,8 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(sequence not in sequences, f"duplicate sequence {sequence}")
         sequences.add(sequence)
         _require(run.get("frozen_identity_sha256") == identity_digest, f"run {run_id!r} frozen identity mismatch")
-        source_digests[implementation].add(_source_digest(run))
+        run_source_digest = _source_digest(run)
+        source_digests[implementation].add(run_source_digest)
 
         for name in REQUIRED_ARTIFACTS:
             _artifact(run, name, root)
@@ -321,11 +367,21 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
 
         if condition == "cold":
             _require(fresh_process, f"run {run_id!r} cold condition is not a fresh process")
-        elif condition == "primed":
-            _require(not fresh_process, f"run {run_id!r} primed condition claims a fresh process")
-            _require(run.get("fresh_sol_requests") is True, f"run {run_id!r} did not force fresh Sol Requests")
-            _require(sol["compile_misses"] == 0, f"run {run_id!r} primed condition observed compiler misses")
+            _require(
+                cache_state in COLD_CACHE_STATES,
+                f"run {run_id!r} cold compiler cache state is not isolated/documented",
+            )
         else:
+            _require(not fresh_process, f"run {run_id!r} non-cold condition claims a fresh process")
+            _require(run.get("fresh_sol_requests") is True, f"run {run_id!r} did not force fresh Sol Requests")
+            _require(
+                cache_state == "retained_same_process",
+                f"run {run_id!r} non-cold compiler cache state is not retained_same_process",
+            )
+        if condition == "primed":
+            _require(sol["compile_misses"] == 0, f"run {run_id!r} primed condition observed compiler misses")
+        elif condition in {"numerical_invalidated", "geometry_bias_mutated"}:
+            _mutation(run)
             _require(run.get("changed_contract_revalidated") is True, f"run {run_id!r} lacks revalidation receipt")
             _require(sol["validation_misses"] > 0, f"run {run_id!r} changed contract produced no validation miss")
         if condition == "geometry_bias_mutated":
@@ -356,6 +412,7 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         entry = dict(run)
         entry["_sampler_s"] = sampler
         entry["_e2e_s"] = e2e
+        entry["_source_digest"] = run_source_digest
         validated.append(entry)
         by_impl_condition.setdefault((implementation, condition), []).append(entry)
 
@@ -393,6 +450,10 @@ def validate_campaign_manifest(manifest: dict[str, Any], *, root: Path) -> Campa
         _require(positions[1] == positions[0] + 1, f"pair {pair_id!r} is not adjacent in interleaved order")
         control = by_impl["released_target"]
         fixed = by_impl["partitioned_fixed"]
+        _require(
+            control["_source_digest"] == fixed["_source_digest"],
+            f"pair {pair_id!r} control/fixed source stacks differ",
+        )
         sampler_delta = control["_sampler_s"] - fixed["_sampler_s"]
         e2e_delta = control["_e2e_s"] - fixed["_e2e_s"]
         _require(sampler_delta > 0.0, f"pair {pair_id!r} has no sampler advantage")
