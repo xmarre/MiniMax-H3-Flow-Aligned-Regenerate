@@ -42,7 +42,11 @@ from .runtime import (
     _resize_packed_mask,
     _validate_progressive_sampler_state,
 )
-from .seam_diagnostics import measure_video_boundary
+from .seam_diagnostics import (
+    measure_exact_prefix_splice,
+    measure_video_boundary,
+    recover_conditional_clean_for_diagnostics,
+)
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
@@ -174,6 +178,47 @@ def _preflight(
     except (TypeError, ValueError, RuntimeError) as exc:
         raise PartitionedPreflightUnsupported(str(exc)) from exc
     return source_h, source_w, stage_plan
+
+
+def _measure_partitioned_transfer_splice(
+    target_video: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    sigma: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Measure the learned-transfer seam immediately before exact-prefix restore.
+
+    target_video is the target-grid conditional state returned by
+    build_handoff_state. Reconstructing the clean learned state with the same
+    deterministic handoff noise lets us compare two clean-domain boundaries:
+    the learned upscaler's own prefix-last -> suffix-first boundary and the
+    authoritative exact-prefix-last -> learned suffix-first boundary created
+    when Flow discards the learned prefix.
+
+    The tensors are diagnostics-only and never feed back into sampling.
+    """
+
+    diagnostic_started = time.perf_counter()
+    diagnostic_noise = deterministic_video_noise(
+        tuple(target_video.shape),
+        seed=int(seed),
+        device=target_video.device,
+        dtype=target_video.dtype,
+    )
+    learned_clean = recover_conditional_clean_for_diagnostics(
+        target_video,
+        diagnostic_noise,
+        sigma=float(sigma),
+    )
+    exact = exact_prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
+    fields = measure_exact_prefix_splice(learned_clean, exact)
+    fields.update(
+        splice_diagnostic_elapsed_ms=(time.perf_counter() - diagnostic_started) * 1000.0,
+        splice_recovery="inverse_conditional_renoise",
+        splice_scope="learned_clean_before_exact_prefix_restore",
+    )
+    return fields
 
 
 def run_partitioned_progressive(
@@ -399,6 +444,13 @@ def run_partitioned_progressive(
         if rebuilt_shapes != target_shapes:
             raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
         target_video, target_audio = unpack_streams(target_raw, target_shapes)
+        splice_diagnostics = _measure_partitioned_transfer_splice(
+            target_video,
+            stage_plan.prefix,
+            sigma=sigma,
+            seed=int(seed or 0) + config.seed_offset,
+        )
+        binding.metrics.increment("partitioned_splice_diagnostic_runs")
         target_video = target_video.clone()
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -417,6 +469,7 @@ def run_partitioned_progressive(
             target_hw=transfer_metrics.get("target_hw"),
             temporal_length=transfer_metrics.get("temporal_length"),
             learned_upscale_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
+            **splice_diagnostics,
         )
 
         target_latent_internal = _process_latent_in(base_model, latent_image, target_shapes)
@@ -486,6 +539,8 @@ def run_partitioned_progressive(
         ):
             raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
+        if not splice_diagnostics:
+            raise RuntimeError("partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling")
         binding.metrics.event(
             "partitioned_exact_prefix_complete",
             final_prefix_exact=True,
@@ -495,6 +550,18 @@ def run_partitioned_progressive(
             final_seam_rms=boundary["seam_rms"],
             final_seam_lowpass_rms=boundary["seam_lowpass_rms"],
             final_seam_spatial_mean_rms=boundary["seam_spatial_mean_rms"],
+            final_over_transfer_native_seam_rms_ratio=boundary["seam_rms"]
+            / max(float(splice_diagnostics["upscaler_native_seam_rms"]), 1e-12),
+            final_over_transfer_native_seam_lowpass_ratio=boundary["seam_lowpass_rms"]
+            / max(float(splice_diagnostics["upscaler_native_seam_lowpass_rms"]), 1e-12),
+            final_over_transfer_native_seam_spatial_mean_ratio=boundary["seam_spatial_mean_rms"]
+            / max(float(splice_diagnostics["upscaler_native_seam_spatial_mean_rms"]), 1e-12),
+            final_over_transfer_exact_seam_rms_ratio=boundary["seam_rms"]
+            / max(float(splice_diagnostics["exact_restored_seam_rms"]), 1e-12),
+            final_over_transfer_exact_seam_lowpass_ratio=boundary["seam_lowpass_rms"]
+            / max(float(splice_diagnostics["exact_restored_seam_lowpass_rms"]), 1e-12),
+            final_over_transfer_exact_seam_spatial_mean_ratio=boundary["seam_spatial_mean_rms"]
+            / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
             deprecated_mixed_grid_contract_active=False,
         )
         binding.metrics.event(
