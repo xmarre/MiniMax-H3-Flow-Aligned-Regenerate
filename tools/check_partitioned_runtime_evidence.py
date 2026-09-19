@@ -63,6 +63,11 @@ def main() -> None:
         action="store_true",
         help="Do not require the VDN variable-grid linear-complement active marker.",
     )
+    parser.add_argument(
+        "--require-performance-accounting",
+        action="store_true",
+        help="Require request/stage/evaluation correlation and complete low/probe/high accounting.",
+    )
     args = parser.parse_args()
 
     metrics = _read_json(args.metrics)
@@ -78,6 +83,7 @@ def main() -> None:
             require_spectrum=not args.allow_no_spectrum,
             require_audio_overlap=not args.allow_no_audio_overlap,
             require_vdn_linear=not args.allow_no_vdn_linear,
+            require_performance_accounting=args.require_performance_accounting,
         )
     except RuntimeGateError as exc:
         raise SystemExit(f"partitioned exact-prefix runtime gate: FAIL: {exc}") from exc

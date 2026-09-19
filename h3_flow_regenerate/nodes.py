@@ -772,6 +772,53 @@ class H3RuntimeMetricsProbe:
         return patched, metrics
 
 
+class H3ArithmeticValidationRuntimeSourceReceipt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "filename_prefix": (
+                    "STRING",
+                    {"default": "h3_flow_regenerate/arithmetic_validation_runtime_source"},
+                )
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("receipt_path",)
+    FUNCTION = "capture"
+    OUTPUT_NODE = True
+    CATEGORY = "MiniMax H3/flow regenerate/diagnostics"
+    DESCRIPTION = (
+        "Campaign preflight only. Captures loaded module __file__ paths and the "
+        "custom-node load order directly from this running ComfyUI process."
+    )
+
+    def capture(self, filename_prefix="h3_flow_regenerate/arithmetic_validation_runtime_source"):
+        import json
+
+        import folder_paths
+
+        from .arithmetic_validation_provenance import capture_running_comfyui_source_receipt
+
+        receipt = capture_running_comfyui_source_receipt()
+        output_dir = Path(folder_paths.get_output_directory())
+        full_output_folder, filename, counter, _, _ = folder_paths.get_save_image_path(
+            filename_prefix,
+            str(output_dir),
+        )
+        target = Path(full_output_folder) / f"{filename}_{counter:05}_.json"
+        target.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            relative_path = target.relative_to(output_dir).as_posix()
+        except ValueError:
+            relative_path = target.as_posix()
+        return {
+            "ui": {"text": [f"Saved runtime source receipt: {relative_path}"]},
+            "result": (str(target),),
+        }
+
+
 class H3MetricsJSON:
     @classmethod
     def INPUT_TYPES(cls):
@@ -826,6 +873,7 @@ NODE_CLASS_MAPPINGS = {
     "H3ReferenceBudget": H3ReferenceBudget,
     "H3AttentionExperiment": H3AttentionExperiment,
     "H3RuntimeMetricsProbe": H3RuntimeMetricsProbe,
+    "H3ArithmeticValidationRuntimeSourceReceipt": H3ArithmeticValidationRuntimeSourceReceipt,
     "H3MetricsJSON": H3MetricsJSON,
 }
 
@@ -841,5 +889,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3ReferenceBudget": "MiniMax H3 Reference Budget [Experimental]",
     "H3AttentionExperiment": "MiniMax H3 Attention Lab [Experimental]",
     "H3RuntimeMetricsProbe": "MiniMax H3 Runtime Metrics Probe",
+    "H3ArithmeticValidationRuntimeSourceReceipt": "MiniMax H3 Arithmetic Validation Runtime Source Receipt",
     "H3MetricsJSON": "MiniMax H3 Metrics JSON",
 }
