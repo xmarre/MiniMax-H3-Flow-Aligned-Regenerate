@@ -71,6 +71,73 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return result
 
 
+_TRAJECTORY_X_FIELDS = (
+    "pre_pairwise_dx",
+    "pairwise_dx",
+    "pairwise_cumulative_dx",
+    "anchor_dx",
+    "pre_pairwise_median_dx",
+    "pairwise_net_dx",
+    "anchor_final_dx",
+)
+_TRAJECTORY_Y_FIELDS = (
+    "pre_pairwise_dy",
+    "pairwise_dy",
+    "pairwise_cumulative_dy",
+    "anchor_dy",
+    "pre_pairwise_median_dy",
+    "pairwise_net_dy",
+    "anchor_final_dy",
+)
+
+
+def project_translation_trajectory_to_grid(
+    fields: dict[str, object],
+    *,
+    source_hw: tuple[int, int],
+    target_hw: tuple[int, int],
+) -> dict[str, object]:
+    """Project trajectory offsets into another latent-grid coordinate system.
+
+    Phase-correlation dx/dy values are measured in cells of the tensor passed to
+    measure_translation_trajectory. Progressive source and target stages use
+    different spatial grids, so comparing their raw offsets directly is invalid.
+    This helper leaves the original receipt untouched and publishes explicit
+    target-grid-equivalent offsets for cross-stage comparisons.
+    """
+
+    source_h, source_w = map(int, source_hw)
+    target_h, target_w = map(int, target_hw)
+    if min(source_h, source_w, target_h, target_w) <= 0:
+        raise ValueError("trajectory grid projection requires positive spatial dimensions")
+    scale_x = float(target_w) / float(source_w)
+    scale_y = float(target_h) / float(source_h)
+    if not math.isfinite(scale_x) or not math.isfinite(scale_y):
+        raise RuntimeError("trajectory grid projection produced a non-finite scale")
+
+    projected: dict[str, object] = {
+        "trajectory_measurement_hw": (source_h, source_w),
+        "trajectory_target_equivalent_hw": (target_h, target_w),
+        "trajectory_target_equivalent_scale_x": scale_x,
+        "trajectory_target_equivalent_scale_y": scale_y,
+    }
+
+    def scale_value(name: str, scale: float) -> None:
+        value = fields.get(name)
+        if value is None:
+            return
+        if isinstance(value, list):
+            projected[f"target_equivalent_{name}"] = [float(item) * scale for item in value]
+            return
+        projected[f"target_equivalent_{name}"] = float(value) * scale
+
+    for name in _TRAJECTORY_X_FIELDS:
+        scale_value(name, scale_x)
+    for name in _TRAJECTORY_Y_FIELDS:
+        scale_value(name, scale_y)
+    return projected
+
+
 def _parabolic_peak_offset(left: torch.Tensor, center: torch.Tensor, right: torch.Tensor) -> float:
     denominator = float((left - 2.0 * center + right).item())
     if abs(denominator) <= _EPS:
