@@ -54,6 +54,24 @@ class FakeVAE:
         return x.expand(frames, height, width, 3).contiguous()
 
 
+class FakeBatchedVAE(FakeVAE):
+    def decode(self, latent):
+        return super().decode(latent).unsqueeze(0)
+
+
+def test_large_tile_decode_matches_core_batched_video_output_shape():
+    vae = FakeBatchedVAE()
+    latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
+    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=320, tile_overlap=128)
+    assert images.shape == (2, 896, 1216, 3)
+    assert "output=1216x896" in report
+    assert (
+        vae.first_stage_model.tile_size,
+        vae.first_stage_model.tile_overlap_min,
+        vae.first_stage_model.tiling,
+    ) == (256, 64, True)
+
+
 def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     vae = FakeVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
