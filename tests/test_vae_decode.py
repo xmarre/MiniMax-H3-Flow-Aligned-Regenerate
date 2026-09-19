@@ -57,9 +57,7 @@ class FakeVAE:
 def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     vae = FakeVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
-    images, report = decode_minimax_h3_large_tile(
-        vae, latent, tile_size=320, tile_overlap=128
-    )
+    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=320, tile_overlap=128)
     assert images.shape == (2, 896, 1216, 3)
     assert vae.seen_profile == (320, 128, True)
     assert (
