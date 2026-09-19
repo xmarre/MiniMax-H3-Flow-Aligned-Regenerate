@@ -95,7 +95,6 @@ def test_multiframe_trajectory_recovers_bounded_translation_direction():
     assert all(value > 1.0 for value in fields["pairwise_response"])
 
 
-
 def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
     torch.manual_seed(456)
     video = torch.randn(1, 8, 8, 32, 40, dtype=torch.float32)

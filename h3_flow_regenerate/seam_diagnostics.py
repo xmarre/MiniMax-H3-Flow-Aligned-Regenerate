@@ -279,12 +279,8 @@ def measure_translation_trajectory(
         "pre_pairwise_dy": pre_pairwise_dy,
         "pre_pairwise_response": pre_pairwise_response,
         "pre_pairwise_clipped": pre_pairwise_clipped,
-        "pre_pairwise_median_dx": float(torch.tensor(pre_pairwise_dx).median().item())
-        if pre_pairwise_dx
-        else 0.0,
-        "pre_pairwise_median_dy": float(torch.tensor(pre_pairwise_dy).median().item())
-        if pre_pairwise_dy
-        else 0.0,
+        "pre_pairwise_median_dx": float(torch.tensor(pre_pairwise_dx).median().item()) if pre_pairwise_dx else 0.0,
+        "pre_pairwise_median_dy": float(torch.tensor(pre_pairwise_dy).median().item()) if pre_pairwise_dy else 0.0,
         "pairwise_dx": pairwise_dx,
         "pairwise_dy": pairwise_dy,
         "pairwise_response": pairwise_response,
