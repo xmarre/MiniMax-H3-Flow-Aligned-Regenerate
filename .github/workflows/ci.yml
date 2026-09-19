@@ -86,7 +86,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout 0ef11c371484f0d5dd4bd627174406f3a6c7efcc
+          git -C .contracts/VDNPartitioned checkout f9dc846279478020353b6007cf4baea8393b3bd9
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
