@@ -32,8 +32,9 @@ def _namespace_package(name: str, package_dir: Path) -> None:
 
 def _validate_preprocess_transport() -> None:
     """Prove Flow metadata is consumable by Sol and published under VDN's key."""
-    from h3_flow_regenerate.partitioned_transformer import make_partitioned_attention_override
-    from sol_h3.interop import VDN_PREPROCESS_KEY
+    from h3_flow_regenerate.partitioned_stage import PartitionedStageRuntime
+    from h3_flow_regenerate.partitioned_transformer import _stage_partitioned_attention_override
+    from sol_h3.interop import VDN_PREPROCESS_KEY, provider_identity
     from sol_h3.runtime import BlockPatch, _preprocess_chain
     from vdn_h3.softmax_provider import PREPROCESS_KEY, preprocess as vdn_preprocess
 
@@ -65,7 +66,10 @@ def _validate_preprocess_transport() -> None:
 
     inherited.attention_preprocess_v1 = (inherited_transform, terminal)
     metrics = SimpleNamespace(increment=lambda *_args, **_kwargs: None)
-    flow_override = make_partitioned_attention_override(inherited, metrics)
+    runtime = PartitionedStageRuntime(plan=None, metrics=metrics)
+    flow_override = _stage_partitioned_attention_override(runtime, inherited, metrics)
+    if getattr(flow_override, "_h3_flow_partitioned_provider_identity", None) != provider_identity(inherited):
+        raise SystemExit("Flow partitioned provider identity diverged from Sol history-v1 semantics")
     contract = getattr(flow_override, "attention_preprocess_v1", None)
     if not isinstance(contract, tuple) or len(contract) != 2 or not callable(contract[0]):
         raise SystemExit("Flow partitioned override did not preserve attention_preprocess_v1 metadata")
