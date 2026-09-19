@@ -14,7 +14,6 @@ import threading
 
 import torch
 
-
 _DECODE_LOCK = threading.Lock()
 
 
