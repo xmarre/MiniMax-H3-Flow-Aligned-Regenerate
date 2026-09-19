@@ -59,3 +59,36 @@ def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_rest
     }
     assert required <= fields.keys()
     assert all(math.isfinite(float(fields[key])) for key in required)
+
+
+
+def test_multiframe_trajectory_recovers_bounded_translation_direction():
+    torch.manual_seed(123)
+    base = torch.randn(1, 8, 6, 32, 40, dtype=torch.float32)
+    for index in range(1, 6):
+        base[:, :, index] = torch.roll(
+            base[:, :, index - 1],
+            shifts=(1, -1),
+            dims=(-2, -1),
+        )
+
+    from h3_flow_regenerate.seam_diagnostics import measure_translation_trajectory
+
+    fields = measure_translation_trajectory(
+        base,
+        1,
+        forward_steps=4,
+        roi_fraction=1.0,
+        max_shift=3,
+    )
+
+    assert fields["trajectory_diagnostic_version"] == 1
+    assert fields["trajectory_boundary_t"] == 1
+    assert fields["trajectory_forward_steps"] == 4
+    assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0, 1.0], abs=0.05)
+    assert fields["pairwise_dx"] == pytest.approx([-1.0, -1.0, -1.0, -1.0], abs=0.05)
+    assert fields["pairwise_net_dy"] == pytest.approx(4.0, abs=0.1)
+    assert fields["pairwise_net_dx"] == pytest.approx(-4.0, abs=0.1)
+    assert fields["anchor_final_dy"] == pytest.approx(4.0, abs=0.1)
+    assert fields["anchor_final_dx"] == pytest.approx(-4.0, abs=0.1)
+    assert all(value > 1.0 for value in fields["pairwise_response"])

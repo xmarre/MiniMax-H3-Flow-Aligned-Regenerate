@@ -44,6 +44,7 @@ from .runtime import (
 )
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
+    measure_translation_trajectory,
     measure_video_boundary,
     recover_conditional_clean_for_diagnostics,
 )
@@ -180,6 +181,25 @@ def _preflight(
     return source_h, source_w, stage_plan
 
 
+def _recover_partitioned_transfer_clean(
+    target_video: torch.Tensor,
+    *,
+    sigma: float,
+    seed: int,
+) -> torch.Tensor:
+    diagnostic_noise = deterministic_video_noise(
+        tuple(target_video.shape),
+        seed=int(seed),
+        device=target_video.device,
+        dtype=target_video.dtype,
+    )
+    return recover_conditional_clean_for_diagnostics(
+        target_video,
+        diagnostic_noise,
+        sigma=float(sigma),
+    )
+
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
@@ -200,16 +220,10 @@ def _measure_partitioned_transfer_splice(
     """
 
     diagnostic_started = time.perf_counter()
-    diagnostic_noise = deterministic_video_noise(
-        tuple(target_video.shape),
-        seed=int(seed),
-        device=target_video.device,
-        dtype=target_video.dtype,
-    )
-    learned_clean = recover_conditional_clean_for_diagnostics(
+    learned_clean = _recover_partitioned_transfer_clean(
         target_video,
-        diagnostic_noise,
         sigma=float(sigma),
+        seed=int(seed),
     )
     exact = exact_prefix.to(device=learned_clean.device, dtype=learned_clean.dtype)
     fields = measure_exact_prefix_splice(learned_clean, exact)
@@ -444,13 +458,58 @@ def run_partitioned_progressive(
         if rebuilt_shapes != target_shapes:
             raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
         target_video, target_audio = unpack_streams(target_raw, target_shapes)
-        splice_diagnostics = _measure_partitioned_transfer_splice(
+        diagnostic_seed = int(seed or 0) + config.seed_offset
+        learned_clean = _recover_partitioned_transfer_clean(
             target_video,
-            stage_plan.prefix,
             sigma=sigma,
-            seed=int(seed or 0) + config.seed_offset,
+            seed=diagnostic_seed,
         )
+        splice_started = time.perf_counter()
+        exact_prefix = stage_plan.prefix.to(
+            device=learned_clean.device,
+            dtype=learned_clean.dtype,
+        )
+        splice_diagnostics = measure_exact_prefix_splice(
+            learned_clean,
+            exact_prefix,
+        )
+        splice_diagnostics.update(
+            splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
+            splice_recovery="inverse_conditional_renoise",
+            splice_scope="learned_clean_before_exact_prefix_restore",
+        )
+        restored_clean = learned_clean.clone()
+        restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix
+        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+            native_trajectory = measure_translation_trajectory(
+                learned_clean,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            restored_trajectory = measure_translation_trajectory(
+                restored_clean,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="learned_native",
+                roi=roi_name,
+                **native_trajectory,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="exact_restored_pre_high",
+                roi=roi_name,
+                **restored_trajectory,
+            )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
+        binding.metrics.increment("partitioned_multiframe_trajectory_runs")
+        del restored_clean, learned_clean
         target_video = target_video.clone()
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -539,6 +598,20 @@ def run_partitioned_progressive(
         ):
             raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
+        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+            final_trajectory = measure_translation_trajectory(
+                final_video,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="final_post_high",
+                roi=roi_name,
+                **final_trajectory,
+            )
         if not splice_diagnostics:
             raise RuntimeError(
                 "partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling"
