@@ -190,6 +190,7 @@ def measure_translation_trajectory(
     boundary_t: int,
     *,
     forward_steps: int = 4,
+    backward_steps: int = 3,
     roi_fraction: float = 0.45,
     max_shift: int = 4,
 ) -> dict[str, float | int | list[float] | list[bool]]:
@@ -202,7 +203,26 @@ def measure_translation_trajectory(
     if boundary_t < 1 or boundary_t >= temporal:
         raise ValueError("trajectory boundary must separate a prefix from a suffix")
     steps = min(max(1, int(forward_steps)), temporal - boundary_t)
+    pre_steps = min(max(0, int(backward_steps)), max(0, boundary_t - 1))
     max_shift = int(max_shift)
+
+    pre_pairwise_dx: list[float] = []
+    pre_pairwise_dy: list[float] = []
+    pre_pairwise_response: list[float] = []
+    pre_pairwise_clipped: list[bool] = []
+    pre_start = boundary_t - pre_steps - 1
+    for left_index in range(pre_start, boundary_t - 1):
+        right_index = left_index + 1
+        shift = _phase_correlation_shift(
+            video[:, :, left_index],
+            video[:, :, right_index],
+            roi_fraction=roi_fraction,
+            max_shift=max_shift,
+        )
+        pre_pairwise_dx.append(float(shift["dx"]))
+        pre_pairwise_dy.append(float(shift["dy"]))
+        pre_pairwise_response.append(float(shift["response"]))
+        pre_pairwise_clipped.append(bool(shift["clipped"]))
 
     pairwise_dx: list[float] = []
     pairwise_dy: list[float] = []
@@ -252,8 +272,19 @@ def measure_translation_trajectory(
         "trajectory_diagnostic_version": 1,
         "trajectory_boundary_t": boundary_t,
         "trajectory_forward_steps": steps,
+        "trajectory_backward_steps": pre_steps,
         "trajectory_roi_fraction": float(roi_fraction),
         "trajectory_max_shift_cells": max_shift,
+        "pre_pairwise_dx": pre_pairwise_dx,
+        "pre_pairwise_dy": pre_pairwise_dy,
+        "pre_pairwise_response": pre_pairwise_response,
+        "pre_pairwise_clipped": pre_pairwise_clipped,
+        "pre_pairwise_median_dx": float(torch.tensor(pre_pairwise_dx).median().item())
+        if pre_pairwise_dx
+        else 0.0,
+        "pre_pairwise_median_dy": float(torch.tensor(pre_pairwise_dy).median().item())
+        if pre_pairwise_dy
+        else 0.0,
         "pairwise_dx": pairwise_dx,
         "pairwise_dy": pairwise_dy,
         "pairwise_response": pairwise_response,

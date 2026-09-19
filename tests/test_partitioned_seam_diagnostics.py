@@ -84,6 +84,8 @@ def test_multiframe_trajectory_recovers_bounded_translation_direction():
     assert fields["trajectory_diagnostic_version"] == 1
     assert fields["trajectory_boundary_t"] == 1
     assert fields["trajectory_forward_steps"] == 4
+    assert fields["trajectory_backward_steps"] == 0
+    assert fields["pre_pairwise_dy"] == []
     assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0, 1.0], abs=0.05)
     assert fields["pairwise_dx"] == pytest.approx([-1.0, -1.0, -1.0, -1.0], abs=0.05)
     assert fields["pairwise_net_dy"] == pytest.approx(4.0, abs=0.1)
@@ -91,3 +93,31 @@ def test_multiframe_trajectory_recovers_bounded_translation_direction():
     assert fields["anchor_final_dy"] == pytest.approx(4.0, abs=0.1)
     assert fields["anchor_final_dx"] == pytest.approx(-4.0, abs=0.1)
     assert all(value > 1.0 for value in fields["pairwise_response"])
+
+
+
+def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
+    torch.manual_seed(456)
+    video = torch.randn(1, 8, 8, 32, 40, dtype=torch.float32)
+    for index in range(1, 8):
+        video[:, :, index] = torch.roll(
+            video[:, :, index - 1],
+            shifts=(1, 0),
+            dims=(-2, -1),
+        )
+
+    from h3_flow_regenerate.seam_diagnostics import measure_translation_trajectory
+
+    fields = measure_translation_trajectory(
+        video,
+        4,
+        forward_steps=3,
+        backward_steps=3,
+        roi_fraction=1.0,
+        max_shift=3,
+    )
+
+    assert fields["trajectory_backward_steps"] == 3
+    assert fields["pre_pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
+    assert fields["pre_pairwise_median_dy"] == pytest.approx(1.0, abs=0.05)
+    assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)

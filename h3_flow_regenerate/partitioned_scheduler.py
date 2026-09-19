@@ -432,6 +432,23 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+            source_native_trajectory = measure_translation_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="source_low_native",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_native_trajectory,
+            )
         clean_video = clean_video.clone()
         clean_video[:, :, : stage_plan.prefix_t] = resize_spatial_5d(
             stage_plan.prefix.to(clean_video),
@@ -439,6 +456,23 @@ def run_partitioned_progressive(
             source_w,
             mode="bicubic",
         )
+        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+            source_exact_trajectory = measure_translation_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="source_low_exact_context",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_exact_trajectory,
+            )
         source_x0 = pack_streams((clean_video, clean_audio))[0]
 
         transfer_started = time.perf_counter()
@@ -485,6 +519,7 @@ def run_partitioned_progressive(
                 learned_clean,
                 stage_plan.prefix_t,
                 forward_steps=4,
+                backward_steps=3,
                 roi_fraction=roi_fraction,
                 max_shift=4,
             )
@@ -492,6 +527,7 @@ def run_partitioned_progressive(
                 restored_clean,
                 stage_plan.prefix_t,
                 forward_steps=4,
+                backward_steps=3,
                 roi_fraction=roi_fraction,
                 max_shift=4,
             )
@@ -603,6 +639,7 @@ def run_partitioned_progressive(
                 final_video,
                 stage_plan.prefix_t,
                 forward_steps=4,
+                backward_steps=3,
                 roi_fraction=roi_fraction,
                 max_shift=4,
             )
