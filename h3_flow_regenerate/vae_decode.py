@@ -129,6 +129,9 @@ def decode_minimax_h3_large_tile(
 
     with _DECODE_LOCK:
         original = (bool(model.tiling), int(model.tile_size), int(model.tile_overlap_min))
+        native_x_seams, native_y_seams = _tile_boundaries(
+            model, output_height, output_width
+        )
         try:
             model.tiling = True
             model.tile_size = tile_size
@@ -145,8 +148,10 @@ def decode_minimax_h3_large_tile(
     report = (
         "MiniMax-H3 large-tile decode: "
         f"tile={tile_size}px overlap>={tile_overlap}px output={output_width}x{output_height} "
-        f"tiles={(len(x_seams)+1)}x{(len(y_seams)+1)}; "
+        f"tiles={(len(x_seams)+1)}x{(len(y_seams)+1)}; active_"
         + _format_seam_report(images, x_seams, y_seams)
+        + "; old_native_locations_"
+        + _format_seam_report(images, native_x_seams, native_y_seams)
         + f"; restored_native_profile={original[1]}/{original[2]}"
     )
     return images, report
