@@ -56,27 +56,38 @@ def _tile_boundaries(model: Any, height: int, width: int) -> tuple[list[int], li
 
 
 def _edge_ratio(images: torch.Tensor, *, axis: int, position: int, radius: int = 12) -> float:
-    rgb = images[..., :3].to(dtype=torch.float32)
+    # Never cast/copy the complete decoded video for diagnostics: that can be
+    # multiple GiB at Continuum resolutions. Promote only the two adjacent
+    # pixel lines participating in each scalar edge measurement.
+    rgb = images[..., :3]
     if axis == 2:
         length = int(rgb.shape[2])
         if not 1 <= position < length:
             return math.nan
-        seam = (rgb[:, :, position] - rgb[:, :, position - 1]).abs().mean()
+        seam = (
+            rgb[:, :, position].float() - rgb[:, :, position - 1].float()
+        ).abs().mean()
         candidates = []
         for x in range(max(1, position - radius), min(length, position + radius + 1)):
             if x == position:
                 continue
-            candidates.append((rgb[:, :, x] - rgb[:, :, x - 1]).abs().mean())
+            candidates.append(
+                (rgb[:, :, x].float() - rgb[:, :, x - 1].float()).abs().mean()
+            )
     elif axis == 1:
         length = int(rgb.shape[1])
         if not 1 <= position < length:
             return math.nan
-        seam = (rgb[:, position] - rgb[:, position - 1]).abs().mean()
+        seam = (
+            rgb[:, position].float() - rgb[:, position - 1].float()
+        ).abs().mean()
         candidates = []
         for y in range(max(1, position - radius), min(length, position + radius + 1)):
             if y == position:
                 continue
-            candidates.append((rgb[:, y] - rgb[:, y - 1]).abs().mean())
+            candidates.append(
+                (rgb[:, y].float() - rgb[:, y - 1].float()).abs().mean()
+            )
     else:
         raise ValueError("tile seam axis must be image H or W")
     if not candidates:
