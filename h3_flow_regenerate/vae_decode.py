@@ -124,8 +124,12 @@ def decode_minimax_h3_large_tile(
         finally:
             model.tiling, model.tile_size, model.tile_overlap_min = original
 
-    if not torch.is_tensor(images) or images.ndim != 4:
+    if not torch.is_tensor(images) or images.ndim not in (4, 5):
         raise RuntimeError(f"MiniMax-H3 VAE returned unexpected decoded shape {getattr(images, 'shape', None)}")
+    if images.ndim == 5:
+        # Match Core VAEDecode: video VAEs may return [B,T,H,W,C], while
+        # IMAGE consumers receive a single leading frame/batch dimension.
+        images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
     report = (
         "MiniMax-H3 large-tile decode: "
         f"tile={tile_size}px overlap>={tile_overlap}px output={output_width}x{output_height} "
