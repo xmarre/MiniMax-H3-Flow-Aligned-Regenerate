@@ -540,7 +540,9 @@ def run_partitioned_progressive(
             raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         if not splice_diagnostics:
-            raise RuntimeError("partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling")
+            raise RuntimeError(
+                "partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling"
+            )
         binding.metrics.event(
             "partitioned_exact_prefix_complete",
             final_prefix_exact=True,
