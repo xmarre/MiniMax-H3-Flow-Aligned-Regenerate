@@ -24,8 +24,7 @@ def _h3_video_vae_model(vae: object):
         raise ValueError("expected a ComfyUI MiniMax-H3 video VAE")
     if model.__class__.__name__ != "MiniMaxH3VideoVAE":
         raise ValueError(
-            "large-tile decode is restricted to ComfyUI MiniMaxH3VideoVAE, "
-            f"got {model.__class__.__name__}"
+            f"large-tile decode is restricted to ComfyUI MiniMaxH3VideoVAE, got {model.__class__.__name__}"
         )
     return model
 
@@ -37,13 +36,9 @@ def _validate_profile(tile_size: int, tile_overlap: int, vae_ratio: int) -> tupl
     if vae_ratio <= 0:
         raise ValueError("MiniMax-H3 VAE spatial ratio must be positive")
     if tile_size < 256 or tile_size > 512 or tile_size % vae_ratio:
-        raise ValueError(
-            f"tile_size must be 256..512 and divisible by the VAE ratio ({vae_ratio})"
-        )
+        raise ValueError(f"tile_size must be 256..512 and divisible by the VAE ratio ({vae_ratio})")
     if tile_overlap < 64 or tile_overlap >= tile_size or tile_overlap % vae_ratio:
-        raise ValueError(
-            f"tile_overlap must be >=64, < tile_size, and divisible by {vae_ratio}"
-        )
+        raise ValueError(f"tile_overlap must be >=64, < tile_size, and divisible by {vae_ratio}")
     return tile_size, tile_overlap
 
 
@@ -62,30 +57,22 @@ def _edge_ratio(images: torch.Tensor, *, axis: int, position: int, radius: int =
         length = int(rgb.shape[2])
         if not 1 <= position < length:
             return math.nan
-        seam = (
-            rgb[:, :, position].float() - rgb[:, :, position - 1].float()
-        ).abs().mean()
+        seam = (rgb[:, :, position].float() - rgb[:, :, position - 1].float()).abs().mean()
         candidates = []
         for x in range(max(1, position - radius), min(length, position + radius + 1)):
             if x == position:
                 continue
-            candidates.append(
-                (rgb[:, :, x].float() - rgb[:, :, x - 1].float()).abs().mean()
-            )
+            candidates.append((rgb[:, :, x].float() - rgb[:, :, x - 1].float()).abs().mean())
     elif axis == 1:
         length = int(rgb.shape[1])
         if not 1 <= position < length:
             return math.nan
-        seam = (
-            rgb[:, position].float() - rgb[:, position - 1].float()
-        ).abs().mean()
+        seam = (rgb[:, position].float() - rgb[:, position - 1].float()).abs().mean()
         candidates = []
         for y in range(max(1, position - radius), min(length, position + radius + 1)):
             if y == position:
                 continue
-            candidates.append(
-                (rgb[:, y].float() - rgb[:, y - 1].float()).abs().mean()
-            )
+            candidates.append((rgb[:, y].float() - rgb[:, y - 1].float()).abs().mean())
     else:
         raise ValueError("tile seam axis must be image H or W")
     if not candidates:
@@ -99,10 +86,10 @@ def _format_seam_report(images: torch.Tensor, x_seams: list[int], y_seams: list[
     x = [(pos, _edge_ratio(images, axis=2, position=pos)) for pos in x_seams]
     y = [(pos, _edge_ratio(images, axis=1, position=pos)) for pos in y_seams]
     def fmt(items):
-        return ",".join(
-            f"{pos}:{ratio:.3f}x" if math.isfinite(ratio) else f"{pos}:inf"
-            for pos, ratio in items
-        ) or "none"
+        return (
+            ",".join(f"{pos}:{ratio:.3f}x" if math.isfinite(ratio) else f"{pos}:inf" for pos, ratio in items)
+            or "none"
+        )
 
     return f"x_seams=[{fmt(x)}] y_seams=[{fmt(y)}]"
 
@@ -121,17 +108,13 @@ def decode_minimax_h3_large_tile(
         raise ValueError("MiniMax-H3 video latent must be [B,24,T,H,W]")
 
     model = _h3_video_vae_model(vae)
-    tile_size, tile_overlap = _validate_profile(
-        tile_size, tile_overlap, int(model.vae_ratio)
-    )
+    tile_size, tile_overlap = _validate_profile(tile_size, tile_overlap, int(model.vae_ratio))
     output_height = int(latent.shape[-2]) * int(model.vae_ratio)
     output_width = int(latent.shape[-1]) * int(model.vae_ratio)
 
     with _DECODE_LOCK:
         original = (bool(model.tiling), int(model.tile_size), int(model.tile_overlap_min))
-        native_x_seams, native_y_seams = _tile_boundaries(
-            model, output_height, output_width
-        )
+        native_x_seams, native_y_seams = _tile_boundaries(model, output_height, output_width)
         try:
             model.tiling = True
             model.tile_size = tile_size
@@ -142,13 +125,11 @@ def decode_minimax_h3_large_tile(
             model.tiling, model.tile_size, model.tile_overlap_min = original
 
     if not torch.is_tensor(images) or images.ndim != 4:
-        raise RuntimeError(
-            f"MiniMax-H3 VAE returned unexpected decoded shape {getattr(images, 'shape', None)}"
-        )
+        raise RuntimeError(f"MiniMax-H3 VAE returned unexpected decoded shape {getattr(images, 'shape', None)}")
     report = (
         "MiniMax-H3 large-tile decode: "
         f"tile={tile_size}px overlap>={tile_overlap}px output={output_width}x{output_height} "
-        f"tiles={(len(x_seams)+1)}x{(len(y_seams)+1)}; active_"
+        f"tiles={(len(x_seams) + 1)}x{(len(y_seams) + 1)}; active_"
         + _format_seam_report(images, x_seams, y_seams)
         + "; old_native_locations_"
         + _format_seam_report(images, native_x_seams, native_y_seams)
