@@ -80,9 +80,13 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
-          git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
+          git -C .contracts/Upscaler checkout 620165a311de9b28a36260219fb5cd370a304e3c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
+          git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
+          git -C .contracts/VDNPartitioned checkout 0ef11c371484f0d5dd4bd627174406f3a6c7efcc
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -106,3 +110,8 @@ jobs:
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
           python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
+      - name: Validate partitioned exact-prefix cross-repo contracts
+        run: |
+          python tools/check_partitioned_exact_prefix_contracts.py \
+            --sol .contracts/SolPartitioned \
+            --vdn .contracts/VDNPartitioned
