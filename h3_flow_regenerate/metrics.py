@@ -48,11 +48,60 @@ class H3FlowMetrics:
         with self._lock:
             return dict(self._counters)
 
+    def _stage_accounting(self) -> list[dict[str, Any]]:
+        events = self.events
+        model_by_stage: dict[str, float] = {}
+        calls_by_stage: Counter[str] = Counter()
+        for event in events:
+            if event.kind != "model_call":
+                continue
+            stage_id = event.fields.get("stage_id")
+            elapsed = event.fields.get("elapsed_ms")
+            if not isinstance(stage_id, str) or not isinstance(elapsed, (int, float)):
+                continue
+            model_by_stage[stage_id] = model_by_stage.get(stage_id, 0.0) + float(elapsed)
+            calls_by_stage[stage_id] += 1
+
+        rows = []
+        wall_kinds = {"low_stage_wall", "handoff_probe_wall", "high_stage_wall"}
+        for event in events:
+            if event.kind not in wall_kinds:
+                continue
+            stage_id = event.fields.get("stage_id")
+            elapsed = event.fields.get("elapsed_ms")
+            if not isinstance(stage_id, str) or not isinstance(elapsed, (int, float)):
+                rows.append(
+                    {
+                        "kind": event.kind,
+                        "request_id": event.fields.get("request_id"),
+                        "stage_id": stage_id,
+                        "wall_ms": None if not isinstance(elapsed, (int, float)) else float(elapsed),
+                        "model_ms": None,
+                        "model_calls": None,
+                        "remainder_ms": None,
+                    }
+                )
+                continue
+            model_ms = model_by_stage.get(stage_id)
+            rows.append(
+                {
+                    "kind": event.kind,
+                    "request_id": event.fields.get("request_id"),
+                    "stage_id": stage_id,
+                    "wall_ms": float(elapsed),
+                    "model_ms": model_ms,
+                    "model_calls": int(calls_by_stage.get(stage_id, 0)),
+                    "remainder_ms": None if model_ms is None else float(elapsed) - model_ms,
+                }
+            )
+        return rows
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "counters": self.counters,
             "events": [asdict(event) for event in self.events],
+            "stage_accounting": self._stage_accounting(),
         }
 
     def to_json(self, *, indent: int = 2) -> str:
