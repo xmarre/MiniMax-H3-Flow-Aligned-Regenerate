@@ -109,9 +109,7 @@ def _phase_correlation_shift(
     roi_height = max(4, min(height, round(height * roi_fraction)))
     work_left = left.detach().float()[..., :roi_height, :]
     work_right = right.detach().float()[..., :roi_height, :]
-    if not bool(torch.isfinite(work_left).all().item()) or not bool(
-        torch.isfinite(work_right).all().item()
-    ):
+    if not bool(torch.isfinite(work_left).all().item()) or not bool(torch.isfinite(work_right).all().item()):
         raise RuntimeError("trajectory phase correlation contains NaN or Inf")
 
     work_left = work_left - work_left.mean(dim=(-2, -1), keepdim=True)
@@ -135,9 +133,7 @@ def _phase_correlation_shift(
     cross = cross / cross.abs().clamp_min(_EPS)
     reduce_dims = tuple(range(cross.ndim - 2))
     cross = cross.mean(dim=reduce_dims)
-    correlation = torch.fft.fftshift(
-        torch.fft.irfft2(cross, s=(roi_height, width)).real
-    )
+    correlation = torch.fft.fftshift(torch.fft.irfft2(cross, s=(roi_height, width)).real)
 
     center_y, center_x = roi_height // 2, width // 2
     radius_y = min(max_shift, max(1, center_y - 1))
@@ -174,9 +170,9 @@ def _phase_correlation_shift(
     peak = float(correlation[peak_y, peak_x].detach().to(device="cpu").item())
     mean_abs = float(region.abs().mean().detach().to(device="cpu").item())
     response = peak / max(mean_abs, _EPS)
-    clipped = (
-        peak_y in (center_y - radius_y, center_y + radius_y)
-        or peak_x in (center_x - radius_x, center_x + radius_x)
+    clipped = peak_y in (center_y - radius_y, center_y + radius_y) or peak_x in (
+        center_x - radius_x,
+        center_x + radius_x,
     )
     for value in (dx, dy, response):
         if not math.isfinite(value):

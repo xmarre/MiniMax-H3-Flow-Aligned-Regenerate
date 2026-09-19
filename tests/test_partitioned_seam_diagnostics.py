@@ -61,7 +61,6 @@ def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_rest
     assert all(math.isfinite(float(fields[key])) for key in required)
 
 
-
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
     torch.manual_seed(123)
     base = torch.randn(1, 8, 6, 32, 40, dtype=torch.float32)
