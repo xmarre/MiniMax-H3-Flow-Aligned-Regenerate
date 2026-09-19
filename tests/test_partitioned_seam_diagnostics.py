@@ -8,6 +8,7 @@ import torch
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import _measure_partitioned_transfer_splice
+from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
@@ -120,3 +121,43 @@ def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
     assert fields["pre_pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
     assert fields["pre_pairwise_median_dy"] == pytest.approx(1.0, abs=0.05)
     assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
+
+
+def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_independently():
+    fields = {
+        "pre_pairwise_dx": [-1.0, 2.0],
+        "pre_pairwise_dy": [0.5, -1.0],
+        "pairwise_dx": [-3.0],
+        "pairwise_dy": [4.0],
+        "pairwise_cumulative_dx": [-3.0],
+        "pairwise_cumulative_dy": [4.0],
+        "anchor_dx": [-2.0],
+        "anchor_dy": [1.0],
+        "pre_pairwise_median_dx": -1.0,
+        "pre_pairwise_median_dy": 0.5,
+        "pairwise_net_dx": -3.0,
+        "pairwise_net_dy": 4.0,
+        "anchor_final_dx": -2.0,
+        "anchor_final_dy": 1.0,
+        "pairwise_response": [9.0],
+    }
+    original = {key: value[:] if isinstance(value, list) else value for key, value in fields.items()}
+
+    projected = project_translation_trajectory_to_grid(
+        fields,
+        source_hw=(40, 50),
+        target_hw=(60, 100),
+    )
+
+    assert fields == original
+    assert projected["trajectory_measurement_hw"] == (40, 50)
+    assert projected["trajectory_target_equivalent_hw"] == (60, 100)
+    assert projected["trajectory_target_equivalent_scale_x"] == pytest.approx(2.0)
+    assert projected["trajectory_target_equivalent_scale_y"] == pytest.approx(1.5)
+    assert projected["target_equivalent_pairwise_dx"] == pytest.approx([-6.0])
+    assert projected["target_equivalent_pairwise_dy"] == pytest.approx([6.0])
+    assert projected["target_equivalent_pairwise_net_dx"] == pytest.approx(-6.0)
+    assert projected["target_equivalent_pairwise_net_dy"] == pytest.approx(6.0)
+    assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)
+    assert projected["target_equivalent_anchor_final_dy"] == pytest.approx(1.5)
+    assert "target_equivalent_pairwise_response" not in projected
