@@ -106,7 +106,7 @@ def _phase_correlation_shift(
         raise ValueError("trajectory max_shift must be positive")
 
     height, width = map(int, left.shape[-2:])
-    roi_height = max(4, min(height, int(round(height * roi_fraction))))
+    roi_height = max(4, min(height, round(height * roi_fraction)))
     work_left = left.detach().float()[..., :roi_height, :]
     work_right = right.detach().float()[..., :roi_height, :]
     if not bool(torch.isfinite(work_left).all().item()) or not bool(
