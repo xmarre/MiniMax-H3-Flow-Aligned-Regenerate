@@ -46,6 +46,7 @@ from .seam_diagnostics import (
     measure_exact_prefix_splice,
     measure_translation_trajectory,
     measure_video_boundary,
+    project_translation_trajectory_to_grid,
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
@@ -448,6 +449,11 @@ def run_partitioned_progressive(
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
                 **source_native_trajectory,
+                **project_translation_trajectory_to_grid(
+                    source_native_trajectory,
+                    source_hw=(source_h, source_w),
+                    target_hw=(target_h, target_w),
+                ),
             )
         clean_video = clean_video.clone()
         clean_video[:, :, : stage_plan.prefix_t] = resize_spatial_5d(
@@ -472,6 +478,11 @@ def run_partitioned_progressive(
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
                 **source_exact_trajectory,
+                **project_translation_trajectory_to_grid(
+                    source_exact_trajectory,
+                    source_hw=(source_h, source_w),
+                    target_hw=(target_h, target_w),
+                ),
             )
         source_x0 = pack_streams((clean_video, clean_audio))[0]
 
