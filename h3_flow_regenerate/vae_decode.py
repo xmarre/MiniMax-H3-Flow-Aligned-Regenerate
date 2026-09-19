@@ -85,6 +85,7 @@ def _edge_ratio(images: torch.Tensor, *, axis: int, position: int, radius: int =
 def _format_seam_report(images: torch.Tensor, x_seams: list[int], y_seams: list[int]) -> str:
     x = [(pos, _edge_ratio(images, axis=2, position=pos)) for pos in x_seams]
     y = [(pos, _edge_ratio(images, axis=1, position=pos)) for pos in y_seams]
+
     def fmt(items):
         return (
             ",".join(f"{pos}:{ratio:.3f}x" if math.isfinite(ratio) else f"{pos}:inf" for pos, ratio in items) or "none"
