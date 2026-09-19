@@ -11,15 +11,13 @@ from __future__ import annotations
 
 import math
 import threading
-from typing import Any
-
 import torch
 
 
 _DECODE_LOCK = threading.Lock()
 
 
-def _h3_video_vae_model(vae: Any):
+def _h3_video_vae_model(vae: object):
     model = getattr(vae, "first_stage_model", None)
     required = ("tiling", "tile_size", "tile_overlap_min", "vae_ratio", "split_tiles")
     if model is None or not all(hasattr(model, name) for name in required):
@@ -49,7 +47,7 @@ def _validate_profile(tile_size: int, tile_overlap: int, vae_ratio: int) -> tupl
     return tile_size, tile_overlap
 
 
-def _tile_boundaries(model: Any, height: int, width: int) -> tuple[list[int], list[int]]:
+def _tile_boundaries(model: object, height: int, width: int) -> tuple[list[int], list[int]]:
     y_idx, _y_len, _y_overlap = model.split_tiles(int(height))
     x_idx, _x_len, _x_overlap = model.split_tiles(int(width))
     return [int(x) for x in x_idx[1:]], [int(y) for y in y_idx[1:]]
@@ -110,8 +108,8 @@ def _format_seam_report(images: torch.Tensor, x_seams: list[int], y_seams: list[
 
 
 def decode_minimax_h3_large_tile(
-    vae: Any,
-    samples: dict[str, Any],
+    vae: object,
+    samples: dict[str, object],
     *,
     tile_size: int = 320,
     tile_overlap: int = 128,
