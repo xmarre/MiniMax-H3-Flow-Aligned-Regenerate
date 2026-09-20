@@ -120,6 +120,7 @@ def partitioned_outer_wrapper(
     runtime_denoise_mask = denoise_mask
     guided_report = None
     audio_model_context = None
+    core_audio_velocity_mask_contract = None
     if guided_ticks or diagnostic_audio_control:
         guided_mask, guided_report = apply_audio_guided_overlap_mask(
             denoise_mask,
@@ -131,7 +132,8 @@ def partitioned_outer_wrapper(
         elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
             runtime_denoise_mask = denoise_mask
             if bool(guided_report.get("applied")):
-                if not _core_has_audio_velocity_mask_contract():
+                core_audio_velocity_mask_contract = _core_has_audio_velocity_mask_contract()
+                if not core_audio_velocity_mask_contract:
                     raise RuntimeError(
                         "model-timestep-only audio guidance requires ComfyUI MiniMax-H3 "
                         "denoise-mask velocity conversion fix #15988"
@@ -160,6 +162,7 @@ def partitioned_outer_wrapper(
             sampler_exact_audio_prefix_preserved=not bool(
                 guided_report.get("applied") and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
             ),
+            core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
     adapted = _ProgressiveExactMaskExecutor(
@@ -279,6 +282,7 @@ def partitioned_outer_wrapper(
             override_calls=audio_model_context.calls,
             sampler_mask_modified=False,
             exact_sampler_prefix_preserved=True,
+            core_audio_velocity_mask_contract=True,
             fail_closed=True,
         )
         LOG.info(
