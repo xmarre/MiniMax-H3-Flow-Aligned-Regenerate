@@ -214,21 +214,26 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
 
 def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
     metrics = _Metrics()
+    metrics.increment("partitioned_vdn_linear_bypass_calls", 2)
+    metrics.increment("partitioned_vdn_linear_bypass_video_rows", 50)
     with pytest.raises(RuntimeError, match="zero bypass calls"):
         _verify_partitioned_vdn_linear_diagnostic(
             metrics,
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
-            bypass_calls_before=0,
+            bypass_calls_before=2,
+            bypass_video_rows_before=50,
         )
     metrics.increment("partitioned_vdn_linear_bypass_calls", 3)
     metrics.increment("partitioned_vdn_linear_bypass_video_rows", 99)
     _verify_partitioned_vdn_linear_diagnostic(
         metrics,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
-        bypass_calls_before=0,
+        bypass_calls_before=2,
+        bypass_video_rows_before=50,
     )
     assert metrics.events[-1][0] == "partitioned_vdn_linear_diagnostic_verified"
     assert metrics.events[-1][1]["bypass_calls"] == 3
+    assert metrics.events[-1][1]["bypass_video_rows"] == 99
 
 
 def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
