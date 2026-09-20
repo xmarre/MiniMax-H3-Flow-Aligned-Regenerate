@@ -142,6 +142,7 @@ def main() -> None:
     from sol_h3.mapped_neighbors import compile_descriptor, validate_wire_map
     from sol_h3.partitioned_history import (
         PARTITIONED_FLOW_IDENTITY,
+        _partitioned_flow_replacement_identity,
         VDN_EXTERNAL_SEQUENCE_KEY,
         VDN_PARTITIONED_SEQUENCE_API as SOL_VDN_API,
         VDN_PARTITIONED_SEQUENCE_MODE as SOL_VDN_MODE,
@@ -197,6 +198,9 @@ def main() -> None:
         raise SystemExit("Flow/VDN partitioned linear diagnostic contract diverged")
 
     _validate_preprocess_transport()
+    history_source = inspect.getsource(_partitioned_flow_replacement_identity)
+    if "repr(partitioned_layout.signature)" not in history_source:
+        raise SystemExit("Sol history no longer keys partitioned numerical identity by full layout signature")
 
     flow = PartitionedExactPrefixPlan(
         video_start=7,
