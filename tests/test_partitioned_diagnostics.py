@@ -6,6 +6,12 @@ import pytest
 import torch
 
 from h3_flow_regenerate.audio_guided_overlap import AUDIO_GUIDED_OVERLAP_ENV
+from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
+from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.partitioned_outer import partitioned_outer_wrapper
+from h3_flow_regenerate.partitioned_scheduler import PARTITIONED_PROGRESSIVE_KEY
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -218,3 +224,99 @@ def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
     )
     assert metrics.events[-1][0] == "partitioned_vdn_linear_diagnostic_verified"
     assert metrics.events[-1][1]["bypass_calls"] == 3
+
+
+
+def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
+    video = torch.randn(1, 24, 5, 8, 12)
+    audio = torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :2] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :6] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    progressive = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        transfer_mode="learned_3d",
+        learned_upscaler=object(),
+    )
+    transformer_options = {}
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: progressive,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 4,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+            "transformer_options": transformer_options,
+        }
+    )
+
+    class Executor:
+        class_obj = guider
+
+    observed = {}
+
+    def fake_partitioned(
+        adapted,
+        call_guider,
+        call_binding,
+        config,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        call_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes,
+    ):
+        del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
+        assert latent_shapes == shapes
+        assert torch.equal(call_mask, exact_mask)
+        context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
+        assert isinstance(context, PartitionedAudioModelTimestepContext)
+        exact_audio = unpack_streams(call_mask, latent_shapes)[1]
+        forwarded = _audio_model_timestep_kwargs(
+            transformer_options,
+            {"audio_denoise_mask": exact_audio},
+        )
+        assert torch.equal(exact_audio, audio_mask)
+        assert not torch.equal(forwarded["audio_denoise_mask"], exact_audio)
+        observed["inner_audio_mask"] = forwarded["audio_denoise_mask"].clone()
+        return latent_image.clone()
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
+        fake_partitioned,
+    )
+    result = partitioned_outer_wrapper(
+        Executor(),
+        torch.randn_like(packed),
+        packed,
+        SimpleNamespace(),
+        torch.tensor([1.0, 0.0]),
+        exact_mask,
+        None,
+        True,
+        7,
+        latent_shapes=shapes,
+    )
+
+    assert torch.equal(result, packed)
+    assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
+    assert "inner_audio_mask" in observed
+    assert metrics.counters["partitioned_audio_model_timestep_override_calls"] == 1
+    context_events = [
+        event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"
+    ]
+    assert len(context_events) == 1
+    assert context_events[0].fields["override_calls"] == 1
+    assert context_events[0].fields["sampler_mask_modified"] is False
+    assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
