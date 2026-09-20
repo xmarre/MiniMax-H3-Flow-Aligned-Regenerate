@@ -79,7 +79,7 @@ class MiniMaxH3VideoVAE:
         # has to map multiple tile offsets onto one decoder batch.
         slices = [
             z_row[..., pos // self.vae_ratio:(pos + length) // self.vae_ratio]
-            for pos, length in zip(x_idx, x_len)
+            for pos, length in zip(x_idx, x_len, strict=True)
         ]
         for k in range(0, len(slices), 2):
             group = slices[k:k + 2]
@@ -91,7 +91,7 @@ class MiniMaxH3VideoVAE:
         width = int(z.shape[-1]) * self.vae_ratio
         y_idx, y_len, _y_overlap = self.split_tiles(height)
         x_idx, x_len, _x_overlap = self.split_tiles(width)
-        for y_pos, y_length in zip(y_idx, y_len):
+        for y_pos, y_length in zip(y_idx, y_len, strict=True):
             z_row = z[
                 ...,
                 y_pos // self.vae_ratio:(y_pos + y_length) // self.vae_ratio,
