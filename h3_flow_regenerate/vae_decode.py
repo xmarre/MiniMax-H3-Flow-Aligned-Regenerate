@@ -602,16 +602,12 @@ class H3MiniMaxVAEDecodeGlobalPositionDiagnostic:
 NODE_CLASS_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": H3MiniMaxVAEDecodeLargeTile,
     "H3MiniMaxVAEDecodeSerialTileDiagnostic": H3MiniMaxVAEDecodeSerialTileDiagnostic,
-    "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": (
-        H3MiniMaxVAEDecodeGlobalPositionDiagnostic
-    ),
+    "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": (H3MiniMaxVAEDecodeGlobalPositionDiagnostic),
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": "MiniMax H3 VAE Decode — Tile Size [Diagnostic]",
     "H3MiniMaxVAEDecodeSerialTileDiagnostic": (
         "MiniMax H3 VAE Decode — Serial Tiles [Diagnostic]"
     ),
-    "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": (
-        "MiniMax H3 VAE Decode — Global Spatial Position [Diagnostic]"
-    ),
+    "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": ("MiniMax H3 VAE Decode — Global Spatial Position [Diagnostic]"),
 }
