@@ -87,7 +87,7 @@ The current CI pins are:
 
 | Source | Revision |
 |---|---|
-| ComfyUI | `1af040bf022569d7a890241c8dd79b296cda483f` |
+| ComfyUI | `00abd23d4ecc1d5f5a002df3705362436be325b7` |
 | ComfyUI-Spectrum-MiniMax-H3 | `beb32dd210ef9e95520453107f158241d4f2ecf3` |
 | ComfyUI-H3-Continuum | `bf25353d8bec44afea22c89717c4301ce13c2036` |
 | ComfyUI-DiffAid-Patches | `ba9d9efbcf7e64c755e068cb76547d8cc85481eb` |
