@@ -9,12 +9,55 @@ cross-repo attention contract is published separately by ``partitioned_prefix``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 
 import torch
 
 from .geometry import unpack_streams
+from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+)
 
 PARTITIONED_STAGE_KEY = "h3_flow_partitioned_stage_v1"
+PARTITIONED_POSITION_POLICY_TAG = "h3_flow_partitioned_position_policy_v1"
+
+
+def tensor_sha256(value: torch.Tensor) -> str:
+    tensor = value.detach().to(device="cpu").contiguous()
+    return hashlib.sha256(tensor.numpy().tobytes()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class PartitionedPositionPolicy:
+    mode: str
+    source_hw: tuple[int, int]
+    target_hw: tuple[int, int]
+    audio_range: tuple[int, int]
+    target_audio_w: tuple[float, float]
+    source_audio_w: tuple[float, float]
+    temporal_digest: str
+    non_audio_digest: str
+    prefix_rope_position_digest: str
+    suffix_rope_position_digest: str
+    position_digest: str
+
+    @property
+    def signature(self) -> tuple[object, ...]:
+        return (
+            PARTITIONED_POSITION_POLICY_TAG,
+            self.mode,
+            self.source_hw,
+            self.target_hw,
+            self.audio_range,
+            self.target_audio_w,
+            self.source_audio_w,
+            self.temporal_digest,
+            self.non_audio_digest,
+            self.prefix_rope_position_digest,
+            self.suffix_rope_position_digest,
+            self.position_digest,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +131,9 @@ class PartitionedStageRuntime:
     # Diagnostic-only structural A/B. The ordinary node always uses the exact
     # target-grid prefix inside the heterogeneous low/probe transformer.
     prefix_transformer_context: str = "exact_target_partitioned"
+    audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
+    position_policy: PartitionedPositionPolicy | None = None
+    position_policy_positions: torch.Tensor | None = None
 
 
 def build_partitioned_stage_plan(
@@ -176,6 +222,110 @@ def partitioned_positions(native, plan: PartitionedStagePlan, layout):
     return torch.cat((layout.position_ids[:video_start], prefix, suffix))
 
 
+def _target_audio_range(layout) -> tuple[int, int]:
+    matches = [
+        (int(start), int(stop))
+        for start, stop, kind in layout.segments
+        if kind == "audio"
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("source-carrier audio-position candidate requires exactly one target audio segment")
+    start, stop = matches[0]
+    if start < 0 or stop <= start or stop > int(layout.position_ids.shape[0]) or (stop - start) % 2:
+        raise RuntimeError("source-carrier audio-position candidate found malformed target audio rows")
+    return start, stop
+
+
+def partitioned_positions_with_audio_policy(
+    native,
+    plan: PartitionedStagePlan,
+    layout,
+    audio_position_domain: str,
+) -> tuple[torch.Tensor, PartitionedPositionPolicy | None]:
+    """Apply the opt-in target-audio spatial coordinate policy.
+
+    The legacy path is exactly the pre-candidate arithmetic. The candidate changes
+    only the spatial columns of the target audio segment; reference and conditioning
+    audio rows are not selected by this segment lookup.
+    """
+    positions = partitioned_positions(native, plan, layout)
+    if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
+        return positions, None
+    if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+        raise RuntimeError(f"unsupported partitioned audio position domain {audio_position_domain!r}")
+    if not callable(getattr(native, "_frame_grid", None)) or not callable(getattr(native, "_audio_grid", None)):
+        raise RuntimeError("installed MiniMax-H3 Core does not expose the required native audio/grid constructors")
+
+    audio_start, audio_stop = _target_audio_range(layout)
+    audio_rows = positions[audio_start:audio_stop]
+    audio_t = (audio_stop - audio_start) // 2
+    _source_frame, source_w_grid = native._frame_grid(plan.source_h, plan.source_w)
+    if source_w_grid.numel() < 1:
+        raise RuntimeError("source-carrier audio-position candidate produced an empty source width grid")
+    source_audio = native._audio_grid(
+        float(audio_rows[0, 0]),
+        audio_t,
+        float(source_w_grid[0]),
+        float(source_w_grid[-1]),
+    )
+    if tuple(source_audio.shape) != tuple(audio_rows.shape):
+        raise RuntimeError("source-carrier native audio grid does not match target audio row geometry")
+    if not torch.equal(source_audio[:, 0], audio_rows[:, 0]):
+        raise RuntimeError("source-carrier audio-position candidate changed target audio temporal coordinates")
+
+    candidate = positions.clone()
+    candidate[audio_start:audio_stop, 1:] = source_audio[:, 1:].to(candidate)
+    if not torch.equal(candidate[audio_start:audio_stop, 0], positions[audio_start:audio_stop, 0]):
+        raise RuntimeError("source-carrier audio-position candidate changed target audio temporal coordinates")
+
+    unchanged_before = torch.cat((positions[:audio_start], positions[audio_stop:]))
+    unchanged_after = torch.cat((candidate[:audio_start], candidate[audio_stop:]))
+    if not torch.equal(unchanged_before, unchanged_after):
+        raise RuntimeError("source-carrier audio-position candidate mutated non-target-audio position rows")
+
+    video_start = int(layout.segments[-1][0])
+    prefix_stop = video_start + plan.prefix_rows
+    target_w = (float(audio_rows[0, 2]), float(audio_rows[audio_t, 2]))
+    source_w = (float(source_audio[0, 2]), float(source_audio[audio_t, 2]))
+    policy = PartitionedPositionPolicy(
+        mode=audio_position_domain,
+        source_hw=(int(plan.source_h), int(plan.source_w)),
+        target_hw=tuple(map(int, plan.target_hw)),
+        audio_range=(audio_start, audio_stop),
+        target_audio_w=target_w,
+        source_audio_w=source_w,
+        temporal_digest=tensor_sha256(candidate[audio_start:audio_stop, :1]),
+        non_audio_digest=tensor_sha256(unchanged_after),
+        prefix_rope_position_digest=tensor_sha256(candidate[video_start:prefix_stop]),
+        suffix_rope_position_digest=tensor_sha256(candidate[prefix_stop:]),
+        position_digest=tensor_sha256(candidate),
+    )
+    return candidate, policy
+
+
+def partitioned_positions_for_runtime(native, runtime: PartitionedStageRuntime, layout):
+    """Resolve one immutable position policy/position tensor per sampler-stage owner."""
+    mode = str(runtime.audio_position_domain)
+    positions, policy = partitioned_positions_with_audio_policy(native, runtime.plan, layout, mode)
+    if policy is None:
+        if runtime.position_policy is not None or runtime.position_policy_positions is not None:
+            raise RuntimeError("legacy audio-position stage unexpectedly retained candidate position state")
+        return positions, None
+
+    if runtime.position_policy is None:
+        runtime.position_policy = policy
+        runtime.position_policy_positions = positions
+        return positions, policy
+
+    if runtime.position_policy_positions is None:
+        raise RuntimeError("partitioned audio-position policy lost its validated position tensor")
+    if runtime.position_policy.signature != policy.signature:
+        raise RuntimeError("partitioned audio-position policy drifted within one sampler-stage lifetime")
+    if not torch.equal(runtime.position_policy_positions, positions):
+        raise RuntimeError("partitioned audio-position rows drifted within one sampler-stage lifetime")
+    return runtime.position_policy_positions, runtime.position_policy
+
+
 def partitioned_mod_segments(segments, plan: PartitionedStagePlan, video_start: int, video_end: int):
     result = []
     for start, stop, row in segments:
@@ -195,11 +345,16 @@ def partitioned_mod_segments(segments, plan: PartitionedStagePlan, video_start: 
 
 
 __all__ = [
+    "PARTITIONED_POSITION_POLICY_TAG",
     "PARTITIONED_STAGE_KEY",
+    "PartitionedPositionPolicy",
     "PartitionedStagePlan",
     "PartitionedStageRuntime",
     "build_partitioned_stage_plan",
     "partitioned_carrier_layout",
     "partitioned_mod_segments",
     "partitioned_positions",
+    "partitioned_positions_for_runtime",
+    "partitioned_positions_with_audio_policy",
+    "tensor_sha256",
 ]
