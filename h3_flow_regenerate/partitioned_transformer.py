@@ -13,6 +13,12 @@ import copy
 
 import torch
 
+from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
+    PartitionedAudioModelTimestepContext,
+    normalize_vdn_linear_diagnostic,
+)
 from .partitioned_prefix import (
     PARTITIONED_PREFIX_KEY,
     PARTITIONED_PREFIX_TOPOLOGY,
@@ -239,13 +245,26 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     return override
 
 
-def _partitioned_transformer_options(options, partitioned_layout, partition_contract, metrics, *, block_index):
+def _partitioned_transformer_options(
+    options,
+    partitioned_layout,
+    partition_contract,
+    metrics,
+    *,
+    runtime: PartitionedStageRuntime,
+    block_index,
+):
     block_options = dict(options)
     if any(key in block_options for key in _DEPRECATED_MIXED_GRID_KEYS):
         raise RuntimeError("partitioned exact-prefix found a deprecated Mixed-Grid contract")
     block_options["minimax_h3_layout"] = partitioned_layout
     block_options[PARTITIONED_PREFIX_KEY] = partition_contract
     block_options[PARTITIONED_BLOCK_INDEX_KEY] = int(block_index)
+    linear_mode = normalize_vdn_linear_diagnostic(runtime.vdn_linear_diagnostic)
+    existing_linear_mode = block_options.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY)
+    if existing_linear_mode is not None and existing_linear_mode != linear_mode:
+        raise RuntimeError("partitioned exact-prefix VDN linear diagnostic transport drifted")
+    block_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = linear_mode
     expected_vdn = _vdn_external_contract(
         validate_partitioned_contract(
             partition_contract,
@@ -260,6 +279,29 @@ def _partitioned_transformer_options(options, partitioned_layout, partition_cont
     return block_options
 
 
+def _audio_model_timestep_kwargs(options, kwargs):
+    """Override only MiniMax-H3's inner audio timestep labels, never sampler ownership."""
+
+    context = options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
+    if context is None:
+        return kwargs
+    if not isinstance(context, PartitionedAudioModelTimestepContext):
+        raise RuntimeError("partitioned audio model-timestep context is malformed")
+    exact_audio_mask = kwargs.get("audio_denoise_mask")
+    if not torch.is_tensor(exact_audio_mask):
+        raise RuntimeError("model-timestep-only audio guidance requires the exact native audio denoise mask")
+    context_audio_mask = context.audio_mask
+    if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(exact_audio_mask.shape):
+        raise RuntimeError("model-timestep-only audio guidance mask geometry drifted")
+    local = dict(kwargs)
+    local["audio_denoise_mask"] = context_audio_mask.to(
+        device=exact_audio_mask.device,
+        dtype=exact_audio_mask.dtype,
+    )
+    context.record_call()
+    return local
+
+
 def partitioned_diffusion_wrapper(
     executor,
     x,
@@ -271,6 +313,7 @@ def partitioned_diffusion_wrapper(
 ):
     """Expose exact target-prefix and low-grid suffix as explicit physical domains."""
     options = transformer_options or {}
+    kwargs = _audio_model_timestep_kwargs(options, kwargs)
     runtime = options.get(PARTITIONED_STAGE_KEY)
     if runtime is None:
         return executor(
@@ -417,6 +460,7 @@ def partitioned_diffusion_wrapper(
                 partitioned_layout,
                 partition_contract,
                 metrics,
+                runtime=runtime,
                 block_index=layer,
             )
             output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
