@@ -258,3 +258,72 @@ def test_tile_profile_rejects_unaligned_or_invalid_values():
             pass
         else:
             raise AssertionError((size, overlap))
+
+
+def _local_token_ids(tile_t, tile_h, tile_w, *, batch=1):
+    coords = []
+    for dim in (tile_t, tile_h, tile_w):
+        axis = torch.arange(0.5, dim, dtype=torch.float32) / dim
+        coords.append(2.0 * axis - 1.0)
+    patch = torch.stack(torch.meshgrid(*coords, indexing="ij"), dim=-1).reshape(-1, 3)
+    suffix = torch.zeros(5, 3)
+    return torch.cat([patch, suffix], dim=0).unsqueeze(0).repeat(batch, 1, 1)
+
+
+def test_global_spatial_token_ids_match_overlapping_physical_locations():
+    tile_shape = (2, 4, 4)
+    full_hw = (4, 6)
+    local = _local_token_ids(*tile_shape, batch=2)
+    global_ids = _globalize_spatial_token_ids(
+        local,
+        tile_shape=tile_shape,
+        full_hw=full_hw,
+        origins=[(0, 0), (0, 2)],
+    )
+
+    # Same full-frame X positions must receive identical coordinates even when
+    # they are reached through different overlapping decoder tiles.
+    first_tile_x2 = global_ids[0, 2, 2]
+    second_tile_x0 = global_ids[1, 0, 2]
+    assert torch.equal(first_tile_x2, second_tile_x0)
+
+    # Temporal coordinates are intentionally unchanged from Core's local
+    # temporal normalization, and register/sentinel suffix ids remain untouched.
+    patch_tokens = 2 * 4 * 4
+    assert torch.equal(global_ids[0, :patch_tokens, 0], local[0, :patch_tokens, 0])
+    assert torch.equal(global_ids[:, patch_tokens:], local[:, patch_tokens:])
+
+
+def test_global_spatial_token_ids_use_full_frame_yx_coordinates():
+    tile_shape = (1, 2, 2)
+    local = _local_token_ids(*tile_shape)
+    global_ids = _globalize_spatial_token_ids(
+        local,
+        tile_shape=tile_shape,
+        full_hw=(4, 4),
+        origins=[(2, 2)],
+    )
+    expected_yx = torch.tensor(
+        [
+            [0.25, 0.25],
+            [0.25, 0.75],
+            [0.75, 0.25],
+            [0.75, 0.75],
+        ]
+    )
+    assert torch.allclose(global_ids[0, :4, 1:], expected_yx, rtol=0.0, atol=1e-7)
+
+
+def test_global_spatial_token_ids_reject_out_of_bounds_tile():
+    local = _local_token_ids(1, 2, 2)
+    try:
+        _globalize_spatial_token_ids(
+            local,
+            tile_shape=(1, 2, 2),
+            full_hw=(3, 3),
+            origins=[(2, 2)],
+        )
+    except RuntimeError as exc:
+        assert "outside the full latent grid" in str(exc)
+    else:
+        raise AssertionError("expected out-of-bounds global tile origin to fail")
