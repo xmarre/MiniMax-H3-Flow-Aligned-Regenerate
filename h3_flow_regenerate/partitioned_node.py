@@ -16,6 +16,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
+    PARTITIONED_INITIAL_TRANSFER_LEARNED,
+    PARTITIONED_INITIAL_TRANSFER_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -265,6 +267,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Initial/no-prefix chunks bypass the partitioned exact-prefix scheduler.
+        # Append this control last so all earlier diagnostic widget positions stay stable.
+        spec["required"]["initial_transfer"] = (
+            list(PARTITIONED_INITIAL_TRANSFER_OPTIONS),
+            {
+                "default": PARTITIONED_INITIAL_TRANSFER_LEARNED,
+                "tooltip": (
+                    "learned_3d preserves the current first-chunk handoff. bicubic changes only "
+                    "the initial/no-prefix Progressive Target Input handoff to bicubic; protected "
+                    "continuation chunks keep the learned 3D partitioned handoff unchanged."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -297,6 +312,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         prefix_transformer_context,
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        initial_transfer=PARTITIONED_INITIAL_TRANSFER_LEARNED,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -327,6 +343,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             prefix_transformer_context=prefix_transformer_context,
             audio_position_domain=audio_position_domain,
             audio_handoff_source=audio_handoff_source,
+            initial_transfer=initial_transfer,
         )
 
 

@@ -21,6 +21,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+    PARTITIONED_INITIAL_TRANSFER_KEY,
+    PARTITIONED_INITIAL_TRANSFER_LEARNED,
+    PARTITIONED_INITIAL_TRANSFER_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -32,6 +36,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PartitionedAudioModelTimestepContext,
     apply_partitioned_diagnostic_controls,
     normalize_audio_handoff_source,
+    normalize_initial_transfer,
     normalize_prefix_transformer_context,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -41,6 +46,7 @@ from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixHandoff,
 )
 from h3_flow_regenerate.partitioned_outer import (
+    _run_initial_transfer_diagnostic,
     _source_has_audio_velocity_mask_contract,
     partitioned_outer_wrapper,
 )
@@ -52,7 +58,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
-from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, PROGRESSIVE_KEY, FlowBinding
 
 
 class _Metrics:
@@ -81,6 +87,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert "prefix_transformer_context" not in ordinary
     assert "audio_position_domain" not in ordinary
     assert "audio_handoff_source" not in ordinary
+    assert "initial_transfer" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -103,11 +110,14 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_position_domain"][1]["default"] == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
     assert diagnostic["audio_handoff_source"][0] == list(PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS)
     assert diagnostic["audio_handoff_source"][1]["default"] == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+    assert diagnostic["initial_transfer"][0] == list(PARTITIONED_INITIAL_TRANSFER_OPTIONS)
+    assert diagnostic["initial_transfer"][1]["default"] == PARTITIONED_INITIAL_TRANSFER_LEARNED
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
     assert keys.index("prefix_transformer_context") < keys.index("audio_position_domain")
     assert keys.index("audio_position_domain") < keys.index("audio_handoff_source")
+    assert keys.index("audio_handoff_source") < keys.index("initial_transfer")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -571,3 +581,228 @@ def test_audio_handoff_source_is_bounded_and_defaults_to_main_path():
     )
     with pytest.raises(ValueError, match="audio handoff source"):
         normalize_audio_handoff_source("invented")
+
+
+def test_initial_transfer_diagnostic_is_bounded_and_default_absent():
+    assert normalize_initial_transfer(PARTITIONED_INITIAL_TRANSFER_LEARNED) == PARTITIONED_INITIAL_TRANSFER_LEARNED
+    assert normalize_initial_transfer(PARTITIONED_INITIAL_TRANSFER_BICUBIC) == PARTITIONED_INITIAL_TRANSFER_BICUBIC
+    with pytest.raises(ValueError, match="initial transfer diagnostic"):
+        normalize_initial_transfer("invented")
+
+    model = SimpleNamespace(model_options={"transformer_options": {}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        initial_transfer=PARTITIONED_INITIAL_TRANSFER_LEARNED,
+    )
+    assert PARTITIONED_INITIAL_TRANSFER_KEY not in model.model_options
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        initial_transfer=PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+    )
+    assert model.model_options[PARTITIONED_INITIAL_TRANSFER_KEY] == PARTITIONED_INITIAL_TRANSFER_BICUBIC
+    assert metrics.events[-1][1]["initial_transfer"] == PARTITIONED_INITIAL_TRANSFER_BICUBIC
+
+
+def _initial_transfer_test_config():
+    provider = SimpleNamespace(
+        api_version=1,
+        kind="minimax_h3_learned_latent_upscaler",
+        model_name="test-upscaler",
+        device="cpu",
+        inference_device="cpu",
+        precision="fp32",
+        offload_after_upscale=False,
+        upscale_clean_video=lambda *args, **kwargs: None,
+    )
+    return ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+    )
+
+
+def test_initial_bicubic_transfer_is_call_scoped_and_restores_production_config(monkeypatch):
+    progressive = _initial_transfer_test_config()
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    model_options = {
+        FLOW_BINDING_KEY: binding,
+        PROGRESSIVE_KEY: progressive,
+        PARTITIONED_INITIAL_TRANSFER_KEY: PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+        "transformer_options": {},
+    }
+    guider = SimpleNamespace(model_options=model_options)
+
+    class Executor:
+        class_obj = guider
+
+    observed = {}
+
+    def fake_released(*args, **kwargs):
+        del args, kwargs
+        effective = model_options[PROGRESSIVE_KEY]
+        observed["during"] = effective
+        assert effective is not progressive
+        assert effective.transfer_mode == "bicubic"
+        metrics.event("handoff_plan", input_mode="target_grid", transfer_mode="bicubic")
+        metrics.event("handoff_complete", input_mode="target_grid", transfer_mode="bicubic")
+        return torch.tensor([123.0])
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.flow_outer_wrapper_with_exact_mask",
+        fake_released,
+    )
+    result = _run_initial_transfer_diagnostic(
+        Executor(),
+        binding=binding,
+        partitioned_progressive=progressive,
+        model_options=model_options,
+        noise=torch.tensor([0.0]),
+        latent_image=torch.tensor([0.0]),
+        sampler=SimpleNamespace(),
+        sigmas=torch.tensor([1.0, 0.0]),
+        denoise_mask=None,
+        callback=None,
+        disable_pbar=True,
+        seed=7,
+        latent_shapes=[],
+    )
+
+    assert torch.equal(result, torch.tensor([123.0]))
+    assert model_options[PROGRESSIVE_KEY] is progressive
+    receipts = [event for event in metrics.events if event.kind == "partitioned_initial_transfer_diagnostic"]
+    assert [event.fields["phase"] for event in receipts] == ["begin", "verified"]
+    assert receipts[-1].fields["production_config_restored"] is True
+
+
+def test_initial_bicubic_transfer_restores_production_config_on_failure(monkeypatch):
+    progressive = _initial_transfer_test_config()
+    binding = FlowBinding(metrics=H3FlowMetrics())
+    model_options = {
+        FLOW_BINDING_KEY: binding,
+        PROGRESSIVE_KEY: progressive,
+        PARTITIONED_INITIAL_TRANSFER_KEY: PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+        "transformer_options": {},
+    }
+    guider = SimpleNamespace(model_options=model_options)
+
+    class Executor:
+        class_obj = guider
+
+    def fail_released(*args, **kwargs):
+        del args, kwargs
+        assert model_options[PROGRESSIVE_KEY].transfer_mode == "bicubic"
+        raise RuntimeError("sentinel")
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.flow_outer_wrapper_with_exact_mask",
+        fail_released,
+    )
+    with pytest.raises(RuntimeError, match="sentinel"):
+        _run_initial_transfer_diagnostic(
+            Executor(),
+            binding=binding,
+            partitioned_progressive=progressive,
+            model_options=model_options,
+            noise=torch.tensor([0.0]),
+            latent_image=torch.tensor([0.0]),
+            sampler=SimpleNamespace(),
+            sigmas=torch.tensor([1.0, 0.0]),
+            denoise_mask=None,
+            callback=None,
+            disable_pbar=True,
+            seed=7,
+            latent_shapes=[],
+        )
+    assert model_options[PROGRESSIVE_KEY] is progressive
+
+
+def test_initial_bicubic_selector_does_not_change_exact_prefix_continuation_config(monkeypatch):
+    progressive = _initial_transfer_test_config()
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    model_options = {
+        FLOW_BINDING_KEY: binding,
+        PROGRESSIVE_KEY: progressive,
+        PARTITIONED_PROGRESSIVE_KEY: progressive,
+        PARTITIONED_INITIAL_TRANSFER_KEY: PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+        "transformer_options": {},
+    }
+    guider = SimpleNamespace(model_options=model_options)
+
+    class Executor:
+        class_obj = guider
+
+    observed = {}
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer._has_exact_video_protection",
+        lambda _mask, _shapes: True,
+    )
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.resolve_partitioned_audio_guided_overlap_ticks",
+        lambda _options: (0, "test"),
+    )
+
+    def fake_partitioned(
+        adapted,
+        call_guider,
+        call_binding,
+        config,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        denoise_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes,
+    ):
+        del (
+            adapted,
+            call_guider,
+            call_binding,
+            noise,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes,
+        )
+        observed["config"] = config
+        return latent_image.clone()
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
+        fake_partitioned,
+    )
+    latent = torch.tensor([1.0])
+    result = partitioned_outer_wrapper(
+        Executor(),
+        torch.tensor([0.0]),
+        latent,
+        SimpleNamespace(),
+        torch.tensor([1.0, 0.0]),
+        None,
+        None,
+        True,
+        7,
+        latent_shapes=[],
+    )
+
+    assert torch.equal(result, latent)
+    assert observed["config"] is progressive
+    assert observed["config"].transfer_mode == "learned_3d"
+    assert model_options[PROGRESSIVE_KEY] is progressive
