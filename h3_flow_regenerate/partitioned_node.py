@@ -10,6 +10,8 @@ from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -191,6 +193,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["audio_guided_overlap_mode"] = (
+            list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
+            {
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+                "tooltip": (
+                    "sampler_mask preserves the existing A-run behavior. model_timestep_only "
+                    "keeps the sampler/exact audio prefix untouched and exposes the same ramp "
+                    "only to MiniMax-H3's inner audio timestep/modulation labels."
+                ),
+            },
+        )
         spec["required"]["audio_guided_overlap_ticks"] = (
             "INT",
             {
@@ -209,7 +222,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
     DESCRIPTION = (
         "Diagnostic variant of the partitioned exact-prefix handoff. Adds model-local "
         "controls for bypassing only the partitioned VDN learned linear complement and "
-        "for selecting the audio guided-overlap width. Ordinary/native VDN and the "
+        "for selecting the audio guided-overlap mode/width. Ordinary/native VDN and the "
         "production-shaped partitioned node remain unchanged."
     )
 
@@ -230,6 +243,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_frequency_cutoff,
         learned_upscaler,
         vdn_linear_diagnostic,
+        audio_guided_overlap_mode,
         audio_guided_overlap_ticks,
         metrics=None,
         temporal_weight=0.20,
@@ -257,6 +271,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
         )
 
 
