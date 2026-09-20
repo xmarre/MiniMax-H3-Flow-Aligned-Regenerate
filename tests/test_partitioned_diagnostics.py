@@ -87,13 +87,8 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
-    assert diagnostic["prefix_transformer_context"][0] == list(
-        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS
-    )
-    assert (
-        diagnostic["prefix_transformer_context"][1]["default"]
-        == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
-    )
+    assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
+    assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
@@ -144,7 +139,6 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
     ]
 
 
-
 def test_prefix_transformer_context_normalization_is_bounded():
     assert (
         normalize_prefix_transformer_context(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT)
@@ -156,7 +150,6 @@ def test_prefix_transformer_context_normalization_is_bounded():
     )
     with pytest.raises(ValueError, match="prefix transformer context"):
         normalize_prefix_transformer_context("invented")
-
 
 
 def test_node_local_audio_overlap_override_wins_over_process_environment(monkeypatch):

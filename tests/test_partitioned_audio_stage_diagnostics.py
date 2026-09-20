@@ -29,9 +29,7 @@ def test_audio_stage_delta_reports_exact_prefix_and_generated_channel_changes():
     assert window["candidate_over_reference_rms_db"] == pytest.approx(6.0205999)
     assert window["delta_over_reference_rms"] == pytest.approx(1.0)
     assert window["cosine_similarity"] == pytest.approx(1.0)
-    assert window["per_channel_candidate_over_reference_db"] == pytest.approx(
-        [6.0205999] * 4
-    )
+    assert window["per_channel_candidate_over_reference_db"] == pytest.approx([6.0205999] * 4)
 
 
 def test_audio_stage_delta_rejects_noncanonical_mask():

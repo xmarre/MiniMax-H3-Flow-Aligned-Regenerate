@@ -138,7 +138,6 @@ def measure_audio_latent_boundary(
     return report
 
 
-
 def compare_audio_latent_stages(
     reference_audio: torch.Tensor,
     candidate_audio: torch.Tensor,
@@ -160,9 +159,7 @@ def compare_audio_latent_stages(
         raise ValueError("audio stage comparison requires native BxCx2xT audio latents")
     if exact_audio_mask.shape != reference_audio.shape:
         raise ValueError("audio stage comparison requires mask/audio geometry parity")
-    if not bool(torch.isfinite(reference_audio).all().item()) or not bool(
-        torch.isfinite(candidate_audio).all().item()
-    ):
+    if not bool(torch.isfinite(reference_audio).all().item()) or not bool(torch.isfinite(candidate_audio).all().item()):
         raise ValueError("audio stage comparison requires finite latents")
 
     temporal_min = exact_audio_mask.amin(dim=(0, 1, 2))
@@ -174,9 +171,7 @@ def compare_audio_latent_stages(
     while prefix < temporal and bool(exact_zero[prefix].item()):
         prefix += 1
     if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
-        raise ValueError(
-            "audio stage comparison requires a contiguous exact prefix followed by generated suffix"
-        )
+        raise ValueError("audio stage comparison requires a contiguous exact prefix followed by generated suffix")
 
     reference = reference_audio.detach().to(dtype=torch.float32)
     candidate = candidate_audio.detach().to(device=reference.device, dtype=torch.float32)
@@ -217,12 +212,8 @@ def compare_audio_latent_stages(
         cosine = float(torch.dot(flat_ref, flat_cand).item() / denom) if denom > 1e-20 else None
 
         if usable > 1:
-            ref_diff_rms = float(
-                (ref[..., 1:] - ref[..., :-1]).square().mean().sqrt().item()
-            )
-            cand_diff_rms = float(
-                (cand[..., 1:] - cand[..., :-1]).square().mean().sqrt().item()
-            )
+            ref_diff_rms = float((ref[..., 1:] - ref[..., :-1]).square().mean().sqrt().item())
+            cand_diff_rms = float((cand[..., 1:] - cand[..., :-1]).square().mean().sqrt().item())
         else:
             ref_diff_rms = None
             cand_diff_rms = None
@@ -233,16 +224,14 @@ def compare_audio_latent_stages(
             "duration_ms_at_40hz": usable * 25.0,
             "reference_rms": ref_rms,
             "candidate_rms": cand_rms,
-            "candidate_over_reference_rms_db": 20.0
-            * math.log10(max(cand_rms / max(ref_rms, 1e-12), 1e-12)),
+            "candidate_over_reference_rms_db": 20.0 * math.log10(max(cand_rms / max(ref_rms, 1e-12), 1e-12)),
             "delta_rms": delta_rms,
             "delta_over_reference_rms": delta_rms / max(ref_rms, 1e-12),
             "cosine_similarity": cosine,
             "reference_first_difference_rms": ref_diff_rms,
             "candidate_first_difference_rms": cand_diff_rms,
             "per_channel_candidate_over_reference_db": [
-                float(value)
-                for value in channel_db.detach().to(device="cpu", dtype=torch.float32).tolist()
+                float(value) for value in channel_db.detach().to(device="cpu", dtype=torch.float32).tolist()
             ],
         }
 
