@@ -79,11 +79,11 @@ class MiniMaxH3VideoVAE:
         # Deliberately batch two neighboring tiles at a time so the diagnostic
         # has to map multiple tile offsets onto one decoder batch.
         slices = [
-            z_row[..., pos // self.vae_ratio:(pos + length) // self.vae_ratio]
+            z_row[..., pos // self.vae_ratio : (pos + length) // self.vae_ratio]
             for pos, length in zip(x_idx, x_len, strict=True)
         ]
         for k in range(0, len(slices), 2):
-            group = slices[k:k + 2]
+            group = slices[k : k + 2]
             decoded = self._decode_pixels(torch.cat(group))
             yield from decoded.chunk(len(group))
 
@@ -95,7 +95,7 @@ class MiniMaxH3VideoVAE:
         for y_pos, y_length in zip(y_idx, y_len, strict=True):
             z_row = z[
                 ...,
-                y_pos // self.vae_ratio:(y_pos + y_length) // self.vae_ratio,
+                y_pos // self.vae_ratio : (y_pos + y_length) // self.vae_ratio,
                 :,
             ]
             list(self._decode_tile_row(z_row, x_idx, x_len))
@@ -132,7 +132,6 @@ class FakePositionVAE(FakeVAE):
         model.exercise_tiled_decoder(latent)
         return self._output(latent).unsqueeze(0)
 
-
 def test_large_tile_decode_matches_core_batched_video_output_shape(capsys):
     vae = FakeBatchedVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
@@ -150,7 +149,6 @@ def test_large_tile_decode_matches_core_batched_video_output_shape(capsys):
         vae.first_stage_model.tile_overlap_min,
         vae.first_stage_model.tiling,
     ) == (256, 64, True)
-
 
 def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     vae = FakeVAE()
@@ -171,7 +169,6 @@ def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     assert "output=1216x896" in report
     assert "tiles=6x4" in report
 
-
 def test_320_128_profile_moves_grid_but_keeps_six_columns():
     model = MiniMaxH3VideoVAE()
     native_x, native_y = _tile_boundaries(model, 896, 1216)
@@ -184,7 +181,6 @@ def test_320_128_profile_moves_grid_but_keeps_six_columns():
     assert large_y == [192, 384, 576]
     assert len(large_x) == len(native_x)
     assert len(large_y) < len(native_y)
-
 
 
 def test_serial_tile_decode_forces_batch_one_and_restores_override(capsys):
@@ -206,7 +202,6 @@ def test_serial_tile_decode_forces_batch_one_and_restores_override(capsys):
     assert "decoder_tile_calls=30" in report
     assert len(model.decoder.pos_embed.seen) == 30
     assert all(int(ids.shape[0]) == 1 for ids in model.decoder.pos_embed.seen)
-
 
 def test_serial_tile_decode_rejects_non_native_profile():
     vae = FakePositionVAE()
@@ -251,7 +246,6 @@ def test_global_position_remap_preserves_temporal_and_suffix_ids():
     assert torch.allclose(mapped_images[1, 0, :, 0, 1], expected_y1)
     assert torch.allclose(mapped_images[1, 0, 0, :, 2], expected_x1)
 
-
 def test_global_position_decode_uses_native_geometry_and_restores_overrides(capsys):
     vae = FakePositionVAE()
     model = vae.first_stage_model
@@ -286,7 +280,6 @@ def test_global_position_decode_uses_native_geometry_and_restores_overrides(caps
     assert torch.allclose(first_images[1, 0, 0, :, 2], expected_second_x)
     assert torch.allclose(first_images[0, 0, :, 0, 1], expected_y)
     assert torch.equal(first_images[0, ..., 0], first_images[1, ..., 0])
-
 
 
 def test_global_position_decode_rejects_non_native_tile_profile():
