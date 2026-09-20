@@ -46,6 +46,13 @@ def main() -> None:
         "self.frame_overlap = max(self.token_overlap * self.vae_ratio_t - self.frame_pre_padding, 0)",
         "t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap",
         "if i == num_chunks - 1 and dec_overlap is not None:",
+        "tile_size=256",
+        "tile_overlap_min=64",
+        "def _decode_tile_row(self, z_row, x_idx, x_len):",
+        "yield from self._decode_pixels(torch.cat(group)).chunk(len(group))",
+        "tiles = self._decode_tile_row(z[..., zi:zi + zl, :], x_idx, x_len)",
+        "tile = next(tiles)",
+        "img_ids = create_token_ids((latent_T, latent_H, latent_W), x.device, x.dtype).expand(B, -1, -1)",
     )
     require(
         args.continuum / "v3/assembly.py",
