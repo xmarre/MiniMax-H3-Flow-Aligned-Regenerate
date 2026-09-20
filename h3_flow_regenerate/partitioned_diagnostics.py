@@ -35,6 +35,14 @@ PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS = (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
 )
 PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY = "h3_flow_partitioned_audio_model_timestep_context_v1"
+
+PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY = "h3_flow_partitioned_prefix_transformer_context_v1"
+PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT = "exact_target_partitioned"
+PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE = "source_carrier_uniform"
+PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS = (
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+)
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -73,6 +81,16 @@ def normalize_audio_guided_overlap_mode(value: str) -> str:
     return value
 
 
+def normalize_prefix_transformer_context(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS:
+        raise ValueError(
+            "prefix transformer context must be one of "
+            f"{PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -101,6 +119,7 @@ def apply_partitioned_diagnostic_controls(
     vdn_linear_diagnostic: str,
     audio_guided_overlap_ticks: int,
     audio_guided_overlap_mode: str = PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    prefix_transformer_context: str = PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -110,12 +129,14 @@ def apply_partitioned_diagnostic_controls(
         source="audio_guided_overlap_ticks",
     )
     audio_mode = normalize_audio_guided_overlap_mode(audio_guided_overlap_mode)
+    prefix_context = normalize_prefix_transformer_context(prefix_transformer_context)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
 
     transformer_options = dict(model_options.get("transformer_options") or {})
     transformer_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = mode
+    transformer_options[PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY] = prefix_context
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -127,6 +148,7 @@ def apply_partitioned_diagnostic_controls(
             vdn_linear_diagnostic=mode,
             audio_guided_overlap_ticks=ticks,
             audio_guided_overlap_mode=audio_mode,
+            prefix_transformer_context=prefix_context,
             model_local=True,
             native_vdn_unchanged=True,
             production_default_changed=False,
@@ -141,6 +163,10 @@ __all__ = [
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
     "PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY",
+    "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT",
+    "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY",
+    "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS",
+    "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -151,6 +177,7 @@ __all__ = [
     "PartitionedAudioModelTimestepContext",
     "apply_partitioned_diagnostic_controls",
     "normalize_audio_guided_overlap_mode",
+    "normalize_prefix_transformer_context",
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",

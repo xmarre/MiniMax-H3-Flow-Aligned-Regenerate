@@ -15,6 +15,9 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -22,6 +25,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     PartitionedAudioModelTimestepContext,
     apply_partitioned_diagnostic_controls,
+    normalize_prefix_transformer_context,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -66,6 +70,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert "vdn_linear_diagnostic" not in ordinary
     assert "audio_guided_overlap_ticks" not in ordinary
     assert "audio_guided_overlap_mode" not in ordinary
+    assert "prefix_transformer_context" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -82,8 +87,16 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
+    assert diagnostic["prefix_transformer_context"][0] == list(
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS
+    )
+    assert (
+        diagnostic["prefix_transformer_context"][1]["default"]
+        == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+    )
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
+    assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -96,6 +109,7 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
         vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         audio_guided_overlap_ticks=0,
         audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     )
 
     assert returned_model is model
@@ -104,6 +118,10 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
     assert (
         model.model_options["transformer_options"][PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY]
         == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS
+    )
+    assert (
+        model.model_options["transformer_options"]["h3_flow_partitioned_prefix_transformer_context_v1"]
+        == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
     )
     assert model.model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] == 0
     assert (
@@ -117,12 +135,28 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
                 "vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
                 "audio_guided_overlap_ticks": 0,
                 "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+                "prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
                 "model_local": True,
                 "native_vdn_unchanged": True,
                 "production_default_changed": False,
             },
         )
     ]
+
+
+
+def test_prefix_transformer_context_normalization_is_bounded():
+    assert (
+        normalize_prefix_transformer_context(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT)
+        == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+    )
+    assert (
+        normalize_prefix_transformer_context(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE)
+        == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+    )
+    with pytest.raises(ValueError, match="prefix transformer context"):
+        normalize_prefix_transformer_context("invented")
+
 
 
 def test_node_local_audio_overlap_override_wins_over_process_environment(monkeypatch):

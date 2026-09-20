@@ -15,6 +15,8 @@ import torch
 
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PartitionedAudioModelTimestepContext,
     normalize_vdn_linear_diagnostic,
@@ -336,6 +338,12 @@ def partitioned_diffusion_wrapper(
     inner = executor.class_obj
     if not isinstance(plan, PartitionedStagePlan) or metrics is None or len(inner.blocks) == 0:
         raise RuntimeError("partitioned exact-prefix requires a valid stage plan and metrics owner")
+    prefix_context = str(runtime.prefix_transformer_context)
+    if prefix_context not in (
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    ):
+        raise RuntimeError(f"unsupported partitioned prefix transformer context {prefix_context!r}")
     attention_override = options.get("optimized_attention_override")
     if getattr(attention_override, "_h3_flow_attention_override", False):
         raise RuntimeError("partitioned exact-prefix does not support uniform-grid Flow Attention Lab overrides")
@@ -343,6 +351,36 @@ def partitioned_diffusion_wrapper(
         raise RuntimeError("stale partitioned exact-prefix plan does not match sampler geometry")
     if tuple(plan.prefix_noise.shape) != tuple(plan.prefix.shape):
         raise RuntimeError("partitioned exact-prefix plan is missing protected-prefix sampler noise")
+
+    if prefix_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE:
+        # Diagnostic only: keep Core's complete low/probe hidden sequence on the
+        # native source grid. This intentionally does not publish Flow's
+        # heterogeneous partition contract, so VDN and Sol execute their ordinary
+        # uniform-grid paths. The outer exact mask still owns caller-visible carried
+        # prefix values; learned handoff/high-stage behavior is unchanged.
+        metrics.increment("partitioned_source_carrier_uniform_transformer_calls")
+        metrics.increment("partitioned_source_carrier_uniform_prefix_frames", int(plan.prefix_t))
+        metrics.event(
+            "partitioned_prefix_transformer_context",
+            mode=prefix_context,
+            temporal=int(plan.temporal),
+            prefix_t=int(plan.prefix_t),
+            source_hw=(int(plan.source_h), int(plan.source_w)),
+            target_hw=tuple(map(int, plan.target_hw)),
+            heterogeneous_partition_contract_published=False,
+            exact_target_prefix_injected_into_transformer=False,
+            native_source_carrier_preserved=True,
+            external_exact_prefix_owner_unchanged=True,
+            diagnostic_only=True,
+        )
+        return executor(
+            x,
+            timestep,
+            context,
+            options,
+            minimax_payload=minimax_payload,
+            **kwargs,
+        )
 
     payload = dict(minimax_payload or {})
     layout = partitioned_carrier_layout(

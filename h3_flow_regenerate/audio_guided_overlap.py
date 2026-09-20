@@ -138,6 +138,117 @@ def measure_audio_latent_boundary(
     return report
 
 
+
+def compare_audio_latent_stages(
+    reference_audio: torch.Tensor,
+    candidate_audio: torch.Tensor,
+    exact_audio_mask: torch.Tensor,
+    *,
+    windows: tuple[int, ...] = (4, 20),
+) -> dict[str, Any]:
+    """Compare two clean-domain H3 audio latents at the exact continuation boundary.
+
+    Inputs are unpacked native BxCx2xT audio tensors. The report is diagnostics-only
+    and intentionally bounded: aggregate and per-channel RMS changes plus temporal
+    first-difference energy for the first generated ticks. It never mutates either
+    stage.
+    """
+
+    if reference_audio.shape != candidate_audio.shape:
+        raise ValueError("audio stage comparison requires identical reference/candidate geometry")
+    if reference_audio.ndim != 4 or int(reference_audio.shape[2]) != 2:
+        raise ValueError("audio stage comparison requires native BxCx2xT audio latents")
+    if exact_audio_mask.shape != reference_audio.shape:
+        raise ValueError("audio stage comparison requires mask/audio geometry parity")
+    if not bool(torch.isfinite(reference_audio).all().item()) or not bool(
+        torch.isfinite(candidate_audio).all().item()
+    ):
+        raise ValueError("audio stage comparison requires finite latents")
+
+    temporal_min = exact_audio_mask.amin(dim=(0, 1, 2))
+    temporal_max = exact_audio_mask.amax(dim=(0, 1, 2))
+    exact_zero = temporal_max <= 1e-8
+    exact_one = temporal_min >= 1.0 - 1e-8
+    temporal = int(reference_audio.shape[-1])
+    prefix = 0
+    while prefix < temporal and bool(exact_zero[prefix].item()):
+        prefix += 1
+    if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
+        raise ValueError(
+            "audio stage comparison requires a contiguous exact prefix followed by generated suffix"
+        )
+
+    reference = reference_audio.detach().to(dtype=torch.float32)
+    candidate = candidate_audio.detach().to(device=reference.device, dtype=torch.float32)
+    prefix_delta = candidate[..., :prefix] - reference[..., :prefix]
+    report: dict[str, Any] = {
+        "available": True,
+        "audio_prefix_ticks": prefix,
+        "audio_total_ticks": temporal,
+        "exact_prefix_max_abs_delta": float(prefix_delta.abs().max().item()),
+        "exact_prefix_rms_delta": float(prefix_delta.square().mean().sqrt().item()),
+        "windows": {},
+    }
+
+    for requested in windows:
+        width = int(requested)
+        if width <= 0:
+            raise ValueError("audio stage comparison windows must be positive")
+        usable = min(width, temporal - prefix)
+        if usable <= 0:
+            continue
+        ref = reference[..., prefix : prefix + usable]
+        cand = candidate[..., prefix : prefix + usable]
+        delta = cand - ref
+        ref_rms = float(ref.square().mean().sqrt().item())
+        cand_rms = float(cand.square().mean().sqrt().item())
+        delta_rms = float(delta.square().mean().sqrt().item())
+
+        # BxCx2xT -> C summaries, bounded to the native H3 channel count.
+        channel_dims = (0, 2, 3)
+        ref_ch = ref.square().mean(dim=channel_dims).sqrt()
+        cand_ch = cand.square().mean(dim=channel_dims).sqrt()
+        channel_ratio = cand_ch / ref_ch.clamp_min(1e-12)
+        channel_db = 20.0 * torch.log10(channel_ratio.clamp_min(1e-12))
+
+        flat_ref = ref.reshape(-1)
+        flat_cand = cand.reshape(-1)
+        denom = float(flat_ref.norm().item() * flat_cand.norm().item())
+        cosine = float(torch.dot(flat_ref, flat_cand).item() / denom) if denom > 1e-20 else None
+
+        if usable > 1:
+            ref_diff_rms = float(
+                (ref[..., 1:] - ref[..., :-1]).square().mean().sqrt().item()
+            )
+            cand_diff_rms = float(
+                (cand[..., 1:] - cand[..., :-1]).square().mean().sqrt().item()
+            )
+        else:
+            ref_diff_rms = None
+            cand_diff_rms = None
+
+        report["windows"][str(width)] = {
+            "requested_ticks": width,
+            "used_ticks": usable,
+            "duration_ms_at_40hz": usable * 25.0,
+            "reference_rms": ref_rms,
+            "candidate_rms": cand_rms,
+            "candidate_over_reference_rms_db": 20.0
+            * math.log10(max(cand_rms / max(ref_rms, 1e-12), 1e-12)),
+            "delta_rms": delta_rms,
+            "delta_over_reference_rms": delta_rms / max(ref_rms, 1e-12),
+            "cosine_similarity": cosine,
+            "reference_first_difference_rms": ref_diff_rms,
+            "candidate_first_difference_rms": cand_diff_rms,
+            "per_channel_candidate_over_reference_db": [
+                float(value)
+                for value in channel_db.detach().to(device="cpu", dtype=torch.float32).tolist()
+            ],
+        }
+
+    report["available"] = bool(report["windows"])
+    return report
+
 def apply_audio_guided_overlap_mask(
     denoise_mask: torch.Tensor | None,
     latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,

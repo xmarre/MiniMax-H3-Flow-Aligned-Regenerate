@@ -15,15 +15,22 @@ from typing import Any
 
 import torch
 
+from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
+    normalize_prefix_transformer_context,
     normalize_vdn_linear_diagnostic,
 )
 from .partitioned_stage import (
@@ -97,10 +104,17 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
     linear_mode = normalize_vdn_linear_diagnostic(
         transformer.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY, PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL)
     )
+    prefix_context = normalize_prefix_transformer_context(
+        transformer.get(
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        )
+    )
     transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
+        prefix_transformer_context=prefix_context,
     )
     try:
         yield
@@ -234,6 +248,40 @@ def _verify_partitioned_vdn_linear_diagnostic(
             cross_grid_temporal_suppression_calls=delta_calls,
             suppressed_taps=delta_taps,
             suppressed_rows=delta_rows,
+            fail_closed=True,
+        )
+
+
+def _verify_prefix_transformer_context_diagnostic(
+    metrics,
+    mode: str,
+    *,
+    calls_before: int,
+    prefix_frames_before: int,
+) -> None:
+    """Fail closed when the source-carrier structural A/B did not execute."""
+
+    mode = normalize_prefix_transformer_context(mode)
+    if mode == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        return
+    counters = getattr(metrics, "counters", {})
+    calls_after = int(counters.get("partitioned_source_carrier_uniform_transformer_calls", 0))
+    frames_after = int(counters.get("partitioned_source_carrier_uniform_prefix_frames", 0))
+    delta_calls = calls_after - int(calls_before)
+    delta_frames = frames_after - int(prefix_frames_before)
+    if delta_calls <= 0 or delta_frames <= 0:
+        raise RuntimeError(
+            "source-carrier uniform transformer diagnostic was requested but no verified "
+            "low/probe execution was observed; refusing this diagnostic sample"
+        )
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_prefix_transformer_context_verified",
+            mode=mode,
+            transformer_calls=delta_calls,
+            prefix_frames=delta_frames,
+            heterogeneous_partition_contract_published=False,
             fail_closed=True,
         )
 
@@ -399,6 +447,20 @@ def run_partitioned_progressive(
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         )
     )
+    prefix_transformer_context = normalize_prefix_transformer_context(
+        initial_transformer.get(
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        )
+    )
+    if (
+        prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+        and vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
+    ):
+        raise PartitionedPreflightUnsupported(
+            "source_carrier_uniform tests the ordinary uniform-grid VDN/Sol path and therefore "
+            "requires vdn_linear_diagnostic='normal'"
+        )
     source_h, source_w, stage_plan = _preflight(
         guider,
         config,
@@ -485,6 +547,7 @@ def run_partitioned_progressive(
         prefix_exact_latent_resized_for_transformer=False,
         deprecated_mixed_grid_contract_active=False,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
+        prefix_transformer_context=prefix_transformer_context,
     )
 
     sampler_invocation_count = 0
@@ -499,6 +562,16 @@ def run_partitioned_progressive(
     raw_measure_calls_before = int(binding.metrics.counters.get("partitioned_vdn_raw_token_measure_calls", 0))
     raw_measure_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
+    )
+    source_carrier_calls_before = int(
+        binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
+    )
+    source_carrier_prefix_frames_before = int(
+        binding.metrics.counters.get("partitioned_source_carrier_uniform_prefix_frames", 0)
+    )
+    diagnostic_audio_control = (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
+        or PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY in model_options
     )
 
     def low_callback(step, x0, x, _total):
@@ -583,17 +656,24 @@ def run_partitioned_progressive(
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
-        _verify_partitioned_vdn_linear_diagnostic(
+        _verify_prefix_transformer_context_diagnostic(
             binding.metrics,
-            vdn_linear_diagnostic,
-            bypass_calls_before=bypass_calls_before,
-            bypass_video_rows_before=bypass_video_rows_before,
-            suppression_calls_before=suppression_calls_before,
-            suppressed_taps_before=suppressed_taps_before,
-            suppressed_rows_before=suppressed_rows_before,
-            raw_measure_calls_before=raw_measure_calls_before,
-            raw_measure_prefix_frames_before=raw_measure_prefix_frames_before,
+            prefix_transformer_context,
+            calls_before=source_carrier_calls_before,
+            prefix_frames_before=source_carrier_prefix_frames_before,
         )
+        if prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            _verify_partitioned_vdn_linear_diagnostic(
+                binding.metrics,
+                vdn_linear_diagnostic,
+                bypass_calls_before=bypass_calls_before,
+                bypass_video_rows_before=bypass_video_rows_before,
+                suppression_calls_before=suppression_calls_before,
+                suppressed_taps_before=suppressed_taps_before,
+                suppressed_rows_before=suppressed_rows_before,
+                raw_measure_calls_before=raw_measure_calls_before,
+                raw_measure_prefix_frames_before=raw_measure_prefix_frames_before,
+            )
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
@@ -601,6 +681,20 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+        low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
+        if diagnostic_audio_control:
+            low_probe_audio_report = measure_audio_latent_boundary(
+                source_x0,
+                source_shapes,
+                low_mask,
+                windows=(4, 20),
+            )
+            binding.metrics.event(
+                "partitioned_audio_stage_boundary",
+                stage="low_probe_clean",
+                domain="model_internal_clean",
+                **low_probe_audio_report,
+            )
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_native_trajectory = measure_translation_trajectory(
                 clean_video,
@@ -671,6 +765,24 @@ def run_partitioned_progressive(
         if rebuilt_shapes != target_shapes:
             raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
         target_video, target_audio = unpack_streams(target_raw, target_shapes)
+        if diagnostic_audio_control:
+            _source_state_video, source_state_audio = unpack_streams(source_raw, source_shapes)
+            audio_copy_exact = torch.equal(source_state_audio, target_audio)
+            audio_copy_delta = target_audio.to(torch.float32) - source_state_audio.to(
+                device=target_audio.device,
+                dtype=torch.float32,
+            )
+            binding.metrics.event(
+                "partitioned_audio_handoff_copy",
+                exact=audio_copy_exact,
+                max_abs_delta=float(audio_copy_delta.abs().max().item()),
+                rms_delta=float(audio_copy_delta.square().mean().sqrt().item()),
+                source_ticks=int(source_state_audio.shape[-1]),
+                target_ticks=int(target_audio.shape[-1]),
+                learned_video_transfer_audio_mutation=False,
+            )
+            if not audio_copy_exact:
+                raise RuntimeError("learned video handoff mutated the carried H3 audio sampler state")
         diagnostic_seed = int(seed or 0) + config.seed_offset
         learned_clean = _recover_partitioned_transfer_clean(
             target_video,
@@ -806,6 +918,38 @@ def run_partitioned_progressive(
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
 
         final_video, _ = unpack_streams(result, target_shapes)
+        if diagnostic_audio_control:
+            final_internal = _process_latent_in(base_model, result, target_shapes)
+            _final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+            final_audio_report = measure_audio_latent_boundary(
+                final_internal,
+                target_shapes,
+                denoise_mask,
+                windows=(4, 20),
+            )
+            binding.metrics.event(
+                "partitioned_audio_stage_boundary",
+                stage="final_high_clean",
+                domain="model_internal_clean",
+                **final_audio_report,
+            )
+            if low_probe_clean_audio is None:
+                raise RuntimeError("audio stage diagnostics lost the low/probe clean reference")
+            _mask_video, exact_audio_mask = unpack_streams(denoise_mask, target_shapes)
+            stage_delta = compare_audio_latent_stages(
+                low_probe_clean_audio,
+                final_internal_audio,
+                exact_audio_mask,
+                windows=(4, 20),
+            )
+            binding.metrics.event(
+                "partitioned_audio_stage_delta",
+                reference_stage="low_probe_clean",
+                candidate_stage="final_high_clean",
+                domain="model_internal_clean",
+                **stage_delta,
+            )
+            del final_internal
         original_video, _ = unpack_streams(latent_image, target_shapes)
         if not torch.equal(
             final_video[:, :, : stage_plan.prefix_t],
