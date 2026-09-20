@@ -59,6 +59,14 @@ PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS = (
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
 )
+
+PARTITIONED_INITIAL_TRANSFER_KEY = "h3_flow_partitioned_initial_transfer_v1"
+PARTITIONED_INITIAL_TRANSFER_LEARNED = "learned_3d"
+PARTITIONED_INITIAL_TRANSFER_BICUBIC = "bicubic"
+PARTITIONED_INITIAL_TRANSFER_OPTIONS = (
+    PARTITIONED_INITIAL_TRANSFER_LEARNED,
+    PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+)
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -125,6 +133,15 @@ def normalize_audio_handoff_source(value: str) -> str:
     return value
 
 
+def normalize_initial_transfer(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_INITIAL_TRANSFER_OPTIONS:
+        raise ValueError(
+            f"initial transfer diagnostic must be one of {PARTITIONED_INITIAL_TRANSFER_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -156,6 +173,7 @@ def apply_partitioned_diagnostic_controls(
     prefix_transformer_context: str = PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     audio_handoff_source: str = PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+    initial_transfer: str = PARTITIONED_INITIAL_TRANSFER_LEARNED,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -168,6 +186,7 @@ def apply_partitioned_diagnostic_controls(
     prefix_context = normalize_prefix_transformer_context(prefix_transformer_context)
     position_domain = normalize_audio_position_domain(audio_position_domain)
     handoff_source = normalize_audio_handoff_source(audio_handoff_source)
+    initial_transfer_mode = normalize_initial_transfer(initial_transfer)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -184,6 +203,10 @@ def apply_partitioned_diagnostic_controls(
     else:
         transformer_options[PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY] = handoff_source
     model_options["transformer_options"] = transformer_options
+    if initial_transfer_mode == PARTITIONED_INITIAL_TRANSFER_LEARNED:
+        model_options.pop(PARTITIONED_INITIAL_TRANSFER_KEY, None)
+    else:
+        model_options[PARTITIONED_INITIAL_TRANSFER_KEY] = initial_transfer_mode
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
 
@@ -202,6 +225,8 @@ def apply_partitioned_diagnostic_controls(
             fields["audio_position_domain"] = position_domain
         if handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
             fields["audio_handoff_source"] = handoff_source
+        if initial_transfer_mode != PARTITIONED_INITIAL_TRANSFER_LEARNED:
+            fields["initial_transfer"] = initial_transfer_mode
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -221,6 +246,10 @@ __all__ = [
     "PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY",
     "PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS",
     "PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE",
+    "PARTITIONED_INITIAL_TRANSFER_BICUBIC",
+    "PARTITIONED_INITIAL_TRANSFER_KEY",
+    "PARTITIONED_INITIAL_TRANSFER_LEARNED",
+    "PARTITIONED_INITIAL_TRANSFER_OPTIONS",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS",
@@ -237,6 +266,7 @@ __all__ = [
     "normalize_audio_guided_overlap_mode",
     "normalize_audio_handoff_source",
     "normalize_audio_position_domain",
+    "normalize_initial_transfer",
     "normalize_prefix_transformer_context",
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",

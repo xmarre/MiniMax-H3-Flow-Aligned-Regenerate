@@ -12,7 +12,7 @@ from .audio_guided_overlap import (
     apply_audio_guided_overlap_mask,
     measure_audio_latent_boundary,
 )
-from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
+from .comfy_compat import _ProgressiveExactMaskExecutor, clone_config, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
 from .partitioned_diagnostics import (
@@ -21,7 +21,11 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_INITIAL_TRANSFER_BICUBIC,
+    PARTITIONED_INITIAL_TRANSFER_KEY,
+    PARTITIONED_INITIAL_TRANSFER_LEARNED,
     PartitionedAudioModelTimestepContext,
+    normalize_initial_transfer,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -30,7 +34,7 @@ from .partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     run_partitioned_progressive,
 )
-from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
+from .runtime import FLOW_BINDING_KEY, PROGRESSIVE_KEY, FlowBinding, _has_exact_video_protection
 
 LOG = logging.getLogger(__name__)
 
@@ -52,6 +56,118 @@ def _core_has_audio_velocity_mask_contract() -> bool:
     except (ImportError, OSError, TypeError):
         return False
     return _source_has_audio_velocity_mask_contract(source)
+
+
+def _run_initial_transfer_diagnostic(
+    executor,
+    *,
+    binding: FlowBinding,
+    partitioned_progressive: ProgressiveTargetInputConfig,
+    model_options: dict,
+    noise,
+    latent_image,
+    sampler,
+    sigmas,
+    denoise_mask,
+    callback,
+    disable_pbar,
+    seed,
+    latent_shapes,
+):
+    """Override only the initial/no-prefix released handoff transfer for one call."""
+
+    mode = normalize_initial_transfer(
+        model_options.get(PARTITIONED_INITIAL_TRANSFER_KEY, PARTITIONED_INITIAL_TRANSFER_LEARNED)
+    )
+    if mode == PARTITIONED_INITIAL_TRANSFER_LEARNED:
+        return flow_outer_wrapper_with_exact_mask(
+            executor,
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
+    if mode != PARTITIONED_INITIAL_TRANSFER_BICUBIC:
+        raise RuntimeError(f"unsupported initial transfer diagnostic {mode!r}")
+    if partitioned_progressive.transfer_mode != "learned_3d":
+        raise RuntimeError("bicubic initial-transfer diagnostic requires learned_3d as the production baseline")
+
+    released_progressive = model_options.get(PROGRESSIVE_KEY)
+    if not isinstance(released_progressive, ProgressiveTargetInputConfig):
+        raise RuntimeError("initial-transfer diagnostic cannot resolve the released progressive config")
+    if released_progressive.transfer_mode != "learned_3d":
+        raise RuntimeError("initial-transfer diagnostic expected the released progressive config to use learned_3d")
+    if released_progressive != partitioned_progressive:
+        raise RuntimeError("initial-transfer diagnostic detected progressive configuration drift")
+
+    diagnostic_progressive = clone_config(
+        released_progressive,
+        transfer_mode="bicubic",
+    )
+    if not isinstance(diagnostic_progressive, ProgressiveTargetInputConfig):
+        raise RuntimeError("initial-transfer diagnostic failed to clone the progressive config")
+
+    event_start = len(binding.metrics.events)
+    binding.metrics.event(
+        "partitioned_initial_transfer_diagnostic",
+        phase="begin",
+        requested=mode,
+        production_transfer_mode=released_progressive.transfer_mode,
+        effective_transfer_mode=diagnostic_progressive.transfer_mode,
+        scope="initial_no_exact_video_prefix_only",
+        exact_video_protection=False,
+        partitioned_scheduler_used=False,
+        continuation_transfer_unchanged=True,
+        diagnostic_only=True,
+    )
+    model_options[PROGRESSIVE_KEY] = diagnostic_progressive
+    try:
+        result = flow_outer_wrapper_with_exact_mask(
+            executor,
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes=latent_shapes,
+        )
+    finally:
+        model_options[PROGRESSIVE_KEY] = released_progressive
+
+    events = binding.metrics.events[event_start:]
+    plans = [event for event in events if event.kind == "handoff_plan"]
+    completes = [event for event in events if event.kind == "handoff_complete"]
+    if not plans or plans[-1].fields.get("input_mode") != "target_grid":
+        raise RuntimeError("initial-transfer diagnostic did not execute the target-grid progressive path")
+    if plans[-1].fields.get("transfer_mode") != "bicubic":
+        raise RuntimeError("initial-transfer diagnostic handoff plan did not use bicubic transfer")
+    if not completes or completes[-1].fields.get("input_mode") != "target_grid":
+        raise RuntimeError("initial-transfer diagnostic did not complete the target-grid progressive path")
+    if completes[-1].fields.get("transfer_mode") != "bicubic":
+        raise RuntimeError("initial-transfer diagnostic completion did not use bicubic transfer")
+
+    binding.metrics.event(
+        "partitioned_initial_transfer_diagnostic",
+        phase="verified",
+        requested=mode,
+        effective_transfer_mode="bicubic",
+        handoff_plan_verified=True,
+        handoff_complete_verified=True,
+        production_config_restored=model_options.get(PROGRESSIVE_KEY) is released_progressive,
+        scope="initial_no_exact_video_prefix_only",
+        continuation_transfer_unchanged=True,
+        diagnostic_only=True,
+        fail_closed=True,
+    )
+    return result
 
 
 def partitioned_outer_wrapper(
@@ -94,16 +210,19 @@ def partitioned_outer_wrapper(
     if not isinstance(latent_shapes, list):
         raise RuntimeError("partitioned exact-prefix requires mutable packed latent-shape metadata")
     if not _has_exact_video_protection(denoise_mask, latent_shapes):
-        return flow_outer_wrapper_with_exact_mask(
+        return _run_initial_transfer_diagnostic(
             executor,
-            noise,
-            latent_image,
-            sampler,
-            sigmas,
-            denoise_mask,
-            callback,
-            disable_pbar,
-            seed,
+            binding=binding,
+            partitioned_progressive=progressive,
+            model_options=model_options,
+            noise=noise,
+            latent_image=latent_image,
+            sampler=sampler,
+            sigmas=sigmas,
+            denoise_mask=denoise_mask,
+            callback=callback,
+            disable_pbar=disable_pbar,
+            seed=seed,
             latent_shapes=latent_shapes,
         )
 
@@ -318,4 +437,4 @@ def partitioned_outer_wrapper(
     return result
 
 
-__all__ = ["partitioned_outer_wrapper"]
+__all__ = ["_run_initial_transfer_diagnostic", "partitioned_outer_wrapper"]
