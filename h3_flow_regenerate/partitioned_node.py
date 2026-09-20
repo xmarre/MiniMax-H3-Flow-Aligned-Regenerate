@@ -12,6 +12,8 @@ from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -222,13 +224,28 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after all Flow #54/#57 widgets so existing diagnostic workflow
+        # widget positions remain stable.
+        spec["required"]["prefix_transformer_context"] = (
+            list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS),
+            {
+                "default": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+                "tooltip": (
+                    "exact_target_partitioned preserves the production-shaped heterogeneous "
+                    "target-prefix/source-suffix transformer. source_carrier_uniform is a bounded "
+                    "diagnostic that leaves the low/probe transformer on its native uniform source "
+                    "grid while caller-owned exact output restoration remains unchanged."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
         "Diagnostic variant of the partitioned exact-prefix handoff. Adds model-local "
-        "controls for isolating the partitioned VDN learned-linear boundary path and "
-        "for selecting the audio guided-overlap mode/width. Ordinary/native VDN and the "
-        "production-shaped partitioned node remain unchanged."
+        "controls for isolating the partitioned VDN learned-linear boundary path, selecting "
+        "the audio guided-overlap mode/width, and comparing the heterogeneous exact-prefix "
+        "transformer against its native uniform source-grid carrier. Ordinary/native VDN and "
+        "the production-shaped partitioned node remain unchanged."
     )
 
     def patch(
@@ -250,6 +267,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         vdn_linear_diagnostic,
         audio_guided_overlap_mode,
         audio_guided_overlap_ticks,
+        prefix_transformer_context,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -277,6 +295,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             vdn_linear_diagnostic=vdn_linear_diagnostic,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             audio_guided_overlap_mode=audio_guided_overlap_mode,
+            prefix_transformer_context=prefix_transformer_context,
         )
 
 
