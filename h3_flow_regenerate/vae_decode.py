@@ -8,6 +8,7 @@ full latent canvas. All temporary VAE mutations are restored in ``finally``.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import threading
 import types
