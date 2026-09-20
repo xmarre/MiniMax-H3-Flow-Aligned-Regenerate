@@ -6,8 +6,14 @@ import logging
 import time
 from types import SimpleNamespace
 
-from .audio_guided_overlap import apply_audio_guided_overlap_mask
-from .partitioned_diagnostics import resolve_partitioned_audio_guided_overlap_ticks
+from .audio_guided_overlap import (
+    apply_audio_guided_overlap_mask,
+    measure_audio_latent_boundary,
+)
+from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
+    resolve_partitioned_audio_guided_overlap_ticks,
+)
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .handoff import ProgressiveTargetInputConfig
 from .partitioned_scheduler import (
@@ -118,6 +124,38 @@ def partitioned_outer_wrapper(
             seed,
             latent_shapes,
         )
+        if PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options:
+            try:
+                latent_audio_report = measure_audio_latent_boundary(
+                    result,
+                    denoise_mask,
+                    latent_shapes,
+                    window_ticks=8,
+                )
+                binding.metrics.event(
+                    "partitioned_audio_latent_boundary",
+                    partitioned_exact_prefix=True,
+                    **latent_audio_report,
+                )
+                LOG.info(
+                    "partitioned audio latent boundary available=%s prefix_ticks=%d "
+                    "window_ticks=%d protected_tail_rms=%s generated_head_rms=%s "
+                    "generated_over_protected_ratio=%s generated_over_protected_db=%s reason=%s",
+                    bool(latent_audio_report.get("available")),
+                    int(latent_audio_report.get("audio_prefix_ticks", 0)),
+                    int(latent_audio_report.get("window_ticks", 0)),
+                    latent_audio_report.get("protected_tail_rms"),
+                    latent_audio_report.get("generated_head_rms"),
+                    latent_audio_report.get("generated_over_protected_ratio"),
+                    latent_audio_report.get("generated_over_protected_db"),
+                    latent_audio_report.get("reason"),
+                )
+            except Exception as exc:
+                LOG.warning(
+                    "partitioned audio latent boundary diagnostic unavailable reason=%s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
     except PartitionedPreflightUnsupported as exc:
         fallback_reason = str(exc)
     except BaseException as exc:
