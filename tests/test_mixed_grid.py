@@ -369,7 +369,7 @@ def test_native_forward_uses_authoritative_prefix_and_real_suffix(monkeypatch, n
     seen = []
 
     class MixingBlock(torch.nn.Module):
-        def forward(self, h, t_emb, segments, rope, transformer_options):
+        def forward(self, h, t_emb, segments, rope, transformer_options, attention=None):
             seen.append((h.clone(), segments, rope.shape[1]))
             # Deliberate global dependence proves which prefix conditions the suffix.
             return h + h.mean(0)
