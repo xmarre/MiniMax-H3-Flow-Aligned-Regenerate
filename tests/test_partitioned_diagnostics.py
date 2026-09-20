@@ -231,7 +231,6 @@ def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
     assert metrics.events[-1][1]["bypass_calls"] == 3
 
 
-
 def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
@@ -322,9 +321,7 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
     assert "inner_audio_mask" in observed
     assert metrics.counters["partitioned_audio_model_timestep_override_calls"] == 1
-    context_events = [
-        event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"
-    ]
+    context_events = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"]
     assert len(context_events) == 1
     assert context_events[0].fields["override_calls"] == 1
     assert context_events[0].fields["sampler_mask_modified"] is False
