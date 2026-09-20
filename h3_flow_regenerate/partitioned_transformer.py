@@ -15,6 +15,7 @@ import torch
 
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
@@ -33,7 +34,7 @@ from .partitioned_stage import (
     PartitionedStageRuntime,
     partitioned_carrier_layout,
     partitioned_mod_segments,
-    partitioned_positions,
+    partitioned_positions_for_runtime,
 )
 
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
@@ -333,6 +334,8 @@ def partitioned_diffusion_wrapper(
 
     plan = runtime.plan
     metrics = runtime.metrics
+    if runtime.audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+        metrics.increment("partitioned_audio_position_candidate_wrapper_entries")
     inner = executor.class_obj
     if not isinstance(plan, PartitionedStagePlan) or metrics is None or len(inner.blocks) == 0:
         raise RuntimeError("partitioned exact-prefix requires a valid stage plan and metrics owner")
@@ -393,7 +396,7 @@ def partitioned_diffusion_wrapper(
     payload["layout"] = layout
     video_start, video_end, _ = layout.segments[-1]
     carrier_prefix_rows = plan.prefix_t * plan.source_rows
-    positions = partitioned_positions(native, plan, layout)
+    positions, position_policy = partitioned_positions_for_runtime(native, runtime, layout)
     partitioned_layout = copy.copy(layout)
     partitioned_layout.position_ids = positions
     partitioned_layout.seq_len = video_start + plan.partitioned_rows
@@ -407,6 +410,8 @@ def partitioned_diffusion_wrapper(
         plan.prefix_t,
         *plan.target_hw,
     )
+    if position_policy is not None:
+        partitioned_layout.signature = (*partitioned_layout.signature, position_policy.signature)
     keep = layout.img_pos < video_start
     partitioned_layout.img_pos = torch.cat(
         (layout.img_pos[keep], torch.arange(video_start, partitioned_layout.seq_len))
@@ -473,7 +478,39 @@ def partitioned_diffusion_wrapper(
                     vdn_external_sequence_api=VDN_PARTITIONED_SEQUENCE_API,
                     sol_single_union=True,
                     deprecated_mixed_grid_contract_active=False,
+                    audio_position_domain=str(runtime.audio_position_domain),
+                    audio_position_policy_active=(position_policy is not None),
+                    audio_position_policy_signature=(
+                        position_policy.signature if position_policy is not None else None
+                    ),
+                    audio_position_target_spatial_endpoints=(
+                        position_policy.target_audio_spatial_endpoints if position_policy is not None else None
+                    ),
+                    audio_position_source_spatial_endpoints=(
+                        position_policy.source_audio_spatial_endpoints if position_policy is not None else None
+                    ),
+                    audio_position_temporal_equal=(
+                        position_policy.audio_temporal_equal if position_policy is not None else None
+                    ),
+                    audio_position_temporal_digest=(
+                        position_policy.temporal_digest if position_policy is not None else None
+                    ),
+                    audio_position_non_audio_before_digest=(
+                        position_policy.non_audio_before_digest if position_policy is not None else None
+                    ),
+                    audio_position_non_audio_after_digest=(
+                        position_policy.non_audio_after_digest if position_policy is not None else None
+                    ),
+                    prefix_rope_position_digest=(
+                        position_policy.prefix_rope_position_digest if position_policy is not None else None
+                    ),
+                    suffix_rope_position_digest=(
+                        position_policy.suffix_rope_position_digest if position_policy is not None else None
+                    ),
+                    position_digest=(position_policy.position_digest if position_policy is not None else None),
                 )
+                if runtime.audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+                    metrics.increment("partitioned_audio_position_source_carrier_block0_calls")
             if len(img) != partitioned_layout.seq_len:
                 raise RuntimeError("partitioned exact-prefix transformer row count mismatch")
             if "rope" not in cached:
