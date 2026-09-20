@@ -89,7 +89,11 @@ Diagnostic runs enable Sol CUDA attribution and same-input replay. At least one
 diagnostic run is required for both `partitioned_preserved` and
 `partitioned_fixed`. Its Sol diagnostic report must contain the ordinary-low,
 ordinary-continuation-high and partitioned-suffix replay targets, with no
-primed recompilation and a retained-proof hit. Progressive low/probe/high
+primed recompilation and a retained-proof hit. The partitioned-suffix replay
+must also carry the same-input production sparse-versus-weighted-dense error
+metrics required by the Sol diagnostic checker; an all-selected arithmetic gate
+alone does not establish the numerical effect of sparse route selection.
+Progressive low/probe/high
 execution spans separate Sol Request lifetimes, so generate this report with
 Sol's `--all-requests` mode; continuation-high is correlated to the same Flow
 request as the partitioned suffix rather than inferred from summary order.
