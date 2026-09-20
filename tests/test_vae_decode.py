@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from h3_flow_regenerate.vae_decode import (
+    H3MiniMaxVAEDecodeLargeTile,
     _tile_boundaries,
     _validate_profile,
     decode_minimax_h3_large_tile,
@@ -108,3 +109,20 @@ def test_tile_profile_rejects_larger_tiles_and_invalid_overlap():
             pass
         else:
             raise AssertionError((size, overlap))
+
+
+def test_saved_320_widget_is_forced_back_to_released_256_tile(capsys):
+    vae = FakeVAE()
+    latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
+    images, report = H3MiniMaxVAEDecodeLargeTile().decode(
+        latent,
+        vae,
+        tile_size=320,
+        tile_overlap=128,
+    )
+    assert images.shape == (2, 896, 1216, 3)
+    assert vae.seen_profile == (256, 128, True)
+    assert "tile=256px" in report
+    output = capsys.readouterr().out
+    assert "rejecting persisted tile_size=320px" in output
+    assert "forcing released 256px tile extent" in output
