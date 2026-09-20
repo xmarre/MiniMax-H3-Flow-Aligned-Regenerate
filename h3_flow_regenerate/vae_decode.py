@@ -319,6 +319,7 @@ def decode_minimax_h3_serial_tiles(
     _emit_report(report)
     return images, report
 
+
 def decode_minimax_h3_global_spatial_position(
     vae: object,
     samples: dict[str, object],
