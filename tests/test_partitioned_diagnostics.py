@@ -253,11 +253,21 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
 
     metrics = H3FlowMetrics()
     binding = FlowBinding(metrics=metrics)
+    learned_upscaler = SimpleNamespace(
+        api_version=1,
+        kind="minimax_h3_learned_latent_upscaler",
+        model_name="diagnostic-test-provider",
+        device="cpu",
+        inference_device="cpu",
+        precision="fp32",
+        offload_after_upscale=False,
+        upscale_clean_video=lambda *args, **kwargs: None,
+    )
     progressive = ProgressiveTargetInputConfig(
         source_latent_h=4,
         source_latent_w=6,
         transfer_mode="learned_3d",
-        learned_upscaler=object(),
+        learned_upscaler=learned_upscaler,
     )
     transformer_options = {}
     guider = SimpleNamespace(
