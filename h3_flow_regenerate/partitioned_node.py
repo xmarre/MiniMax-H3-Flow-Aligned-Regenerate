@@ -10,6 +10,8 @@ from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -238,6 +240,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["audio_position_domain"] = (
+            list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS),
+            {
+                "default": PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+                "tooltip": (
+                    "legacy_target preserves current target-audio spatial RoPE coordinates. "
+                    "source_carrier changes only the target audio segment spatial RoPE coordinates "
+                    "during heterogeneous low/probe execution; latent and mask ownership is unchanged."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -268,6 +281,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_guided_overlap_mode,
         audio_guided_overlap_ticks,
         prefix_transformer_context,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -296,6 +310,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             prefix_transformer_context=prefix_transformer_context,
+            audio_position_domain=audio_position_domain,
         )
 
 
