@@ -10,6 +10,7 @@ from h3_flow_regenerate.vae_decode import (
     _validate_profile,
     decode_minimax_h3_global_spatial_position,
     decode_minimax_h3_large_tile,
+    decode_minimax_h3_serial_tiles,
 )
 
 
@@ -184,6 +185,44 @@ def test_320_128_profile_moves_grid_but_keeps_six_columns():
     assert len(large_x) == len(native_x)
     assert len(large_y) < len(native_y)
 
+
+
+def test_serial_tile_decode_forces_batch_one_and_restores_override(capsys):
+    vae = FakePositionVAE()
+    model = vae.first_stage_model
+    original_row = model._decode_tile_row
+    latent = {"samples": torch.zeros(1, 24, 1, 56, 76)}
+
+    images, report = decode_minimax_h3_serial_tiles(vae, latent)
+
+    assert images.shape == (2, 896, 1216, 3)
+    assert "mode=serial_tile_batch1" in report
+    assert report in capsys.readouterr().out
+    assert model._decode_tile_row.__func__ is original_row.__func__
+    assert (model.tile_size, model.tile_overlap_min, model.tiling) == (256, 64, True)
+
+    # Native 1216x896 is 6x5 tiles. Serial mode must therefore invoke the
+    # decoder exactly 30 times with batch size one.
+    assert "decoder_tile_calls=30" in report
+    assert len(model.decoder.pos_embed.seen) == 30
+    assert all(int(ids.shape[0]) == 1 for ids in model.decoder.pos_embed.seen)
+
+
+def test_serial_tile_decode_rejects_non_native_profile():
+    vae = FakePositionVAE()
+    model = vae.first_stage_model
+    model.tile_size = 320
+    model.tile_overlap_min = 128
+    latent = {"samples": torch.zeros(1, 24, 1, 56, 76)}
+
+    try:
+        decode_minimax_h3_serial_tiles(vae, latent)
+    except RuntimeError as exc:
+        assert "requires the unchanged Core 256/64 tiled decode profile" in str(exc)
+    else:
+        raise AssertionError("expected non-native tile geometry to fail closed")
+
+    assert (model.tile_size, model.tile_overlap_min, model.tiling) == (320, 128, True)
 
 def test_global_position_remap_preserves_temporal_and_suffix_ids():
     image_ids = _token_ids((2, 2, 3), batch=2)
