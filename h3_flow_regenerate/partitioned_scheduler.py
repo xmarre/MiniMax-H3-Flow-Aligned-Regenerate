@@ -21,6 +21,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
     normalize_vdn_linear_diagnostic,
@@ -135,12 +136,16 @@ def _validate_partitioned_vdn_compat(
                 "partitioned VDN linear diagnostic was requested but the installed VDN bridge "
                 f"does not publish diagnostic API v{VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API}"
             )
-        if required_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL:
+        capability_modes = (
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+        )
+        if required_linear_diagnostic in capability_modes:
             supported = tuple(getattr(owner, "_vdn_partitioned_linear_diagnostic_modes", ()))
-            if PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL not in supported:
+            if required_linear_diagnostic not in supported:
                 raise PartitionedPreflightUnsupported(
-                    "partitioned VDN cross-grid temporal diagnostic was requested but the "
-                    "installed VDN bridge does not publish that diagnostic capability"
+                    f"partitioned VDN diagnostic {required_linear_diagnostic!r} was requested but "
+                    "the installed VDN bridge does not publish that diagnostic capability"
                 )
     if matched == 0:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
@@ -155,6 +160,8 @@ def _verify_partitioned_vdn_linear_diagnostic(
     suppression_calls_before: int = 0,
     suppressed_taps_before: int = 0,
     suppressed_rows_before: int = 0,
+    raw_measure_calls_before: int = 0,
+    raw_measure_prefix_frames_before: int = 0,
 ) -> None:
     """Fail closed when a requested VDN linear diagnostic did not execute in low/probe."""
 
@@ -185,6 +192,26 @@ def _verify_partitioned_vdn_linear_diagnostic(
                 mode=mode,
                 bypass_calls=delta_calls,
                 bypass_video_rows=delta_rows,
+                fail_closed=True,
+            )
+        return
+
+    if mode == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE:
+        calls_after = int(counters.get("partitioned_vdn_raw_token_measure_calls", 0))
+        frames_after = int(counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0))
+        delta_calls = calls_after - int(raw_measure_calls_before)
+        delta_frames = frames_after - int(raw_measure_prefix_frames_before)
+        if delta_calls <= 0 or delta_frames <= 0:
+            raise RuntimeError(
+                "partitioned VDN raw-token measure diagnostic was requested but no verified "
+                "raw-token measure execution was observed; refusing this diagnostic sample"
+            )
+        if callable(event):
+            event(
+                "partitioned_vdn_linear_diagnostic_verified",
+                mode=mode,
+                raw_token_measure_calls=delta_calls,
+                raw_token_measure_prefix_frames=delta_frames,
                 fail_closed=True,
             )
         return
@@ -469,6 +496,10 @@ def run_partitioned_progressive(
     )
     suppressed_taps_before = int(binding.metrics.counters.get("partitioned_vdn_cross_grid_temporal_suppressed_taps", 0))
     suppressed_rows_before = int(binding.metrics.counters.get("partitioned_vdn_cross_grid_temporal_suppressed_rows", 0))
+    raw_measure_calls_before = int(binding.metrics.counters.get("partitioned_vdn_raw_token_measure_calls", 0))
+    raw_measure_prefix_frames_before = int(
+        binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
+    )
 
     def low_callback(step, x0, x, _total):
         if callback is None:
@@ -560,6 +591,8 @@ def run_partitioned_progressive(
             suppression_calls_before=suppression_calls_before,
             suppressed_taps_before=suppressed_taps_before,
             suppressed_rows_before=suppressed_rows_before,
+            raw_measure_calls_before=raw_measure_calls_before,
+            raw_measure_prefix_frames_before=raw_measure_prefix_frames_before,
         )
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
