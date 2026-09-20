@@ -75,7 +75,7 @@ def test_large_tile_decode_matches_core_batched_video_output_shape():
 def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     vae = FakeVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
-    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=320, tile_overlap=128)
+    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=256, tile_overlap=128)
     assert images.shape == (2, 896, 1216, 3)
     assert vae.seen_profile == (256, 128, True)
     assert (
