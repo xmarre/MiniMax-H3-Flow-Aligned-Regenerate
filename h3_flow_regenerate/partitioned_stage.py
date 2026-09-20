@@ -83,6 +83,8 @@ class PartitionedStageRuntime:
     attention_provider_transforms: tuple[object, ...] = ()
     attention_provider_terminal: object = None
     attention_provider_identity: tuple[object, ...] | None = None
+    # Captured once at stage entry and republished explicitly to each VDN block call.
+    vdn_linear_diagnostic: str = "normal"
 
 
 def build_partitioned_stage_plan(

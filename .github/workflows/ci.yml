@@ -69,6 +69,8 @@ jobs:
         run: |
           git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyUI
           git -C .contracts/ComfyUI checkout 1af040bf022569d7a890241c8dd79b296cda483f
+          git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyMask
+          git -C .contracts/ComfyMask checkout 421a1c245c682c04d4325ba365f40c834c66f5b0
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
           git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
@@ -86,11 +88,12 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout 922cc15d1a69d03b0434dee2f09db81c62ae18c8
+          git -C .contracts/VDNPartitioned checkout b853289ae5c4dd35430acc4a13daa8e383e2f26a
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
             --comfy .contracts/ComfyUI \
+            --comfy-mask .contracts/ComfyMask \
             --spectrum .contracts/Spectrum \
             --continuum .contracts/Continuum \
             --diffaid .contracts/DiffAid \
