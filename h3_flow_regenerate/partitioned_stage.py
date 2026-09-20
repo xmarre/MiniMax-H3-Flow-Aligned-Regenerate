@@ -83,6 +83,21 @@ class PartitionedStageRuntime:
     attention_provider_transforms: tuple[object, ...] = ()
     attention_provider_terminal: object = None
     attention_provider_identity: tuple[object, ...] | None = None
+    owner_generation: str | None = None
+    host_component_s: dict[str, float] = field(default_factory=dict)
+    host_component_calls: dict[str, int] = field(default_factory=dict)
+
+    def record_host_component(self, name: str, elapsed_s: float) -> None:
+        key = str(name)
+        self.host_component_s[key] = float(self.host_component_s.get(key, 0.0)) + float(elapsed_s)
+        self.host_component_calls[key] = int(self.host_component_calls.get(key, 0)) + 1
+
+    def component_summary(self) -> dict:
+        return {
+            "owner_generation": self.owner_generation,
+            "host_component_s": dict(self.host_component_s),
+            "host_component_calls": dict(self.host_component_calls),
+        }
 
 
 def build_partitioned_stage_plan(

@@ -94,6 +94,8 @@ The current CI pins are:
 | ComfyUI-MiniMax-H3-RefDelta-Solver | `034e4c4c14c56bf76813cee4765e7164b0c7e0db` |
 | ComfyUI-Untwisting-RoPE | `299d4c56a3f057a97b3140d2136189bcd1e7d6bb` |
 | Comfyui_Minimax_h3_latent_Upscaler | `bdc670e5926bcefbe4022e17fe8b171fbfcf15de` |
+| ComfyUI-Sol-H3 stacked partitioned contract | `93480d74cd4904f6f3502a7f5dd8e18027e6f7ac` |
+| ComfyUI-VDN-H3-Plus stacked partitioned contract | `b584070b37b3ec5ea2be97e96c420b982b5aab5f` |
 
 MiniMax-H3 main was additionally inspected at:
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from types import SimpleNamespace
 
 from .audio_guided_overlap import (
@@ -17,7 +18,7 @@ from .partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     run_partitioned_progressive,
 )
-from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
+from .runtime import FLOW_BINDING_KEY, FLOW_REQUEST_ID_KEY, FlowBinding, _has_exact_video_protection
 
 LOG = logging.getLogger(__name__)
 
@@ -99,6 +100,23 @@ def partitioned_outer_wrapper(
     outer_started = time.perf_counter()
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+
+    # This wrapper intentionally bypasses runtime.flow_outer_wrapper for the
+    # partitioned scheduler, so it must establish the same Flow request
+    # correlation lifetime itself.  Without this, production partitioned runs
+    # emit null request/evaluation IDs even though the ordinary path is fully
+    # correlated, making stage/Sol/VDN attribution unverifiable.
+    if binding.active_request_id is not None:
+        raise RuntimeError("nested H3 Flow request correlation lifetimes are unsupported")
+    request_transformer = model_options.setdefault("transformer_options", {})
+    if not isinstance(request_transformer, dict):
+        raise RuntimeError("H3 flow request tracking requires mutable transformer options")
+    request_id = f"flow-{uuid.uuid4().hex}"
+    previous_request_id = request_transformer.get(FLOW_REQUEST_ID_KEY)
+    binding.active_request_id = request_id
+    binding.evaluation_serial = 0
+    request_transformer[FLOW_REQUEST_ID_KEY] = request_id
+
     error = None
     fallback_reason = None
     result = None
@@ -129,11 +147,18 @@ def partitioned_outer_wrapper(
         if fallback_reason is None:
             binding.metrics.event(
                 "sampler_wall",
+                request_id=request_id,
                 elapsed_ms=(time.perf_counter() - outer_started) * 1000.0,
                 progressive=True,
                 partitioned_exact_prefix=True,
                 failed=error is not None,
             )
+        if previous_request_id is None:
+            request_transformer.pop(FLOW_REQUEST_ID_KEY, None)
+        else:
+            request_transformer[FLOW_REQUEST_ID_KEY] = previous_request_id
+        binding.active_request_id = None
+        binding.evaluation_serial = 0
 
     if fallback_reason is not None:
         binding.metrics.increment("partitioned_exact_prefix_fallbacks")
