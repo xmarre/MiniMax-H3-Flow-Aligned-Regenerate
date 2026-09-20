@@ -166,7 +166,7 @@ def test_audio_guided_overlap_mode_defaults_and_node_override():
 
 def test_model_timestep_audio_context_changes_only_inner_forward_mask():
     metrics = _Metrics()
-    exact = torch.zeros(1, 32, 2, 8)
+    exact = torch.zeros(1, 1, 2, 8)
     guided = exact.clone()
     guided[..., 2:6] = torch.tensor([0.2, 0.4, 0.6, 0.8]).view(1, 1, 1, 4)
     context = PartitionedAudioModelTimestepContext(
@@ -291,12 +291,15 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
         exact_audio = unpack_streams(call_mask, latent_shapes)[1]
+        exact_audio_cond = exact_audio.amax(dim=1, keepdim=True)
         forwarded = _audio_model_timestep_kwargs(
             transformer_options,
-            {"audio_denoise_mask": exact_audio},
+            {"audio_denoise_mask": exact_audio_cond},
         )
         assert torch.equal(exact_audio, audio_mask)
-        assert not torch.equal(forwarded["audio_denoise_mask"], exact_audio)
+        assert tuple(context.audio_mask.shape) == tuple(exact_audio_cond.shape)
+        assert context.audio_mask.shape[1] == 1
+        assert not torch.equal(forwarded["audio_denoise_mask"], exact_audio_cond)
         observed["inner_audio_mask"] = forwarded["audio_denoise_mask"].clone()
         return latent_image.clone()
 
