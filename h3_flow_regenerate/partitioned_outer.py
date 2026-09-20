@@ -156,8 +156,7 @@ def partitioned_outer_wrapper(
             ),
             model_timestep_mask_modified=bool(guided_report.get("applied")),
             model_timestep_override_only=bool(
-                guided_report.get("applied")
-                and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP
+                guided_report.get("applied") and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP
             ),
             sampler_exact_audio_prefix_preserved=not bool(
                 guided_report.get("applied") and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
