@@ -7,6 +7,7 @@ import logging
 import math
 import struct
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,6 +53,9 @@ CLONE_CALLBACK_KEY = "h3_flow_regenerate.clone.v1"
 PROBE_MARKER = "_h3_flow_exact_probe"
 PROBE_CONTEXT_KEY = "h3_flow_exact_probe_context"
 FLOW_STAGE_KEY = "h3_flow_stage"
+FLOW_REQUEST_ID_KEY = "h3_flow_request_id_v1"
+FLOW_STAGE_ID_KEY = "h3_flow_stage_id_v1"
+FLOW_EVALUATION_ID_KEY = "h3_flow_evaluation_id_v1"
 EXACT_PREFIX_BRIDGE_KEY = "h3_flow_exact_prefix_bridge_v1"
 SPECTRUM_BINDING_KEY = "spectrum_h3_binding"
 SPECTRUM_ACTUAL_KEY = "spectrum_h3_actual"
@@ -80,6 +84,8 @@ class FlowBinding:
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
+    active_request_id: str | None = None
+    evaluation_serial: int = 0
 
 
 def sampler_name(sampler: Any) -> str:
@@ -386,11 +392,28 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
+    transformer_options = model_options.get("transformer_options") if isinstance(model_options, dict) else None
+    transformer = transformer_options if isinstance(transformer_options, dict) else {}
+    request_id = None if binding is None else binding.active_request_id
+    evaluation_id = None
+    previous_evaluation_id = None
+    if binding is not None and request_id is not None:
+        evaluation_id = f"{request_id}:{binding.evaluation_serial}"
+        binding.evaluation_serial += 1
+        if isinstance(transformer, dict):
+            previous_evaluation_id = transformer.get(FLOW_EVALUATION_ID_KEY)
+            transformer[FLOW_EVALUATION_ID_KEY] = evaluation_id
     started = time.perf_counter()
-    result = executor(x, timestep, model_options, seed)
+    try:
+        result = executor(x, timestep, model_options, seed)
+    finally:
+        if binding is not None and evaluation_id is not None and isinstance(transformer, dict):
+            if previous_evaluation_id is None:
+                transformer.pop(FLOW_EVALUATION_ID_KEY, None)
+            else:
+                transformer[FLOW_EVALUATION_ID_KEY] = previous_evaluation_id
     if binding is None:
         return result
-    transformer = (model_options or {}).get("transformer_options") or {}
     probe_context = transformer.get(PROBE_CONTEXT_KEY)
     stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
@@ -428,7 +451,10 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
     binding.metrics.event(
         "model_call",
+        request_id=request_id,
         stage=stage,
+        stage_id=transformer.get(FLOW_STAGE_ID_KEY),
+        evaluation_id=evaluation_id,
         sigma=sigma,
         coordinate=coordinate,
         actual=actual,
@@ -608,6 +634,24 @@ def flow_outer_wrapper(
         binding.active_guidance_run = run
     if not is_progressive:
         _begin_capture(binding, guider, sampler, sigmas, latent_shapes)
+
+    # Correlation state begins only after setup that can fail before sampling.
+    # From here onward the existing execution finally block owns teardown.
+    if binding.active_request_id is not None:
+        raise RuntimeError("nested H3 Flow request correlation lifetimes are unsupported")
+    request_id = f"flow-{uuid.uuid4().hex}"
+    binding.active_request_id = request_id
+    binding.evaluation_serial = 0
+    model_options_root = getattr(guider, "model_options", None)
+    request_transformer = (
+        model_options_root.setdefault("transformer_options", {}) if isinstance(model_options_root, dict) else None
+    )
+    if not isinstance(request_transformer, dict):
+        binding.active_request_id = None
+        raise RuntimeError("H3 flow request tracking requires mutable transformer options")
+    previous_request_id = request_transformer.get(FLOW_REQUEST_ID_KEY)
+    request_transformer[FLOW_REQUEST_ID_KEY] = request_id
+
     error: BaseException | None = None
     try:
         if is_progressive:
@@ -647,10 +691,17 @@ def flow_outer_wrapper(
         binding.active_guidance_run = None
         binding.metrics.event(
             "sampler_wall",
+            request_id=request_id,
             elapsed_ms=(time.perf_counter() - outer_started) * 1000.0,
             progressive=is_progressive,
             failed=error is not None,
         )
+        if previous_request_id is None:
+            request_transformer.pop(FLOW_REQUEST_ID_KEY, None)
+        else:
+            request_transformer[FLOW_REQUEST_ID_KEY] = previous_request_id
+        binding.active_request_id = None
+        binding.evaluation_serial = 0
 
 
 def _exact_probe_function(model, x, sigmas, extra_args=None, callback=None, disable=False, **_options):
@@ -873,14 +924,21 @@ def _flow_stage_contract(guider: Any, stage: str):
     if not isinstance(transformer, dict):
         raise RuntimeError("H3 flow stage tracking requires mutable transformer options")
     previous = transformer.get(FLOW_STAGE_KEY)
+    previous_stage_id = transformer.get(FLOW_STAGE_ID_KEY)
+    stage_id = f"{stage}-{uuid.uuid4().hex}"
     transformer[FLOW_STAGE_KEY] = str(stage)
+    transformer[FLOW_STAGE_ID_KEY] = stage_id
     try:
-        yield
+        yield stage_id
     finally:
         if previous is None:
             transformer.pop(FLOW_STAGE_KEY, None)
         else:
             transformer[FLOW_STAGE_KEY] = previous
+        if previous_stage_id is None:
+            transformer.pop(FLOW_STAGE_ID_KEY, None)
+        else:
+            transformer[FLOW_STAGE_ID_KEY] = previous_stage_id
 
 
 @contextlib.contextmanager
@@ -1465,7 +1523,10 @@ def _run_progressive(
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"), _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics):
+            with (
+                _flow_stage_contract(guider, "low") as low_stage_id,
+                _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics),
+            ):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -1478,7 +1539,12 @@ def _run_progressive(
                     latent_shapes=source_shapes,
                 )
         finally:
-            binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
+            binding.metrics.event(
+                "low_stage_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("low_stage_id"),
+                elapsed_ms=(time.perf_counter() - low_started) * 1000.0,
+            )
         base_model = guider.model_patcher.model
         source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
         source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
@@ -1504,7 +1570,7 @@ def _run_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             binding.metrics.increment("progressive_history_boundaries")
             with (
-                _flow_stage_contract(guider, "probe"),
+                _flow_stage_contract(guider, "probe") as probe_stage_id,
                 _high_stage_contract(guider),
                 _mixed_grid_stage_contract(guider, mixed_plan, binding.metrics),
             ):
@@ -1524,7 +1590,12 @@ def _run_progressive(
                 transformer.pop(PROBE_CONTEXT_KEY, None)
             else:
                 transformer[PROBE_CONTEXT_KEY] = previous_probe
-            binding.metrics.event("handoff_probe_wall", elapsed_ms=(time.perf_counter() - probe_started) * 1000.0)
+            binding.metrics.event(
+                "handoff_probe_wall",
+                request_id=binding.active_request_id,
+                stage_id=locals().get("probe_stage_id"),
+                elapsed_ms=(time.perf_counter() - probe_started) * 1000.0,
+            )
     except BaseException as exc:
         _finish_capture(binding, error=exc)
         raise
@@ -1746,7 +1817,7 @@ def _run_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with _flow_stage_contract(guider, "high") as high_stage_id, _high_stage_contract(guider):
             result = executor(
                 target_noise,
                 target_latent_image,
@@ -1758,7 +1829,12 @@ def _run_progressive(
                 seed,
                 latent_shapes=latent_shapes,
             )
-        binding.metrics.event("high_stage_wall", elapsed_ms=(time.perf_counter() - high_started) * 1000.0)
+        binding.metrics.event(
+            "high_stage_wall",
+            request_id=binding.active_request_id,
+            stage_id=high_stage_id,
+            elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
+        )
         high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
         if not high_model_calls:
             raise RuntimeError("progressive high stage produced no H3 model evaluations")
