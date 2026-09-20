@@ -28,6 +28,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    PARTITIONED_AV_HANDOFF_SOURCE_KEY,
+    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -39,6 +42,7 @@ from .partitioned_diagnostics import (
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
     normalize_audio_handoff_source,
     normalize_audio_position_domain,
+    normalize_av_handoff_source,
     normalize_prefix_transformer_context,
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -126,6 +130,38 @@ def _validate_audio_handoff_shadow_configuration(
         )
 
 
+def _validate_av_handoff_shadow_configuration(
+    av_handoff_source: str,
+    *,
+    audio_handoff_source: str,
+    prefix_transformer_context: str,
+    vdn_linear_diagnostic: str,
+    audio_position_domain: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> None:
+    source = normalize_av_handoff_source(av_handoff_source)
+    if source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN:
+        return
+    mismatches = []
+    if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+        mismatches.append("audio_handoff_source='main_partitioned'")
+    if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        mismatches.append("prefix_transformer_context='exact_target_partitioned'")
+    if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+        mismatches.append("vdn_linear_diagnostic='normal'")
+    if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+        mismatches.append("audio_position_domain='source_carrier'")
+    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
+        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
+    if int(audio_guided_overlap_ticks) != 4:
+        mismatches.append("audio_guided_overlap_ticks=4")
+    if mismatches:
+        raise PartitionedPreflightUnsupported(
+            "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
+        )
+
+
 @contextlib.contextmanager
 def _source_uniform_audio_shadow_controls(transformer: dict[str, Any]):
     """Temporarily select the already-released uniform source-grid low/probe arm."""
@@ -205,6 +241,65 @@ def _splice_source_uniform_shadow_audio_state(
     return hybrid
 
 
+def _select_source_uniform_shadow_clean_video(
+    main_clean: torch.Tensor,
+    shadow_clean: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+    *,
+    prefix_t: int,
+    exact_prefix_source: torch.Tensor,
+    metrics,
+) -> torch.Tensor:
+    """Select only shadow clean video while keeping exact prefix and main clean audio."""
+
+    main_video, main_audio = unpack_streams(main_clean, shapes)
+    shadow_video, shadow_audio = unpack_streams(shadow_clean, shapes)
+    if tuple(main_video.shape) != tuple(shadow_video.shape) or tuple(main_audio.shape) != tuple(shadow_audio.shape):
+        raise RuntimeError("AV handoff shadow clean-state geometry drifted")
+    if not 0 < int(prefix_t) < int(main_video.shape[2]):
+        raise RuntimeError("AV handoff shadow requires a non-empty protected video prefix and generated suffix")
+    expected_prefix_shape = tuple(main_video[:, :, : int(prefix_t)].shape)
+    if tuple(exact_prefix_source.shape) != expected_prefix_shape:
+        raise RuntimeError("AV handoff shadow exact source-prefix geometry drifted")
+
+    generated_main = main_video[:, :, int(prefix_t) :]
+    generated_shadow = shadow_video[:, :, int(prefix_t) :]
+    generated_delta = generated_shadow.to(torch.float32) - generated_main.to(torch.float32)
+    changed_elements = int(torch.count_nonzero(generated_delta).item())
+    if changed_elements <= 0:
+        raise RuntimeError("source-uniform AV shadow produced no distinct generated clean-video state")
+
+    selected_video = shadow_video.clone()
+    selected_video[:, :, : int(prefix_t)] = exact_prefix_source.to(selected_video)
+    selected, selected_shapes = pack_streams((selected_video, main_audio.clone()))
+    if list(selected_shapes) != list(shapes):
+        raise RuntimeError("AV handoff shadow changed packed clean-state geometry")
+    check_video, check_audio = unpack_streams(selected, shapes)
+    if not torch.equal(check_video[:, :, : int(prefix_t)], exact_prefix_source.to(check_video)):
+        raise RuntimeError("AV handoff shadow failed to restore the exact source-grid video prefix")
+    if not torch.equal(check_video[:, :, int(prefix_t) :], generated_shadow):
+        raise RuntimeError("AV handoff shadow failed to preserve the selected generated clean-video suffix")
+    if not torch.equal(check_audio, main_audio):
+        raise RuntimeError("AV handoff shadow mutated the main clean-audio probe state")
+
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_av_handoff_shadow_clean_video",
+            source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+            main_clean_video_digest=tensor_sha256(main_video),
+            shadow_clean_video_digest=tensor_sha256(shadow_video),
+            selected_clean_video_digest=tensor_sha256(check_video),
+            shadow_clean_audio_discarded=True,
+            main_clean_audio_preserved=True,
+            exact_source_prefix_restored=True,
+            generated_video_changed_elements=changed_elements,
+            generated_video_rms_delta=float(generated_delta.square().mean().sqrt().item()),
+            fail_closed=True,
+        )
+    return selected
+
+
 @contextlib.contextmanager
 def _partitioned_stage_contract(guider: Any, plan, metrics):
     options = getattr(guider, "model_options", None)
@@ -273,6 +368,24 @@ def _source_uniform_audio_shadow_sampler_contract(guider: Any, plan, metrics):
     with _partitioned_stage_contract(guider, plan, metrics):
         if FLOW_STAGE_KEY in transformer:
             raise RuntimeError("audio handoff shadow unexpectedly acquired a Flow stage marker")
+        yield
+
+
+@contextlib.contextmanager
+def _source_uniform_av_shadow_stage_contract(guider: Any, plan, metrics, stage: str):
+    """Publish a real low->probe pair so VDN releases retained shadow scratch at probe."""
+
+    stage = str(stage)
+    if stage not in {"low", "probe"}:
+        raise ValueError("AV handoff shadow stage must be low or probe")
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(_flow_stage_contract(guider, stage))
+        if stage == "probe":
+            stack.enter_context(_high_stage_contract(guider))
+        stack.enter_context(_partitioned_stage_contract(guider, plan, metrics))
+        transformer = guider.model_options["transformer_options"]
+        if transformer.get(FLOW_STAGE_KEY) != stage:
+            raise RuntimeError("AV handoff shadow Flow stage marker drifted")
         yield
 
 
@@ -676,12 +789,27 @@ def run_partitioned_progressive(
             PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         )
     )
+    av_handoff_source = normalize_av_handoff_source(
+        initial_transformer.get(
+            PARTITIONED_AV_HANDOFF_SOURCE_KEY,
+            PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        )
+    )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
     _validate_audio_handoff_shadow_configuration(
         audio_handoff_source,
+        prefix_transformer_context=prefix_transformer_context,
+        vdn_linear_diagnostic=vdn_linear_diagnostic,
+        audio_position_domain=audio_position_domain,
+        audio_guided_overlap_mode=audio_guided_overlap_mode,
+        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+    )
+    _validate_av_handoff_shadow_configuration(
+        av_handoff_source,
+        audio_handoff_source=audio_handoff_source,
         prefix_transformer_context=prefix_transformer_context,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
         audio_position_domain=audio_position_domain,
@@ -806,6 +934,24 @@ def run_partitioned_progressive(
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             video_owner="main_exact_partitioned",
             audio_handoff_owner="source_carrier_uniform_shadow",
+            diagnostic_only=True,
+        )
+    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN:
+        binding.metrics.event(
+            "partitioned_av_handoff_shadow_plan",
+            source=av_handoff_source,
+            main_prefix_transformer_context=prefix_transformer_context,
+            main_audio_position_domain=audio_position_domain,
+            shadow_prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+            shadow_audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            raw_audio_owner="source_carrier_uniform_shadow",
+            clean_video_owner="source_carrier_uniform_shadow_probe",
+            exact_video_prefix_owner="main_target_prefix",
+            clean_audio_probe_owner="main_exact_partitioned",
+            guidance_trajectory_owner="main_exact_partitioned",
             diagnostic_only=True,
         )
 
@@ -1032,6 +1178,153 @@ def run_partitioned_progressive(
                 fail_closed=True,
             )
 
+        shadow_source_x0 = None
+        if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+            if binding.active_capture is not None:
+                raise RuntimeError("AV handoff shadow must begin after the main Flow trajectory is committed")
+            if committed_low_run is None or binding.captured_run_id != committed_low_run.run_id:
+                raise RuntimeError("AV handoff shadow lost main exact-partitioned trajectory ownership")
+            main_captured_run_id = binding.captured_run_id
+            shadow_calls_before = int(
+                binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
+            )
+            shadow_prefix_frames_before = int(
+                binding.metrics.counters.get("partitioned_source_carrier_uniform_prefix_frames", 0)
+            )
+            shadow_audio_timestep_calls_before = int(
+                binding.metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0)
+            )
+            shadow_started = time.perf_counter()
+            shadow_event_start = len(binding.metrics.events)
+            with _source_uniform_audio_shadow_controls(transformer):
+                _reset_guider_conds(guider, template=conditioning_template)
+                sampler_invocation_count += 1
+                history_boundary_count += 1
+                binding.metrics.increment("progressive_sampler_invocations")
+                binding.metrics.increment("progressive_history_boundaries")
+                binding.metrics.increment("partitioned_av_handoff_shadow_low_invocations")
+                with _source_uniform_av_shadow_stage_contract(
+                    guider,
+                    stage_plan,
+                    binding.metrics,
+                    "low",
+                ):
+                    shadow_low_result = executor(
+                        low_noise,
+                        low_latent_image,
+                        sampler,
+                        low_sigmas,
+                        low_mask,
+                        None,
+                        disable_pbar,
+                        seed,
+                        latent_shapes=source_shapes,
+                    )
+                shadow_source_raw = _raw_sampler_state(
+                    base_model,
+                    shadow_low_result,
+                    source_shapes,
+                    sigma,
+                )
+                shadow_probe_noise = _noise_argument(
+                    base_model,
+                    shadow_source_raw,
+                    sigma,
+                    source_latent_internal,
+                )
+                previous_shadow_probe = transformer.get(PROBE_CONTEXT_KEY)
+                transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
+                try:
+                    _reset_guider_conds(guider, template=conditioning_template)
+                    sampler_invocation_count += 1
+                    history_boundary_count += 1
+                    binding.metrics.increment("progressive_sampler_invocations")
+                    binding.metrics.increment("progressive_history_boundaries")
+                    binding.metrics.increment("partitioned_av_handoff_shadow_probe_invocations")
+                    binding.metrics.increment("partitioned_av_handoff_shadow_probe_nfe")
+                    with _source_uniform_av_shadow_stage_contract(
+                        guider,
+                        stage_plan,
+                        binding.metrics,
+                        "probe",
+                    ):
+                        shadow_probe_result = executor(
+                            shadow_probe_noise,
+                            low_latent_image,
+                            _make_probe_sampler(sampler),
+                            sigmas[index : index + 1],
+                            low_mask,
+                            None,
+                            disable_pbar,
+                            seed,
+                            latent_shapes=source_shapes,
+                        )
+                finally:
+                    if previous_shadow_probe is None:
+                        transformer.pop(PROBE_CONTEXT_KEY, None)
+                    else:
+                        transformer[PROBE_CONTEXT_KEY] = previous_shadow_probe
+                shadow_source_x0 = _process_latent_in(
+                    base_model,
+                    shadow_probe_result,
+                    source_shapes,
+                )
+
+            if binding.active_capture is not None:
+                raise RuntimeError("AV handoff shadow unexpectedly captured a replacement Flow trajectory")
+            if binding.captured_run_id != main_captured_run_id:
+                raise RuntimeError("AV handoff shadow replaced the main exact-partitioned Flow trajectory")
+            shadow_model_calls = [
+                event
+                for event in binding.metrics.events[shadow_event_start:]
+                if event.kind == "model_call"
+            ]
+            shadow_low_calls = [
+                event for event in shadow_model_calls if event.fields.get("stage") == "low"
+            ]
+            shadow_probe_calls = [
+                event for event in shadow_model_calls if event.fields.get("stage") == "probe"
+            ]
+            if not shadow_low_calls:
+                raise RuntimeError("source-uniform AV handoff shadow produced no low-stage H3 evaluations")
+            if len(shadow_probe_calls) != 1 or not bool(shadow_probe_calls[0].fields.get("actual")):
+                raise RuntimeError(
+                    "source-uniform AV handoff shadow did not produce exactly one actual probe evaluation"
+                )
+            _verify_prefix_transformer_context_diagnostic(
+                binding.metrics,
+                PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+                calls_before=shadow_calls_before,
+                prefix_frames_before=shadow_prefix_frames_before,
+            )
+            shadow_audio_timestep_calls = (
+                int(binding.metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0))
+                - shadow_audio_timestep_calls_before
+            )
+            if shadow_audio_timestep_calls <= 0:
+                raise RuntimeError("source-uniform AV handoff shadow observed no model-timestep audio guidance")
+            binding.metrics.event(
+                "partitioned_av_handoff_shadow_execution",
+                source=av_handoff_source,
+                elapsed_ms=(time.perf_counter() - shadow_started) * 1000.0,
+                model_timestep_override_calls=shadow_audio_timestep_calls,
+                shadow_low_model_calls=len(shadow_low_calls),
+                shadow_probe_model_calls=len(shadow_probe_calls),
+                shadow_probe_first_call_actual=bool(shadow_probe_calls[0].fields.get("actual")),
+                shadow_low_executed=True,
+                shadow_probe_executed=True,
+                separate_sampler_lifetimes=2,
+                vdn_low_stage_retained_until_probe=True,
+                vdn_release_boundary="probe_to_high",
+                main_guidance_trajectory_preserved=True,
+                shadow_trajectory_captured=False,
+                raw_audio_state_selected=True,
+                clean_video_probe_selected=True,
+                shadow_raw_video_discarded=True,
+                shadow_clean_audio_discarded=True,
+                fail_closed=True,
+            )
+
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
@@ -1075,13 +1368,52 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        clean_video = clean_video.clone()
-        clean_video[:, :, : stage_plan.prefix_t] = resize_spatial_5d(
+        exact_prefix_source = resize_spatial_5d(
             stage_plan.prefix.to(clean_video),
             source_h,
             source_w,
             mode="bicubic",
         )
+        if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+            if shadow_source_x0 is None or shadow_source_raw is None:
+                raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
+            shadow_clean_video, _shadow_clean_audio = unpack_streams(shadow_source_x0, source_shapes)
+            for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+                shadow_native_trajectory = measure_translation_trajectory(
+                    shadow_clean_video,
+                    stage_plan.prefix_t,
+                    forward_steps=4,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="source_uniform_shadow_clean_native",
+                    roi=roi_name,
+                    source_hw=(source_h, source_w),
+                    target_hw=(target_h, target_w),
+                    **shadow_native_trajectory,
+                    **project_translation_trajectory_to_grid(
+                        shadow_native_trajectory,
+                        source_hw=(source_h, source_w),
+                        target_hw=(target_h, target_w),
+                    ),
+                )
+            source_x0 = _select_source_uniform_shadow_clean_video(
+                source_x0,
+                shadow_source_x0,
+                source_shapes,
+                prefix_t=stage_plan.prefix_t,
+                exact_prefix_source=exact_prefix_source,
+                metrics=binding.metrics,
+            )
+            clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+        else:
+            clean_video = clean_video.clone()
+            clean_video[:, :, : stage_plan.prefix_t] = exact_prefix_source
+            source_x0 = pack_streams((clean_video, clean_audio))[0]
+
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_exact_trajectory = measure_translation_trajectory(
                 clean_video,
@@ -1104,11 +1436,18 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        source_x0 = pack_streams((clean_video, clean_audio))[0]
 
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:
             if shadow_source_raw is None:
                 raise RuntimeError("source-uniform audio handoff shadow lost its sampler state")
+            source_raw = _splice_source_uniform_shadow_audio_state(
+                source_raw,
+                shadow_source_raw,
+                source_shapes,
+                low_mask,
+                binding.metrics,
+            )
+        elif av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             source_raw = _splice_source_uniform_shadow_audio_state(
                 source_raw,
                 shadow_source_raw,
@@ -1326,6 +1665,17 @@ def run_partitioned_progressive(
                     causal_pair=False,
                     reason="high stage initialized from source-uniform shadow raw audio state",
                 )
+            elif av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+                binding.metrics.event(
+                    "partitioned_audio_stage_delta_interpretation",
+                    reference_stage="low_probe_clean",
+                    candidate_stage="final_high_clean",
+                    causal_pair=False,
+                    reason=(
+                        "high stage initialized from source-uniform shadow raw audio and "
+                        "shadow-probe clean video handoff state"
+                    ),
+                )
             del final_internal
         original_video, original_audio = unpack_streams(latent_image, target_shapes)
         if not torch.equal(
@@ -1428,6 +1778,21 @@ def run_partitioned_progressive(
                 history_boundary_count=history_boundary_count,
                 diagnostic_only=True,
             )
+        if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+            binding.metrics.event(
+                "partitioned_av_handoff_shadow_complete",
+                source=av_handoff_source,
+                final_exact_video_prefix=True,
+                final_exact_audio_prefix=True,
+                main_guidance_trajectory_preserved=True,
+                shadow_raw_audio_handoff_applied=True,
+                shadow_clean_video_handoff_applied=True,
+                final_video_independent_of_shadow_av=False,
+                high_stage_first_call_actual=first_high_actual,
+                sampler_invocation_count=sampler_invocation_count,
+                history_boundary_count=history_boundary_count,
+                diagnostic_only=True,
+            )
         return result
     except BaseException as exc:
         if committed_low_run is not None and binding.trajectory is not None:
@@ -1449,9 +1814,12 @@ __all__ = [
     "PARTITIONED_SOL_REQUIRED_METADATA",
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
+    "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
+    "_source_uniform_av_shadow_stage_contract",
     "_splice_source_uniform_shadow_audio_state",
     "_validate_audio_handoff_shadow_configuration",
+    "_validate_av_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_verify_audio_position_domain_diagnostic",
     "run_partitioned_progressive",

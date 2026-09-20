@@ -12,6 +12,8 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -19,10 +21,13 @@ from h3_flow_regenerate.partitioned_diagnostics import (
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
+    _select_source_uniform_shadow_clean_video,
     _source_uniform_audio_shadow_controls,
     _source_uniform_audio_shadow_sampler_contract,
+    _source_uniform_av_shadow_stage_contract,
     _splice_source_uniform_shadow_audio_state,
     _validate_audio_handoff_shadow_configuration,
+    _validate_av_handoff_shadow_configuration,
 )
 from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY
 from h3_flow_regenerate.runtime import FLOW_STAGE_KEY
@@ -161,3 +166,105 @@ def test_shadow_audio_splice_rejects_protected_prefix_mutation_or_noop():
 
     with pytest.raises(RuntimeError, match="no distinct generated audio state"):
         _splice_source_uniform_shadow_audio_state(main, main.clone(), list(shapes), mask, _Metrics())
+
+
+def test_av_handoff_shadow_configuration_is_strictly_one_axis():
+    _validate_av_handoff_shadow_configuration(
+        PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        audio_guided_overlap_ticks=4,
+    )
+    bad = (
+        {"audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW},
+        {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
+        {"vdn_linear_diagnostic": "bypass_partitioned_linear"},
+        {"audio_position_domain": "legacy_target"},
+        {"audio_guided_overlap_mode": "sampler_mask"},
+        {"audio_guided_overlap_ticks": 3},
+    )
+    base = {
+        "audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        "prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        "vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        "audio_position_domain": PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        "audio_guided_overlap_ticks": 4,
+    }
+    for override in bad:
+        values = {**base, **override}
+        with pytest.raises(PartitionedPreflightUnsupported, match="AV handoff"):
+            _validate_av_handoff_shadow_configuration(
+                PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+                **values,
+            )
+
+
+def test_av_shadow_stage_contract_publishes_low_then_probe():
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+    transformer = guider.model_options["transformer_options"]
+    metrics = _Metrics()
+    with _source_uniform_av_shadow_stage_contract(guider, object(), metrics, "low"):
+        assert transformer[FLOW_STAGE_KEY] == "low"
+        assert PARTITIONED_STAGE_KEY in transformer
+        assert "h3_refinement" not in transformer
+    assert FLOW_STAGE_KEY not in transformer
+    assert PARTITIONED_STAGE_KEY not in transformer
+
+    with _source_uniform_av_shadow_stage_contract(guider, object(), metrics, "probe"):
+        assert transformer[FLOW_STAGE_KEY] == "probe"
+        assert PARTITIONED_STAGE_KEY in transformer
+        assert transformer["h3_refinement"]["active"] is True
+    assert FLOW_STAGE_KEY not in transformer
+    assert PARTITIONED_STAGE_KEY not in transformer
+    assert "h3_refinement" not in transformer
+
+
+def test_av_shadow_clean_video_selection_preserves_exact_prefix_and_main_clean_audio():
+    main_video = torch.arange(1 * 24 * 4 * 2 * 2, dtype=torch.float32).reshape(1, 24, 4, 2, 2)
+    shadow_video = main_video.clone()
+    shadow_video[:, :, 2:] += 9
+    main_audio = torch.arange(1 * 32 * 2 * 6, dtype=torch.float32).reshape(1, 32, 2, 6)
+    shadow_audio = main_audio + 100
+    main, shapes = pack_streams((main_video, main_audio))
+    shadow, shadow_shapes = pack_streams((shadow_video, shadow_audio))
+    assert shadow_shapes == shapes
+    exact_prefix = torch.full_like(main_video[:, :, :2], -3)
+    metrics = _Metrics()
+
+    selected = _select_source_uniform_shadow_clean_video(
+        main,
+        shadow,
+        list(shapes),
+        prefix_t=2,
+        exact_prefix_source=exact_prefix,
+        metrics=metrics,
+    )
+    selected_video, selected_audio = unpack_streams(selected, list(shapes))
+    assert torch.equal(selected_video[:, :, :2], exact_prefix)
+    assert torch.equal(selected_video[:, :, 2:], shadow_video[:, :, 2:])
+    assert torch.equal(selected_audio, main_audio)
+    kind, fields = metrics.events[-1]
+    assert kind == "partitioned_av_handoff_shadow_clean_video"
+    assert fields["exact_source_prefix_restored"] is True
+    assert fields["main_clean_audio_preserved"] is True
+    assert fields["shadow_clean_audio_discarded"] is True
+    assert fields["generated_video_changed_elements"] > 0
+
+
+def test_av_shadow_clean_video_selection_rejects_noop_suffix():
+    video = torch.zeros(1, 24, 4, 2, 2)
+    audio = torch.zeros(1, 32, 2, 6)
+    main, shapes = pack_streams((video, audio))
+    with pytest.raises(RuntimeError, match="no distinct generated clean-video state"):
+        _select_source_uniform_shadow_clean_video(
+            main,
+            main.clone(),
+            list(shapes),
+            prefix_t=2,
+            exact_prefix_source=video[:, :, :2],
+            metrics=_Metrics(),
+        )
