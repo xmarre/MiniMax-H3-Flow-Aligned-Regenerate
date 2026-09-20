@@ -122,6 +122,7 @@ def main() -> None:
 
     from h3_flow_regenerate.partitioned_diagnostics import (
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS as FLOW_VDN_LINEAR_BYPASS,
+        VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API as FLOW_VDN_LINEAR_DIAGNOSTIC_API,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY as FLOW_VDN_LINEAR_DIAGNOSTIC_KEY,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL as FLOW_VDN_LINEAR_NORMAL,
     )
@@ -148,6 +149,7 @@ def main() -> None:
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
     from vdn_h3.partitioned_linear import partitioned_frame_contract
     from vdn_h3.partitioned_runtime import (
+        VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_BYPASS,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_KEY,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_NORMAL,
@@ -181,7 +183,8 @@ def main() -> None:
     if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
         raise SystemExit("Sol partitioned request ABI is missing")
     if (
-        FLOW_VDN_LINEAR_DIAGNOSTIC_KEY != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_KEY
+        FLOW_VDN_LINEAR_DIAGNOSTIC_API != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API
+        or FLOW_VDN_LINEAR_DIAGNOSTIC_KEY != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_KEY
         or FLOW_VDN_LINEAR_NORMAL != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_NORMAL
         or FLOW_VDN_LINEAR_BYPASS != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_BYPASS
     ):
