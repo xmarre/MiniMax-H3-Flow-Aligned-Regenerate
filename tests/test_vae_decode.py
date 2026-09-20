@@ -249,6 +249,23 @@ def test_global_position_decode_uses_native_geometry_and_restores_overrides(caps
     assert torch.equal(first_images[0, ..., 0], first_images[1, ..., 0])
 
 
+
+def test_global_position_decode_rejects_non_native_tile_profile():
+    vae = FakePositionVAE()
+    model = vae.first_stage_model
+    model.tile_size = 320
+    model.tile_overlap_min = 128
+    latent = {"samples": torch.zeros(1, 24, 1, 56, 76)}
+
+    try:
+        decode_minimax_h3_global_spatial_position(vae, latent)
+    except RuntimeError as exc:
+        assert "requires the unchanged Core 256/64 tiled decode profile" in str(exc)
+    else:
+        raise AssertionError("expected non-native tile geometry to fail closed")
+
+    assert (model.tile_size, model.tile_overlap_min, model.tiling) == (320, 128, True)
+
 def test_tile_profile_rejects_unaligned_or_invalid_values():
     assert _validate_profile(320, 128, 16) == (320, 128)
     for size, overlap in ((300, 128), (320, 70), (256, 256), (528, 128)):
