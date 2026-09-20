@@ -152,10 +152,8 @@ def _emit_report(report: str) -> None:
 
 def _restore_instance_attribute(obj: object, name: str, previous: object) -> None:
     if previous is _MISSING:
-        try:
+        with contextlib.suppress(AttributeError):
             delattr(obj, name)
-        except AttributeError:
-            pass
     else:
         setattr(obj, name, previous)
 
