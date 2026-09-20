@@ -252,7 +252,7 @@ def decode_minimax_h3_serial_tiles(
     vae: object,
     samples: dict[str, object],
 ) -> tuple[torch.Tensor, str]:
-    """Decode native 256/64 tiles one at a time, matching Core before #16187.
+    """Decode native 256/64 tiles one at a time instead of tile batching.
 
     Current Core batches up to four horizontal tiles through the ViT decoder.
     This diagnostic changes only that batching dimension: tile geometry,
@@ -517,7 +517,7 @@ class H3MiniMaxVAEDecodeLargeTile:
 class H3MiniMaxVAEDecodeSerialTileDiagnostic:
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
     DESCRIPTION = (
-        "Causal regression diagnostic for Core #16187: preserve native 256/64 "
+        "Causal decoder diagnostic: preserve native 256/64 "
         "tiling and current decoder arithmetic, but decode each spatial tile "
         "individually instead of batching up to four tiles together."
     )
