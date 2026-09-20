@@ -18,6 +18,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     PartitionedAudioModelTimestepContext,
     apply_partitioned_diagnostic_controls,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -68,6 +69,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     ]
     assert diagnostic["vdn_linear_diagnostic"][1]["default"] == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
     assert diagnostic["audio_guided_overlap_mode"][0] == [
@@ -210,6 +212,20 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
         patcher,
         required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     )
+    with pytest.raises(PartitionedPreflightUnsupported, match="diagnostic capability"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        )
+    current._vdn_partitioned_linear_diagnostic_modes = (
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    )
+    _validate_partitioned_vdn_compat(
+        patcher,
+        required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    )
 
 
 def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
@@ -234,6 +250,41 @@ def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
     assert metrics.events[-1][0] == "partitioned_vdn_linear_diagnostic_verified"
     assert metrics.events[-1][1]["bypass_calls"] == 3
     assert metrics.events[-1][1]["bypass_video_rows"] == 99
+
+
+def test_vdn_cross_grid_temporal_verification_fails_closed_then_reports_counts():
+    metrics = _Metrics()
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppression_calls", 4)
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppressed_taps", 20)
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppressed_rows", 200)
+    with pytest.raises(RuntimeError, match="no verified cross-grid short-conv suppression"):
+        _verify_partitioned_vdn_linear_diagnostic(
+            metrics,
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+            bypass_calls_before=0,
+            bypass_video_rows_before=0,
+            suppression_calls_before=4,
+            suppressed_taps_before=20,
+            suppressed_rows_before=200,
+        )
+
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppression_calls", 3)
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppressed_taps", 18)
+    metrics.increment("partitioned_vdn_cross_grid_temporal_suppressed_rows", 144)
+    _verify_partitioned_vdn_linear_diagnostic(
+        metrics,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        bypass_calls_before=0,
+        bypass_video_rows_before=0,
+        suppression_calls_before=4,
+        suppressed_taps_before=20,
+        suppressed_rows_before=200,
+    )
+    kind, fields = metrics.events[-1]
+    assert kind == "partitioned_vdn_linear_diagnostic_verified"
+    assert fields["cross_grid_temporal_suppression_calls"] == 3
+    assert fields["suppressed_taps"] == 18
+    assert fields["suppressed_rows"] == 144
 
 
 def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):

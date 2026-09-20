@@ -188,8 +188,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
                 "tooltip": (
                     "normal preserves the partitioned VDN learned linear complement; "
-                    "bypass_partitioned_linear suppresses only that complement in the "
-                    "heterogeneous low/probe path for causal frame-shift testing."
+                    "bypass_partitioned_linear suppresses the complete complement; "
+                    "suppress_cross_grid_temporal_taps keeps the complement active but "
+                    "zeros only temporal short-conv taps that cross the target/source grid boundary."
                 ),
             },
         )
@@ -223,7 +224,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     DESCRIPTION = (
         "Diagnostic variant of the partitioned exact-prefix handoff. Adds model-local "
-        "controls for bypassing only the partitioned VDN learned linear complement and "
+        "controls for isolating the partitioned VDN learned-linear boundary path and "
         "for selecting the audio guided-overlap mode/width. Ordinary/native VDN and the "
         "production-shaped partitioned node remain unchanged."
     )
