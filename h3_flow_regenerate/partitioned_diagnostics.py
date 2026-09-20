@@ -6,6 +6,7 @@ Progressive Target Input node or the ordinary partitioned node defaults.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from .audio_guided_overlap import (
@@ -22,6 +23,32 @@ PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS = (
 )
 
 PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY = "h3_flow_partitioned_audio_guided_overlap_ticks_v1"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY = "h3_flow_partitioned_audio_guided_overlap_mode_v1"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER = "sampler_mask"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP = "model_timestep_only"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS = (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+)
+PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY = "h3_flow_partitioned_audio_model_timestep_context_v1"
+VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
+
+
+@dataclass(slots=True)
+class PartitionedAudioModelTimestepContext:
+    """Call-scoped audio timestep mask consumed only inside MiniMax-H3's inner forward."""
+
+    audio_mask: Any
+    metrics: Any
+    ticks: int
+    audio_prefix_ticks: int
+    calls: int = 0
+
+    def record_call(self) -> None:
+        self.calls += 1
+        increment = getattr(self.metrics, "increment", None)
+        if callable(increment):
+            increment("partitioned_audio_model_timestep_override_calls")
 
 
 def normalize_vdn_linear_diagnostic(value: str) -> str:
@@ -31,6 +58,24 @@ def normalize_vdn_linear_diagnostic(value: str) -> str:
             f"VDN linear diagnostic must be one of {PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
         )
     return value
+
+
+def normalize_audio_guided_overlap_mode(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS:
+        raise ValueError(
+            f"audio guided-overlap mode must be one of {PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
+def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
+    if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
+        return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
+    return (
+        normalize_audio_guided_overlap_mode(model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY]),
+        "diagnostic_node",
+    )
 
 
 def resolve_partitioned_audio_guided_overlap_ticks(model_options: dict[str, Any]) -> tuple[int, str]:
@@ -51,6 +96,7 @@ def apply_partitioned_diagnostic_controls(
     *,
     vdn_linear_diagnostic: str,
     audio_guided_overlap_ticks: int,
+    audio_guided_overlap_mode: str = PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -59,6 +105,7 @@ def apply_partitioned_diagnostic_controls(
         audio_guided_overlap_ticks,
         source="audio_guided_overlap_ticks",
     )
+    audio_mode = normalize_audio_guided_overlap_mode(audio_guided_overlap_mode)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -67,6 +114,7 @@ def apply_partitioned_diagnostic_controls(
     transformer_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = mode
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
+    model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
 
     event = getattr(metrics, "event", None)
     if callable(event):
@@ -74,6 +122,7 @@ def apply_partitioned_diagnostic_controls(
             "partitioned_diagnostic_controls",
             vdn_linear_diagnostic=mode,
             audio_guided_overlap_ticks=ticks,
+            audio_guided_overlap_mode=audio_mode,
             model_local=True,
             native_vdn_unchanged=True,
             production_default_changed=False,
@@ -82,12 +131,21 @@ def apply_partitioned_diagnostic_controls(
 
 
 __all__ = [
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY",
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP",
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS",
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
+    "PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY",
+    "PartitionedAudioModelTimestepContext",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS",
+    "VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API",
     "apply_partitioned_diagnostic_controls",
+    "normalize_audio_guided_overlap_mode",
     "normalize_vdn_linear_diagnostic",
+    "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
 ]
