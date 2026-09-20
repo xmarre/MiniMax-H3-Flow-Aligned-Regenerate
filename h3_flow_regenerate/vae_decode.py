@@ -289,7 +289,6 @@ def decode_minimax_h3_global_spatial_position(
         )
 
     ratio = int(model.vae_ratio)
-    tile_size, tile_overlap = _validate_profile(256, 64, ratio)
     full_hw = (int(latent.shape[-2]), int(latent.shape[-1]))
     output_height = full_hw[0] * ratio
     output_width = full_hw[1] * ratio
@@ -300,6 +299,17 @@ def decode_minimax_h3_global_spatial_position(
             int(model.tile_size),
             int(model.tile_overlap_min),
         )
+        tile_size, tile_overlap = _validate_profile(
+            original_profile[1],
+            original_profile[2],
+            ratio,
+        )
+        if not original_profile[0] or (tile_size, tile_overlap) != (256, 64):
+            raise RuntimeError(
+                "MiniMax-H3 global-position diagnostic requires the unchanged "
+                "Core 256/64 tiled decode profile; refusing to change tile geometry "
+                f"from {original_profile}"
+            )
         previous_row = getattr(model, "__dict__", {}).get("_decode_tile_row", _MISSING)
         previous_pixels = getattr(model, "__dict__", {}).get("_decode_pixels", _MISSING)
         previous_pos_forward = getattr(decoder.pos_embed, "__dict__", {}).get(
