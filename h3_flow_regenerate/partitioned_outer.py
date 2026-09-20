@@ -211,6 +211,11 @@ def partitioned_outer_wrapper(
             seed,
             latent_shapes,
         )
+        if audio_model_context is not None and audio_model_context.calls <= 0:
+            raise RuntimeError(
+                "model-timestep-only audio guidance was requested but zero MiniMax-H3 "
+                "inner-forward overrides executed"
+            )
     except PartitionedPreflightUnsupported as exc:
         fallback_reason = str(exc)
     except BaseException as exc:
@@ -275,10 +280,6 @@ def partitioned_outer_wrapper(
         )
 
     if audio_model_context is not None:
-        if audio_model_context.calls <= 0:
-            raise RuntimeError(
-                "model-timestep-only audio guidance was requested but zero MiniMax-H3 inner-forward overrides executed"
-            )
         binding.metrics.event(
             "partitioned_audio_model_timestep_context",
             mode=guided_mode,
