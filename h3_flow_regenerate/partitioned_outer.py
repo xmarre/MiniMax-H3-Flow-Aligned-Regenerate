@@ -6,10 +6,8 @@ import logging
 import time
 from types import SimpleNamespace
 
-from .audio_guided_overlap import (
-    apply_audio_guided_overlap_mask,
-    configured_audio_guided_overlap_ticks,
-)
+from .audio_guided_overlap import apply_audio_guided_overlap_mask
+from .partitioned_diagnostics import resolve_partitioned_audio_guided_overlap_ticks
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .handoff import ProgressiveTargetInputConfig
 from .partitioned_scheduler import (
@@ -75,17 +73,19 @@ def partitioned_outer_wrapper(
             latent_shapes=latent_shapes,
         )
 
-    # Guided audio overlap is sampler-lifetime state only.  The original exact
-    # mask remains the authority for caller-visible final restoration.
-    runtime_denoise_mask = denoise_mask
-    guided_ticks = configured_audio_guided_overlap_ticks()
-    guided_report = None
-    if guided_ticks:
-        runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
-            denoise_mask,
-            latent_shapes,
-            ticks=guided_ticks,
-        )
+    # Guided audio overlap is sampler-lifetime state only. The original exact
+    # mask remains the authority for caller-visible final restoration. The
+    # diagnostic node may override the overlap width model-locally; the ordinary
+    # node keeps the existing environment/default resolution path.
+    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(
+        model_options
+    )
+    runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
+        denoise_mask,
+        latent_shapes,
+        ticks=guided_ticks,
+    )
+    guided_report["configuration_source"] = guided_configuration_source
 
     adapted = _ProgressiveExactMaskExecutor(
         executor,
@@ -162,13 +162,16 @@ def partitioned_outer_wrapper(
             partitioned_exact_prefix=True,
             **guided_report,
         )
-        if bool(guided_report.get("applied")):
-            LOG.info(
-                "partitioned audio guided overlap active ticks=%d exact_prefix=%d ramp=%s final_exact_restore=true",
-                guided_ticks,
-                int(guided_report.get("audio_prefix_ticks", 0)),
-                guided_report.get("ramp_values"),
-            )
+        LOG.info(
+            "partitioned audio guided overlap ticks=%d applied=%s source=%s "
+            "reason=%s exact_prefix=%d ramp=%s final_exact_restore=true",
+            guided_ticks,
+            bool(guided_report.get("applied")),
+            guided_report.get("configuration_source"),
+            guided_report.get("reason"),
+            int(guided_report.get("audio_prefix_ticks", 0)),
+            guided_report.get("ramp_values"),
+        )
     return result
 
 
