@@ -15,6 +15,9 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -72,6 +75,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert "audio_guided_overlap_ticks" not in ordinary
     assert "audio_guided_overlap_mode" not in ordinary
     assert "prefix_transformer_context" not in ordinary
+    assert "audio_position_domain" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -90,9 +94,12 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
     assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+    assert diagnostic["audio_position_domain"][0] == list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS)
+    assert diagnostic["audio_position_domain"][1]["default"] == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
+    assert keys.index("prefix_transformer_context") < keys.index("audio_position_domain")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -511,3 +518,36 @@ return out
 """
     assert _source_has_audio_velocity_mask_contract(old_source) is False
     assert _source_has_audio_velocity_mask_contract(fixed_source) is True
+
+
+def test_source_carrier_audio_position_control_is_opt_in_and_model_local():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    )
+    assert (
+        model.model_options["transformer_options"]["h3_flow_partitioned_audio_position_domain_v1"]
+        == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+    )
+    assert metrics.events[-1][1]["audio_position_domain"] == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+
+    legacy = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    legacy_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        legacy,
+        legacy_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    )
+    assert "h3_flow_partitioned_audio_position_domain_v1" not in legacy.model_options["transformer_options"]
+    assert "audio_position_domain" not in legacy_metrics.events[-1][1]
