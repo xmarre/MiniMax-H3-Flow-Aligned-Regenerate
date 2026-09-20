@@ -49,6 +49,11 @@ def main() -> None:
     parser.add_argument("--expected-actual", type=int)
     parser.add_argument("--expected-forecast", type=int)
     parser.add_argument(
+        "--expected-audio-position-domain",
+        choices=("legacy_target", "source_carrier"),
+        help="Validate the selected target-audio position policy and its candidate receipts.",
+    )
+    parser.add_argument(
         "--allow-no-spectrum",
         action="store_true",
         help="Do not require at least one Spectrum forecast call.",
@@ -78,6 +83,7 @@ def main() -> None:
             require_spectrum=not args.allow_no_spectrum,
             require_audio_overlap=not args.allow_no_audio_overlap,
             require_vdn_linear=not args.allow_no_vdn_linear,
+            expected_audio_position_domain=args.expected_audio_position_domain,
         )
     except RuntimeGateError as exc:
         raise SystemExit(f"partitioned exact-prefix runtime gate: FAIL: {exc}") from exc
