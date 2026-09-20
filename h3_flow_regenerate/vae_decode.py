@@ -247,7 +247,6 @@ def decode_minimax_h3_large_tile(
     return images, report
 
 
-
 def decode_minimax_h3_serial_tiles(
     vae: object,
     samples: dict[str, object],
