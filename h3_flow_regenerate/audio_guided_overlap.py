@@ -238,6 +238,7 @@ def compare_audio_latent_stages(
     report["available"] = bool(report["windows"])
     return report
 
+
 def apply_audio_guided_overlap_mask(
     denoise_mask: torch.Tensor | None,
     latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,

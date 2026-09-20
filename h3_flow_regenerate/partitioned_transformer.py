@@ -331,8 +331,6 @@ def partitioned_diffusion_wrapper(
     if not isinstance(runtime, PartitionedStageRuntime):
         raise RuntimeError("partitioned exact-prefix stage contract must be a runtime owner object")
 
-    import comfy.ldm.minimax.model as native
-
     plan = runtime.plan
     metrics = runtime.metrics
     inner = executor.class_obj
@@ -381,6 +379,8 @@ def partitioned_diffusion_wrapper(
             minimax_payload=minimax_payload,
             **kwargs,
         )
+
+    import comfy.ldm.minimax.model as native
 
     payload = dict(minimax_payload or {})
     layout = partitioned_carrier_layout(

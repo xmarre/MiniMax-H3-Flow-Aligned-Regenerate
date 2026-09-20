@@ -42,6 +42,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
+    _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
@@ -265,6 +266,36 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
         patcher,
         required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     )
+
+
+def test_source_carrier_transformer_verification_fails_closed_then_reports_counts():
+    metrics = _Metrics()
+    metrics.increment("partitioned_source_carrier_uniform_transformer_calls", 2)
+    metrics.increment("partitioned_source_carrier_uniform_prefix_frames", 24)
+
+    with pytest.raises(RuntimeError, match="no verified low/probe execution"):
+        _verify_prefix_transformer_context_diagnostic(
+            metrics,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+            calls_before=2,
+            prefix_frames_before=24,
+        )
+
+    metrics.increment("partitioned_source_carrier_uniform_transformer_calls", 3)
+    metrics.increment("partitioned_source_carrier_uniform_prefix_frames", 36)
+    _verify_prefix_transformer_context_diagnostic(
+        metrics,
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+        calls_before=2,
+        prefix_frames_before=24,
+    )
+    kind, fields = metrics.events[-1]
+    assert kind == "partitioned_prefix_transformer_context_verified"
+    assert fields["mode"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+    assert fields["transformer_calls"] == 3
+    assert fields["prefix_frames"] == 36
+    assert fields["heterogeneous_partition_contract_published"] is False
+    assert fields["fail_closed"] is True
 
 
 def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():

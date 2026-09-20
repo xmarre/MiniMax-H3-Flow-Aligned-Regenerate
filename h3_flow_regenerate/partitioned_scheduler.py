@@ -544,7 +544,12 @@ def run_partitioned_progressive(
         prefix_video_rows=stage_plan.prefix_rows,
         suffix_video_rows=stage_plan.suffix_rows,
         partitioned_video_rows=stage_plan.partitioned_rows,
-        prefix_exact_latent_resized_for_transformer=False,
+        prefix_exact_latent_resized_for_transformer=(
+            prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+        ),
+        prefix_target_grid_rows_injected=(
+            prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+        ),
         deprecated_mixed_grid_contract_active=False,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
         prefix_transformer_context=prefix_transformer_context,
