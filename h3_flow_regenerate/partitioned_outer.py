@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import time
 from types import SimpleNamespace
@@ -31,6 +33,25 @@ from .partitioned_scheduler import (
 from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
 
 LOG = logging.getLogger(__name__)
+
+
+def _source_has_audio_velocity_mask_contract(source: str) -> bool:
+    execute_index = source.find(").execute(")
+    mask_index = source.find("out[1] = out[1] * audio_denoise_mask")
+    return execute_index >= 0 and mask_index > execute_index
+
+
+@functools.lru_cache(maxsize=1)
+def _core_has_audio_velocity_mask_contract() -> bool:
+    """Require Core #15988 semantics before decoupling inner and outer audio masks."""
+
+    try:
+        import comfy.ldm.minimax.model as native
+
+        source = inspect.getsource(native.MiniMaxH3Model.forward)
+    except (ImportError, OSError, TypeError):
+        return False
+    return _source_has_audio_velocity_mask_contract(source)
 
 
 def partitioned_outer_wrapper(
@@ -110,6 +131,11 @@ def partitioned_outer_wrapper(
         elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
             runtime_denoise_mask = denoise_mask
             if bool(guided_report.get("applied")):
+                if not _core_has_audio_velocity_mask_contract():
+                    raise RuntimeError(
+                        "model-timestep-only audio guidance requires ComfyUI MiniMax-H3 "
+                        "denoise-mask velocity conversion fix #15988"
+                    )
                 guided_audio_mask = unpack_streams(guided_mask, latent_shapes)[1].detach()
                 audio_model_context = PartitionedAudioModelTimestepContext(
                     audio_mask=guided_audio_mask,
