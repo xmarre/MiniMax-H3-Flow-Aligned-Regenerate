@@ -132,6 +132,7 @@ class FakePositionVAE(FakeVAE):
         model.exercise_tiled_decoder(latent)
         return self._output(latent).unsqueeze(0)
 
+
 def test_large_tile_decode_matches_core_batched_video_output_shape(capsys):
     vae = FakeBatchedVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
@@ -149,6 +150,7 @@ def test_large_tile_decode_matches_core_batched_video_output_shape(capsys):
         vae.first_stage_model.tile_overlap_min,
         vae.first_stage_model.tiling,
     ) == (256, 64, True)
+
 
 def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     vae = FakeVAE()
@@ -168,6 +170,7 @@ def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     ) == (256, 64, True)
     assert "output=1216x896" in report
     assert "tiles=6x4" in report
+
 
 def test_320_128_profile_moves_grid_but_keeps_six_columns():
     model = MiniMaxH3VideoVAE()
@@ -203,6 +206,7 @@ def test_serial_tile_decode_forces_batch_one_and_restores_override(capsys):
     assert len(model.decoder.pos_embed.seen) == 30
     assert all(int(ids.shape[0]) == 1 for ids in model.decoder.pos_embed.seen)
 
+
 def test_serial_tile_decode_rejects_non_native_profile():
     vae = FakePositionVAE()
     model = vae.first_stage_model
@@ -218,6 +222,7 @@ def test_serial_tile_decode_rejects_non_native_profile():
         raise AssertionError("expected non-native tile geometry to fail closed")
 
     assert (model.tile_size, model.tile_overlap_min, model.tiling) == (320, 128, True)
+
 
 def test_global_position_remap_preserves_temporal_and_suffix_ids():
     image_ids = _token_ids((2, 2, 3), batch=2)
@@ -245,6 +250,7 @@ def test_global_position_remap_preserves_temporal_and_suffix_ids():
     expected_x1 = 2.0 * (torch.tensor([4.5, 5.5, 6.5]) / 8.0) - 1.0
     assert torch.allclose(mapped_images[1, 0, :, 0, 1], expected_y1)
     assert torch.allclose(mapped_images[1, 0, 0, :, 2], expected_x1)
+
 
 def test_global_position_decode_uses_native_geometry_and_restores_overrides(capsys):
     vae = FakePositionVAE()
@@ -297,6 +303,7 @@ def test_global_position_decode_rejects_non_native_tile_profile():
         raise AssertionError("expected non-native tile geometry to fail closed")
 
     assert (model.tile_size, model.tile_overlap_min, model.tiling) == (320, 128, True)
+
 
 def test_tile_profile_rejects_unaligned_or_invalid_values():
     assert _validate_profile(320, 128, 16) == (320, 128)
