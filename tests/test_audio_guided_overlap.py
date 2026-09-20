@@ -179,7 +179,6 @@ def test_fallback_sampler_sees_guided_audio_but_return_restores_original_exact_p
     assert exact_events[0].fields["final_exact"] is True
 
 
-
 def test_explicit_audio_guided_overlap_validation_rejects_bool_and_out_of_range_values():
     assert validate_audio_guided_overlap_ticks(0) == 0
     assert validate_audio_guided_overlap_ticks(16) == 16
