@@ -9,33 +9,33 @@ from h3_flow_regenerate.audio_guided_overlap import AUDIO_GUIDED_OVERLAP_ENV
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
-from h3_flow_regenerate.partitioned_outer import partitioned_outer_wrapper
-from h3_flow_regenerate.partitioned_scheduler import PARTITIONED_PROGRESSIVE_KEY
-from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
-    PartitionedAudioModelTimestepContext,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PartitionedAudioModelTimestepContext,
     apply_partitioned_diagnostic_controls,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
+from h3_flow_regenerate.partitioned_node import (
+    H3PartitionedExactPrefixDiagnosticHandoff,
+    H3PartitionedExactPrefixHandoff,
+)
+from h3_flow_regenerate.partitioned_outer import partitioned_outer_wrapper
 from h3_flow_regenerate.partitioned_scheduler import (
+    PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
-from h3_flow_regenerate.partitioned_node import (
-    H3PartitionedExactPrefixDiagnosticHandoff,
-    H3PartitionedExactPrefixHandoff,
-)
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
 
 
 class _Metrics:
