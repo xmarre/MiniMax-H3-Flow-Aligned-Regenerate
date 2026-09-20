@@ -27,7 +27,9 @@ def validate_audio_guided_overlap_ticks(value: int, *, source: str = "audio guid
     """Validate an explicit overlap width without consulting process environment."""
 
     if type(value) is not int or not 0 <= value <= MAX_AUDIO_GUIDED_OVERLAP_TICKS:
-        raise ValueError(\n            f"{source} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}"\n        )
+        raise ValueError(
+            f"{source} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}"
+        )
     return int(value)
 
 
@@ -40,7 +42,8 @@ def configured_audio_guided_overlap_ticks() -> int:
     try:
         ticks = int(str(raw_value).strip())
     except ValueError as exc:
-        message = (\n            f"{AUDIO_GUIDED_OVERLAP_ENV} must be an integer in "
+        message = (
+            f"{AUDIO_GUIDED_OVERLAP_ENV} must be an integer in "
             f"[0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}]"
         )
         raise ValueError(message) from exc
