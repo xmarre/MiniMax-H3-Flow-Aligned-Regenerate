@@ -12,6 +12,13 @@ def require(path: Path, *needles: str) -> None:
         raise SystemExit(f"{path}: missing required contract fragments: {missing}")
 
 
+def require_order(path: Path, *needles: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    positions = [text.find(needle) for needle in needles]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise SystemExit(f"{path}: required contract fragments are missing or out of order: {needles!r}")
+
+
 def require_symbols(path: Path, *, functions: tuple[str, ...] = (), classes: tuple[str, ...] = ()) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found_functions = {
@@ -27,6 +34,7 @@ def require_symbols(path: Path, *, functions: tuple[str, ...] = (), classes: tup
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate pinned H3 sibling-source contracts")
     parser.add_argument("--comfy", type=Path, required=True)
+    parser.add_argument("--comfy-mask", type=Path, required=True)
     parser.add_argument("--spectrum", type=Path, required=True)
     parser.add_argument("--continuum", type=Path, required=True)
     parser.add_argument("--diffaid", type=Path, required=True)
@@ -56,6 +64,12 @@ def main() -> None:
         "if int(image.shape[0]) < total_frames:",
     )
 
+    require_order(
+        args.comfy_mask / "comfy/ldm/minimax/model.py",
+        ").execute(x, timestep, context, transformer_options, minimax_payload=minimax_payload,",
+        "denoise_mask=denoise_mask, audio_denoise_mask=audio_denoise_mask, **kwargs)",
+        "out[1] = out[1] * audio_denoise_mask",
+    )
     require(
         args.comfy / "comfy/ldm/minimax/model.py",
         "latents_dim=24",
