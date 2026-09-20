@@ -5,6 +5,8 @@ import json
 import pytest
 
 from h3_flow_regenerate.partitioned_runtime_gate import (
+    AUDIO_POSITION_DOMAIN_LEGACY,
+    AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_SOL_ABI,
     RuntimeGateError,
     validate_partitioned_runtime_evidence,
@@ -213,3 +215,100 @@ def test_partitioned_runtime_gate_uses_latest_partitioned_window():
     report = validate_partitioned_runtime_evidence(metrics, _log())
 
     assert report.logical_calls == 5
+
+
+def _candidate_metrics() -> dict:
+    metrics = _metrics()
+    events = metrics["events"]
+    events[0]["fields"]["audio_position_domain"] = AUDIO_POSITION_DOMAIN_SOURCE
+    transformer = events[1]["fields"]
+    transformer.update(
+        audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+        audio_position_policy_active=True,
+        audio_position_policy_signature=(
+            "h3_flow_partitioned_position_policy_v1",
+            AUDIO_POSITION_DOMAIN_SOURCE,
+            17,
+        ),
+        audio_position_temporal_equal=True,
+        audio_position_non_audio_before_digest="a" * 64,
+        audio_position_non_audio_after_digest="a" * 64,
+        prefix_rope_position_digest="b" * 64,
+        suffix_rope_position_digest="c" * 64,
+        position_digest="d" * 64,
+    )
+    events.insert(
+        3,
+        _event(
+            "partitioned_audio_position_domain_verified",
+            mode=AUDIO_POSITION_DOMAIN_SOURCE,
+            wrapper_entries=3,
+            actual_block0_calls=2,
+            model_timestep_override_calls=2,
+            target_audio_rows_only=True,
+            sampler_mask_mutated=False,
+            fail_closed=True,
+        ),
+    )
+    events.insert(
+        -2,
+        _event(
+            "partitioned_audio_position_candidate_integrity",
+            mode=AUDIO_POSITION_DOMAIN_SOURCE,
+            low_mask_digest="e" * 64,
+            high_mask_digest="f" * 64,
+            final_exact_video_prefix=True,
+            final_exact_audio_prefix=True,
+            sampler_masks_unchanged=True,
+        ),
+    )
+    return metrics
+
+
+def test_partitioned_runtime_gate_accepts_source_carrier_candidate_receipts():
+    report = validate_partitioned_runtime_evidence(
+        _candidate_metrics(),
+        _log(),
+        expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+    )
+
+    assert report.audio_position_domain == AUDIO_POSITION_DOMAIN_SOURCE
+    assert report.audio_position_candidate_verified is True
+    assert report.audio_position_candidate_block0_calls == 2
+    assert report.audio_position_model_timestep_override_calls == 2
+
+
+def test_partitioned_runtime_gate_keeps_legacy_gate_backward_compatible():
+    report = validate_partitioned_runtime_evidence(
+        _metrics(),
+        _log(),
+        expected_audio_position_domain=AUDIO_POSITION_DOMAIN_LEGACY,
+    )
+
+    assert report.audio_position_domain == AUDIO_POSITION_DOMAIN_LEGACY
+    assert report.audio_position_candidate_verified is False
+
+
+def test_partitioned_runtime_gate_rejects_candidate_position_or_av_receipt_drift():
+    metrics = _candidate_metrics()
+    metrics["events"][1]["fields"]["audio_position_non_audio_after_digest"] = "0" * 64
+    with pytest.raises(RuntimeGateError, match="non-target-audio"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+        )
+
+    metrics = _candidate_metrics()
+    integrity = next(
+        event
+        for event in metrics["events"]
+        if event["kind"] == "partitioned_audio_position_candidate_integrity"
+    )
+    integrity["fields"]["final_exact_audio_prefix"] = False
+    with pytest.raises(RuntimeGateError, match="exact AV prefix"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+        )
