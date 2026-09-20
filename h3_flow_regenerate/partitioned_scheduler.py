@@ -21,6 +21,9 @@ from .handoff import ProgressiveTargetInputConfig, build_handoff_state, determin
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -30,6 +33,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
+    normalize_audio_position_domain,
     normalize_prefix_transformer_context,
     normalize_vdn_linear_diagnostic,
 )
@@ -37,6 +41,7 @@ from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStageRuntime,
     build_partitioned_stage_plan,
+    tensor_sha256,
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
@@ -110,11 +115,18 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
         )
     )
+    audio_position_domain = normalize_audio_position_domain(
+        transformer.get(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
+            PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+        )
+    )
     transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
         prefix_transformer_context=prefix_context,
+        audio_position_domain=audio_position_domain,
     )
     try:
         yield
@@ -286,6 +298,65 @@ def _verify_prefix_transformer_context_diagnostic(
         )
 
 
+def _validate_audio_position_candidate_configuration(
+    audio_position_domain: str,
+    prefix_transformer_context: str,
+    vdn_linear_diagnostic: str,
+) -> None:
+    mode = normalize_audio_position_domain(audio_position_domain)
+    if mode == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
+        return
+    if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        raise PartitionedPreflightUnsupported(
+            "source_carrier audio-position candidate requires prefix_transformer_context='exact_target_partitioned'"
+        )
+    if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+        raise PartitionedPreflightUnsupported(
+            "source_carrier audio-position candidate requires vdn_linear_diagnostic='normal'"
+        )
+
+
+def _verify_audio_position_domain_diagnostic(
+    metrics,
+    mode: str,
+    *,
+    block0_calls_before: int,
+    wrapper_entries_before: int,
+    model_timestep_calls_before: int,
+) -> None:
+    mode = normalize_audio_position_domain(mode)
+    if mode == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
+        return
+    counters = getattr(metrics, "counters", {})
+    block0_after = int(counters.get("partitioned_audio_position_source_carrier_block0_calls", 0))
+    wrapper_after = int(counters.get("partitioned_audio_position_candidate_wrapper_entries", 0))
+    model_timestep_after = int(counters.get("partitioned_audio_model_timestep_override_calls", 0))
+    block0_delta = block0_after - int(block0_calls_before)
+    wrapper_delta = wrapper_after - int(wrapper_entries_before)
+    model_timestep_delta = model_timestep_after - int(model_timestep_calls_before)
+    if block0_delta <= 0:
+        raise RuntimeError(
+            "source-carrier audio-position candidate was requested but no actual low/probe "
+            "block-zero execution was observed; refusing this diagnostic sample"
+        )
+    if wrapper_delta < block0_delta:
+        raise RuntimeError(
+            "source-carrier audio-position candidate block execution exceeded wrapper-entry accounting"
+        )
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_audio_position_domain_verified",
+            mode=mode,
+            wrapper_entries=wrapper_delta,
+            actual_block0_calls=block0_delta,
+            model_timestep_override_calls=model_timestep_delta,
+            target_audio_rows_only=True,
+            sampler_mask_mutated=False,
+            fail_closed=True,
+        )
+
+
 def _validate_partitioned_sol_compat(guider: Any) -> None:
     """Require the Sol request owner before any partitioned sampler lifetime.
 
@@ -453,6 +524,12 @@ def run_partitioned_progressive(
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
         )
     )
+    audio_position_domain = normalize_audio_position_domain(
+        initial_transformer.get(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
+            PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+        )
+    )
     if (
         prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
         and vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -461,6 +538,11 @@ def run_partitioned_progressive(
             "source_carrier_uniform tests the ordinary uniform-grid VDN/Sol path and therefore "
             "requires vdn_linear_diagnostic='normal'"
         )
+    _validate_audio_position_candidate_configuration(
+        audio_position_domain,
+        prefix_transformer_context,
+        vdn_linear_diagnostic,
+    )
     source_h, source_w, stage_plan = _preflight(
         guider,
         config,
@@ -551,6 +633,7 @@ def run_partitioned_progressive(
         deprecated_mixed_grid_contract_active=False,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
         prefix_transformer_context=prefix_transformer_context,
+        audio_position_domain=audio_position_domain,
     )
 
     sampler_invocation_count = 0
@@ -571,6 +654,21 @@ def run_partitioned_progressive(
     )
     source_carrier_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_source_carrier_uniform_prefix_frames", 0)
+    )
+    audio_position_calls_before = int(
+        binding.metrics.counters.get("partitioned_audio_position_source_carrier_block0_calls", 0)
+    )
+    audio_position_wrapper_entries_before = int(
+        binding.metrics.counters.get("partitioned_audio_position_candidate_wrapper_entries", 0)
+    )
+    audio_model_timestep_calls_before = int(
+        binding.metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0)
+    )
+    candidate_low_mask_digest = (
+        tensor_sha256(low_mask) if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE else None
+    )
+    candidate_high_mask_digest = (
+        tensor_sha256(denoise_mask) if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE else None
     )
     diagnostic_audio_control = (
         PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
@@ -665,6 +763,21 @@ def run_partitioned_progressive(
             calls_before=source_carrier_calls_before,
             prefix_frames_before=source_carrier_prefix_frames_before,
         )
+        _verify_audio_position_domain_diagnostic(
+            binding.metrics,
+            audio_position_domain,
+            block0_calls_before=audio_position_calls_before,
+            wrapper_entries_before=audio_position_wrapper_entries_before,
+            model_timestep_calls_before=audio_model_timestep_calls_before,
+        )
+        if (
+            audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+            and (
+                tensor_sha256(low_mask) != candidate_low_mask_digest
+                or tensor_sha256(denoise_mask) != candidate_high_mask_digest
+            )
+        ):
+            raise RuntimeError("source-carrier audio-position candidate mutated sampler masks during low/probe")
         if prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
             _verify_partitioned_vdn_linear_diagnostic(
                 binding.metrics,
@@ -920,7 +1033,7 @@ def run_partitioned_progressive(
         if not first_high_actual:
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
 
-        final_video, _ = unpack_streams(result, target_shapes)
+        final_video, final_audio = unpack_streams(result, target_shapes)
         if diagnostic_audio_control:
             final_internal = _process_latent_in(base_model, result, target_shapes)
             _final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
@@ -953,12 +1066,34 @@ def run_partitioned_progressive(
                 **stage_delta,
             )
             del final_internal
-        original_video, _ = unpack_streams(latent_image, target_shapes)
+        original_video, original_audio = unpack_streams(latent_image, target_shapes)
         if not torch.equal(
             final_video[:, :, : stage_plan.prefix_t],
             original_video[:, :, : stage_plan.prefix_t].to(final_video),
         ):
             raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
+        if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+            if tensor_sha256(denoise_mask) != candidate_high_mask_digest:
+                raise RuntimeError("source-carrier audio-position candidate mutated the high-stage sampler mask")
+            _mask_video, audio_mask = unpack_streams(denoise_mask, target_shapes)
+            protected_audio = audio_mask == 0
+            if not bool(protected_audio.any().item()):
+                raise RuntimeError("source-carrier audio-position candidate found no protected carried-audio prefix")
+            audio_exact = torch.equal(
+                final_audio[protected_audio],
+                original_audio.to(final_audio)[protected_audio],
+            )
+            if not audio_exact:
+                raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
+            binding.metrics.event(
+                "partitioned_audio_position_candidate_integrity",
+                mode=audio_position_domain,
+                low_mask_digest=candidate_low_mask_digest,
+                high_mask_digest=candidate_high_mask_digest,
+                final_exact_video_prefix=True,
+                final_exact_audio_prefix=True,
+                sampler_masks_unchanged=True,
+            )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             final_trajectory = measure_translation_trajectory(
@@ -1039,5 +1174,7 @@ __all__ = [
     "PARTITIONED_SOL_REQUIRED_METADATA",
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
+    "_validate_audio_position_candidate_configuration",
+    "_verify_audio_position_domain_diagnostic",
     "run_partitioned_progressive",
 ]
