@@ -80,3 +80,47 @@ def test_layout_wrapper_prefers_direct_layout_and_restores_existing_context():
     assert transformer["h3_flow_attention_context"] is old_context
     assert metrics.counters == {}
     assert metrics.events == ()
+
+
+def test_layout_wrapper_preserves_nested_partitioned_signature_in_telemetry():
+    metrics = H3FlowMetrics()
+    position_policy = (
+        "h3_flow_partitioned_position_policy_v1",
+        "source_carrier",
+        (40, 52),
+        (56, 74),
+        (4880, 5464),
+        ((0.0, 0.0), (55.0, 73.0)),
+        ((0.0, 0.0), (39.0, 51.0)),
+        True,
+        "a" * 64,
+        "b" * 64,
+    )
+    layout = SimpleNamespace(
+        segments=((0, 2, "text"), (2, 4, "audio"), (4, 8, "video")),
+        signature=(
+            "h3_flow_partitioned_exact_prefix_v1",
+            2,
+            1,
+            4,
+            4,
+            2,
+            1,
+            8,
+            8,
+            position_policy,
+        ),
+        seq_len=8,
+    )
+
+    wrapper = make_layout_block_wrapper(0, metrics)
+    args = {"transformer_options": {}, "img": "native-input", "layout": layout}
+
+    assert wrapper(args, {"original_block": lambda inner: {"img": inner["img"]}}) == {
+        "img": "native-input"
+    }
+    assert [event.kind for event in metrics.events] == ["packed_layout"]
+    assert metrics.events[0].fields["signature"] == layout.signature
+    assert metrics.events[0].fields["signature"][-1][5][1] == (55.0, 73.0)
+    assert metrics.events[0].fields["signature"][-1][7] is True
+
