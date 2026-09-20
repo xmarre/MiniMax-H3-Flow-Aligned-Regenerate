@@ -193,17 +193,6 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
-        spec["required"]["audio_guided_overlap_mode"] = (
-            list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
-            {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
-                "tooltip": (
-                    "sampler_mask preserves the existing A-run behavior. model_timestep_only "
-                    "keeps the sampler/exact audio prefix untouched and exposes the same ramp "
-                    "only to MiniMax-H3's inner audio timestep/modulation labels."
-                ),
-            },
-        )
         spec["required"]["audio_guided_overlap_ticks"] = (
             "INT",
             {
@@ -214,6 +203,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "tooltip": (
                     "Node-local 40-Hz audio overlap width. Use 4 for the current "
                     "production-shaped behavior and 0 for the matched audio A/B control."
+                ),
+            },
+        )
+        # Append the new selector after the pre-existing tick widget so saved
+        # Flow #54 diagnostic workflows keep their serialized widget positions.
+        spec["required"]["audio_guided_overlap_mode"] = (
+            list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
+            {
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+                "tooltip": (
+                    "sampler_mask preserves the existing A-run behavior. model_timestep_only "
+                    "keeps the sampler/exact audio prefix untouched and exposes the same ramp "
+                    "only to MiniMax-H3's inner audio timestep/modulation labels."
                 ),
             },
         )
