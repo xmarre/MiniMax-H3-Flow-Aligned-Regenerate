@@ -107,10 +107,11 @@ def partitioned_outer_wrapper(
             latent_shapes=latent_shapes,
         )
 
-    # Guided audio overlap is sampler-lifetime state only. The original exact
-    # mask remains the authority for caller-visible final restoration. The
-    # diagnostic node may override the overlap width model-locally; the ordinary
-    # node keeps the existing environment/default resolution path.
+    # The original exact mask remains authoritative. sampler_mask reproduces
+    # the existing sampler-lifetime ramp. model_timestep_only instead derives
+    # the same quantized audio ramp but publishes only Core's pooled Bx1x2xT
+    # audio mask to the MiniMax-H3 inner forward; sampler/inpaint ownership stays
+    # exact. The ordinary node keeps the existing environment/default path.
     diagnostic_audio_control = (
         PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
         or PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY in model_options
@@ -138,7 +139,12 @@ def partitioned_outer_wrapper(
                         "model-timestep-only audio guidance requires ComfyUI MiniMax-H3 "
                         "denoise-mask velocity conversion fix #15988"
                     )
-                guided_audio_mask = unpack_streams(guided_mask, latent_shapes)[1].detach()
+                guided_audio_mask = (
+                    unpack_streams(guided_mask, latent_shapes)[1]
+                    .amax(dim=1, keepdim=True)
+                    .contiguous()
+                    .detach()
+                )
                 audio_model_context = PartitionedAudioModelTimestepContext(
                     audio_mask=guided_audio_mask,
                     metrics=binding.metrics,
