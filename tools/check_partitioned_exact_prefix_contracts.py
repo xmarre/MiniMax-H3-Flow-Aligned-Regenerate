@@ -142,6 +142,7 @@ def main() -> None:
     from sol_h3.mapped_neighbors import compile_descriptor, validate_wire_map
     from sol_h3.partitioned_history import (
         PARTITIONED_FLOW_IDENTITY,
+        _partitioned_flow_replacement_identity,
         VDN_EXTERNAL_SEQUENCE_KEY,
         VDN_PARTITIONED_SEQUENCE_API as SOL_VDN_API,
         VDN_PARTITIONED_SEQUENCE_MODE as SOL_VDN_MODE,
@@ -197,6 +198,9 @@ def main() -> None:
         raise SystemExit("Flow/VDN partitioned linear diagnostic contract diverged")
 
     _validate_preprocess_transport()
+    history_source = inspect.getsource(_partitioned_flow_replacement_identity)
+    if "repr(partitioned_layout.signature)" not in history_source:
+        raise SystemExit("Sol history no longer keys partitioned numerical identity by full layout signature")
 
     flow = PartitionedExactPrefixPlan(
         video_start=7,
@@ -208,6 +212,70 @@ def main() -> None:
         target_grid_w=4,
     )
     contract = flow.to_contract()
+
+    def fake_partition_patch():
+        return None
+
+    fake_partition_patch.__module__ = "h3_flow_regenerate.partitioned_transformer"
+    fake_partition_patch.__qualname__ = "partitioned_diffusion_wrapper.<locals>.wrap.<locals>.call"
+    stage_plan = SimpleNamespace(
+        prefix_t=flow.prefix_t,
+        temporal=flow.temporal,
+        source_rows=flow.source_rows,
+        target_rows=flow.target_rows,
+        prefix_rows=flow.prefix_t * flow.target_rows,
+        partitioned_rows=flow.prefix_t * flow.target_rows + (flow.temporal - flow.prefix_t) * flow.source_rows,
+        target_hw=(flow.target_grid_h * 2, flow.target_grid_w * 2),
+    )
+    native_rows = flow.video_start + flow.temporal * flow.source_rows
+    partitioned_rows = flow.sequence_rows
+    native_layout = SimpleNamespace(
+        seq_len=native_rows,
+        segments=[(0, flow.video_start, "nonvideo"), (flow.video_start, native_rows, "video")],
+        signature=("native-carrier",),
+    )
+    legacy_partitioned_layout = SimpleNamespace(
+        seq_len=partitioned_rows,
+        segments=[(0, flow.video_start, "nonvideo"), (flow.video_start, partitioned_rows, "video")],
+        signature=(PARTITIONED_FLOW_IDENTITY, "legacy"),
+    )
+    candidate_partitioned_layout = SimpleNamespace(
+        seq_len=partitioned_rows,
+        segments=legacy_partitioned_layout.segments,
+        signature=(
+            PARTITIONED_FLOW_IDENTITY,
+            "legacy",
+            ("h3_flow_partitioned_position_policy_v1", "source_carrier", 12345),
+        ),
+    )
+    closure_values = {
+        "layer": 0,
+        "previous": None,
+        "plan": stage_plan,
+        "layout": native_layout,
+        "partitioned_layout": legacy_partitioned_layout,
+        "video_start": flow.video_start,
+        "video_end": native_rows,
+        "carrier_prefix_rows": flow.prefix_t * flow.source_rows,
+        "inner": SimpleNamespace(blocks=[object()]),
+        "partition_contract": contract,
+    }
+
+    class _Interop:
+        @staticmethod
+        def _closure_values(_patch):
+            return closure_values
+
+    legacy_identity = _partitioned_flow_replacement_identity(_Interop(), fake_partition_patch, 0)
+    if legacy_identity is None:
+        raise SystemExit("Sol history rejected the baseline partitioned Flow replacement identity")
+    closure_values["partitioned_layout"] = candidate_partitioned_layout
+    candidate_identity = _partitioned_flow_replacement_identity(_Interop(), fake_partition_patch, 0)
+    if candidate_identity is None:
+        raise SystemExit("Sol history rejected the candidate position-policy layout signature")
+    if candidate_identity[0] == legacy_identity[0]:
+        raise SystemExit("Sol history failed to distinguish the candidate position policy")
+
     vdn_plan = validate_flow_partition_contract(contract, sequence_rows=flow.sequence_rows)
     if (
         vdn_plan.sequence_rows != flow.sequence_rows
