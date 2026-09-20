@@ -83,13 +83,19 @@ def partitioned_outer_wrapper(
     # mask remains the authority for caller-visible final restoration. The
     # diagnostic node may override the overlap width model-locally; the ordinary
     # node keeps the existing environment/default resolution path.
-    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(model_options)
-    runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
-        denoise_mask,
-        latent_shapes,
-        ticks=guided_ticks,
+    diagnostic_audio_control = PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
+    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(
+        model_options
     )
-    guided_report["configuration_source"] = guided_configuration_source
+    runtime_denoise_mask = denoise_mask
+    guided_report = None
+    if guided_ticks or diagnostic_audio_control:
+        runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
+            denoise_mask,
+            latent_shapes,
+            ticks=guided_ticks,
+        )
+        guided_report["configuration_source"] = guided_configuration_source
 
     adapted = _ProgressiveExactMaskExecutor(
         executor,
@@ -122,38 +128,6 @@ def partitioned_outer_wrapper(
             seed,
             latent_shapes,
         )
-        if PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options:
-            try:
-                latent_audio_report = measure_audio_latent_boundary(
-                    result,
-                    denoise_mask,
-                    latent_shapes,
-                    window_ticks=8,
-                )
-                binding.metrics.event(
-                    "partitioned_audio_latent_boundary",
-                    partitioned_exact_prefix=True,
-                    **latent_audio_report,
-                )
-                LOG.info(
-                    "partitioned audio latent boundary available=%s prefix_ticks=%d "
-                    "window_ticks=%d protected_tail_rms=%s generated_head_rms=%s "
-                    "generated_over_protected_ratio=%s generated_over_protected_db=%s reason=%s",
-                    bool(latent_audio_report.get("available")),
-                    int(latent_audio_report.get("audio_prefix_ticks", 0)),
-                    int(latent_audio_report.get("window_ticks", 0)),
-                    latent_audio_report.get("protected_tail_rms"),
-                    latent_audio_report.get("generated_head_rms"),
-                    latent_audio_report.get("generated_over_protected_ratio"),
-                    latent_audio_report.get("generated_over_protected_db"),
-                    latent_audio_report.get("reason"),
-                )
-            except Exception as exc:
-                LOG.warning(
-                    "partitioned audio latent boundary diagnostic unavailable reason=%s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
     except PartitionedPreflightUnsupported as exc:
         fallback_reason = str(exc)
     except BaseException as exc:
@@ -207,6 +181,29 @@ def partitioned_outer_wrapper(
             guided_report.get("reason"),
             int(guided_report.get("audio_prefix_ticks", 0)),
             guided_report.get("ramp_values"),
+        )
+
+    if diagnostic_audio_control:
+        latent_audio_report = measure_audio_latent_boundary(
+            result,
+            latent_shapes,
+            denoise_mask,
+            windows=(4, 20),
+        )
+        binding.metrics.event(
+            "partitioned_audio_latent_boundary",
+            partitioned_exact_prefix=True,
+            audio_guided_overlap_ticks=guided_ticks,
+            **latent_audio_report,
+        )
+        LOG.info(
+            "partitioned audio latent boundary ticks=%d prefix=%d available=%s "
+            "reason=%s windows=%s",
+            guided_ticks,
+            int(latent_audio_report.get("audio_prefix_ticks", 0)),
+            bool(latent_audio_report.get("available")),
+            latent_audio_report.get("reason"),
+            latent_audio_report.get("windows"),
         )
     return result
 
