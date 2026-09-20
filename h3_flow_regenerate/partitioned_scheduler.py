@@ -17,6 +17,13 @@ import torch
 
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
+from .partitioned_diagnostics import (
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
+    normalize_vdn_linear_diagnostic,
+)
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStageRuntime,
@@ -85,14 +92,25 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
     # dictionaries between model calls, while scalar/object leaves retain their
     # identity. The runtime object therefore owns provider identity for exactly
     # this low/probe sampler-stage lifetime.
-    transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(plan=plan, metrics=metrics)
+    linear_mode = normalize_vdn_linear_diagnostic(
+        transformer.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY, PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL)
+    )
+    transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(
+        plan=plan,
+        metrics=metrics,
+        vdn_linear_diagnostic=linear_mode,
+    )
     try:
         yield
     finally:
         transformer.pop(PARTITIONED_STAGE_KEY, None)
 
 
-def _validate_partitioned_vdn_compat(patcher: Any) -> None:
+def _validate_partitioned_vdn_compat(
+    patcher: Any,
+    *,
+    required_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+) -> None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
         raise PartitionedPreflightUnsupported("VDN object-patch ownership is unavailable")
@@ -107,8 +125,55 @@ def _validate_partitioned_vdn_compat(patcher: Any) -> None:
             raise PartitionedPreflightUnsupported(
                 f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"
             )
+        if (
+            required_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS
+            and int(getattr(owner, "_vdn_partitioned_linear_diagnostic_api", 0))
+            != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API
+        ):
+            raise PartitionedPreflightUnsupported(
+                "partitioned VDN linear bypass was requested but the installed VDN bridge "
+                f"does not publish diagnostic API v{VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API}"
+            )
     if matched == 0:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
+
+
+def _verify_partitioned_vdn_linear_diagnostic(
+    metrics,
+    mode: str,
+    *,
+    bypass_calls_before: int,
+    bypass_video_rows_before: int,
+) -> None:
+    """Fail closed when a requested VDN bypass did not execute in low/probe."""
+
+    mode = normalize_vdn_linear_diagnostic(mode)
+    if mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS:
+        return
+    counters = getattr(metrics, "counters", {})
+    calls_after = int(counters.get("partitioned_vdn_linear_bypass_calls", 0))
+    rows_after = int(counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
+    delta_calls = calls_after - int(bypass_calls_before)
+    delta_rows = rows_after - int(bypass_video_rows_before)
+    if delta_calls <= 0:
+        raise RuntimeError(
+            "partitioned VDN linear bypass was requested but zero bypass calls were observed; "
+            "refusing to accept this run as a diagnostic sample"
+        )
+    if delta_rows <= 0:
+        raise RuntimeError(
+            "partitioned VDN linear bypass executed without reporting any bypassed video rows; "
+            "refusing to accept this run as a diagnostic sample"
+        )
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_vdn_linear_diagnostic_verified",
+            mode=mode,
+            bypass_calls=delta_calls,
+            bypass_video_rows=delta_rows,
+            fail_closed=True,
+        )
 
 
 def _validate_partitioned_sol_compat(guider: Any) -> None:
@@ -145,6 +210,8 @@ def _preflight(
     latent_image: torch.Tensor,
     denoise_mask: torch.Tensor | None,
     latent_shapes: list[tuple[int, ...]],
+    *,
+    required_vdn_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
 ):
     if len(latent_shapes) != 2:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
@@ -163,7 +230,10 @@ def _preflight(
     # These two owners are structural prerequisites for the heterogeneous
     # attention path. Validate them before any sampler lifetime is committed so
     # unsupported saved workflows use the released exact target-grid fallback.
-    _validate_partitioned_vdn_compat(guider.model_patcher)
+    _validate_partitioned_vdn_compat(
+        guider.model_patcher,
+        required_linear_diagnostic=required_vdn_linear_diagnostic,
+    )
     _validate_partitioned_sol_compat(guider)
 
     try:
@@ -255,6 +325,18 @@ def run_partitioned_progressive(
     chunk_started = time.perf_counter()
     if not isinstance(latent_shapes, list):
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires mutable latent-shape metadata")
+    initial_model_options = getattr(guider, "model_options", None)
+    initial_transformer = (
+        initial_model_options.get("transformer_options") if isinstance(initial_model_options, dict) else None
+    )
+    if not isinstance(initial_transformer, dict):
+        raise PartitionedPreflightUnsupported("partitioned exact-prefix requires mutable transformer options")
+    vdn_linear_diagnostic = normalize_vdn_linear_diagnostic(
+        initial_transformer.get(
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        )
+    )
     source_h, source_w, stage_plan = _preflight(
         guider,
         config,
@@ -262,6 +344,7 @@ def run_partitioned_progressive(
         latent_image,
         denoise_mask,
         latent_shapes,
+        required_vdn_linear_diagnostic=vdn_linear_diagnostic,
     )
 
     # All unsupported conditions above are checked before any sampler lifetime.
@@ -339,10 +422,13 @@ def run_partitioned_progressive(
         partitioned_video_rows=stage_plan.partitioned_rows,
         prefix_exact_latent_resized_for_transformer=False,
         deprecated_mixed_grid_contract_active=False,
+        vdn_linear_diagnostic=vdn_linear_diagnostic,
     )
 
     sampler_invocation_count = 0
     history_boundary_count = 0
+    bypass_calls_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_calls", 0))
+    bypass_video_rows_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
 
     def low_callback(step, x0, x, _total):
         if callback is None:
@@ -426,6 +512,12 @@ def run_partitioned_progressive(
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
+        _verify_partitioned_vdn_linear_diagnostic(
+            binding.metrics,
+            vdn_linear_diagnostic,
+            bypass_calls_before=bypass_calls_before,
+            bypass_video_rows_before=bypass_video_rows_before,
+        )
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
