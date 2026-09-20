@@ -265,6 +265,80 @@ def decode_minimax_h3_large_tile(
     return images, report
 
 
+
+def decode_minimax_h3_serial_tiles(
+    vae: object,
+    samples: dict[str, object],
+) -> tuple[torch.Tensor, str]:
+    """Decode native 256/64 tiles one at a time, matching Core before #16187.
+
+    Current Core batches up to four horizontal tiles through the ViT decoder.
+    This diagnostic changes only that batching dimension: tile geometry,
+    local positional IDs, overlap blending, temporal chunking, decoder kernels,
+    weights, and VAE wrapper behavior remain unchanged.
+    """
+    latent = _validate_samples(samples)
+    model = _h3_video_vae_model(vae)
+    if not hasattr(model, "_decode_tile_row") or not hasattr(model, "_decode_pixels"):
+        raise RuntimeError(
+            "MiniMax-H3 serial-tile diagnostic requires Core _decode_tile_row/_decode_pixels"
+        )
+
+    ratio = int(model.vae_ratio)
+    output_height = int(latent.shape[-2]) * ratio
+    output_width = int(latent.shape[-1]) * ratio
+
+    with _DECODE_LOCK:
+        original_profile = (
+            bool(model.tiling),
+            int(model.tile_size),
+            int(model.tile_overlap_min),
+        )
+        tile_size, tile_overlap = _validate_profile(
+            original_profile[1],
+            original_profile[2],
+            ratio,
+        )
+        if not original_profile[0] or (tile_size, tile_overlap) != (256, 64):
+            raise RuntimeError(
+                "MiniMax-H3 serial-tile diagnostic requires the unchanged "
+                "Core 256/64 tiled decode profile; refusing to change tile geometry "
+                f"from {original_profile}"
+            )
+
+        previous_row = getattr(model, "__dict__", {}).get("_decode_tile_row", _MISSING)
+        original_pixels = model._decode_pixels
+        tile_calls = 0
+
+        def serial_decode_tile_row(_model_self, z_row, x_idx, x_len):
+            nonlocal tile_calls
+            for j_pos, j_len in zip(x_idx, x_len, strict=True):
+                zj = int(j_pos) // ratio
+                zw = int(j_len) // ratio
+                tile_calls += 1
+                yield original_pixels(z_row[..., zj : zj + zw])
+
+        try:
+            model._decode_tile_row = types.MethodType(serial_decode_tile_row, model)
+            images = vae.decode(latent)
+        finally:
+            _restore_instance_attribute(model, "_decode_tile_row", previous_row)
+            model.tiling, model.tile_size, model.tile_overlap_min = original_profile
+
+    images = _flatten_core_video_output(images)
+    x_seams, y_seams = _tile_boundaries(model, output_height, output_width)
+    report = (
+        "mode=serial_tile_batch1; "
+        "tile=256px overlap>=64px; "
+        f"output={output_width}x{output_height}; "
+        f"tiles={(len(x_seams) + 1)}x{(len(y_seams) + 1)}; "
+        f"decoder_tile_calls={tile_calls}; "
+        + _format_seam_report(images, x_seams, y_seams)
+        + f"; restored_profile={original_profile[1]}/{original_profile[2]}"
+    )
+    _emit_report(report)
+    return images, report
+
 def decode_minimax_h3_global_spatial_position(
     vae: object,
     samples: dict[str, object],
@@ -477,6 +551,30 @@ class H3MiniMaxVAEDecodeLargeTile:
         )
 
 
+class H3MiniMaxVAEDecodeSerialTileDiagnostic:
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+    DESCRIPTION = (
+        "Causal regression diagnostic for Core #16187: preserve native 256/64 "
+        "tiling and current decoder arithmetic, but decode each spatial tile "
+        "individually instead of batching up to four tiles together."
+    )
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "report")
+    FUNCTION = "decode"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "samples": ("LATENT",),
+                "vae": ("VAE",),
+            }
+        }
+
+    def decode(self, samples, vae):
+        return decode_minimax_h3_serial_tiles(vae, samples)
+
+
 class H3MiniMaxVAEDecodeGlobalPositionDiagnostic:
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
     DESCRIPTION = (
@@ -503,12 +601,16 @@ class H3MiniMaxVAEDecodeGlobalPositionDiagnostic:
 
 NODE_CLASS_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": H3MiniMaxVAEDecodeLargeTile,
+    "H3MiniMaxVAEDecodeSerialTileDiagnostic": H3MiniMaxVAEDecodeSerialTileDiagnostic,
     "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": (
         H3MiniMaxVAEDecodeGlobalPositionDiagnostic
     ),
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": "MiniMax H3 VAE Decode — Tile Size [Diagnostic]",
+    "H3MiniMaxVAEDecodeSerialTileDiagnostic": (
+        "MiniMax H3 VAE Decode — Serial Tiles [Diagnostic]"
+    ),
     "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": (
         "MiniMax H3 VAE Decode — Global Spatial Position [Diagnostic]"
     ),
