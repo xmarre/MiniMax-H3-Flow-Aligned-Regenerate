@@ -24,7 +24,7 @@ def _h3_video_vae_model(vae: object):
         raise ValueError("expected a ComfyUI MiniMax-H3 video VAE")
     if model.__class__.__name__ != "MiniMaxH3VideoVAE":
         raise ValueError(
-            f"large-tile decode is restricted to ComfyUI MiniMaxH3VideoVAE, got {model.__class__.__name__}"
+            f"native-tile overlap decode is restricted to ComfyUI MiniMaxH3VideoVAE, got {model.__class__.__name__}"
         )
     return model
 
@@ -171,7 +171,7 @@ class H3MiniMaxVAEDecodeLargeTile:
                 ),
                 "tile_overlap": (
                     "INT",
-                    {"default": 128, "min": 64, "max": 256, "step": 16},
+                    {"default": 128, "min": 64, "max": 240, "step": 16},
                 ),
             }
         }
