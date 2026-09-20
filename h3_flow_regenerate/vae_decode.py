@@ -26,8 +26,7 @@ def _h3_video_vae_model(vae: object):
         raise ValueError("expected a ComfyUI MiniMax-H3 video VAE")
     if model.__class__.__name__ != "MiniMaxH3VideoVAE":
         raise ValueError(
-            "MiniMax-H3 VAE diagnostics are restricted to ComfyUI "
-            f"MiniMaxH3VideoVAE, got {model.__class__.__name__}"
+            f"MiniMax-H3 VAE diagnostics are restricted to ComfyUI MiniMaxH3VideoVAE, got {model.__class__.__name__}"
         )
     return model
 
@@ -48,13 +47,9 @@ def _validate_profile(tile_size: int, tile_overlap: int, vae_ratio: int) -> tupl
     if vae_ratio <= 0:
         raise ValueError("MiniMax-H3 VAE spatial ratio must be positive")
     if tile_size < 256 or tile_size > 512 or tile_size % vae_ratio:
-        raise ValueError(
-            f"tile_size must be 256..512 and divisible by the VAE ratio ({vae_ratio})"
-        )
+        raise ValueError(f"tile_size must be 256..512 and divisible by the VAE ratio ({vae_ratio})")
     if tile_overlap < 64 or tile_overlap >= tile_size or tile_overlap % vae_ratio:
-        raise ValueError(
-            f"tile_overlap must be >=64, < tile_size, and divisible by {vae_ratio}"
-        )
+        raise ValueError(f"tile_overlap must be >=64, < tile_size, and divisible by {vae_ratio}")
     return tile_size, tile_overlap
 
 
@@ -83,9 +78,7 @@ def _edge_ratio(
         for x in range(max(1, position - radius), min(length, position + radius + 1)):
             if x == position:
                 continue
-            candidates.append(
-                (rgb[:, :, x].float() - rgb[:, :, x - 1].float()).abs().mean()
-            )
+            candidates.append((rgb[:, :, x].float() - rgb[:, :, x - 1].float()).abs().mean())
     elif axis == 1:
         length = int(rgb.shape[1])
         if not 1 <= position < length:
@@ -95,9 +88,7 @@ def _edge_ratio(
         for y in range(max(1, position - radius), min(length, position + radius + 1)):
             if y == position:
                 continue
-            candidates.append(
-                (rgb[:, y].float() - rgb[:, y - 1].float()).abs().mean()
-            )
+            candidates.append((rgb[:, y].float() - rgb[:, y - 1].float()).abs().mean())
     else:
         raise ValueError("tile seam axis must be image H or W")
     if not candidates:
@@ -117,11 +108,7 @@ def _format_seam_report(
 
     def fmt(items):
         return (
-            ",".join(
-                f"{pos}:{ratio:.3f}x" if math.isfinite(ratio) else f"{pos}:inf"
-                for pos, ratio in items
-            )
-            or "none"
+            ",".join(f"{pos}:{ratio:.3f}x" if math.isfinite(ratio) else f"{pos}:inf" for pos, ratio in items) or "none"
         )
 
     return f"x_seams=[{fmt(x)}] y_seams=[{fmt(y)}]"
@@ -129,10 +116,7 @@ def _format_seam_report(
 
 def _flatten_core_video_output(images: torch.Tensor) -> torch.Tensor:
     if not torch.is_tensor(images) or images.ndim not in (4, 5):
-        raise RuntimeError(
-            "MiniMax-H3 VAE returned unexpected decoded shape "
-            f"{getattr(images, 'shape', None)}"
-        )
+        raise RuntimeError(f"MiniMax-H3 VAE returned unexpected decoded shape {getattr(images, 'shape', None)}")
     if images.ndim == 5:
         # Match Core VAEDecode: video VAEs may return [B,T,H,W,C], while IMAGE
         # consumers receive a single leading frame/batch dimension.
@@ -173,9 +157,7 @@ def _remap_spatial_position_ids(
 
     batch = int(img_ids.shape[0])
     if len(spatial_offsets) != batch:
-        raise RuntimeError(
-            "MiniMax-H3 global-position diagnostic batch/offset count mismatch"
-        )
+        raise RuntimeError("MiniMax-H3 global-position diagnostic batch/offset count mismatch")
 
     local_h, local_w = map(int, local_hw)
     full_h, full_w = map(int, full_hw)
@@ -280,9 +262,7 @@ def decode_minimax_h3_serial_tiles(
     latent = _validate_samples(samples)
     model = _h3_video_vae_model(vae)
     if not hasattr(model, "_decode_tile_row") or not hasattr(model, "_decode_pixels"):
-        raise RuntimeError(
-            "MiniMax-H3 serial-tile diagnostic requires Core _decode_tile_row/_decode_pixels"
-        )
+        raise RuntimeError("MiniMax-H3 serial-tile diagnostic requires Core _decode_tile_row/_decode_pixels")
 
     ratio = int(model.vae_ratio)
     output_height = int(latent.shape[-2]) * ratio
@@ -353,14 +333,10 @@ def decode_minimax_h3_global_spatial_position(
     model = _h3_video_vae_model(vae)
     for name in ("_decode_tile_row", "_decode_pixels", "decoder"):
         if not hasattr(model, name):
-            raise RuntimeError(
-                f"MiniMax-H3 global-position diagnostic requires model.{name}"
-            )
+            raise RuntimeError(f"MiniMax-H3 global-position diagnostic requires model.{name}")
     decoder = model.decoder
     if not hasattr(decoder, "pos_embed") or not hasattr(decoder, "num_register_tokens"):
-        raise RuntimeError(
-            "MiniMax-H3 global-position diagnostic requires the Core ViT3D decoder"
-        )
+        raise RuntimeError("MiniMax-H3 global-position diagnostic requires the Core ViT3D decoder")
 
     ratio = int(model.vae_ratio)
     full_hw = (int(latent.shape[-2]), int(latent.shape[-1]))
@@ -405,9 +381,7 @@ def decode_minimax_h3_global_spatial_position(
             y_idx, _y_len, _y_overlap = model.split_tiles(output_height)
             x_idx, _x_len, _x_overlap = model.split_tiles(output_width)
             if any(v % ratio for v in [*y_idx, *x_idx]):
-                raise RuntimeError(
-                    "MiniMax-H3 tile starts must align to the latent spatial ratio"
-                )
+                raise RuntimeError("MiniMax-H3 tile starts must align to the latent spatial ratio")
 
             def patched_pos_forward(_pos_self, img_ids):
                 context = state["position_context"]
@@ -429,24 +403,16 @@ def decode_minimax_h3_global_spatial_position(
                 base_batch = int(row_context["base_batch"])
                 total_batch = int(z.shape[0])
                 if base_batch <= 0 or total_batch % base_batch:
-                    raise RuntimeError(
-                        "MiniMax-H3 tile decoder batch cannot be mapped to tile offsets"
-                    )
+                    raise RuntimeError("MiniMax-H3 tile decoder batch cannot be mapped to tile offsets")
                 tile_count = total_batch // base_batch
                 start = int(row_context["next_x"])
                 stop = start + tile_count
                 x_offsets = row_context["x_offsets"][start:stop]
                 if len(x_offsets) != tile_count:
-                    raise RuntimeError(
-                        "MiniMax-H3 tile decoder consumed an unexpected number of columns"
-                    )
+                    raise RuntimeError("MiniMax-H3 tile decoder consumed an unexpected number of columns")
                 row_context["next_x"] = stop
                 y_offset = int(row_context["y_offset"])
-                offsets = [
-                    (y_offset, int(x_offset))
-                    for x_offset in x_offsets
-                    for _ in range(base_batch)
-                ]
+                offsets = [(y_offset, int(x_offset)) for x_offset in x_offsets for _ in range(base_batch)]
                 state["position_context"] = {
                     "image_token_count": int(z.shape[-3] * z.shape[-2] * z.shape[-1]),
                     "local_hw": (int(z.shape[-2]), int(z.shape[-1])),
@@ -461,9 +427,7 @@ def decode_minimax_h3_global_spatial_position(
                 row_number = int(state["row_calls"]) % len(y_idx)
                 state["row_calls"] = int(state["row_calls"]) + 1
                 if list(map(int, row_x_idx)) != list(map(int, x_idx)):
-                    raise RuntimeError(
-                        "MiniMax-H3 tile-column geometry changed during diagnostic decode"
-                    )
+                    raise RuntimeError("MiniMax-H3 tile-column geometry changed during diagnostic decode")
                 row_context = {
                     "base_batch": int(z_row.shape[0]),
                     "next_x": 0,
@@ -474,9 +438,7 @@ def decode_minimax_h3_global_spatial_position(
                 try:
                     yield from original_row(z_row, row_x_idx, row_x_len)
                     if int(row_context["next_x"]) != len(row_context["x_offsets"]):
-                        raise RuntimeError(
-                            "MiniMax-H3 tile decoder did not consume every tile column"
-                        )
+                        raise RuntimeError("MiniMax-H3 tile decoder did not consume every tile column")
                 finally:
                     state["row_context"] = None
                     state["position_context"] = None
@@ -606,8 +568,6 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": "MiniMax H3 VAE Decode — Tile Size [Diagnostic]",
-    "H3MiniMaxVAEDecodeSerialTileDiagnostic": (
-        "MiniMax H3 VAE Decode — Serial Tiles [Diagnostic]"
-    ),
+    "H3MiniMaxVAEDecodeSerialTileDiagnostic": ("MiniMax H3 VAE Decode — Serial Tiles [Diagnostic]"),
     "H3MiniMaxVAEDecodeGlobalPositionDiagnostic": ("MiniMax H3 VAE Decode — Global Spatial Position [Diagnostic]"),
 }
