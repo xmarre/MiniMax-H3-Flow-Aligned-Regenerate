@@ -27,7 +27,10 @@ from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixDiagnosticHandoff,
     H3PartitionedExactPrefixHandoff,
 )
-from h3_flow_regenerate.partitioned_outer import partitioned_outer_wrapper
+from h3_flow_regenerate.partitioned_outer import (
+    _source_has_audio_velocity_mask_contract,
+    partitioned_outer_wrapper,
+)
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
@@ -228,6 +231,10 @@ def test_vdn_bypass_verification_fails_closed_when_no_bypass_executed():
 
 
 def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
+        lambda: True,
+    )
     video = torch.randn(1, 24, 5, 8, 12)
     audio = torch.randn(1, 32, 2, 12)
     packed, shapes = pack_streams((video, audio))
@@ -320,3 +327,19 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert context_events[0].fields["override_calls"] == 1
     assert context_events[0].fields["sampler_mask_modified"] is False
     assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
+
+
+
+def test_audio_model_timestep_mode_requires_post_wrapper_velocity_mask_contract():
+    old_source = """
+out = WrapperExecutor(...).execute(x, audio_denoise_mask=audio_denoise_mask)
+return out
+"""
+    fixed_source = """
+out = WrapperExecutor(...).execute(x, audio_denoise_mask=audio_denoise_mask)
+if audio_denoise_mask is not None:
+    out[1] = out[1] * audio_denoise_mask
+return out
+"""
+    assert _source_has_audio_velocity_mask_contract(old_source) is False
+    assert _source_has_audio_velocity_mask_contract(fixed_source) is True
