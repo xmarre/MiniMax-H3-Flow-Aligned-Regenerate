@@ -138,7 +138,13 @@ def _validate_partitioned_vdn_compat(
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
 
 
-def _verify_partitioned_vdn_linear_diagnostic(metrics, mode: str, *, bypass_calls_before: int) -> None:
+def _verify_partitioned_vdn_linear_diagnostic(
+    metrics,
+    mode: str,
+    *,
+    bypass_calls_before: int,
+    bypass_video_rows_before: int,
+) -> None:
     """Fail closed when a requested VDN bypass did not execute in low/probe."""
 
     mode = normalize_vdn_linear_diagnostic(mode)
@@ -148,9 +154,15 @@ def _verify_partitioned_vdn_linear_diagnostic(metrics, mode: str, *, bypass_call
     calls_after = int(counters.get("partitioned_vdn_linear_bypass_calls", 0))
     rows_after = int(counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
     delta_calls = calls_after - int(bypass_calls_before)
+    delta_rows = rows_after - int(bypass_video_rows_before)
     if delta_calls <= 0:
         raise RuntimeError(
             "partitioned VDN linear bypass was requested but zero bypass calls were observed; "
+            "refusing to accept this run as a diagnostic sample"
+        )
+    if delta_rows <= 0:
+        raise RuntimeError(
+            "partitioned VDN linear bypass executed without reporting any bypassed video rows; "
             "refusing to accept this run as a diagnostic sample"
         )
     event = getattr(metrics, "event", None)
@@ -159,7 +171,7 @@ def _verify_partitioned_vdn_linear_diagnostic(metrics, mode: str, *, bypass_call
             "partitioned_vdn_linear_diagnostic_verified",
             mode=mode,
             bypass_calls=delta_calls,
-            bypass_video_rows=rows_after,
+            bypass_video_rows=delta_rows,
             fail_closed=True,
         )
 
@@ -416,6 +428,7 @@ def run_partitioned_progressive(
     sampler_invocation_count = 0
     history_boundary_count = 0
     bypass_calls_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_calls", 0))
+    bypass_video_rows_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
 
     def low_callback(step, x0, x, _total):
         if callback is None:
@@ -498,12 +511,13 @@ def run_partitioned_progressive(
 
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
-    _verify_partitioned_vdn_linear_diagnostic(
-        binding.metrics,
-        vdn_linear_diagnostic,
-        bypass_calls_before=bypass_calls_before,
-    )
     try:
+        _verify_partitioned_vdn_linear_diagnostic(
+            binding.metrics,
+            vdn_linear_diagnostic,
+            bypass_calls_before=bypass_calls_before,
+            bypass_video_rows_before=bypass_video_rows_before,
+        )
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
