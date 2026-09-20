@@ -266,9 +266,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Experimental]",
-    "H3PartitionedExactPrefixDiagnosticHandoff": (
-        "MiniMax H3 Partitioned Exact-Prefix Handoff [Diagnostic]"
-    ),
+    "H3PartitionedExactPrefixDiagnosticHandoff": ("MiniMax H3 Partitioned Exact-Prefix Handoff [Diagnostic]"),
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
