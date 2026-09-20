@@ -230,7 +230,6 @@ def test_audio_latent_boundary_measurement_uses_original_exact_mask_not_guided_m
     assert guided["applied"] is True
 
     exact_report = measure_audio_latent_boundary(packed, shapes, exact_mask, windows=(4,))
-    guided_report = measure_audio_latent_boundary(packed, shapes, guided_mask, windows=(4,))
 
     assert exact_report["audio_prefix_ticks"] == 6
     assert exact_report["available"] is True
