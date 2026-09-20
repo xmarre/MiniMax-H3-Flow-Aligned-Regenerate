@@ -138,7 +138,6 @@ def _validate_partitioned_vdn_compat(
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
 
 
-
 def _verify_partitioned_vdn_linear_diagnostic(metrics, mode: str, *, bypass_calls_before: int) -> None:
     """Fail closed when a requested VDN bypass did not execute in low/probe."""
 
