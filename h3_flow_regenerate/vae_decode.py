@@ -177,10 +177,19 @@ class H3MiniMaxVAEDecodeLargeTile:
         }
 
     def decode(self, samples, vae, tile_size, tile_overlap):
+        requested_tile_size = int(tile_size)
+        if requested_tile_size != 256:
+            # Existing 00534-era workflows persist 320 in the widget. Do not
+            # let an old serialized value silently re-enable the rejected
+            # checkerboard-producing decoder domain after this PR updates.
+            print(
+                "[MiniMax-H3 VAE diagnostic] rejecting persisted "
+                f"tile_size={requested_tile_size}px; forcing released 256px tile extent"
+            )
         return decode_minimax_h3_large_tile(
             vae,
             samples,
-            tile_size=int(tile_size),
+            tile_size=256,
             tile_overlap=int(tile_overlap),
         )
 
