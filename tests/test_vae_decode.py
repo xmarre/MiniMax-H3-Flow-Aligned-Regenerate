@@ -62,7 +62,7 @@ class FakeBatchedVAE(FakeVAE):
 def test_large_tile_decode_matches_core_batched_video_output_shape():
     vae = FakeBatchedVAE()
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
-    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=320, tile_overlap=128)
+    images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=256, tile_overlap=128)
     assert images.shape == (2, 896, 1216, 3)
     assert "output=1216x896" in report
     assert (
@@ -77,32 +77,31 @@ def test_large_tile_decode_is_call_scoped_and_restores_native_profile():
     latent = {"samples": torch.zeros(1, 24, 7, 56, 76)}
     images, report = decode_minimax_h3_large_tile(vae, latent, tile_size=320, tile_overlap=128)
     assert images.shape == (2, 896, 1216, 3)
-    assert vae.seen_profile == (320, 128, True)
+    assert vae.seen_profile == (256, 128, True)
     assert (
         vae.first_stage_model.tile_size,
         vae.first_stage_model.tile_overlap_min,
         vae.first_stage_model.tiling,
     ) == (256, 64, True)
     assert "output=1216x896" in report
-    assert "tiles=6x4" in report
+    assert "tiles=9x6" in report
 
 
-def test_320_128_profile_moves_and_reduces_native_tile_grid():
+def test_256_128_profile_changes_overlap_without_enlarging_decoder_tiles():
     model = MiniMaxH3VideoVAE()
     native_x, native_y = _tile_boundaries(model, 896, 1216)
-    model.tile_size = 320
     model.tile_overlap_min = 128
-    large_x, large_y = _tile_boundaries(model, 896, 1216)
+    overlap_x, overlap_y = _tile_boundaries(model, 896, 1216)
     assert native_x == [192, 384, 576, 768, 960]
     assert native_y == [160, 320, 480, 640]
-    assert large_x == [176, 352, 528, 704, 896]
-    assert large_y == [192, 384, 576]
-    assert (len(large_x) + 1) * (len(large_y) + 1) < (len(native_x) + 1) * (len(native_y) + 1)
+    assert overlap_x == [112, 224, 336, 448, 576, 704, 832, 960]
+    assert overlap_y == [128, 256, 384, 512, 640]
+    assert model.tile_size == 256
 
 
-def test_tile_profile_rejects_unaligned_or_invalid_values():
-    assert _validate_profile(320, 128, 16) == (320, 128)
-    for size, overlap in ((300, 128), (320, 70), (256, 256), (528, 128)):
+def test_tile_profile_rejects_larger_tiles_and_invalid_overlap():
+    assert _validate_profile(256, 128, 16) == (256, 128)
+    for size, overlap in ((320, 128), (256, 70), (256, 256), (512, 128)):
         try:
             _validate_profile(size, overlap, 16)
         except ValueError:
