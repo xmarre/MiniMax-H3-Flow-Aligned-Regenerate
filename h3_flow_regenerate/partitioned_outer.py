@@ -10,12 +10,12 @@ from .audio_guided_overlap import (
     apply_audio_guided_overlap_mask,
     measure_audio_latent_boundary,
 )
+from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
+from .handoff import ProgressiveTargetInputConfig
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
-from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
-from .handoff import ProgressiveTargetInputConfig
 from .partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
