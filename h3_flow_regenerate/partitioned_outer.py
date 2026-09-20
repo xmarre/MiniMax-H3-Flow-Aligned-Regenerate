@@ -83,9 +83,7 @@ def partitioned_outer_wrapper(
     # mask remains the authority for caller-visible final restoration. The
     # diagnostic node may override the overlap width model-locally; the ordinary
     # node keeps the existing environment/default resolution path.
-    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(
-        model_options
-    )
+    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(model_options)
     runtime_denoise_mask, guided_report = apply_audio_guided_overlap_mask(
         denoise_mask,
         latent_shapes,
