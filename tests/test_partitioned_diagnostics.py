@@ -332,7 +332,6 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
 
 
-
 def test_audio_model_timestep_mode_requires_post_wrapper_velocity_mask_contract():
     old_source = """
 out = WrapperExecutor(...).execute(x, audio_denoise_mask=audio_denoise_mask)
