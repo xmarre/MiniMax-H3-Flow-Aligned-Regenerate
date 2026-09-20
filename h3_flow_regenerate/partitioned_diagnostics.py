@@ -51,6 +51,14 @@ PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS = (
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
 )
+
+PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY = "h3_flow_partitioned_audio_handoff_source_v1"
+PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN = "main_partitioned"
+PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW = "source_carrier_uniform_shadow"
+PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS = (
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
+)
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -108,6 +116,15 @@ def normalize_audio_position_domain(value: str) -> str:
     return value
 
 
+def normalize_audio_handoff_source(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS:
+        raise ValueError(
+            f"audio handoff source must be one of {PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -138,6 +155,7 @@ def apply_partitioned_diagnostic_controls(
     audio_guided_overlap_mode: str = PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     prefix_transformer_context: str = PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+    audio_handoff_source: str = PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -149,6 +167,7 @@ def apply_partitioned_diagnostic_controls(
     audio_mode = normalize_audio_guided_overlap_mode(audio_guided_overlap_mode)
     prefix_context = normalize_prefix_transformer_context(prefix_transformer_context)
     position_domain = normalize_audio_position_domain(audio_position_domain)
+    handoff_source = normalize_audio_handoff_source(audio_handoff_source)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -160,6 +179,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_AUDIO_POSITION_DOMAIN_KEY, None)
     else:
         transformer_options[PARTITIONED_AUDIO_POSITION_DOMAIN_KEY] = position_domain
+    if handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+        transformer_options.pop(PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY, None)
+    else:
+        transformer_options[PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY] = handoff_source
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -177,6 +200,8 @@ def apply_partitioned_diagnostic_controls(
         }
         if position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
             fields["audio_position_domain"] = position_domain
+        if handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+            fields["audio_handoff_source"] = handoff_source
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -188,6 +213,10 @@ __all__ = [
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
     "PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY",
+    "PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY",
+    "PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN",
+    "PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS",
+    "PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW",
     "PARTITIONED_AUDIO_POSITION_DOMAIN_KEY",
     "PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY",
     "PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS",
@@ -206,6 +235,7 @@ __all__ = [
     "PartitionedAudioModelTimestepContext",
     "apply_partitioned_diagnostic_controls",
     "normalize_audio_guided_overlap_mode",
+    "normalize_audio_handoff_source",
     "normalize_audio_position_domain",
     "normalize_prefix_transformer_context",
     "normalize_vdn_linear_diagnostic",

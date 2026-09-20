@@ -12,6 +12,8 @@ from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -251,6 +253,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["audio_handoff_source"] = (
+            list(PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS),
+            {
+                "default": PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+                "tooltip": (
+                    "main_partitioned keeps the current low/probe audio state. "
+                    "source_carrier_uniform_shadow runs an isolated source-grid low/probe shadow "
+                    "lifetime and substitutes only its audio sampler state at the learned handoff; "
+                    "the main exact-partitioned video state and learned video transfer are retained."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -282,6 +296,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_guided_overlap_ticks,
         prefix_transformer_context,
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+        audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -311,6 +326,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             prefix_transformer_context=prefix_transformer_context,
             audio_position_domain=audio_position_domain,
+            audio_handoff_source=audio_handoff_source,
         )
 
 
