@@ -1,10 +1,10 @@
-"""MiniMax-H3 VAE decode with a bounded larger spatial tile profile.
+"""MiniMax-H3 VAE decode with native 256px tiles and adjustable overlap.
 
-Core MiniMax-H3 decoding uses independent ViT decoder tiles. At high output
-resolutions the native 256px / 64px-overlap profile can leave visible rectangular
-context boundaries because each tile receives a different global-attention domain.
-This node changes only the spatial decode tiling for one VAE call, restores the
-original model attributes afterward, and reports measured seam discontinuities.
+The MiniMax-H3 ViT decoder was released with 256px spatial windows. Enlarging
+those windows changes the transformer's token domain and can expose a 16px patch
+lattice. This diagnostic therefore keeps the decoder tile extent at 256px and
+changes only overlap/blending geometry for one call. All VAE attributes are
+restored afterward and seam measurements are always printed to the runtime log.
 """
 
 from __future__ import annotations
@@ -35,8 +35,13 @@ def _validate_profile(tile_size: int, tile_overlap: int, vae_ratio: int) -> tupl
     vae_ratio = int(vae_ratio)
     if vae_ratio <= 0:
         raise ValueError("MiniMax-H3 VAE spatial ratio must be positive")
-    if tile_size < 256 or tile_size > 512 or tile_size % vae_ratio:
-        raise ValueError(f"tile_size must be 256..512 and divisible by the VAE ratio ({vae_ratio})")
+    if tile_size != 256:
+        raise ValueError(
+            "experimental MiniMax-H3 decode now requires the released 256px "
+            "decoder tile extent; larger tiles can produce a 16px checkerboard lattice"
+        )
+    if tile_size % vae_ratio:
+        raise ValueError(f"tile_size must be divisible by the VAE ratio ({vae_ratio})")
     if tile_overlap < 64 or tile_overlap >= tile_size or tile_overlap % vae_ratio:
         raise ValueError(f"tile_overlap must be >=64, < tile_size, and divisible by {vae_ratio}")
     return tile_size, tile_overlap
@@ -98,7 +103,7 @@ def decode_minimax_h3_large_tile(
     vae: object,
     samples: dict[str, object],
     *,
-    tile_size: int = 320,
+    tile_size: int = 256,
     tile_overlap: int = 128,
 ) -> tuple[torch.Tensor, str]:
     if not isinstance(samples, dict) or not torch.is_tensor(samples.get("samples")):
@@ -131,7 +136,7 @@ def decode_minimax_h3_large_tile(
         # IMAGE consumers receive a single leading frame/batch dimension.
         images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
     report = (
-        "MiniMax-H3 large-tile decode: "
+        "MiniMax-H3 native-tile overlap decode: "
         f"tile={tile_size}px overlap>={tile_overlap}px output={output_width}x{output_height} "
         f"tiles={(len(x_seams) + 1)}x{(len(y_seams) + 1)}; active_"
         + _format_seam_report(images, x_seams, y_seams)
@@ -139,16 +144,16 @@ def decode_minimax_h3_large_tile(
         + _format_seam_report(images, native_x_seams, native_y_seams)
         + f"; restored_native_profile={original[1]}/{original[2]}"
     )
+    print(f"[MiniMax-H3 VAE diagnostic] {report}")
     return images, report
 
 
 class H3MiniMaxVAEDecodeLargeTile:
     CATEGORY = "MiniMax H3/flow regenerate/experimental"
     DESCRIPTION = (
-        "Decode MiniMax-H3 video latents with a larger spatial VAE tile and overlap "
-        "to reduce rectangular tile-context artifacts. Replaces Core VAE Decode for "
-        "the video branch only. The VAE's original tile settings are restored after "
-        "every call. 320/128 is the bounded production test profile."
+        "Diagnostic decode for MiniMax-H3 video latents. Keeps the released 256px "
+        "ViT decoder tile extent and changes only spatial overlap/blending geometry. "
+        "The VAE's original tile settings are restored after every call."
     )
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "report")
@@ -162,7 +167,7 @@ class H3MiniMaxVAEDecodeLargeTile:
                 "vae": ("VAE",),
                 "tile_size": (
                     "INT",
-                    {"default": 320, "min": 256, "max": 512, "step": 16},
+                    {"default": 256, "min": 256, "max": 256, "step": 16},
                 ),
                 "tile_overlap": (
                     "INT",
@@ -184,5 +189,5 @@ NODE_CLASS_MAPPINGS = {
     "H3MiniMaxVAEDecodeLargeTile": H3MiniMaxVAEDecodeLargeTile,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3MiniMaxVAEDecodeLargeTile": "MiniMax H3 VAE Decode — Large Tile [Experimental]",
+    "H3MiniMaxVAEDecodeLargeTile": "MiniMax H3 VAE Decode — Native Tile Overlap [Diagnostic]",
 }
