@@ -16,6 +16,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
+    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -265,6 +267,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after the #61 audio-only selector so existing saved diagnostic
+        # widget positions remain stable.
+        spec["required"]["av_handoff_source"] = (
+            list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS),
+            {
+                "default": PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+                "tooltip": (
+                    "main_partitioned preserves the #60/#61 handoff. "
+                    "source_carrier_uniform_shadow runs a separate uniform source-grid low+probe "
+                    "pair, selects its raw audio sampler state and clean generated video for the "
+                    "learned handoff, but keeps the main exact-partitioned captured Flow trajectory."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -297,6 +313,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         prefix_transformer_context,
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -327,6 +344,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             prefix_transformer_context=prefix_transformer_context,
             audio_position_domain=audio_position_domain,
             audio_handoff_source=audio_handoff_source,
+            av_handoff_source=av_handoff_source,
         )
 
 
