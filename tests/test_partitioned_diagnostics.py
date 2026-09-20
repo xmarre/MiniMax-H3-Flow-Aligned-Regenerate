@@ -329,6 +329,7 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert context_events[0].fields["override_calls"] == 1
     assert context_events[0].fields["sampler_mask_modified"] is False
     assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
+    assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
 
 
 
