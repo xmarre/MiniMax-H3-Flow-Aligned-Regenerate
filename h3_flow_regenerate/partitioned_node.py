@@ -9,6 +9,11 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
+from .partitioned_diagnostics import (
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
+    apply_partitioned_diagnostic_controls,
+)
 from .partitioned_outer import partitioned_outer_wrapper
 from .partitioned_scheduler import PARTITIONED_PROGRESSIVE_KEY
 from .partitioned_transformer import (
@@ -169,11 +174,99 @@ class H3PartitionedExactPrefixHandoff:
         return patched, metrics
 
 
+class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff):
+    """Expose bounded A/B controls without changing the production-shaped node."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        spec = copy.deepcopy(super().INPUT_TYPES())
+        spec["required"]["vdn_linear_diagnostic"] = (
+            list(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS),
+            {
+                "default": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+                "tooltip": (
+                    "normal preserves the partitioned VDN learned linear complement; "
+                    "bypass_partitioned_linear suppresses only that complement in the "
+                    "heterogeneous low/probe path for causal frame-shift testing."
+                ),
+            },
+        )
+        spec["required"]["audio_guided_overlap_ticks"] = (
+            "INT",
+            {
+                "default": 4,
+                "min": 0,
+                "max": 16,
+                "step": 1,
+                "tooltip": (
+                    "Node-local 40-Hz audio overlap width. Use 4 for the current "
+                    "production-shaped behavior and 0 for the matched audio A/B control."
+                ),
+            },
+        )
+        return spec
+
+    DESCRIPTION = (
+        "Diagnostic variant of the partitioned exact-prefix handoff. Adds model-local "
+        "controls for bypassing only the partitioned VDN learned linear complement and "
+        "for selecting the audio guided-overlap width. Ordinary/native VDN and the "
+        "production-shaped partitioned node remain unchanged."
+    )
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        source_mode,
+        source_scale,
+        source_width,
+        source_height,
+        handoff_coordinate,
+        handoff_selection,
+        guidance_mode,
+        direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
+        learned_upscaler,
+        vdn_linear_diagnostic,
+        audio_guided_overlap_ticks,
+        metrics=None,
+        temporal_weight=0.20,
+    ):
+        patched, metrics = super().patch(
+            model=model,
+            trajectory=trajectory,
+            source_mode=source_mode,
+            source_scale=source_scale,
+            source_width=source_width,
+            source_height=source_height,
+            handoff_coordinate=handoff_coordinate,
+            handoff_selection=handoff_selection,
+            guidance_mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            low_frequency_cutoff=low_frequency_cutoff,
+            learned_upscaler=learned_upscaler,
+            metrics=metrics,
+            temporal_weight=temporal_weight,
+        )
+        return apply_partitioned_diagnostic_controls(
+            patched,
+            metrics,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "H3PartitionedExactPrefixHandoff": H3PartitionedExactPrefixHandoff,
+    "H3PartitionedExactPrefixDiagnosticHandoff": H3PartitionedExactPrefixDiagnosticHandoff,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Experimental]",
+    "H3PartitionedExactPrefixDiagnosticHandoff": ("MiniMax H3 Partitioned Exact-Prefix Handoff [Diagnostic]"),
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
