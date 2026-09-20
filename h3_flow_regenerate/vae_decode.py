@@ -15,6 +15,7 @@ import types
 import torch
 
 _DECODE_LOCK = threading.Lock()
+_LOG = logging.getLogger(__name__)
 _MISSING = object()
 
 
@@ -211,12 +212,184 @@ def _remap_spatial_position_ids(
     return adjusted
 
 
+
+def _globalize_spatial_token_ids(
+    img_ids: torch.Tensor,
+    *,
+    tile_shape: tuple[int, int, int],
+    full_hw: tuple[int, int],
+    origins: list[tuple[int, int]],
+) -> torch.Tensor:
+    """Replace tile-local Y/X RoPE coordinates with full-frame coordinates."""
+    if img_ids.ndim != 3 or int(img_ids.shape[-1]) != 3:
+        raise RuntimeError("MiniMax-H3 decoder token ids must be [B,S,3]")
+    tile_t, tile_h, tile_w = map(int, tile_shape)
+    full_h, full_w = map(int, full_hw)
+    if min(tile_t, tile_h, tile_w, full_h, full_w) <= 0:
+        raise RuntimeError("MiniMax-H3 global-position dimensions must be positive")
+    if int(img_ids.shape[0]) != len(origins):
+        raise RuntimeError("MiniMax-H3 global-position batch/origin count mismatch")
+    patch_tokens = tile_t * tile_h * tile_w
+    if int(img_ids.shape[1]) < patch_tokens:
+        raise RuntimeError("MiniMax-H3 global-position token count is shorter than the tile volume")
+
+    out = img_ids.clone()
+    t = (torch.arange(0.5, tile_t, device=img_ids.device, dtype=img_ids.dtype) / tile_t) * 2.0 - 1.0
+    for batch_index, (origin_y, origin_x) in enumerate(origins):
+        origin_y, origin_x = int(origin_y), int(origin_x)
+        if origin_y < 0 or origin_x < 0 or origin_y + tile_h > full_h or origin_x + tile_w > full_w:
+            raise RuntimeError(
+                "MiniMax-H3 global-position tile origin is outside the full latent grid: "
+                f"origin={(origin_y, origin_x)} tile={(tile_h, tile_w)} full={(full_h, full_w)}"
+            )
+        y = (
+            (origin_y + torch.arange(0.5, tile_h, device=img_ids.device, dtype=img_ids.dtype))
+            / full_h
+        ) * 2.0 - 1.0
+        x = (
+            (origin_x + torch.arange(0.5, tile_w, device=img_ids.device, dtype=img_ids.dtype))
+            / full_w
+        ) * 2.0 - 1.0
+        coords = torch.stack(torch.meshgrid(t, y, x, indexing="ij"), dim=-1).reshape(-1, 3)
+        out[batch_index, :patch_tokens] = coords
+    return out
+
+
+def _install_instance_method(obj: object, name: str, fn):
+    namespace = getattr(obj, "__dict__", {})
+    had_instance_value = name in namespace
+    previous_instance_value = namespace.get(name)
+    setattr(obj, name, types.MethodType(fn, obj))
+
+    def restore() -> None:
+        if had_instance_value:
+            setattr(obj, name, previous_instance_value)
+        else:
+            try:
+                delattr(obj, name)
+            except AttributeError:
+                pass
+
+    return restore
+
+
+@contextlib.contextmanager
+def _global_spatial_position_patch(model: object):
+    """Use full-frame spatial RoPE coordinates while retaining Core tile geometry.
+
+    Core decodes every spatial tile independently and the ViT decoder constructs
+    normalized Y/X token coordinates from the tile's local H/W. This bounded
+    diagnostic keeps the exact Core split/blend path but makes overlapping
+    physical locations receive identical full-frame Y/X coordinates.
+    """
+    decoder = getattr(model, "decoder", None)
+    pos_embed = getattr(decoder, "pos_embed", None)
+    if decoder is None or pos_embed is None:
+        raise RuntimeError("MiniMax-H3 global-position diagnostic requires the Core ViT decoder")
+    ratio = int(model.vae_ratio)
+    if ratio <= 0:
+        raise RuntimeError("MiniMax-H3 global-position diagnostic requires a positive VAE ratio")
+
+    original_tiled_decode = model.tiled_decode
+    original_pos_forward = pos_embed.forward
+    context: dict[str, object] = {
+        "full_hw": None,
+        "y_starts": None,
+        "row": 0,
+        "origins": None,
+        "tile_shape": None,
+    }
+
+    def tiled_decode_with_global_context(self, z):
+        height = int(z.shape[-2]) * ratio
+        width = int(z.shape[-1]) * ratio
+        y_idx, _y_len, _y_overlap = self.split_tiles(height)
+        context["full_hw"] = (int(z.shape[-2]), int(z.shape[-1]))
+        context["y_starts"] = [int(value) // ratio for value in y_idx]
+        context["row"] = 0
+        context["origins"] = None
+        context["tile_shape"] = None
+        try:
+            return original_tiled_decode(z)
+        finally:
+            context["origins"] = None
+            context["tile_shape"] = None
+            context["y_starts"] = None
+
+    def decode_tile_row_with_global_context(self, z_row, x_idx, x_len):
+        # Match Core's bounded batch policy so this diagnostic changes only
+        # decoder spatial coordinates, not tile grouping or memory behavior.
+        import comfy.model_management as model_management
+
+        y_starts = context.get("y_starts")
+        full_hw = context.get("full_hw")
+        if not isinstance(y_starts, list) or full_hw is None:
+            raise RuntimeError("MiniMax-H3 global-position row context was not initialized")
+        row = int(context["row"])
+        if row >= len(y_starts):
+            raise RuntimeError("MiniMax-H3 global-position row index exceeded the Core tile plan")
+        context["row"] = row + 1
+        origin_y = int(y_starts[row])
+
+        free = model_management.get_free_memory(z_row.device)
+        source_batch = int(z_row.shape[0])
+        batch = int(max(1, min(4, free // (128 * 2**20 * source_batch))))
+        slices = [
+            z_row[..., j_pos // ratio : (j_pos + j_len) // ratio]
+            for j_pos, j_len in zip(x_idx, x_len)
+        ]
+        for k in range(0, len(slices), batch):
+            group = slices[k : k + batch]
+            group_starts = x_idx[k : k + len(group)]
+            origins: list[tuple[int, int]] = []
+            for j_pos in group_starts:
+                origins.extend([(origin_y, int(j_pos) // ratio)] * source_batch)
+            merged = torch.cat(group)
+            context["origins"] = origins
+            context["tile_shape"] = (
+                int(merged.shape[-3]),
+                int(merged.shape[-2]),
+                int(merged.shape[-1]),
+            )
+            try:
+                decoded = self._decode_pixels(merged)
+            finally:
+                context["origins"] = None
+                context["tile_shape"] = None
+            yield from decoded.chunk(len(group))
+
+    def pos_forward_with_global_spatial_ids(self, img_ids):
+        origins = context.get("origins")
+        tile_shape = context.get("tile_shape")
+        full_hw = context.get("full_hw")
+        if origins is None or tile_shape is None or full_hw is None:
+            return original_pos_forward(img_ids)
+        global_ids = _globalize_spatial_token_ids(
+            img_ids,
+            tile_shape=tile_shape,
+            full_hw=full_hw,
+            origins=origins,
+        )
+        return original_pos_forward(global_ids)
+
+    restorers = [
+        _install_instance_method(model, "tiled_decode", tiled_decode_with_global_context),
+        _install_instance_method(model, "_decode_tile_row", decode_tile_row_with_global_context),
+        _install_instance_method(pos_embed, "forward", pos_forward_with_global_spatial_ids),
+    ]
+    try:
+        yield
+    finally:
+        for restore in reversed(restorers):
+            restore()
+
 def decode_minimax_h3_large_tile(
     vae: object,
     samples: dict[str, object],
     *,
     tile_size: int = 320,
     tile_overlap: int = 128,
+    global_spatial_positions: bool = False,
 ) -> tuple[torch.Tensor, str]:
     """Decode with a changed spatial tile profile; retained as a tile-size diagnostic."""
     latent = _validate_samples(samples)
@@ -245,7 +418,13 @@ def decode_minimax_h3_large_tile(
             model.tile_size = tile_size
             model.tile_overlap_min = tile_overlap
             x_seams, y_seams = _tile_boundaries(model, output_height, output_width)
-            images = vae.decode(latent)
+            position_context = (
+                _global_spatial_position_patch(model)
+                if global_spatial_positions
+                else contextlib.nullcontext()
+            )
+            with position_context:
+                images = vae.decode(latent)
         finally:
             model.tiling, model.tile_size, model.tile_overlap_min = original
 
@@ -488,6 +667,38 @@ class H3MiniMaxVAEDecodeGlobalPositionDiagnostic:
 
     def decode(self, samples, vae):
         return decode_minimax_h3_global_spatial_position(vae, samples)
+
+
+class H3MiniMaxVAEDecodeGlobalPosition:
+    CATEGORY = "MiniMax H3/flow regenerate/experimental"
+    DESCRIPTION = (
+        "Diagnostic decode that preserves the VAE's current spatial tile size, overlap, "
+        "split, blending, and batching, but gives every tile full-frame spatial RoPE "
+        "coordinates. Use this to isolate tile-local position reset from independent "
+        "tile attention/context as the source of rectangular/checkerboard artifacts."
+    )
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "report")
+    FUNCTION = "decode"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "samples": ("LATENT",),
+                "vae": ("VAE",),
+            }
+        }
+
+    def decode(self, samples, vae):
+        model = _h3_video_vae_model(vae)
+        return decode_minimax_h3_large_tile(
+            vae,
+            samples,
+            tile_size=int(model.tile_size),
+            tile_overlap=int(model.tile_overlap_min),
+            global_spatial_positions=True,
+        )
 
 
 NODE_CLASS_MAPPINGS = {
