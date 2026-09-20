@@ -190,7 +190,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "normal preserves the partitioned VDN learned linear complement; "
                     "bypass_partitioned_linear suppresses the complete complement; "
                     "suppress_cross_grid_temporal_taps keeps the complement active but "
-                    "zeros only temporal short-conv taps that cross the target/source grid boundary."
+                    "zeros only temporal short-conv taps that cross the target/source grid boundary; "
+                    "raw_token_measure keeps both VDN paths active but disables only the matched "
+                    "target-prefix density correction in softmax and learned-linear statistics."
                 ),
             },
         )
