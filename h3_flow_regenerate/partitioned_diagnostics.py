@@ -28,8 +28,7 @@ def normalize_vdn_linear_diagnostic(value: str) -> str:
     value = str(value)
     if value not in PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS:
         raise ValueError(
-            "VDN linear diagnostic must be one of "
-            f"{PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
+            f"VDN linear diagnostic must be one of {PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
         )
     return value
 
