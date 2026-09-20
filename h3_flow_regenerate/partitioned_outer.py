@@ -84,9 +84,7 @@ def partitioned_outer_wrapper(
     # diagnostic node may override the overlap width model-locally; the ordinary
     # node keeps the existing environment/default resolution path.
     diagnostic_audio_control = PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
-    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(
-        model_options
-    )
+    guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(model_options)
     runtime_denoise_mask = denoise_mask
     guided_report = None
     if guided_ticks or diagnostic_audio_control:
@@ -197,8 +195,7 @@ def partitioned_outer_wrapper(
             **latent_audio_report,
         )
         LOG.info(
-            "partitioned audio latent boundary ticks=%d prefix=%d available=%s "
-            "reason=%s windows=%s",
+            "partitioned audio latent boundary ticks=%d prefix=%d available=%s reason=%s windows=%s",
             guided_ticks,
             int(latent_audio_report.get("audio_prefix_ticks", 0)),
             bool(latent_audio_report.get("available")),
