@@ -18,6 +18,8 @@ VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap active"
+AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
+AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 _SOL_PREFIX = "Sol-H3 "
 
 
@@ -48,6 +50,10 @@ class RuntimeGateReport:
     sol_kernel_q_rows: int
     vdn_variable_grid_linear_active: bool
     audio_guided_overlap_active: bool
+    audio_position_domain: str | None
+    audio_position_candidate_verified: bool
+    audio_position_candidate_block0_calls: int
+    audio_position_model_timestep_override_calls: int
 
     def as_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -115,6 +121,119 @@ def _stage_counts(model_calls: list[dict[str, Any]], stage: str) -> tuple[int, i
     return len(calls), actual
 
 
+def _sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _validate_audio_position_policy(
+    window: list[dict[str, Any]],
+    transformer_events: list[dict[str, Any]],
+    plan_fields: dict[str, Any],
+    *,
+    expected_audio_position_domain: str | None,
+) -> tuple[str | None, bool, int, int]:
+    if expected_audio_position_domain is None:
+        return None, False, 0, 0
+    _require(
+        expected_audio_position_domain in {AUDIO_POSITION_DOMAIN_LEGACY, AUDIO_POSITION_DOMAIN_SOURCE},
+        f"unsupported expected audio-position domain {expected_audio_position_domain!r}",
+    )
+    observed_plan_domain = plan_fields.get("audio_position_domain")
+    if expected_audio_position_domain == AUDIO_POSITION_DOMAIN_LEGACY:
+        _require(
+            observed_plan_domain in {None, AUDIO_POSITION_DOMAIN_LEGACY},
+            "legacy control selected a non-legacy target-audio position domain",
+        )
+        return AUDIO_POSITION_DOMAIN_LEGACY, False, 0, 0
+
+    _require(
+        observed_plan_domain == AUDIO_POSITION_DOMAIN_SOURCE,
+        "source-carrier candidate was not selected in the partitioned stage plan",
+    )
+    for event in transformer_events:
+        fields = _event_fields(event)
+        _require(
+            fields.get("audio_position_domain") == AUDIO_POSITION_DOMAIN_SOURCE,
+            "source-carrier candidate did not reach every actual low/probe transformer call",
+        )
+        _require(
+            fields.get("audio_position_policy_active") is True,
+            "source-carrier candidate did not publish an active position policy",
+        )
+        _require(
+            fields.get("audio_position_temporal_equal") is True,
+            "source-carrier candidate changed target-audio temporal coordinates",
+        )
+        before = fields.get("audio_position_non_audio_before_digest")
+        after = fields.get("audio_position_non_audio_after_digest")
+        _require(
+            _sha256(before) and before == after,
+            "source-carrier candidate changed non-target-audio position rows",
+        )
+        _require(
+            _sha256(fields.get("prefix_rope_position_digest")),
+            "source-carrier candidate is missing the target-prefix RoPE receipt",
+        )
+        _require(
+            _sha256(fields.get("suffix_rope_position_digest")),
+            "source-carrier candidate is missing the source-suffix RoPE receipt",
+        )
+        _require(
+            _sha256(fields.get("position_digest")),
+            "source-carrier candidate is missing the complete position digest",
+        )
+        _require(
+            bool(fields.get("audio_position_policy_signature")),
+            "source-carrier candidate is missing its numerical-history policy signature",
+        )
+        owner = fields.get("audio_position_stage_owner_generation")
+        _require(
+            type(owner) is int and owner > 0,
+            "source-carrier candidate is missing its stage-owner position-policy receipt",
+        )
+
+    verified_events = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_audio_position_domain_verified"
+    ]
+    _require(bool(verified_events), "source-carrier candidate emitted no execution-verification receipt")
+    verified = verified_events[-1]
+    _require(verified.get("mode") == AUDIO_POSITION_DOMAIN_SOURCE, "candidate execution receipt mode drifted")
+    block0_calls = int(verified.get("actual_block0_calls", 0))
+    wrapper_entries = int(verified.get("wrapper_entries", 0))
+    model_timestep_calls = int(verified.get("model_timestep_override_calls", 0))
+    _require(block0_calls > 0, "source-carrier candidate executed no actual block-zero calls")
+    _require(
+        wrapper_entries >= block0_calls,
+        "source-carrier candidate wrapper/block execution accounting drifted",
+    )
+    _require(
+        model_timestep_calls > 0,
+        "source-carrier candidate gate requires observed model-timestep-only audio guidance",
+    )
+
+    integrity_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_audio_position_candidate_integrity"
+    ]
+    _require(bool(integrity_events), "source-carrier candidate emitted no final exact-AV integrity receipt")
+    integrity = integrity_events[-1]
+    _require(integrity.get("mode") == AUDIO_POSITION_DOMAIN_SOURCE, "candidate integrity receipt mode drifted")
+    _require(
+        integrity.get("final_exact_video_prefix") is True and integrity.get("final_exact_audio_prefix") is True,
+        "source-carrier candidate did not preserve the caller-owned exact AV prefix",
+    )
+    _require(
+        integrity.get("sampler_masks_unchanged") is True,
+        "source-carrier candidate changed sampler-mask ownership",
+    )
+    _require(
+        _sha256(integrity.get("low_mask_digest")) and _sha256(integrity.get("high_mask_digest")),
+        "source-carrier candidate is missing sampler-mask receipts",
+    )
+    return AUDIO_POSITION_DOMAIN_SOURCE, True, block0_calls, model_timestep_calls
+
+
 def validate_partitioned_runtime_evidence(
     metrics: dict[str, Any],
     log_text: str,
@@ -126,6 +245,7 @@ def validate_partitioned_runtime_evidence(
     require_spectrum: bool = True,
     require_audio_overlap: bool = True,
     require_vdn_linear: bool = True,
+    expected_audio_position_domain: str | None = None,
 ) -> RuntimeGateReport:
     """Validate one latest partitioned chunk plus its matching process log evidence."""
     _require(isinstance(metrics, dict), "Flow metrics root must be an object")
@@ -160,6 +280,14 @@ def validate_partitioned_runtime_evidence(
     _require(
         bool(transformer_events),
         "partitioned transformer emitted no physical-domain evidence",
+    )
+    audio_position_domain, candidate_verified, candidate_block0_calls, model_timestep_calls = (
+        _validate_audio_position_policy(
+            window,
+            transformer_events,
+            plan_fields,
+            expected_audio_position_domain=expected_audio_position_domain,
+        )
     )
 
     # Provider stability is part of the numerical-history contract, not merely a
@@ -430,10 +558,16 @@ def validate_partitioned_runtime_evidence(
         sol_kernel_q_rows=sol_kernel,
         vdn_variable_grid_linear_active=vdn_linear,
         audio_guided_overlap_active=audio_overlap,
+        audio_position_domain=audio_position_domain,
+        audio_position_candidate_verified=candidate_verified,
+        audio_position_candidate_block0_calls=candidate_block0_calls,
+        audio_position_model_timestep_override_calls=model_timestep_calls,
     )
 
 
 __all__ = [
+    "AUDIO_POSITION_DOMAIN_LEGACY",
+    "AUDIO_POSITION_DOMAIN_SOURCE",
     "PARTITIONED_SOL_ABI",
     "RuntimeGateError",
     "RuntimeGateReport",
