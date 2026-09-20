@@ -9,6 +9,7 @@ original exact mask remains authoritative for the final output restore.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -22,6 +23,14 @@ MAX_AUDIO_GUIDED_OVERLAP_TICKS = 16
 _MASK_QUANTIZATION_LEVELS = 256.0
 
 
+def validate_audio_guided_overlap_ticks(value: int, *, source: str = "audio guided overlap") -> int:
+    """Validate an explicit overlap width without consulting process environment."""
+
+    if type(value) is not int or not 0 <= value <= MAX_AUDIO_GUIDED_OVERLAP_TICKS:
+        raise ValueError(f"{source} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}")
+    return int(value)
+
+
 def configured_audio_guided_overlap_ticks() -> int:
     """Return the production overlap width in 40-Hz audio latent ticks."""
 
@@ -33,9 +42,100 @@ def configured_audio_guided_overlap_ticks() -> int:
     except ValueError as exc:
         message = f"{AUDIO_GUIDED_OVERLAP_ENV} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}]"
         raise ValueError(message) from exc
-    if not 0 <= ticks <= MAX_AUDIO_GUIDED_OVERLAP_TICKS:
-        raise ValueError(f"{AUDIO_GUIDED_OVERLAP_ENV} must be in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}], got {ticks}")
-    return ticks
+    return validate_audio_guided_overlap_ticks(ticks, source=AUDIO_GUIDED_OVERLAP_ENV)
+
+
+def measure_audio_latent_boundary(
+    packed_latent: torch.Tensor,
+    latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,
+    exact_denoise_mask: torch.Tensor | None,
+    *,
+    windows: tuple[int, ...] = (4, 20),
+) -> dict[str, Any]:
+    """Measure latent amplitude immediately around the original exact audio boundary.
+
+    This is diagnostics-only: it never modifies the latent or mask. Windows are
+    expressed in native 40-Hz MiniMax-H3 audio latent ticks. The boundary is
+    derived from the caller-owned exact mask rather than any sampler-lifetime
+    guided-overlap mask, so 4-tick and 0-tick A/B runs are measured at the same
+    physical carried-prefix -> generated-suffix boundary.
+    """
+
+    report: dict[str, Any] = {
+        "available": False,
+        "reason": "pending",
+        "audio_prefix_ticks": 0,
+        "audio_total_ticks": 0,
+        "windows": {},
+    }
+    if exact_denoise_mask is None:
+        report["reason"] = "no_denoise_mask"
+        return report
+    if latent_shapes is None or len(latent_shapes) != 2:
+        raise ValueError("audio latent boundary diagnostics require native packed H3 AV shapes")
+    if packed_latent.ndim != 3 or exact_denoise_mask.ndim != 3:
+        raise ValueError("audio latent boundary diagnostics require packed BxCxN tensors")
+
+    latent_audio = unpack_streams(packed_latent, latent_shapes)[1]
+    mask_audio = unpack_streams(exact_denoise_mask, latent_shapes)[1]
+    if latent_audio.ndim != 4 or int(latent_audio.shape[2]) != 2:
+        raise ValueError("audio latent boundary diagnostics require native BxCx2xT audio latents")
+    if mask_audio.shape != latent_audio.shape:
+        raise ValueError("audio latent boundary diagnostics require mask/audio geometry parity")
+
+    temporal_min = mask_audio.amin(dim=(0, 1, 2))
+    temporal_max = mask_audio.amax(dim=(0, 1, 2))
+    exact_zero = temporal_max <= 1e-8
+    exact_one = temporal_min >= 1.0 - 1e-8
+    temporal = int(latent_audio.shape[-1])
+    report["audio_total_ticks"] = temporal
+
+    if bool(exact_one.all().item()):
+        report["reason"] = "no_exact_audio_prefix"
+        return report
+    if bool(exact_zero.all().item()):
+        report["reason"] = "no_generated_audio_suffix"
+        report["audio_prefix_ticks"] = temporal
+        return report
+
+    prefix = 0
+    while prefix < temporal and bool(exact_zero[prefix].item()):
+        prefix += 1
+    report["audio_prefix_ticks"] = prefix
+    if prefix <= 0 or not bool(exact_one[prefix:].all().item()):
+        raise ValueError(
+            "audio latent boundary diagnostics require a contiguous exact audio prefix "
+            "followed by a fully generated suffix"
+        )
+
+    audio = latent_audio.detach().to(dtype=torch.float32)
+    for requested in windows:
+        width = int(requested)
+        if width <= 0:
+            raise ValueError("audio latent boundary diagnostic windows must be positive")
+        usable = min(width, prefix, temporal - prefix)
+        if usable <= 0:
+            continue
+        pre = audio[..., prefix - usable : prefix]
+        post = audio[..., prefix : prefix + usable]
+        pre_rms = float(pre.square().mean().sqrt().item())
+        post_rms = float(post.square().mean().sqrt().item())
+        ratio = post_rms / max(pre_rms, 1e-12)
+        report["windows"][str(width)] = {
+            "requested_ticks": width,
+            "used_ticks": usable,
+            "duration_ms_at_40hz": usable * 25.0,
+            "pre_rms": pre_rms,
+            "post_rms": post_rms,
+            "post_over_pre_rms_ratio": ratio,
+            "post_over_pre_db": 20.0 * math.log10(max(ratio, 1e-12)),
+            "pre_mean_abs": float(pre.abs().mean().item()),
+            "post_mean_abs": float(post.abs().mean().item()),
+        }
+
+    report["available"] = bool(report["windows"])
+    report["reason"] = "measured" if report["available"] else "insufficient_boundary_context"
+    return report
 
 
 def apply_audio_guided_overlap_mask(
