@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import pytest
+import torch
+
+from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+    PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
+    PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+)
+from h3_flow_regenerate.partitioned_scheduler import (
+    PartitionedPreflightUnsupported,
+    _source_uniform_audio_shadow_controls,
+    _splice_source_uniform_shadow_audio_state,
+    _validate_audio_handoff_shadow_configuration,
+)
+
+
+class _Metrics:
+    def __init__(self):
+        self.events = []
+
+    def event(self, kind, **fields):
+        self.events.append((kind, fields))
+
+
+def _valid_shadow_configuration(**overrides):
+    values = {
+        "audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
+        "prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        "vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        "audio_position_domain": PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        "audio_guided_overlap_ticks": 4,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_audio_handoff_shadow_configuration_is_strictly_one_axis():
+    _validate_audio_handoff_shadow_configuration(**_valid_shadow_configuration())
+    _validate_audio_handoff_shadow_configuration(
+        PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        prefix_transformer_context="anything",
+        vdn_linear_diagnostic="anything",
+        audio_position_domain="anything",
+        audio_guided_overlap_mode="anything",
+        audio_guided_overlap_ticks=0,
+    )
+
+    bad_cases = (
+        {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
+        {"vdn_linear_diagnostic": "bypass_partitioned_linear"},
+        {"audio_position_domain": "legacy_target"},
+        {"audio_guided_overlap_mode": "sampler_mask"},
+        {"audio_guided_overlap_ticks": 3},
+    )
+    for override in bad_cases:
+        with pytest.raises(PartitionedPreflightUnsupported, match="audio handoff"):
+            _validate_audio_handoff_shadow_configuration(**_valid_shadow_configuration(**override))
+
+
+def test_shadow_control_scope_restores_main_candidate_options_after_exception():
+    transformer = {
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY: PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        "keep": "value",
+    }
+    with (
+        pytest.raises(RuntimeError, match="sentinel"),
+        _source_uniform_audio_shadow_controls(transformer),
+    ):
+        assert transformer[PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+        assert PARTITIONED_AUDIO_POSITION_DOMAIN_KEY not in transformer
+        assert transformer["keep"] == "value"
+        raise RuntimeError("sentinel")
+
+    assert transformer[PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+    assert transformer[PARTITIONED_AUDIO_POSITION_DOMAIN_KEY] == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+    assert transformer["keep"] == "value"
+
+
+def test_shadow_audio_splice_preserves_main_video_and_exact_prefix():
+    main_video = torch.arange(1 * 24 * 2 * 2 * 2, dtype=torch.float32).reshape(1, 24, 2, 2, 2)
+    shadow_video = main_video + 1000
+    main_audio = torch.arange(1 * 32 * 2 * 6, dtype=torch.float32).reshape(1, 32, 2, 6)
+    shadow_audio = main_audio.clone()
+    shadow_audio[..., 2:] += 7
+
+    main, shapes = pack_streams((main_video, main_audio))
+    shadow, shadow_shapes = pack_streams((shadow_video, shadow_audio))
+    assert shadow_shapes == shapes
+    video_mask = torch.ones_like(main_video)
+    audio_mask = torch.ones_like(main_audio)
+    audio_mask[..., :2] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
+    metrics = _Metrics()
+
+    hybrid = _splice_source_uniform_shadow_audio_state(main, shadow, list(shapes), mask, metrics)
+    hybrid_video, hybrid_audio = unpack_streams(hybrid, list(shapes))
+
+    assert torch.equal(hybrid_video, main_video)
+    assert torch.equal(hybrid_audio, shadow_audio)
+    kind, fields = metrics.events[-1]
+    assert kind == "partitioned_audio_handoff_shadow_splice"
+    assert fields["shadow_video_discarded"] is True
+    assert fields["main_video_preserved"] is True
+    assert fields["protected_audio_prefix_exact"] is True
+    assert fields["generated_audio_changed_elements"] > 0
+
+
+def test_shadow_audio_splice_rejects_protected_prefix_mutation_or_noop():
+    video = torch.zeros(1, 24, 2, 2, 2)
+    audio = torch.zeros(1, 32, 2, 6)
+    main, shapes = pack_streams((video, audio))
+    video_mask = torch.ones_like(video)
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :2] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
+
+    bad_audio = audio.clone()
+    bad_audio[..., :2] = 1
+    bad, _ = pack_streams((video, bad_audio))
+    with pytest.raises(RuntimeError, match="protected audio prefix"):
+        _splice_source_uniform_shadow_audio_state(main, bad, list(shapes), mask, _Metrics())
+
+    with pytest.raises(RuntimeError, match="no distinct generated audio state"):
+        _splice_source_uniform_shadow_audio_state(main, main.clone(), list(shapes), mask, _Metrics())
