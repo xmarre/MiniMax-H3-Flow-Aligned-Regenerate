@@ -21,6 +21,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
     normalize_vdn_linear_diagnostic,
 )
@@ -126,14 +127,21 @@ def _validate_partitioned_vdn_compat(
                 f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"
             )
         if (
-            required_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS
+            required_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
             and int(getattr(owner, "_vdn_partitioned_linear_diagnostic_api", 0))
             != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API
         ):
             raise PartitionedPreflightUnsupported(
-                "partitioned VDN linear bypass was requested but the installed VDN bridge "
+                "partitioned VDN linear diagnostic was requested but the installed VDN bridge "
                 f"does not publish diagnostic API v{VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API}"
             )
+        if required_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL:
+            supported = tuple(getattr(owner, "_vdn_partitioned_linear_diagnostic_modes", ()))
+            if PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL not in supported:
+                raise PartitionedPreflightUnsupported(
+                    "partitioned VDN cross-grid temporal diagnostic was requested but the "
+                    "installed VDN bridge does not publish that diagnostic capability"
+                )
     if matched == 0:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
 
@@ -144,34 +152,61 @@ def _verify_partitioned_vdn_linear_diagnostic(
     *,
     bypass_calls_before: int,
     bypass_video_rows_before: int,
+    suppression_calls_before: int = 0,
+    suppressed_taps_before: int = 0,
+    suppressed_rows_before: int = 0,
 ) -> None:
-    """Fail closed when a requested VDN bypass did not execute in low/probe."""
+    """Fail closed when a requested VDN linear diagnostic did not execute in low/probe."""
 
     mode = normalize_vdn_linear_diagnostic(mode)
-    if mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS:
+    if mode == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
         return
     counters = getattr(metrics, "counters", {})
-    calls_after = int(counters.get("partitioned_vdn_linear_bypass_calls", 0))
-    rows_after = int(counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
-    delta_calls = calls_after - int(bypass_calls_before)
-    delta_rows = rows_after - int(bypass_video_rows_before)
-    if delta_calls <= 0:
-        raise RuntimeError(
-            "partitioned VDN linear bypass was requested but zero bypass calls were observed; "
-            "refusing to accept this run as a diagnostic sample"
-        )
-    if delta_rows <= 0:
-        raise RuntimeError(
-            "partitioned VDN linear bypass executed without reporting any bypassed video rows; "
-            "refusing to accept this run as a diagnostic sample"
-        )
     event = getattr(metrics, "event", None)
+
+    if mode == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS:
+        calls_after = int(counters.get("partitioned_vdn_linear_bypass_calls", 0))
+        rows_after = int(counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
+        delta_calls = calls_after - int(bypass_calls_before)
+        delta_rows = rows_after - int(bypass_video_rows_before)
+        if delta_calls <= 0:
+            raise RuntimeError(
+                "partitioned VDN linear bypass was requested but zero bypass calls were observed; "
+                "refusing to accept this run as a diagnostic sample"
+            )
+        if delta_rows <= 0:
+            raise RuntimeError(
+                "partitioned VDN linear bypass executed without reporting any bypassed video rows; "
+                "refusing to accept this run as a diagnostic sample"
+            )
+        if callable(event):
+            event(
+                "partitioned_vdn_linear_diagnostic_verified",
+                mode=mode,
+                bypass_calls=delta_calls,
+                bypass_video_rows=delta_rows,
+                fail_closed=True,
+            )
+        return
+
+    calls_after = int(counters.get("partitioned_vdn_cross_grid_temporal_suppression_calls", 0))
+    taps_after = int(counters.get("partitioned_vdn_cross_grid_temporal_suppressed_taps", 0))
+    rows_after = int(counters.get("partitioned_vdn_cross_grid_temporal_suppressed_rows", 0))
+    delta_calls = calls_after - int(suppression_calls_before)
+    delta_taps = taps_after - int(suppressed_taps_before)
+    delta_rows = rows_after - int(suppressed_rows_before)
+    if delta_calls <= 0 or delta_taps <= 0 or delta_rows <= 0:
+        raise RuntimeError(
+            "partitioned VDN cross-grid temporal diagnostic was requested but no verified "
+            "cross-grid short-conv suppression was observed; refusing this diagnostic sample"
+        )
     if callable(event):
         event(
             "partitioned_vdn_linear_diagnostic_verified",
             mode=mode,
-            bypass_calls=delta_calls,
-            bypass_video_rows=delta_rows,
+            cross_grid_temporal_suppression_calls=delta_calls,
+            suppressed_taps=delta_taps,
+            suppressed_rows=delta_rows,
             fail_closed=True,
         )
 
@@ -429,6 +464,11 @@ def run_partitioned_progressive(
     history_boundary_count = 0
     bypass_calls_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_calls", 0))
     bypass_video_rows_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
+    suppression_calls_before = int(
+        binding.metrics.counters.get("partitioned_vdn_cross_grid_temporal_suppression_calls", 0)
+    )
+    suppressed_taps_before = int(binding.metrics.counters.get("partitioned_vdn_cross_grid_temporal_suppressed_taps", 0))
+    suppressed_rows_before = int(binding.metrics.counters.get("partitioned_vdn_cross_grid_temporal_suppressed_rows", 0))
 
     def low_callback(step, x0, x, _total):
         if callback is None:
@@ -517,6 +557,9 @@ def run_partitioned_progressive(
             vdn_linear_diagnostic,
             bypass_calls_before=bypass_calls_before,
             bypass_video_rows_before=bypass_video_rows_before,
+            suppression_calls_before=suppression_calls_before,
+            suppressed_taps_before=suppressed_taps_before,
+            suppressed_rows_before=suppressed_rows_before,
         )
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
