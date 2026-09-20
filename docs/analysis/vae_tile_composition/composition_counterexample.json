@@ -1,0 +1,43 @@
+{
+  "engine": "Core methods extracted via AST; NumPy float64 primitive adapter; no learned decoder",
+  "source_sha256": "aae581a7da3a1fba6ed35c8d11912af139246830764c525c14900f1bfd07225f",
+  "two_by_two": {
+    "point_y192_x0": 0.0,
+    "point_y192_x192": 1.0,
+    "point_y224_x191": 0.5,
+    "point_y224_x192": 1.0,
+    "max_jump_x192": 1.0,
+    "expected_x_invariance": true
+  },
+  "triple_overlap": {
+    "starts": [
+      0,
+      112,
+      224,
+      336,
+      448,
+      576,
+      704,
+      832,
+      960
+    ],
+    "overlaps": [
+      144,
+      144,
+      144,
+      144,
+      128,
+      128,
+      128,
+      128
+    ],
+    "x223": 0.7708333333333334,
+    "x224": 1.0,
+    "jump": 0.22916666666666663
+  },
+  "weight_oracle": {
+    "cases": 387,
+    "max_partition_error": 4.440892098500626e-16,
+    "positive_denominators": true
+  }
+}
