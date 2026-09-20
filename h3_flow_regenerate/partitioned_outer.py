@@ -140,10 +140,7 @@ def partitioned_outer_wrapper(
                         "denoise-mask velocity conversion fix #15988"
                     )
                 guided_audio_mask = (
-                    unpack_streams(guided_mask, latent_shapes)[1]
-                    .amax(dim=1, keepdim=True)
-                    .contiguous()
-                    .detach()
+                    unpack_streams(guided_mask, latent_shapes)[1].amax(dim=1, keepdim=True).contiguous().detach()
                 )
                 audio_model_context = PartitionedAudioModelTimestepContext(
                     audio_mask=guided_audio_mask,
@@ -213,8 +210,7 @@ def partitioned_outer_wrapper(
         )
         if audio_model_context is not None and audio_model_context.calls <= 0:
             raise RuntimeError(
-                "model-timestep-only audio guidance was requested but zero MiniMax-H3 "
-                "inner-forward overrides executed"
+                "model-timestep-only audio guidance was requested but zero MiniMax-H3 inner-forward overrides executed"
             )
     except PartitionedPreflightUnsupported as exc:
         fallback_reason = str(exc)
