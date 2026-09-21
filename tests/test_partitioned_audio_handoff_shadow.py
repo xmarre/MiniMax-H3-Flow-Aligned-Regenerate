@@ -25,11 +25,13 @@ from h3_flow_regenerate.partitioned_diagnostics import (
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
+    _preserve_main_clean_video_against_shadow,
     _select_source_uniform_shadow_clean_video,
     _source_uniform_audio_shadow_controls,
     _source_uniform_audio_shadow_sampler_contract,
     _source_uniform_av_shadow_stage_contract,
     _splice_source_uniform_shadow_audio_state,
+    _use_main_clean_video_width16_ab,
     _validate_audio_handoff_shadow_configuration,
     _validate_av_handoff_shadow_configuration,
     _validate_av_shadow_width16_execution_configuration,
@@ -297,6 +299,78 @@ def test_av_shadow_overlap_execution_preserves_parent_model_timestep_contract():
             model_timestep_override_calls=0,
             runtime_mask=exact_mask,
             latent_shapes=list(shapes),
+        )
+
+
+def test_width16_main_clean_video_ab_is_exactly_bounded_to_pr68_tuple():
+    assert _use_main_clean_video_width16_ab(
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=16,
+    )
+    assert not _use_main_clean_video_width16_ab(
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        audio_guided_overlap_ticks=4,
+    )
+    assert not _use_main_clean_video_width16_ab(
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=16,
+    )
+
+
+def test_main_clean_video_ab_preserves_main_suffix_and_discards_distinct_shadow():
+    main_video = torch.arange(1 * 24 * 4 * 2 * 2, dtype=torch.float32).reshape(1, 24, 4, 2, 2)
+    shadow_video = main_video.clone()
+    shadow_video[:, :, 2:] += 9
+    main_audio = torch.arange(1 * 32 * 2 * 6, dtype=torch.float32).reshape(1, 32, 2, 6)
+    shadow_audio = main_audio + 100
+    main, shapes = pack_streams((main_video, main_audio))
+    shadow, shadow_shapes = pack_streams((shadow_video, shadow_audio))
+    assert shadow_shapes == shapes
+    exact_prefix = torch.full_like(main_video[:, :, :2], -3)
+    metrics = _Metrics()
+
+    selected = _preserve_main_clean_video_against_shadow(
+        main,
+        shadow,
+        list(shapes),
+        prefix_t=2,
+        exact_prefix_source=exact_prefix,
+        metrics=metrics,
+    )
+    selected_video, selected_audio = unpack_streams(selected, list(shapes))
+    assert torch.equal(selected_video[:, :, :2], exact_prefix)
+    assert torch.equal(selected_video[:, :, 2:], main_video[:, :, 2:])
+    assert torch.equal(selected_audio, main_audio)
+    kind, fields = metrics.events[-1]
+    assert kind == "partitioned_av_handoff_main_clean_video_ab"
+    assert fields["main_clean_video_preserved"] is True
+    assert fields["shadow_clean_video_discarded"] is True
+    assert fields["main_clean_audio_preserved"] is True
+    assert fields["exact_source_prefix_restored"] is True
+    assert fields["generated_video_changed_elements"] > 0
+
+
+def test_main_clean_video_ab_rejects_identical_shadow_suffix():
+    video = torch.zeros(1, 24, 4, 2, 2)
+    audio = torch.zeros(1, 32, 2, 6)
+    main, shapes = pack_streams((video, audio))
+    with pytest.raises(RuntimeError, match="cannot discriminate an identical shadow"):
+        _preserve_main_clean_video_against_shadow(
+            main,
+            main.clone(),
+            list(shapes),
+            prefix_t=2,
+            exact_prefix_source=video[:, :, :2],
+            metrics=_Metrics(),
         )
 
 

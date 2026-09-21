@@ -281,6 +281,88 @@ def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
                 transformer[key] = value
 
 
+def _use_main_clean_video_width16_ab(
+    *,
+    low_probe_execution_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> bool:
+    """Return whether this overlay keeps main clean video while retaining AV-shadow raw audio."""
+
+    return (
+        normalize_low_probe_execution_source(low_probe_execution_source)
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        and normalize_av_handoff_source(av_handoff_source) == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
+        and normalize_guidance_trajectory_source(guidance_trajectory_source)
+        == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+        and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+        and int(audio_guided_overlap_ticks) == 16
+    )
+
+
+def _preserve_main_clean_video_against_shadow(
+    main_clean: torch.Tensor,
+    shadow_clean: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+    *,
+    prefix_t: int,
+    exact_prefix_source: torch.Tensor,
+    metrics,
+) -> torch.Tensor:
+    """Keep main clean-video suffix while proving the discarded shadow candidate is distinct."""
+
+    main_video, main_audio = unpack_streams(main_clean, shapes)
+    shadow_video, shadow_audio = unpack_streams(shadow_clean, shapes)
+    if tuple(main_video.shape) != tuple(shadow_video.shape) or tuple(main_audio.shape) != tuple(shadow_audio.shape):
+        raise RuntimeError("main-clean-video A/B state geometry drifted")
+    if not 0 < int(prefix_t) < int(main_video.shape[2]):
+        raise RuntimeError("main-clean-video A/B requires a non-empty protected video prefix and generated suffix")
+    expected_prefix_shape = tuple(main_video[:, :, : int(prefix_t)].shape)
+    if tuple(exact_prefix_source.shape) != expected_prefix_shape:
+        raise RuntimeError("main-clean-video A/B exact source-prefix geometry drifted")
+
+    generated_main = main_video[:, :, int(prefix_t) :]
+    generated_shadow = shadow_video[:, :, int(prefix_t) :]
+    generated_delta = generated_shadow.to(torch.float32) - generated_main.to(torch.float32)
+    changed_elements = int(torch.count_nonzero(generated_delta).item())
+    if changed_elements <= 0:
+        raise RuntimeError("main-clean-video A/B cannot discriminate an identical shadow clean-video suffix")
+
+    selected_video = main_video.clone()
+    selected_video[:, :, : int(prefix_t)] = exact_prefix_source.to(selected_video)
+    selected, selected_shapes = pack_streams((selected_video, main_audio.clone()))
+    if list(selected_shapes) != list(shapes):
+        raise RuntimeError("main-clean-video A/B changed packed clean-state geometry")
+    check_video, check_audio = unpack_streams(selected, shapes)
+    if not torch.equal(check_video[:, :, : int(prefix_t)], exact_prefix_source.to(check_video)):
+        raise RuntimeError("main-clean-video A/B failed to restore the exact source-grid video prefix")
+    if not torch.equal(check_video[:, :, int(prefix_t) :], generated_main):
+        raise RuntimeError("main-clean-video A/B mutated the main generated clean-video suffix")
+    if not torch.equal(check_audio, main_audio):
+        raise RuntimeError("main-clean-video A/B mutated the main clean-audio probe state")
+
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_av_handoff_main_clean_video_ab",
+            source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+            main_clean_video_digest=tensor_sha256(main_video),
+            shadow_clean_video_digest=tensor_sha256(shadow_video),
+            selected_clean_video_digest=tensor_sha256(check_video),
+            main_clean_video_preserved=True,
+            shadow_clean_video_discarded=True,
+            main_clean_audio_preserved=True,
+            shadow_clean_audio_discarded=True,
+            exact_source_prefix_restored=True,
+            generated_video_changed_elements=changed_elements,
+            generated_video_rms_delta=float(generated_delta.square().mean().sqrt().item()),
+            fail_closed=True,
+        )
+    return selected
+
+
 def _verify_shadow_audio_overlap_execution(
     *,
     audio_guided_overlap_mode: str,
@@ -1087,6 +1169,13 @@ def run_partitioned_progressive(
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
+    main_clean_video_width16_ab = _use_main_clean_video_width16_ab(
+        low_probe_execution_source=low_probe_execution_source,
+        av_handoff_source=av_handoff_source,
+        guidance_trajectory_source=guidance_trajectory_source,
+        audio_guided_overlap_mode=audio_guided_overlap_mode,
+        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+    )
     _validate_low_probe_execution_source_configuration(
         low_probe_execution_source,
         prefix_transformer_context=prefix_transformer_context,
@@ -1351,7 +1440,10 @@ def run_partitioned_progressive(
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             raw_audio_owner="source_carrier_uniform_shadow",
-            clean_video_owner="source_carrier_uniform_shadow_probe",
+            clean_video_owner=(
+                "main_exact_partitioned_probe" if main_clean_video_width16_ab else "source_carrier_uniform_shadow_probe"
+            ),
+            clean_video_width16_ab=main_clean_video_width16_ab,
             exact_video_prefix_owner="main_target_prefix",
             clean_audio_probe_owner="main_exact_partitioned",
             guidance_trajectory_owner=(
@@ -1760,7 +1852,8 @@ def run_partitioned_progressive(
                     len(shadow_guidance_run.exact_samples()) if shadow_guidance_run is not None else 0
                 ),
                 raw_audio_state_selected=True,
-                clean_video_probe_selected=True,
+                clean_video_probe_selected=not main_clean_video_width16_ab,
+                main_clean_video_probe_preserved=main_clean_video_width16_ab,
                 shadow_raw_video_discarded=True,
                 shadow_clean_audio_discarded=True,
                 fail_closed=True,
@@ -1841,14 +1934,24 @@ def run_partitioned_progressive(
                         target_hw=(target_h, target_w),
                     ),
                 )
-            source_x0 = _select_source_uniform_shadow_clean_video(
-                source_x0,
-                shadow_source_x0,
-                source_shapes,
-                prefix_t=stage_plan.prefix_t,
-                exact_prefix_source=exact_prefix_source,
-                metrics=binding.metrics,
-            )
+            if main_clean_video_width16_ab:
+                source_x0 = _preserve_main_clean_video_against_shadow(
+                    source_x0,
+                    shadow_source_x0,
+                    source_shapes,
+                    prefix_t=stage_plan.prefix_t,
+                    exact_prefix_source=exact_prefix_source,
+                    metrics=binding.metrics,
+                )
+            else:
+                source_x0 = _select_source_uniform_shadow_clean_video(
+                    source_x0,
+                    shadow_source_x0,
+                    source_shapes,
+                    prefix_t=stage_plan.prefix_t,
+                    exact_prefix_source=exact_prefix_source,
+                    metrics=binding.metrics,
+                )
             clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
         else:
             clean_video = clean_video.clone()
@@ -2262,7 +2365,8 @@ def run_partitioned_progressive(
                 ),
                 shared_trajectory_handle_preserved=True,
                 shadow_raw_audio_handoff_applied=True,
-                shadow_clean_video_handoff_applied=True,
+                shadow_clean_video_handoff_applied=not main_clean_video_width16_ab,
+                main_clean_video_handoff_preserved=main_clean_video_width16_ab,
                 final_video_independent_of_shadow_av=False,
                 high_stage_first_call_actual=first_high_actual,
                 sampler_invocation_count=sampler_invocation_count,
@@ -2291,11 +2395,13 @@ __all__ = [
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
     "_isolated_shadow_trajectory_capture",
+    "_preserve_main_clean_video_against_shadow",
     "_resolve_audio_diagnostic_masks",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
     "_splice_source_uniform_shadow_audio_state",
+    "_use_main_clean_video_width16_ab",
     "_validate_audio_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_validate_av_handoff_shadow_configuration",
