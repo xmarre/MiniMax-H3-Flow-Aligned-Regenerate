@@ -28,6 +28,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -41,6 +45,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
+    normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -92,6 +97,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert "audio_handoff_source" not in ordinary
     assert "av_handoff_source" not in ordinary
     assert "guidance_trajectory_source" not in ordinary
+    assert "low_probe_execution_source" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -118,6 +124,11 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
+    assert (
+        diagnostic["low_probe_execution_source"][1]["default"]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+    )
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
@@ -635,3 +646,44 @@ def test_guidance_trajectory_source_is_model_local_and_default_absent():
         == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
     )
     assert shadow_metrics.events[-1][1]["guidance_trajectory_source"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+
+
+def test_low_probe_execution_source_is_bounded_and_model_local():
+    assert (
+        normalize_low_probe_execution_source(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW)
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+    )
+    assert (
+        normalize_low_probe_execution_source(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY)
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    )
+    with pytest.raises(ValueError, match="low/probe execution source"):
+        normalize_low_probe_execution_source("invented")
+
+    default_model = SimpleNamespace(model_options={"transformer_options": {}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY not in default_model.model_options["transformer_options"]
+
+    candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
+    candidate_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        candidate_model,
+        candidate_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+    )
+    assert (
+        candidate_model.model_options["transformer_options"][PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    )
+    assert (
+        candidate_metrics.events[-1][1]["low_probe_execution_source"]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    )
