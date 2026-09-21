@@ -208,9 +208,7 @@ def _validate_fast_main_width16_candidate_configuration(
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
         mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
     if mismatches:
-        raise PartitionedPreflightUnsupported(
-            "fast main width-16 candidate requires " + ", ".join(mismatches)
-        )
+        raise PartitionedPreflightUnsupported("fast main width-16 candidate requires " + ", ".join(mismatches))
     return True
 
 
