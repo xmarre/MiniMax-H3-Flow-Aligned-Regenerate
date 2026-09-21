@@ -306,10 +306,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
                 "tooltip": (
-                    "main_then_shadow preserves #64. source_carrier_uniform_only is a bounded "
-                    "A/B that makes the selected source-uniform pair the only low/probe execution, "
-                    "removing the preceding exact-partitioned low/probe lifetime while preserving "
-                    "learned transfer, exact target-prefix restoration, and target-high sampling."
+                    "main_then_shadow preserves the exact-main diagnostic path. "
+                    "source_carrier_uniform_only executes one source-uniform low/probe pair only, "
+                    "avoiding duplicate shadow lifetimes while preserving learned transfer, exact "
+                    "target-prefix restoration, and target-high sampling."
                 ),
             },
         )
