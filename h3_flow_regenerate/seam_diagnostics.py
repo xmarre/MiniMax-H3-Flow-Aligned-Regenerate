@@ -365,6 +365,77 @@ def measure_translation_trajectory(
     }
 
 
+def measure_temporal_transition_profile(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    forward_pairs: int = 10,
+) -> dict[str, object]:
+    """Measure per-frame latent changes after the protected/generated boundary.
+
+    This is diagnostics-only. It does not infer semantics; it exposes where a
+    large temporal representation change first appears so source/probe, learned
+    transfer, and final-high stages can be compared without extra H3 evaluations.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("temporal transition diagnostics expect floating BxCxTxHxW video")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    if prefix_t < 1 or prefix_t >= temporal:
+        raise ValueError("temporal transition diagnostics require a non-empty prefix and suffix")
+    forward_pairs = max(1, int(forward_pairs))
+    left_start = prefix_t - 1
+    left_stop = min(temporal - 1, left_start + forward_pairs)
+    pair_left = list(range(left_start, left_stop))
+    if not pair_left:
+        raise ValueError("temporal transition diagnostics found no frame pairs")
+
+    with torch.no_grad():
+        left = video[:, :, left_start:left_stop].detach().float()
+        right = video[:, :, left_start + 1 : left_stop + 1].detach().float()
+        if not bool(torch.isfinite(left).all().item() and torch.isfinite(right).all().item()):
+            raise RuntimeError("temporal transition diagnostics contain NaN or Inf")
+        reduce_dims = (0, 1, 3, 4)
+        delta_rms_t = (right - left).square().mean(dim=reduce_dims).sqrt()
+        left_rms_t = left.square().mean(dim=reduce_dims).sqrt()
+        right_rms_t = right.square().mean(dim=reduce_dims).sqrt()
+        relative_t = delta_rms_t / (0.5 * (left_rms_t + right_rms_t)).clamp_min(_EPS)
+        dot_t = (left * right).sum(dim=reduce_dims)
+        left_norm_t = left.square().sum(dim=reduce_dims).sqrt()
+        right_norm_t = right.square().sum(dim=reduce_dims).sqrt()
+        cosine_t = dot_t / (left_norm_t * right_norm_t).clamp_min(_EPS)
+        packed = torch.stack((delta_rms_t, relative_t, cosine_t)).detach().to(device="cpu")
+    if not bool(torch.isfinite(packed).all().item()):
+        raise RuntimeError("temporal transition diagnostics produced a non-finite value")
+    delta_rms = [float(value) for value in packed[0].tolist()]
+    relative_delta_rms = [float(value) for value in packed[1].tolist()]
+    cosine_similarity = [float(value) for value in packed[2].tolist()]
+
+    peak_local = max(range(len(relative_delta_rms)), key=relative_delta_rms.__getitem__)
+    trough_local = min(range(len(cosine_similarity)), key=cosine_similarity.__getitem__)
+    right_indices = [index + 1 for index in pair_left]
+    generated_offsets = [index - prefix_t for index in right_indices]
+    return {
+        "temporal_transition_diagnostic_version": 1,
+        "prefix_t": prefix_t,
+        "temporal": temporal,
+        "pair_left_t": pair_left,
+        "pair_right_t": right_indices,
+        "generated_offset_right": generated_offsets,
+        "delta_rms": delta_rms,
+        "relative_delta_rms": relative_delta_rms,
+        "cosine_similarity": cosine_similarity,
+        "peak_relative_delta_pair_right_t": right_indices[peak_local],
+        "peak_relative_delta_generated_offset": generated_offsets[peak_local],
+        "peak_relative_delta": relative_delta_rms[peak_local],
+        "minimum_cosine_pair_right_t": right_indices[trough_local],
+        "minimum_cosine_generated_offset": generated_offsets[trough_local],
+        "minimum_cosine": cosine_similarity[trough_local],
+        "extra_transformer_nfe": 0,
+    }
+
+
 def recover_conditional_clean_for_diagnostics(
     state: torch.Tensor,
     noise: torch.Tensor,
