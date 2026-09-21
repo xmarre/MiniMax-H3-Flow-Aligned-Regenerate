@@ -1441,9 +1441,7 @@ def run_partitioned_progressive(
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             raw_audio_owner="source_carrier_uniform_shadow",
             clean_video_owner=(
-                "main_exact_partitioned_probe"
-                if main_clean_video_width16_ab
-                else "source_carrier_uniform_shadow_probe"
+                "main_exact_partitioned_probe" if main_clean_video_width16_ab else "source_carrier_uniform_shadow_probe"
             ),
             clean_video_width16_ab=main_clean_video_width16_ab,
             exact_video_prefix_owner="main_target_prefix",
