@@ -35,6 +35,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -48,6 +51,7 @@ from .partitioned_diagnostics import (
     normalize_audio_position_domain,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
+    normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -179,6 +183,98 @@ def _validate_guidance_trajectory_shadow_configuration(
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow guidance trajectory requires "
             "av_handoff_source='source_carrier_uniform_shadow'"
+        )
+
+
+def _validate_low_probe_execution_source_configuration(
+    low_probe_execution_source: str,
+    *,
+    prefix_transformer_context: str,
+    vdn_linear_diagnostic: str,
+    audio_position_domain: str,
+    audio_handoff_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> None:
+    source = normalize_low_probe_execution_source(low_probe_execution_source)
+    if source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+        return
+    mismatches = []
+    if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        mismatches.append("prefix_transformer_context='exact_target_partitioned'")
+    if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+        mismatches.append("vdn_linear_diagnostic='normal'")
+    if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+        mismatches.append("audio_position_domain='source_carrier'")
+    if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+        mismatches.append("audio_handoff_source='main_partitioned'")
+    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+        mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
+    if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
+        mismatches.append("guidance_trajectory_source='source_carrier_uniform_shadow'")
+    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
+        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
+    if int(audio_guided_overlap_ticks) != 4:
+        mismatches.append("audio_guided_overlap_ticks=4")
+    if mismatches:
+        raise PartitionedPreflightUnsupported(
+            "source_carrier_uniform_only low/probe execution requires " + ", ".join(mismatches)
+        )
+
+
+@contextlib.contextmanager
+def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
+    """Make the selected source-uniform pair the only low/probe execution."""
+
+    if not isinstance(transformer, dict):
+        raise RuntimeError("source-uniform primary execution requires mutable transformer options")
+    keys = (
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
+        PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
+        PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY,
+        PARTITIONED_AV_HANDOFF_SOURCE_KEY,
+        PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
+        PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
+    )
+    missing = object()
+    previous = {key: transformer.get(key, missing) for key in keys}
+    transformer[PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY] = PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+    for key in keys[1:]:
+        transformer.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is missing:
+                transformer.pop(key, None)
+            else:
+                transformer[key] = value
+
+
+def _cuda_allocator_checkpoint(metrics, stage: str) -> None:
+    """Record CUDA allocator/headroom state without changing allocation policy."""
+
+    if not torch.cuda.is_available():
+        return
+    try:
+        device = torch.device("cuda", torch.cuda.current_device())
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        metrics.event(
+            "partitioned_allocator_checkpoint",
+            stage=str(stage),
+            allocated_mib=torch.cuda.memory_allocated(device) / (1 << 20),
+            reserved_mib=torch.cuda.memory_reserved(device) / (1 << 20),
+            free_mib=int(free_bytes) / (1 << 20),
+            total_mib=int(total_bytes) / (1 << 20),
+        )
+    except Exception as exc:
+        metrics.event(
+            "partitioned_allocator_checkpoint",
+            stage=str(stage),
+            unavailable=True,
+            error=type(exc).__name__,
         )
 
 
@@ -878,6 +974,12 @@ def run_partitioned_progressive(
             PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         )
     )
+    low_probe_execution_source = normalize_low_probe_execution_source(
+        initial_transformer.get(
+            PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
+            PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        )
+    )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -903,6 +1005,17 @@ def run_partitioned_progressive(
         guidance_trajectory_source,
         av_handoff_source=av_handoff_source,
     )
+    _validate_low_probe_execution_source_configuration(
+        low_probe_execution_source,
+        prefix_transformer_context=prefix_transformer_context,
+        vdn_linear_diagnostic=vdn_linear_diagnostic,
+        audio_position_domain=audio_position_domain,
+        audio_handoff_source=audio_handoff_source,
+        av_handoff_source=av_handoff_source,
+        guidance_trajectory_source=guidance_trajectory_source,
+        audio_guided_overlap_mode=audio_guided_overlap_mode,
+        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+    )
     if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         if binding.guidance is None or binding.guidance.mode == "off":
             raise PartitionedPreflightUnsupported(
@@ -912,6 +1025,73 @@ def run_partitioned_progressive(
             raise PartitionedPreflightUnsupported(
                 "source_carrier_uniform_shadow guidance trajectory requires enabled Flow trajectory capture"
             )
+    if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+        sampler_calls_before = int(binding.metrics.counters.get("progressive_sampler_invocations", 0))
+        history_boundaries_before = int(binding.metrics.counters.get("progressive_history_boundaries", 0))
+        source_calls_before = int(
+            binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
+        )
+        partitioned_calls_before = int(binding.metrics.counters.get("partitioned_transformer_calls", 0))
+        binding.metrics.event(
+            "partitioned_low_probe_execution_plan",
+            source=low_probe_execution_source,
+            skipped_main_exact_partitioned_low_probe=True,
+            raw_audio_owner="source_carrier_uniform_primary",
+            clean_video_owner="source_carrier_uniform_primary_probe",
+            guidance_trajectory_owner="source_carrier_uniform_primary",
+            exact_target_prefix_restore_unchanged=True,
+            learned_transfer_unchanged=True,
+            target_high_unchanged=True,
+            diagnostic_only=True,
+        )
+        _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_entry")
+        with _source_uniform_primary_execution_controls(initial_transformer):
+            result = run_partitioned_progressive(
+                executor,
+                guider,
+                binding,
+                config,
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes,
+            )
+        _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_exit")
+        sampler_delta = int(binding.metrics.counters.get("progressive_sampler_invocations", 0)) - sampler_calls_before
+        history_delta = (
+            int(binding.metrics.counters.get("progressive_history_boundaries", 0)) - history_boundaries_before
+        )
+        source_call_delta = (
+            int(binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0))
+            - source_calls_before
+        )
+        partitioned_call_delta = (
+            int(binding.metrics.counters.get("partitioned_transformer_calls", 0)) - partitioned_calls_before
+        )
+        if sampler_delta != 3 or history_delta != 2:
+            raise RuntimeError(
+                "source-uniform primary execution did not produce exactly low/probe/high sampler lifetimes"
+            )
+        if source_call_delta <= 0 or partitioned_call_delta != 0:
+            raise RuntimeError(
+                "source-uniform primary execution did not isolate the uniform low/probe transformer path"
+            )
+        binding.metrics.event(
+            "partitioned_low_probe_execution_complete",
+            source=low_probe_execution_source,
+            sampler_invocation_delta=sampler_delta,
+            history_boundary_delta=history_delta,
+            source_uniform_transformer_calls=source_call_delta,
+            exact_partitioned_transformer_calls=partitioned_call_delta,
+            skipped_main_exact_partitioned_low_probe=True,
+            diagnostic_only=True,
+        )
+        return result
     if (
         prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
         and vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -1176,6 +1356,7 @@ def run_partitioned_progressive(
 
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
+    _cuda_allocator_checkpoint(binding.metrics, "after_primary_probe")
     try:
         _verify_prefix_transformer_context_diagnostic(
             binding.metrics,
@@ -1423,6 +1604,7 @@ def run_partitioned_progressive(
             )
             if shadow_audio_timestep_calls <= 0:
                 raise RuntimeError("source-uniform AV handoff shadow observed no model-timestep audio guidance")
+            _cuda_allocator_checkpoint(binding.metrics, "after_shadow_probe")
             binding.metrics.event(
                 "partitioned_av_handoff_shadow_execution",
                 source=av_handoff_source,
@@ -1740,6 +1922,7 @@ def run_partitioned_progressive(
                 return callback(index + step, x0, x, len(sigmas) - 1)
             return None
 
+        _cuda_allocator_checkpoint(binding.metrics, "pre_high")
         _reset_guider_conds(guider, template=conditioning_template)
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
@@ -1764,6 +1947,7 @@ def run_partitioned_progressive(
             elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
             partitioned_exact_prefix=True,
         )
+        _cuda_allocator_checkpoint(binding.metrics, "post_high")
         high_model_calls = [event for event in binding.metrics.events[high_event_start:] if event.kind == "model_call"]
         if not high_model_calls:
             raise RuntimeError("partitioned exact-prefix high stage produced no H3 model evaluations")

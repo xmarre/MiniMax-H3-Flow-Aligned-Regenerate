@@ -75,6 +75,14 @@ PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS = (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
 )
+
+PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY = "h3_flow_partitioned_low_probe_execution_source_v1"
+PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW = "main_then_shadow"
+PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY = "source_carrier_uniform_only"
+PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS = (
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+)
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -158,6 +166,16 @@ def normalize_guidance_trajectory_source(value: str) -> str:
     return value
 
 
+def normalize_low_probe_execution_source(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS:
+        raise ValueError(
+            "low/probe execution source must be one of "
+            f"{PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -191,6 +209,7 @@ def apply_partitioned_diagnostic_controls(
     audio_handoff_source: str = PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     av_handoff_source: str = PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     guidance_trajectory_source: str = PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    low_probe_execution_source: str = PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -205,6 +224,7 @@ def apply_partitioned_diagnostic_controls(
     handoff_source = normalize_audio_handoff_source(audio_handoff_source)
     av_handoff = normalize_av_handoff_source(av_handoff_source)
     guidance_source = normalize_guidance_trajectory_source(guidance_trajectory_source)
+    execution_source = normalize_low_probe_execution_source(low_probe_execution_source)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -228,6 +248,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY, None)
     else:
         transformer_options[PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY] = guidance_source
+    if execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+        transformer_options.pop(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY, None)
+    else:
+        transformer_options[PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY] = execution_source
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -251,6 +275,8 @@ def apply_partitioned_diagnostic_controls(
             fields["av_handoff_source"] = av_handoff
         if guidance_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
             fields["guidance_trajectory_source"] = guidance_source
+        if execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+            fields["low_probe_execution_source"] = execution_source
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -278,6 +304,10 @@ __all__ = [
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW",
+    "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY",
+    "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW",
+    "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS",
+    "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS",
@@ -296,6 +326,7 @@ __all__ = [
     "normalize_audio_position_domain",
     "normalize_av_handoff_source",
     "normalize_guidance_trajectory_source",
+    "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",
