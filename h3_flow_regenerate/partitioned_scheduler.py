@@ -931,6 +931,7 @@ def run_partitioned_progressive(
     disable_pbar,
     seed,
     latent_shapes,
+    exact_denoise_mask=None,
 ):
     """Execute exact-prefix low/probe/high continuation with a physical two-grid H3 stage."""
     chunk_started = time.perf_counter()
@@ -1071,6 +1072,7 @@ def run_partitioned_progressive(
                 disable_pbar,
                 seed,
                 latent_shapes,
+                exact_denoise_mask=exact_denoise_mask,
             )
         _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_exit")
         sampler_delta = int(binding.metrics.counters.get("progressive_sampler_invocations", 0)) - sampler_calls_before
@@ -1180,6 +1182,13 @@ def run_partitioned_progressive(
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+
+    diagnostic_target_mask = denoise_mask if exact_denoise_mask is None else exact_denoise_mask
+    if diagnostic_target_mask is None:
+        raise RuntimeError("partitioned exact-prefix diagnostics require an authoritative exact mask")
+    if tuple(diagnostic_target_mask.shape) != tuple(denoise_mask.shape):
+        raise RuntimeError("partitioned exact-prefix diagnostic mask geometry drifted from sampler mask")
+    diagnostic_low_mask = _resize_packed_mask(diagnostic_target_mask, target_shapes, source_shapes)
 
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
@@ -1657,7 +1666,7 @@ def run_partitioned_progressive(
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
                 source_shapes,
-                low_mask,
+                diagnostic_low_mask,
                 windows=(4, 20),
             )
             binding.metrics.event(
@@ -1975,7 +1984,7 @@ def run_partitioned_progressive(
             final_audio_report = measure_audio_latent_boundary(
                 final_internal,
                 target_shapes,
-                denoise_mask,
+                diagnostic_target_mask,
                 windows=(4, 20),
             )
             binding.metrics.event(
@@ -1986,7 +1995,7 @@ def run_partitioned_progressive(
             )
             if low_probe_clean_audio is None:
                 raise RuntimeError("audio stage diagnostics lost the low/probe clean reference")
-            _mask_video, exact_audio_mask = unpack_streams(denoise_mask, target_shapes)
+            _mask_video, exact_audio_mask = unpack_streams(diagnostic_target_mask, target_shapes)
             stage_delta = compare_audio_latent_stages(
                 low_probe_clean_audio,
                 final_internal_audio,
