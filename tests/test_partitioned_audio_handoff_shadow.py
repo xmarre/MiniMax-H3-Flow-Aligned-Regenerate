@@ -8,11 +8,15 @@ import torch
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -27,6 +31,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _splice_source_uniform_shadow_audio_state,
     _validate_audio_handoff_shadow_configuration,
     _validate_av_handoff_shadow_configuration,
+    _validate_av_shadow_width16_execution_configuration,
 )
 from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY
 from h3_flow_regenerate.runtime import FLOW_STAGE_KEY
@@ -167,39 +172,70 @@ def test_shadow_audio_splice_rejects_protected_prefix_mutation_or_noop():
         _splice_source_uniform_shadow_audio_state(main, main.clone(), list(shapes), mask, _Metrics())
 
 
-def test_av_handoff_shadow_configuration_is_strictly_one_axis():
-    _validate_av_handoff_shadow_configuration(
-        PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
-        audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
-        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-        audio_guided_overlap_ticks=4,
-    )
-    bad = (
-        {"audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW},
-        {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
-        {"vdn_linear_diagnostic": "bypass_partitioned_linear"},
-        {"audio_position_domain": "legacy_target"},
-        {"audio_guided_overlap_mode": "sampler_mask"},
-        {"audio_guided_overlap_ticks": 3},
-    )
+def test_av_handoff_shadow_configuration_accepts_only_control_or_width16_overlap_contract():
     base = {
         "audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         "prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
         "vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         "audio_position_domain": PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+    }
+    _validate_av_handoff_shadow_configuration(
+        PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        **base,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        audio_guided_overlap_ticks=4,
+    )
+    _validate_av_handoff_shadow_configuration(
+        PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        **base,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=16,
+    )
+
+    bad = (
+        {"audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW},
+        {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
+        {"vdn_linear_diagnostic": "bypass_partitioned_linear"},
+        {"audio_position_domain": "legacy_target"},
+        {
+            "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            "audio_guided_overlap_ticks": 4,
+        },
+        {
+            "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+            "audio_guided_overlap_ticks": 16,
+        },
+    )
+    control = {
+        **base,
         "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         "audio_guided_overlap_ticks": 4,
     }
     for override in bad:
-        values = {**base, **override}
+        values = {**control, **override}
         with pytest.raises(PartitionedPreflightUnsupported, match="AV handoff"):
             _validate_av_handoff_shadow_configuration(
                 PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
                 **values,
             )
+
+
+def test_width16_av_shadow_keeps_exact_main_guidance_trajectory():
+    _validate_av_shadow_width16_execution_configuration(
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=16,
+    )
+    with pytest.raises(PartitionedPreflightUnsupported, match="main_exact_partitioned"):
+        _validate_av_shadow_width16_execution_configuration(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+            av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+            guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            audio_guided_overlap_ticks=16,
+        )
 
 
 def test_av_shadow_stage_contract_publishes_low_then_probe():
