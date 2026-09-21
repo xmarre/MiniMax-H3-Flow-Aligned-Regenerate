@@ -9,9 +9,9 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_AV_HANDOFF_SOURCE_KEY,
-    PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
-    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -33,8 +33,8 @@ def _validate_candidate(**overrides):
         "vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         "audio_position_domain": PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
         "audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
-        "av_handoff_source": PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
-        "guidance_trajectory_source": PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+        "av_handoff_source": PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        "guidance_trajectory_source": PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
         "audio_guided_overlap_ticks": 16,
     }
@@ -45,6 +45,10 @@ def _validate_candidate(**overrides):
 def test_source_uniform_primary_execution_requires_width16_sampler_mask_control_tuple():
     _validate_candidate()
 
+    with pytest.raises(PartitionedPreflightUnsupported, match="av_handoff_source"):
+        _validate_candidate(av_handoff_source="source_carrier_uniform_shadow")
+    with pytest.raises(PartitionedPreflightUnsupported, match="guidance_trajectory_source"):
+        _validate_candidate(guidance_trajectory_source="source_carrier_uniform_shadow")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
         _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP)
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
