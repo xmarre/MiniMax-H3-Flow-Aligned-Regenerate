@@ -181,14 +181,9 @@ def validate_partitioned_audio_guided_overlap_ticks(
 ) -> int:
     """Validate the model-local diagnostic width without widening production env controls."""
 
-    if (
-        type(value) is not int
-        or not 0 <= value <= MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS
-    ):
-        raise ValueError(
-            f"{source} must be an integer in [0, "
-            f"{MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}"
-        )
+    valid = type(value) is int and (0 <= value <= 16 or value == MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS)
+    if not valid:
+        raise ValueError(f"{source} must be an integer in [0, 16] or 32, got {value!r}")
     return int(value)
 
 
