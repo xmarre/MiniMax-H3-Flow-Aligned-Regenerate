@@ -78,6 +78,21 @@ def test_width32_overlap_is_rejected_on_main_then_shadow_execution():
         )
 
 
+def test_width32_overlap_is_allowed_only_for_collapsed_source_primary_inner_call():
+    _validate_low_probe_execution_source_configuration(
+        PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_position_domain="legacy_target",
+        audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=32,
+        source_uniform_primary_inner=True,
+    )
+
+
 def test_source_uniform_width32_runtime_mask_is_verified_exactly():
     video = torch.zeros(1, 24, 4, 4, 4)
     audio = torch.zeros(1, 32, 2, 80)
