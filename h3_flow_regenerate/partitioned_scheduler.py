@@ -2237,6 +2237,7 @@ __all__ = [
     "_validate_audio_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_validate_av_handoff_shadow_configuration",
+    "_validate_av_shadow_width16_execution_configuration",
     "_validate_guidance_trajectory_shadow_configuration",
     "_verify_audio_position_domain_diagnostic",
     "run_partitioned_progressive",
