@@ -31,9 +31,9 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _source_uniform_audio_shadow_sampler_contract,
     _source_uniform_av_shadow_stage_contract,
     _splice_source_uniform_shadow_audio_state,
+    _use_main_clean_video_width16_ab,
     _validate_audio_handoff_shadow_configuration,
     _validate_av_handoff_shadow_configuration,
-    _use_main_clean_video_width16_ab,
     _validate_av_shadow_width16_execution_configuration,
     _verify_shadow_audio_overlap_execution,
 )
