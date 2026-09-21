@@ -203,8 +203,7 @@ def _validate_low_probe_execution_source_configuration(
     if source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
         if int(audio_guided_overlap_ticks) > 16:
             raise PartitionedPreflightUnsupported(
-                "audio_guided_overlap_ticks > 16 is reserved for "
-                "source_carrier_uniform_only low/probe execution"
+                "audio_guided_overlap_ticks > 16 is reserved for source_carrier_uniform_only low/probe execution"
             )
         return
     mismatches = []
