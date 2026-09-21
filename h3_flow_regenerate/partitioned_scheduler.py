@@ -162,13 +162,46 @@ def _validate_av_handoff_shadow_configuration(
         mismatches.append("vdn_linear_diagnostic='normal'")
     if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
         mismatches.append("audio_position_domain='source_carrier'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
-    if int(audio_guided_overlap_ticks) != 4:
-        mismatches.append("audio_guided_overlap_ticks=4")
+    overlap_contract = (audio_guided_overlap_mode, int(audio_guided_overlap_ticks))
+    supported_overlap_contracts = {
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, 16),
+    }
+    if overlap_contract not in supported_overlap_contracts:
+        mismatches.append(
+            "audio guided overlap must be ('model_timestep_only', 4) or ('sampler_mask', 16)"
+        )
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
+        )
+
+
+def _validate_av_shadow_width16_execution_configuration(
+    *,
+    low_probe_execution_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> None:
+    """Bound the width-16 AV-shadow A/B to the exact-main trajectory path."""
+
+    if (
+        normalize_low_probe_execution_source(low_probe_execution_source)
+        != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        or normalize_av_handoff_source(av_handoff_source) != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
+        or audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+        or int(audio_guided_overlap_ticks) != 16
+    ):
+        return
+    if (
+        normalize_guidance_trajectory_source(guidance_trajectory_source)
+        != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    ):
+        raise PartitionedPreflightUnsupported(
+            "16-tick sampler-mask AV shadow requires "
+            "guidance_trajectory_source='main_exact_partitioned'"
         )
 
 
@@ -1041,6 +1074,13 @@ def run_partitioned_progressive(
         _validate_guidance_trajectory_shadow_configuration(
             guidance_trajectory_source,
             av_handoff_source=av_handoff_source,
+        )
+        _validate_av_shadow_width16_execution_configuration(
+            low_probe_execution_source=low_probe_execution_source,
+            av_handoff_source=av_handoff_source,
+            guidance_trajectory_source=guidance_trajectory_source,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
         )
     if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         if binding.guidance is None or binding.guidance.mode == "off":
