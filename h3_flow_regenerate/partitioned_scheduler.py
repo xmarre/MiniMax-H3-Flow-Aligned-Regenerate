@@ -87,6 +87,7 @@ from .runtime import (
 )
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
+    measure_temporal_transition_profile,
     measure_translation_trajectory,
     measure_video_boundary,
     project_translation_trajectory_to_grid,
@@ -1765,6 +1766,16 @@ def run_partitioned_progressive(
             clean_video[:, :, : stage_plan.prefix_t] = exact_prefix_source
             source_x0 = pack_streams((clean_video, clean_audio))[0]
 
+        binding.metrics.event(
+            "partitioned_temporal_transition_profile",
+            stage="low_probe_clean",
+            grid="source",
+            **measure_temporal_transition_profile(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_pairs=10,
+            ),
+        )
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_exact_trajectory = measure_translation_trajectory(
                 clean_video,
@@ -1893,6 +1904,16 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **restored_trajectory,
             )
+        binding.metrics.event(
+            "partitioned_temporal_transition_profile",
+            stage="exact_restored_pre_high",
+            grid="target",
+            **measure_temporal_transition_profile(
+                restored_clean,
+                stage_plan.prefix_t,
+                forward_pairs=10,
+            ),
+        )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
         del restored_clean, learned_clean
@@ -2000,9 +2021,19 @@ def run_partitioned_progressive(
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
 
         final_video, final_audio = unpack_streams(result, target_shapes)
+        final_internal = _process_latent_in(base_model, result, target_shapes)
+        final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+        binding.metrics.event(
+            "partitioned_temporal_transition_profile",
+            stage="final_high_clean",
+            grid="target",
+            **measure_temporal_transition_profile(
+                final_internal_video,
+                stage_plan.prefix_t,
+                forward_pairs=10,
+            ),
+        )
         if diagnostic_audio_control:
-            final_internal = _process_latent_in(base_model, result, target_shapes)
-            _final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
             final_audio_report = measure_audio_latent_boundary(
                 final_internal,
                 target_shapes,
@@ -2055,7 +2086,7 @@ def run_partitioned_progressive(
                         )
                     ),
                 )
-            del final_internal
+        del final_internal
         original_video, original_audio = unpack_streams(latent_image, target_shapes)
         if not torch.equal(
             final_video[:, :, : stage_plan.prefix_t],

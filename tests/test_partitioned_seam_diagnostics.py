@@ -8,7 +8,10 @@ import torch
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import _measure_partitioned_transfer_splice
-from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+from h3_flow_regenerate.seam_diagnostics import (
+    measure_temporal_transition_profile,
+    project_translation_trajectory_to_grid,
+)
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
@@ -161,3 +164,29 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
     assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)
     assert projected["target_equivalent_anchor_final_dy"] == pytest.approx(1.5)
     assert "target_equivalent_pairwise_response" not in projected
+
+
+def test_temporal_transition_profile_localizes_strong_generated_change():
+    video = torch.ones(1, 4, 8, 4, 4, dtype=torch.float32)
+    video[:, :, 3] = 1.1
+    video[:, :, 4] = 1.2
+    video[:, :, 5:] = -5.0
+
+    fields = measure_temporal_transition_profile(video, 3, forward_pairs=4)
+
+    assert fields["temporal_transition_diagnostic_version"] == 1
+    assert fields["prefix_t"] == 3
+    assert fields["generated_offset_right"] == [0, 1, 2, 3]
+    assert fields["peak_relative_delta_generated_offset"] == 2
+    assert fields["minimum_cosine_generated_offset"] == 2
+    assert fields["extra_transformer_nfe"] == 0
+    assert len(fields["relative_delta_rms"]) == 4
+    assert len(fields["cosine_similarity"]) == 4
+
+
+def test_temporal_transition_profile_rejects_invalid_boundary():
+    video = torch.zeros(1, 4, 4, 4, 4, dtype=torch.float32)
+    with pytest.raises(ValueError, match="non-empty prefix and suffix"):
+        measure_temporal_transition_profile(video, 0)
+    with pytest.raises(ValueError, match="non-empty prefix and suffix"):
+        measure_temporal_transition_profile(video, 4)
