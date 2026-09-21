@@ -245,9 +245,7 @@ def test_partitioned_diagnostic_overlap_accepts_32_without_widening_production_d
     )
     assert returned_model.model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] == 32
 
-    ticks, source = resolve_partitioned_audio_guided_overlap_ticks(
-        {PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 32}
-    )
+    ticks, source = resolve_partitioned_audio_guided_overlap_ticks({PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 32})
     assert ticks == 32
     assert source == "diagnostic_node"
 
