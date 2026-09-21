@@ -201,6 +201,11 @@ def _validate_low_probe_execution_source_configuration(
 ) -> None:
     source = normalize_low_probe_execution_source(low_probe_execution_source)
     if source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+        if int(audio_guided_overlap_ticks) > 16:
+            raise PartitionedPreflightUnsupported(
+                "audio_guided_overlap_ticks > 16 is reserved for "
+                "source_carrier_uniform_only low/probe execution"
+            )
         return
     mismatches = []
     if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
@@ -217,8 +222,8 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
     if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
         mismatches.append("audio_guided_overlap_mode='sampler_mask'")
-    if int(audio_guided_overlap_ticks) != 16:
-        mismatches.append("audio_guided_overlap_ticks=16")
+    if int(audio_guided_overlap_ticks) != 32:
+        mismatches.append("audio_guided_overlap_ticks=32")
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_only low/probe execution requires " + ", ".join(mismatches)
