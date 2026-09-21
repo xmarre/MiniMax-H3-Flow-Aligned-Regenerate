@@ -257,6 +257,25 @@ def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
                 transformer[key] = value
 
 
+def _resolve_audio_diagnostic_masks(
+    runtime_mask: torch.Tensor,
+    exact_mask: torch.Tensor | None,
+    target_shapes: list[tuple[int, ...]],
+    source_shapes: list[tuple[int, ...]],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Keep sampler overlap ownership separate from exact-boundary diagnostics."""
+
+    diagnostic_target_mask = runtime_mask if exact_mask is None else exact_mask
+    if tuple(diagnostic_target_mask.shape) != tuple(runtime_mask.shape):
+        raise RuntimeError("partitioned exact-prefix diagnostic mask geometry drifted from sampler mask")
+    diagnostic_low_mask = _resize_packed_mask(
+        diagnostic_target_mask,
+        target_shapes,
+        source_shapes,
+    )
+    return diagnostic_target_mask, diagnostic_low_mask
+
+
 def _cuda_allocator_checkpoint(metrics, stage: str) -> None:
     """Record CUDA allocator/headroom state without changing allocation policy."""
 
@@ -1183,12 +1202,12 @@ def run_partitioned_progressive(
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
-    diagnostic_target_mask = denoise_mask if exact_denoise_mask is None else exact_denoise_mask
-    if diagnostic_target_mask is None:
-        raise RuntimeError("partitioned exact-prefix diagnostics require an authoritative exact mask")
-    if tuple(diagnostic_target_mask.shape) != tuple(denoise_mask.shape):
-        raise RuntimeError("partitioned exact-prefix diagnostic mask geometry drifted from sampler mask")
-    diagnostic_low_mask = _resize_packed_mask(diagnostic_target_mask, target_shapes, source_shapes)
+    diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
+        denoise_mask,
+        exact_denoise_mask,
+        target_shapes,
+        source_shapes,
+    )
 
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
@@ -2179,6 +2198,7 @@ __all__ = [
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
     "_isolated_shadow_trajectory_capture",
+    "_resolve_audio_diagnostic_masks",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
