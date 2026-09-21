@@ -162,13 +162,40 @@ def _validate_av_handoff_shadow_configuration(
         mismatches.append("vdn_linear_diagnostic='normal'")
     if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
         mismatches.append("audio_position_domain='source_carrier'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
-    if int(audio_guided_overlap_ticks) != 4:
-        mismatches.append("audio_guided_overlap_ticks=4")
+    overlap_contract = (audio_guided_overlap_mode, int(audio_guided_overlap_ticks))
+    supported_overlap_contracts = {
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, 16),
+    }
+    if overlap_contract not in supported_overlap_contracts:
+        mismatches.append("audio guided overlap must be ('model_timestep_only', 4) or ('sampler_mask', 16)")
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
+        )
+
+
+def _validate_av_shadow_width16_execution_configuration(
+    *,
+    low_probe_execution_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> None:
+    """Bound the width-16 AV-shadow A/B to the exact-main trajectory path."""
+
+    if (
+        normalize_low_probe_execution_source(low_probe_execution_source)
+        != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        or normalize_av_handoff_source(av_handoff_source) != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
+        or audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+        or int(audio_guided_overlap_ticks) != 16
+    ):
+        return
+    if normalize_guidance_trajectory_source(guidance_trajectory_source) != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+        raise PartitionedPreflightUnsupported(
+            "16-tick sampler-mask AV shadow requires guidance_trajectory_source='main_exact_partitioned'"
         )
 
 
@@ -252,6 +279,61 @@ def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
                 transformer.pop(key, None)
             else:
                 transformer[key] = value
+
+
+def _verify_shadow_audio_overlap_execution(
+    *,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+    model_timestep_override_calls: int,
+    runtime_mask: torch.Tensor,
+    latent_shapes: list[tuple[int, ...]],
+) -> dict[str, Any]:
+    """Verify the selected AV-shadow overlap mechanism actually executed."""
+
+    mode = str(audio_guided_overlap_mode)
+    ticks = int(audio_guided_overlap_ticks)
+    calls = int(model_timestep_override_calls)
+    _video_mask, audio_mask = unpack_streams(runtime_mask, latent_shapes)
+    temporal_min = audio_mask.amin(dim=(0, 1, 2))
+    temporal_max = audio_mask.amax(dim=(0, 1, 2))
+    fractional = (temporal_min > 1e-8) & (temporal_max < 1.0 - 1e-8)
+    fractional_ticks = int(fractional.sum().item())
+
+    if mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
+        if calls <= 0:
+            raise RuntimeError("source-uniform AV handoff shadow observed no model-timestep audio guidance")
+        if fractional_ticks != 0:
+            raise RuntimeError("model-timestep-only AV shadow unexpectedly received a fractional sampler mask")
+        return {
+            "model_timestep_override_calls": calls,
+            "sampler_mask_fractional_ticks": 0,
+            "sampler_mask_ramp_verified": False,
+        }
+
+    if mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
+        if calls != 0:
+            raise RuntimeError("sampler-mask AV shadow unexpectedly executed model-timestep audio guidance")
+        if fractional_ticks != ticks:
+            raise RuntimeError(
+                "sampler-mask AV shadow did not receive the requested fractional overlap width "
+                f"(expected {ticks}, observed {fractional_ticks})"
+            )
+        observed = temporal_min[fractional].to(dtype=torch.float32)
+        observed_max = temporal_max[fractional].to(dtype=torch.float32)
+        if not torch.equal(observed, observed_max):
+            raise RuntimeError("sampler-mask AV shadow overlap ramp is not uniform across audio rows")
+        raw = torch.arange(1, ticks + 1, device=observed.device, dtype=torch.float32) / float(ticks + 1)
+        expected = torch.ceil(raw * 256.0) / 256.0
+        if not torch.equal(observed, expected):
+            raise RuntimeError("sampler-mask AV shadow overlap ramp does not match the canonical quantized ramp")
+        return {
+            "model_timestep_override_calls": 0,
+            "sampler_mask_fractional_ticks": fractional_ticks,
+            "sampler_mask_ramp_verified": True,
+        }
+
+    raise RuntimeError(f"unsupported AV-shadow audio overlap mode {mode!r}")
 
 
 def _resolve_audio_diagnostic_masks(
@@ -1042,6 +1124,13 @@ def run_partitioned_progressive(
             guidance_trajectory_source,
             av_handoff_source=av_handoff_source,
         )
+        _validate_av_shadow_width16_execution_configuration(
+            low_probe_execution_source=low_probe_execution_source,
+            av_handoff_source=av_handoff_source,
+            guidance_trajectory_source=guidance_trajectory_source,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
     if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         if binding.guidance is None or binding.guidance.mode == "off":
             raise PartitionedPreflightUnsupported(
@@ -1640,14 +1729,21 @@ def run_partitioned_progressive(
                 int(binding.metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0))
                 - shadow_audio_timestep_calls_before
             )
-            if shadow_audio_timestep_calls <= 0:
-                raise RuntimeError("source-uniform AV handoff shadow observed no model-timestep audio guidance")
+            overlap_execution = _verify_shadow_audio_overlap_execution(
+                audio_guided_overlap_mode=audio_guided_overlap_mode,
+                audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+                model_timestep_override_calls=shadow_audio_timestep_calls,
+                runtime_mask=low_mask,
+                latent_shapes=source_shapes,
+            )
             _cuda_allocator_checkpoint(binding.metrics, "after_shadow_probe")
             binding.metrics.event(
                 "partitioned_av_handoff_shadow_execution",
                 source=av_handoff_source,
                 elapsed_ms=(time.perf_counter() - shadow_started) * 1000.0,
-                model_timestep_override_calls=shadow_audio_timestep_calls,
+                audio_guided_overlap_mode=audio_guided_overlap_mode,
+                audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+                **overlap_execution,
                 shadow_low_model_calls=len(shadow_low_calls),
                 shadow_probe_model_calls=len(shadow_probe_calls),
                 shadow_probe_first_call_actual=bool(shadow_probe_calls[0].fields.get("actual")),
@@ -2203,7 +2299,9 @@ __all__ = [
     "_validate_audio_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_validate_av_handoff_shadow_configuration",
+    "_validate_av_shadow_width16_execution_configuration",
     "_validate_guidance_trajectory_shadow_configuration",
     "_verify_audio_position_domain_diagnostic",
+    "_verify_shadow_audio_overlap_execution",
     "run_partitioned_progressive",
 ]
