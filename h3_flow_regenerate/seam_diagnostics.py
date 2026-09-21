@@ -386,7 +386,7 @@ def measure_temporal_transition_profile(
         raise ValueError("temporal transition diagnostics require a non-empty prefix and suffix")
     forward_pairs = max(1, int(forward_pairs))
     left_start = prefix_t - 1
-    left_stop = min(temporal - 1, prefix_t + forward_pairs)
+    left_stop = min(temporal - 1, left_start + forward_pairs)
     pair_left = list(range(left_start, left_stop))
     if not pair_left:
         raise ValueError("temporal transition diagnostics found no frame pairs")
