@@ -20,6 +20,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -297,6 +299,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after #64 so every previously serialized diagnostic widget keeps
+        # the same positional index.
+        spec["required"]["low_probe_execution_source"] = (
+            list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS),
+            {
+                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+                "tooltip": (
+                    "main_then_shadow preserves #64. source_carrier_uniform_only is a bounded "
+                    "A/B that makes the selected source-uniform pair the only low/probe execution, "
+                    "removing the preceding exact-partitioned low/probe lifetime while preserving "
+                    "learned transfer, exact target-prefix restoration, and target-high sampling."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -331,6 +347,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -363,6 +380,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             audio_handoff_source=audio_handoff_source,
             av_handoff_source=av_handoff_source,
             guidance_trajectory_source=guidance_trajectory_source,
+            low_probe_execution_source=low_probe_execution_source,
         )
 
 
