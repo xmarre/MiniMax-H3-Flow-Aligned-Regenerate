@@ -544,7 +544,6 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
 
 
-
 def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic_mask(monkeypatch):
     video = torch.randn(1, 24, 5, 8, 12)
     audio = torch.randn(1, 32, 2, 12)
@@ -633,6 +632,7 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["mode"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
     assert overlap_events[0].fields["sampler_mask_modified"] is True
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
+
 
 def test_audio_model_timestep_mode_requires_post_wrapper_velocity_mask_contract():
     old_source = """
