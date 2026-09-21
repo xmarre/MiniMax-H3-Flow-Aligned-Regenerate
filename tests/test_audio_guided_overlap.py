@@ -71,6 +71,30 @@ def test_audio_guided_overlap_changes_only_tail_of_exact_audio_prefix():
     assert report["original_exact_output_restore"] is True
 
 
+def test_audio_guided_overlap_supports_explicit_32_tick_runtime_ramp():
+    _packed, shapes, mask = _packed_case(audio_t=80, audio_prefix=65)
+    original = mask.clone()
+
+    runtime_mask, report = apply_audio_guided_overlap_mask(mask, shapes, ticks=32)
+
+    assert runtime_mask is not mask
+    assert torch.equal(mask, original)
+    old_video, old_audio = unpack_streams(original, shapes)
+    new_video, new_audio = unpack_streams(runtime_mask, shapes)
+    assert torch.equal(new_video, old_video)
+    assert torch.equal(new_audio[..., :33], old_audio[..., :33])
+    assert torch.equal(new_audio[..., 65:], old_audio[..., 65:])
+    ramp = new_audio[0, 0, 0, 33:65].to(dtype=torch.float32)
+    expected_raw = torch.arange(1, 33, dtype=torch.float32) / 33.0
+    expected = torch.ceil(expected_raw * 256.0) / 256.0
+    torch.testing.assert_close(ramp, expected)
+    assert report["applied"] is True
+    assert report["audio_prefix_ticks"] == 65
+    assert report["ramp_start_tick"] == 33
+    assert report["ramp_stop_tick"] == 65
+    assert len(report["ramp_values"]) == 32
+
+
 def test_audio_guided_overlap_all_generated_audio_is_expected_noop():
     packed, shapes, mask = _packed_case(audio_prefix=0)
 
