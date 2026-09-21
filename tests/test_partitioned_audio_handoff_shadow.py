@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from h3_flow_regenerate.audio_guided_overlap import apply_audio_guided_overlap_mask
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -32,6 +33,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _validate_audio_handoff_shadow_configuration,
     _validate_av_handoff_shadow_configuration,
     _validate_av_shadow_width16_execution_configuration,
+    _verify_shadow_audio_overlap_execution,
 )
 from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY
 from h3_flow_regenerate.runtime import FLOW_STAGE_KEY
@@ -235,6 +237,66 @@ def test_width16_av_shadow_keeps_exact_main_guidance_trajectory():
             guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
             audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
             audio_guided_overlap_ticks=16,
+        )
+
+
+def test_av_shadow_overlap_execution_verifies_sampler_mask_without_model_timestep_calls():
+    video = torch.ones(1, 1, 4, 2, 2)
+    audio = torch.ones(1, 1, 2, 24)
+    audio[..., :20] = 0
+    packed, shapes = pack_streams((video, audio))
+    runtime_mask, report = apply_audio_guided_overlap_mask(packed, list(shapes), ticks=16)
+    assert report["applied"] is True
+
+    fields = _verify_shadow_audio_overlap_execution(
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        audio_guided_overlap_ticks=16,
+        model_timestep_override_calls=0,
+        runtime_mask=runtime_mask,
+        latent_shapes=list(shapes),
+    )
+    assert fields == {
+        "model_timestep_override_calls": 0,
+        "sampler_mask_fractional_ticks": 16,
+        "sampler_mask_ramp_verified": True,
+    }
+
+    with pytest.raises(RuntimeError, match="unexpectedly executed model-timestep"):
+        _verify_shadow_audio_overlap_execution(
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            audio_guided_overlap_ticks=16,
+            model_timestep_override_calls=1,
+            runtime_mask=runtime_mask,
+            latent_shapes=list(shapes),
+        )
+
+
+def test_av_shadow_overlap_execution_preserves_parent_model_timestep_contract():
+    video = torch.ones(1, 1, 4, 2, 2)
+    audio = torch.ones(1, 1, 2, 24)
+    audio[..., :20] = 0
+    exact_mask, shapes = pack_streams((video, audio))
+
+    fields = _verify_shadow_audio_overlap_execution(
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        audio_guided_overlap_ticks=4,
+        model_timestep_override_calls=3,
+        runtime_mask=exact_mask,
+        latent_shapes=list(shapes),
+    )
+    assert fields == {
+        "model_timestep_override_calls": 3,
+        "sampler_mask_fractional_ticks": 0,
+        "sampler_mask_ramp_verified": False,
+    }
+
+    with pytest.raises(RuntimeError, match="observed no model-timestep"):
+        _verify_shadow_audio_overlap_execution(
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+            audio_guided_overlap_ticks=4,
+            model_timestep_override_calls=0,
+            runtime_mask=exact_mask,
+            latent_shapes=list(shapes),
         )
 
 
