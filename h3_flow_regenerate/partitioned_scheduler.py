@@ -168,9 +168,7 @@ def _validate_av_handoff_shadow_configuration(
         (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, 16),
     }
     if overlap_contract not in supported_overlap_contracts:
-        mismatches.append(
-            "audio guided overlap must be ('model_timestep_only', 4) or ('sampler_mask', 16)"
-        )
+        mismatches.append("audio guided overlap must be ('model_timestep_only', 4) or ('sampler_mask', 16)")
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
@@ -195,13 +193,9 @@ def _validate_av_shadow_width16_execution_configuration(
         or int(audio_guided_overlap_ticks) != 16
     ):
         return
-    if (
-        normalize_guidance_trajectory_source(guidance_trajectory_source)
-        != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-    ):
+    if normalize_guidance_trajectory_source(guidance_trajectory_source) != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
         raise PartitionedPreflightUnsupported(
-            "16-tick sampler-mask AV shadow requires "
-            "guidance_trajectory_source='main_exact_partitioned'"
+            "16-tick sampler-mask AV shadow requires guidance_trajectory_source='main_exact_partitioned'"
         )
 
 
