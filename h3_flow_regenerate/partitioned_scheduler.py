@@ -16,6 +16,7 @@ from typing import Any
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
+from .contracts import H3FlowTrajectory
 from .geometry import pack_streams, resize_spatial_5d, unpack_streams
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
@@ -31,6 +32,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_KEY,
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -43,6 +47,7 @@ from .partitioned_diagnostics import (
     normalize_audio_handoff_source,
     normalize_audio_position_domain,
     normalize_av_handoff_source,
+    normalize_guidance_trajectory_source,
     normalize_prefix_transformer_context,
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -159,6 +164,21 @@ def _validate_av_handoff_shadow_configuration(
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
+        )
+
+
+def _validate_guidance_trajectory_shadow_configuration(
+    guidance_trajectory_source: str,
+    *,
+    av_handoff_source: str,
+) -> None:
+    source = normalize_guidance_trajectory_source(guidance_trajectory_source)
+    if source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+        return
+    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+        raise PartitionedPreflightUnsupported(
+            "source_carrier_uniform_shadow guidance trajectory requires "
+            "av_handoff_source='source_carrier_uniform_shadow'"
         )
 
 
@@ -387,6 +407,63 @@ def _source_uniform_av_shadow_stage_contract(guider: Any, plan, metrics, stage: 
         if transformer.get(FLOW_STAGE_KEY) != stage:
             raise RuntimeError("AV handoff shadow Flow stage marker drifted")
         yield
+
+
+@contextlib.contextmanager
+def _isolated_shadow_trajectory_capture(
+    binding,
+    guider,
+    sampler,
+    sigmas,
+    latent_shapes,
+    *,
+    enabled: bool,
+):
+    """Capture a shadow low+probe trajectory without mutating the shared trajectory handle."""
+
+    if not enabled:
+        yield None
+        return
+    if binding.active_capture is not None:
+        raise RuntimeError("shadow guidance trajectory capture requires a quiescent capture boundary")
+    if binding.active_guidance_run is not None:
+        raise RuntimeError("shadow guidance trajectory capture must complete before target-high guidance")
+    main_trajectory = binding.trajectory
+    if main_trajectory is None:
+        raise RuntimeError("shadow guidance trajectory capture requires the shared H3 flow trajectory")
+    if not binding.capture_enabled:
+        raise RuntimeError("shadow guidance trajectory capture requires Flow capture to be enabled")
+    main_captured_run_id = binding.captured_run_id
+    shadow_trajectory = H3FlowTrajectory(storage=main_trajectory.storage, max_runs=1)
+    holder: dict[str, Any] = {}
+    binding.trajectory = shadow_trajectory
+    try:
+        _begin_capture(binding, guider, sampler, sigmas, latent_shapes)
+        if binding.active_capture is None:
+            raise RuntimeError("shadow guidance trajectory capture did not start")
+        try:
+            yield holder
+        except BaseException as exc:
+            if binding.active_capture is not None:
+                _finish_capture(binding, error=exc)
+            raise
+        else:
+            run = _finish_capture(binding)
+            if run is None or not run.complete:
+                raise RuntimeError("shadow guidance trajectory capture did not commit")
+            if not run.exact_samples():
+                raise RuntimeError("shadow guidance trajectory capture produced no exact anchors")
+            holder["run"] = run
+    finally:
+        try:
+            if binding.active_capture is not None:
+                _finish_capture(
+                    binding,
+                    error=RuntimeError("shadow guidance trajectory capture escaped its bounded lifetime"),
+                )
+        finally:
+            binding.trajectory = main_trajectory
+            binding.captured_run_id = main_captured_run_id
 
 
 def _validate_partitioned_vdn_compat(
@@ -795,6 +872,12 @@ def run_partitioned_progressive(
             PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         )
     )
+    guidance_trajectory_source = normalize_guidance_trajectory_source(
+        initial_transformer.get(
+            PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
+            PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+        )
+    )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -816,6 +899,19 @@ def run_partitioned_progressive(
         audio_guided_overlap_mode=audio_guided_overlap_mode,
         audio_guided_overlap_ticks=audio_guided_overlap_ticks,
     )
+    _validate_guidance_trajectory_shadow_configuration(
+        guidance_trajectory_source,
+        av_handoff_source=av_handoff_source,
+    )
+    if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
+        if binding.guidance is None or binding.guidance.mode == "off":
+            raise PartitionedPreflightUnsupported(
+                "source_carrier_uniform_shadow guidance trajectory requires active Flow guidance"
+            )
+        if binding.trajectory is None or not binding.capture_enabled:
+            raise PartitionedPreflightUnsupported(
+                "source_carrier_uniform_shadow guidance trajectory requires enabled Flow trajectory capture"
+            )
     if (
         prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
         and vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -951,7 +1047,12 @@ def run_partitioned_progressive(
             clean_video_owner="source_carrier_uniform_shadow_probe",
             exact_video_prefix_owner="main_target_prefix",
             clean_audio_probe_owner="main_exact_partitioned",
-            guidance_trajectory_owner="main_exact_partitioned",
+            guidance_trajectory_owner=(
+                "source_carrier_uniform_shadow"
+                if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+                else "main_exact_partitioned"
+            ),
+            guidance_trajectory_source=guidance_trajectory_source,
             diagnostic_only=True,
         )
 
@@ -1179,12 +1280,16 @@ def run_partitioned_progressive(
             )
 
         shadow_source_x0 = None
+        shadow_guidance_run = None
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if binding.active_capture is not None:
                 raise RuntimeError("AV handoff shadow must begin after the main Flow trajectory is committed")
             if committed_low_run is None or binding.captured_run_id != committed_low_run.run_id:
                 raise RuntimeError("AV handoff shadow lost main exact-partitioned trajectory ownership")
             main_captured_run_id = binding.captured_run_id
+            main_trajectory_handle = binding.trajectory
+            if main_trajectory_handle is None:
+                raise RuntimeError("AV handoff shadow lost the shared main Flow trajectory handle")
             shadow_calls_before = int(
                 binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
             )
@@ -1196,7 +1301,18 @@ def run_partitioned_progressive(
             )
             shadow_started = time.perf_counter()
             shadow_event_start = len(binding.metrics.events)
-            with _source_uniform_audio_shadow_controls(transformer):
+            capture_shadow_guidance = guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+            with (
+                _isolated_shadow_trajectory_capture(
+                    binding,
+                    guider,
+                    sampler,
+                    low_sigmas,
+                    source_shapes,
+                    enabled=capture_shadow_guidance,
+                ) as shadow_capture,
+                _source_uniform_audio_shadow_controls(transformer),
+            ):
                 _reset_guider_conds(guider, template=conditioning_template)
                 sampler_invocation_count += 1
                 history_boundary_count += 1
@@ -1270,10 +1386,20 @@ def run_partitioned_progressive(
                     source_shapes,
                 )
 
+            if capture_shadow_guidance:
+                if shadow_capture is None or "run" not in shadow_capture:
+                    raise RuntimeError("source-uniform shadow guidance trajectory was not committed")
+                shadow_guidance_run = shadow_capture["run"]
             if binding.active_capture is not None:
-                raise RuntimeError("AV handoff shadow unexpectedly captured a replacement Flow trajectory")
+                raise RuntimeError("AV handoff shadow unexpectedly retained an active Flow trajectory capture")
+            if binding.trajectory is not main_trajectory_handle:
+                raise RuntimeError("AV handoff shadow failed to restore the shared main Flow trajectory handle")
             if binding.captured_run_id != main_captured_run_id:
                 raise RuntimeError("AV handoff shadow replaced the main exact-partitioned Flow trajectory")
+            if shadow_guidance_run is not None and any(
+                run.run_id == shadow_guidance_run.run_id for run in main_trajectory_handle.runs
+            ):
+                raise RuntimeError("isolated shadow guidance trajectory leaked into the shared trajectory store")
             shadow_model_calls = [
                 event for event in binding.metrics.events[shadow_event_start:] if event.kind == "model_call"
             ]
@@ -1310,8 +1436,13 @@ def run_partitioned_progressive(
                 separate_sampler_lifetimes=2,
                 vdn_low_stage_retained_until_probe=True,
                 vdn_release_boundary="probe_to_high",
-                main_guidance_trajectory_preserved=True,
-                shadow_trajectory_captured=False,
+                guidance_trajectory_source=guidance_trajectory_source,
+                main_guidance_trajectory_preserved=not capture_shadow_guidance,
+                shadow_trajectory_captured=capture_shadow_guidance,
+                shadow_trajectory_run_id=(shadow_guidance_run.run_id if shadow_guidance_run is not None else None),
+                shadow_trajectory_exact_samples=(
+                    len(shadow_guidance_run.exact_samples()) if shadow_guidance_run is not None else 0
+                ),
                 raw_audio_state_selected=True,
                 clean_video_probe_selected=True,
                 shadow_raw_video_discarded=True,
@@ -1574,14 +1705,35 @@ def run_partitioned_progressive(
                 raise RuntimeError("partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY")
             session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
             expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-            run = binding.trajectory.select(
-                chunk_id=chunk_id,
-                session_id=session_id,
-                conditioning_signature=expected_signature,
-            )
+            if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
+                run = shadow_guidance_run
+                if run is None:
+                    raise RuntimeError("source-uniform shadow guidance trajectory is unavailable")
+                if run.chunk_id != str(chunk_id) or run.session_id != str(session_id):
+                    raise RuntimeError("source-uniform shadow guidance trajectory identity drifted")
+                if run.conditioning_signature != expected_signature:
+                    raise RuntimeError("source-uniform shadow guidance trajectory conditioning drifted")
+            else:
+                run = binding.trajectory.select(
+                    chunk_id=chunk_id,
+                    session_id=session_id,
+                    conditioning_signature=expected_signature,
+                )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
             binding.active_guidance_run = run
+            binding.metrics.event(
+                "partitioned_guidance_trajectory_selection",
+                source=guidance_trajectory_source,
+                run_id=run.run_id,
+                exact_samples=len(run.exact_samples()),
+                source_hw=(run.geometry.latent_h, run.geometry.latent_w),
+                target_hw=(target_h, target_w),
+                main_captured_run_id=(committed_low_run.run_id if committed_low_run is not None else None),
+                shared_trajectory_handle_preserved=True,
+                audio_latent_trajectory_present=False,
+                diagnostic_only=(guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW),
+            )
 
         def high_callback(step, x0, x, _total):
             if callback is not None:
@@ -1668,6 +1820,11 @@ def run_partitioned_progressive(
                     reason=(
                         "high stage initialized from source-uniform shadow raw audio and "
                         "shadow-probe clean video handoff state"
+                        + (
+                            " and guided by the isolated source-uniform shadow video trajectory"
+                            if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+                            else ""
+                        )
                     ),
                 )
             del final_internal
@@ -1778,7 +1935,14 @@ def run_partitioned_progressive(
                 source=av_handoff_source,
                 final_exact_video_prefix=True,
                 final_exact_audio_prefix=True,
-                main_guidance_trajectory_preserved=True,
+                guidance_trajectory_source=guidance_trajectory_source,
+                main_guidance_trajectory_preserved=(
+                    guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+                ),
+                shadow_guidance_trajectory_applied=(
+                    guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+                ),
+                shared_trajectory_handle_preserved=True,
                 shadow_raw_audio_handoff_applied=True,
                 shadow_clean_video_handoff_applied=True,
                 final_video_independent_of_shadow_av=False,
@@ -1808,6 +1972,7 @@ __all__ = [
     "PARTITIONED_SOL_REQUIRED_METADATA",
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
+    "_isolated_shadow_trajectory_capture",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
@@ -1815,6 +1980,7 @@ __all__ = [
     "_validate_audio_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_validate_av_handoff_shadow_configuration",
+    "_validate_guidance_trajectory_shadow_configuration",
     "_verify_audio_position_domain_diagnostic",
     "run_partitioned_progressive",
 ]

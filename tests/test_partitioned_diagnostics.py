@@ -24,6 +24,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
@@ -36,6 +40,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     apply_partitioned_diagnostic_controls,
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
+    normalize_guidance_trajectory_source,
     normalize_prefix_transformer_context,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -86,6 +91,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert "audio_position_domain" not in ordinary
     assert "audio_handoff_source" not in ordinary
     assert "av_handoff_source" not in ordinary
+    assert "guidance_trajectory_source" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -110,12 +116,15 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_handoff_source"][1]["default"] == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
     assert diagnostic["av_handoff_source"][0] == list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS)
     assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+    assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
+    assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")
     assert keys.index("prefix_transformer_context") < keys.index("audio_position_domain")
     assert keys.index("audio_position_domain") < keys.index("audio_handoff_source")
     assert keys.index("audio_handoff_source") < keys.index("av_handoff_source")
+    assert keys.index("av_handoff_source") < keys.index("guidance_trajectory_source")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -586,3 +595,43 @@ def test_av_handoff_source_is_bounded_and_defaults_to_main_path():
     assert normalize_av_handoff_source(PARTITIONED_AV_HANDOFF_SOURCE_SHADOW) == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
     with pytest.raises(ValueError, match="AV handoff source"):
         normalize_av_handoff_source("invented")
+
+
+def test_guidance_trajectory_source_is_bounded_and_defaults_to_main_path():
+    assert (
+        normalize_guidance_trajectory_source(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN)
+        == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    )
+    assert (
+        normalize_guidance_trajectory_source(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW)
+        == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+    )
+    with pytest.raises(ValueError, match="guidance trajectory source"):
+        normalize_guidance_trajectory_source("invented")
+
+
+def test_guidance_trajectory_source_is_model_local_and_default_absent():
+    default_model = SimpleNamespace(model_options={"transformer_options": {}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY not in default_model.model_options["transformer_options"]
+
+    shadow_model = SimpleNamespace(model_options={"transformer_options": {}})
+    shadow_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        shadow_model,
+        shadow_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    )
+    assert (
+        shadow_model.model_options["transformer_options"][PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY]
+        == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
+    )
+    assert shadow_metrics.events[-1][1]["guidance_trajectory_source"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
