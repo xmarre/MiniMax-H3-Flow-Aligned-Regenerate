@@ -10,6 +10,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_diagnostics import (
+    MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -49,6 +50,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_prefix_transformer_context,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    validate_partitioned_audio_guided_overlap_ticks,
 )
 from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixDiagnosticHandoff,
@@ -113,7 +115,7 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
-    assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
+    assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 32
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
     assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
     assert diagnostic["audio_position_domain"][0] == list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS)
@@ -216,7 +218,7 @@ def test_ordinary_partitioned_audio_overlap_still_uses_existing_environment_or_d
     assert source == "environment_or_default"
 
 
-@pytest.mark.parametrize("bad", [-1, 17, True, 4.0, "4"])
+@pytest.mark.parametrize("bad", [-1, 33, True, 4.0, "4"])
 def test_diagnostic_audio_overlap_rejects_noncanonical_values(bad):
     model = SimpleNamespace(model_options={"transformer_options": {}})
     with pytest.raises(ValueError):
@@ -227,6 +229,27 @@ def test_diagnostic_audio_overlap_rejects_noncanonical_values(bad):
             audio_guided_overlap_ticks=bad,
             audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
         )
+
+
+def test_partitioned_diagnostic_overlap_accepts_32_without_widening_production_default():
+    assert MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS == 32
+    assert validate_partitioned_audio_guided_overlap_ticks(32) == 32
+
+    model = SimpleNamespace(model_options={"transformer_options": {}})
+    returned_model, _ = apply_partitioned_diagnostic_controls(
+        model,
+        _Metrics(),
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=32,
+        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    )
+    assert returned_model.model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] == 32
+
+    ticks, source = resolve_partitioned_audio_guided_overlap_ticks(
+        {PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 32}
+    )
+    assert ticks == 32
+    assert source == "diagnostic_node"
 
 
 def test_audio_guided_overlap_mode_defaults_and_node_override():
