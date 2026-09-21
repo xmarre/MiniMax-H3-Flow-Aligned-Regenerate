@@ -18,6 +18,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -281,6 +283,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after #62 so every previously serialized diagnostic widget keeps
+        # the same positional index.
+        spec["required"]["guidance_trajectory_source"] = (
+            list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS),
+            {
+                "default": PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+                "tooltip": (
+                    "main_exact_partitioned preserves #62. source_carrier_uniform_shadow captures "
+                    "only the already-executed source-uniform shadow low+probe video trajectory "
+                    "into an isolated temporary store and uses that trajectory for target-high "
+                    "Flow guidance; handoff state, exact prefixes, and all audio controls stay #62."
+                ),
+            },
+        )
         return spec
 
     DESCRIPTION = (
@@ -314,6 +330,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -345,6 +362,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             audio_position_domain=audio_position_domain,
             audio_handoff_source=audio_handoff_source,
             av_handoff_source=av_handoff_source,
+            guidance_trajectory_source=guidance_trajectory_source,
         )
 
 
