@@ -213,11 +213,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": 4,
                 "min": 0,
-                "max": 16,
+                "max": 32,
                 "step": 1,
                 "tooltip": (
-                    "Node-local 40-Hz audio overlap width. Use 4 for the current "
-                    "production-shaped behavior and 0 for the matched audio A/B control."
+                    "Node-local 40-Hz audio overlap width. 0-16 preserves existing diagnostics; "
+                    "32 is reserved for the source-uniform decoder-context-scale timing probe."
                 ),
             },
         )
