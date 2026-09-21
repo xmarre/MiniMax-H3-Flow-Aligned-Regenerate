@@ -35,17 +35,18 @@ def _validate_candidate(**overrides):
         "audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         "av_handoff_source": PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
         "guidance_trajectory_source": PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
-        "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-        "audio_guided_overlap_ticks": 4,
+        "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        "audio_guided_overlap_ticks": 16,
     }
     values.update(overrides)
     _validate_low_probe_execution_source_configuration(**values)
 
 
-def test_source_uniform_primary_execution_requires_matched_control_tuple_with_overlap_ab():
+def test_source_uniform_primary_execution_requires_width16_sampler_mask_control_tuple():
     _validate_candidate()
-    _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER)
 
+    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
+        _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP)
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
         _validate_candidate(audio_guided_overlap_mode="unsupported")
     with pytest.raises(PartitionedPreflightUnsupported, match="guidance_trajectory_source"):
@@ -53,7 +54,9 @@ def test_source_uniform_primary_execution_requires_matched_control_tuple_with_ov
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_position_domain"):
         _validate_candidate(audio_position_domain="legacy_target")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
-        _validate_candidate(audio_guided_overlap_ticks=3)
+        _validate_candidate(audio_guided_overlap_ticks=4)
+    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
+        _validate_candidate(audio_guided_overlap_ticks=15)
 
 
 def test_source_uniform_primary_controls_are_bounded_and_restore_exactly():
