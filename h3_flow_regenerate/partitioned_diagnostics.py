@@ -9,10 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .audio_guided_overlap import (
-    configured_audio_guided_overlap_ticks,
-    validate_audio_guided_overlap_ticks,
-)
+from .audio_guided_overlap import configured_audio_guided_overlap_ticks
 
 PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY = "h3_flow_partitioned_vdn_linear_diagnostic_v1"
 PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL = "normal"
@@ -27,6 +24,7 @@ PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS = (
 )
 
 PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY = "h3_flow_partitioned_audio_guided_overlap_ticks_v1"
+MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS = 32
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY = "h3_flow_partitioned_audio_guided_overlap_mode_v1"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER = "sampler_mask"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP = "model_timestep_only"
@@ -176,6 +174,24 @@ def normalize_low_probe_execution_source(value: str) -> str:
     return value
 
 
+def validate_partitioned_audio_guided_overlap_ticks(
+    value: int,
+    *,
+    source: str = "partitioned audio guided overlap",
+) -> int:
+    """Validate the model-local diagnostic width without widening production env controls."""
+
+    if (
+        type(value) is not int
+        or not 0 <= value <= MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS
+    ):
+        raise ValueError(
+            f"{source} must be an integer in [0, "
+            f"{MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}"
+        )
+    return int(value)
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -189,7 +205,7 @@ def resolve_partitioned_audio_guided_overlap_ticks(model_options: dict[str, Any]
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY not in model_options:
         return configured_audio_guided_overlap_ticks(), "environment_or_default"
     return (
-        validate_audio_guided_overlap_ticks(
+        validate_partitioned_audio_guided_overlap_ticks(
             model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY],
             source=PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
         ),
@@ -214,7 +230,7 @@ def apply_partitioned_diagnostic_controls(
     """Install diagnostic controls on one cloned MODEL only."""
 
     mode = normalize_vdn_linear_diagnostic(vdn_linear_diagnostic)
-    ticks = validate_audio_guided_overlap_ticks(
+    ticks = validate_partitioned_audio_guided_overlap_ticks(
         audio_guided_overlap_ticks,
         source="audio_guided_overlap_ticks",
     )
@@ -286,6 +302,7 @@ __all__ = [
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
+    "MAX_PARTITIONED_DIAGNOSTIC_AUDIO_GUIDED_OVERLAP_TICKS",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN",
@@ -331,4 +348,5 @@ __all__ = [
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
+    "validate_partitioned_audio_guided_overlap_ticks",
 ]
