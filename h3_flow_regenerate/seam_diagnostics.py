@@ -391,28 +391,26 @@ def measure_temporal_transition_profile(
     if not pair_left:
         raise ValueError("temporal transition diagnostics found no frame pairs")
 
-    delta_rms: list[float] = []
-    relative_delta_rms: list[float] = []
-    cosine_similarity: list[float] = []
     with torch.no_grad():
-        for left_index in pair_left:
-            left = video[:, :, left_index].detach().float()
-            right = video[:, :, left_index + 1].detach().float()
-            if not bool(torch.isfinite(left).all().item() and torch.isfinite(right).all().item()):
-                raise RuntimeError("temporal transition diagnostics contain NaN or Inf")
-            delta = _finite_rms(right - left)
-            left_rms = _finite_rms(left)
-            right_rms = _finite_rms(right)
-            relative = delta / max(0.5 * (left_rms + right_rms), _EPS)
-            dot = float((left * right).sum().detach().to(device="cpu").item())
-            left_norm = float(left.square().sum().sqrt().detach().to(device="cpu").item())
-            right_norm = float(right.square().sum().sqrt().detach().to(device="cpu").item())
-            cosine = dot / max(left_norm * right_norm, _EPS)
-            if not all(math.isfinite(value) for value in (delta, relative, cosine)):
-                raise RuntimeError("temporal transition diagnostics produced a non-finite value")
-            delta_rms.append(delta)
-            relative_delta_rms.append(relative)
-            cosine_similarity.append(cosine)
+        left = video[:, :, left_start:left_stop].detach().float()
+        right = video[:, :, left_start + 1 : left_stop + 1].detach().float()
+        if not bool(torch.isfinite(left).all().item() and torch.isfinite(right).all().item()):
+            raise RuntimeError("temporal transition diagnostics contain NaN or Inf")
+        reduce_dims = (0, 1, 3, 4)
+        delta_rms_t = (right - left).square().mean(dim=reduce_dims).sqrt()
+        left_rms_t = left.square().mean(dim=reduce_dims).sqrt()
+        right_rms_t = right.square().mean(dim=reduce_dims).sqrt()
+        relative_t = delta_rms_t / (0.5 * (left_rms_t + right_rms_t)).clamp_min(_EPS)
+        dot_t = (left * right).sum(dim=reduce_dims)
+        left_norm_t = left.square().sum(dim=reduce_dims).sqrt()
+        right_norm_t = right.square().sum(dim=reduce_dims).sqrt()
+        cosine_t = dot_t / (left_norm_t * right_norm_t).clamp_min(_EPS)
+        packed = torch.stack((delta_rms_t, relative_t, cosine_t)).detach().to(device="cpu")
+    if not bool(torch.isfinite(packed).all().item()):
+        raise RuntimeError("temporal transition diagnostics produced a non-finite value")
+    delta_rms = [float(value) for value in packed[0].tolist()]
+    relative_delta_rms = [float(value) for value in packed[1].tolist()]
+    cosine_similarity = [float(value) for value in packed[2].tolist()]
 
     peak_local = max(range(len(relative_delta_rms)), key=relative_delta_rms.__getitem__)
     trough_local = min(range(len(cosine_similarity)), key=cosine_similarity.__getitem__)
