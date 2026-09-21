@@ -218,7 +218,7 @@ def test_ordinary_partitioned_audio_overlap_still_uses_existing_environment_or_d
     assert source == "environment_or_default"
 
 
-@pytest.mark.parametrize("bad", [-1, 33, True, 4.0, "4"])
+@pytest.mark.parametrize("bad", [-1, 17, 31, 33, True, 4.0, "4"])
 def test_diagnostic_audio_overlap_rejects_noncanonical_values(bad):
     model = SimpleNamespace(model_options={"transformer_options": {}})
     with pytest.raises(ValueError):
