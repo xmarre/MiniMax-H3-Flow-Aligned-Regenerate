@@ -4,6 +4,7 @@ import pytest
 
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -41,9 +42,12 @@ def _validate_candidate(**overrides):
     _validate_low_probe_execution_source_configuration(**values)
 
 
-def test_source_uniform_primary_execution_requires_exact_pr64_control_tuple():
+def test_source_uniform_primary_execution_requires_matched_control_tuple_with_overlap_ab():
     _validate_candidate()
+    _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER)
 
+    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
+        _validate_candidate(audio_guided_overlap_mode="unsupported")
     with pytest.raises(PartitionedPreflightUnsupported, match="guidance_trajectory_source"):
         _validate_candidate(guidance_trajectory_source="main_exact_partitioned")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_position_domain"):

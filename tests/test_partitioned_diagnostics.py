@@ -494,10 +494,12 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         disable_pbar,
         seed,
         latent_shapes,
+        exact_denoise_mask=None,
     ):
         del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(call_mask, exact_mask)
+        assert torch.equal(exact_denoise_mask, exact_mask)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
         exact_audio = unpack_streams(call_mask, latent_shapes)[1]
@@ -540,6 +542,96 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     assert context_events[0].fields["sampler_mask_modified"] is False
     assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
     assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
+
+
+def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic_mask(monkeypatch):
+    video = torch.randn(1, 24, 5, 8, 12)
+    audio = torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :2] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :6] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    progressive = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        transfer_mode="learned_3d",
+        learned_upscaler=SimpleNamespace(
+            api_version=1,
+            kind="minimax_h3_learned_latent_upscaler",
+            model_name="diagnostic-test-provider",
+            device="cpu",
+            inference_device="cpu",
+            precision="fp32",
+            offload_after_upscale=False,
+            upscale_clean_video=lambda *args, **kwargs: None,
+        ),
+    )
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: progressive,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 4,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            "transformer_options": {},
+        }
+    )
+
+    class Executor:
+        class_obj = guider
+
+    def fake_partitioned(
+        adapted,
+        call_guider,
+        call_binding,
+        config,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        call_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes,
+        exact_denoise_mask=None,
+    ):
+        del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
+        assert latent_shapes == shapes
+        assert torch.equal(exact_denoise_mask, exact_mask)
+        assert not torch.equal(call_mask, exact_mask)
+        runtime_audio = unpack_streams(call_mask, latent_shapes)[1]
+        assert bool(((runtime_audio > 0) & (runtime_audio < 1)).any().item())
+        return latent_image.clone()
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
+        fake_partitioned,
+    )
+    result = partitioned_outer_wrapper(
+        Executor(),
+        torch.randn_like(packed),
+        packed,
+        SimpleNamespace(),
+        torch.tensor([1.0, 0.0]),
+        exact_mask,
+        None,
+        True,
+        7,
+        latent_shapes=shapes,
+    )
+
+    assert torch.equal(result, packed)
+    overlap_events = [event for event in metrics.events if event.kind == "audio_guided_overlap"]
+    assert len(overlap_events) == 1
+    assert overlap_events[0].fields["mode"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+    assert overlap_events[0].fields["sampler_mask_modified"] is True
+    assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
 def test_audio_model_timestep_mode_requires_post_wrapper_velocity_mask_contract():

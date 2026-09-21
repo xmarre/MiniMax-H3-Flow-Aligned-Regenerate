@@ -207,6 +207,7 @@ def partitioned_outer_wrapper(
             disable_pbar,
             seed,
             latent_shapes,
+            exact_denoise_mask=denoise_mask,
         )
         if audio_model_context is not None and audio_model_context.calls <= 0:
             raise RuntimeError(

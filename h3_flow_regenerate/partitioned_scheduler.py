@@ -22,6 +22,7 @@ from .handoff import ProgressiveTargetInputConfig, build_handoff_state, determin
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
@@ -214,8 +215,11 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         mismatches.append("guidance_trajectory_source='source_carrier_uniform_shadow'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
+    if audio_guided_overlap_mode not in {
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    }:
+        mismatches.append("audio_guided_overlap_mode='model_timestep_only' or 'sampler_mask'")
     if int(audio_guided_overlap_ticks) != 4:
         mismatches.append("audio_guided_overlap_ticks=4")
     if mismatches:
@@ -251,6 +255,25 @@ def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
                 transformer.pop(key, None)
             else:
                 transformer[key] = value
+
+
+def _resolve_audio_diagnostic_masks(
+    runtime_mask: torch.Tensor,
+    exact_mask: torch.Tensor | None,
+    target_shapes: list[tuple[int, ...]],
+    source_shapes: list[tuple[int, ...]],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Keep sampler overlap ownership separate from exact-boundary diagnostics."""
+
+    diagnostic_target_mask = runtime_mask if exact_mask is None else exact_mask
+    if tuple(diagnostic_target_mask.shape) != tuple(runtime_mask.shape):
+        raise RuntimeError("partitioned exact-prefix diagnostic mask geometry drifted from sampler mask")
+    diagnostic_low_mask = _resize_packed_mask(
+        diagnostic_target_mask,
+        target_shapes,
+        source_shapes,
+    )
+    return diagnostic_target_mask, diagnostic_low_mask
 
 
 def _cuda_allocator_checkpoint(metrics, stage: str) -> None:
@@ -927,6 +950,7 @@ def run_partitioned_progressive(
     disable_pbar,
     seed,
     latent_shapes,
+    exact_denoise_mask=None,
 ):
     """Execute exact-prefix low/probe/high continuation with a physical two-grid H3 stage."""
     chunk_started = time.perf_counter()
@@ -984,27 +1008,6 @@ def run_partitioned_progressive(
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
-    _validate_audio_handoff_shadow_configuration(
-        audio_handoff_source,
-        prefix_transformer_context=prefix_transformer_context,
-        vdn_linear_diagnostic=vdn_linear_diagnostic,
-        audio_position_domain=audio_position_domain,
-        audio_guided_overlap_mode=audio_guided_overlap_mode,
-        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
-    )
-    _validate_av_handoff_shadow_configuration(
-        av_handoff_source,
-        audio_handoff_source=audio_handoff_source,
-        prefix_transformer_context=prefix_transformer_context,
-        vdn_linear_diagnostic=vdn_linear_diagnostic,
-        audio_position_domain=audio_position_domain,
-        audio_guided_overlap_mode=audio_guided_overlap_mode,
-        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
-    )
-    _validate_guidance_trajectory_shadow_configuration(
-        guidance_trajectory_source,
-        av_handoff_source=av_handoff_source,
-    )
     _validate_low_probe_execution_source_configuration(
         low_probe_execution_source,
         prefix_transformer_context=prefix_transformer_context,
@@ -1016,6 +1019,32 @@ def run_partitioned_progressive(
         audio_guided_overlap_mode=audio_guided_overlap_mode,
         audio_guided_overlap_ticks=audio_guided_overlap_ticks,
     )
+    if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+        # In the collapsed source-only diagnostic, the shadow selectors above are
+        # guard values proving the exact #64 control tuple; no shadow sampler
+        # lifetime executes. Validate shadow-specific overlap requirements only
+        # when those shadow lifetimes actually remain in the execution plan.
+        _validate_audio_handoff_shadow_configuration(
+            audio_handoff_source,
+            prefix_transformer_context=prefix_transformer_context,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_position_domain=audio_position_domain,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
+        _validate_av_handoff_shadow_configuration(
+            av_handoff_source,
+            audio_handoff_source=audio_handoff_source,
+            prefix_transformer_context=prefix_transformer_context,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_position_domain=audio_position_domain,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
+        _validate_guidance_trajectory_shadow_configuration(
+            guidance_trajectory_source,
+            av_handoff_source=av_handoff_source,
+        )
     if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         if binding.guidance is None or binding.guidance.mode == "off":
             raise PartitionedPreflightUnsupported(
@@ -1039,6 +1068,8 @@ def run_partitioned_progressive(
             raw_audio_owner="source_carrier_uniform_primary",
             clean_video_owner="source_carrier_uniform_primary_probe",
             guidance_trajectory_owner="source_carrier_uniform_primary",
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
             learned_transfer_unchanged=True,
             target_high_unchanged=True,
@@ -1060,6 +1091,7 @@ def run_partitioned_progressive(
                 disable_pbar,
                 seed,
                 latent_shapes,
+                exact_denoise_mask=exact_denoise_mask,
             )
         _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_exit")
         sampler_delta = int(binding.metrics.counters.get("progressive_sampler_invocations", 0)) - sampler_calls_before
@@ -1088,6 +1120,8 @@ def run_partitioned_progressive(
             history_boundary_delta=history_delta,
             source_uniform_transformer_calls=source_call_delta,
             exact_partitioned_transformer_calls=partitioned_call_delta,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             skipped_main_exact_partitioned_low_probe=True,
             diagnostic_only=True,
         )
@@ -1167,6 +1201,13 @@ def run_partitioned_progressive(
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+
+    diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
+        denoise_mask,
+        exact_denoise_mask,
+        target_shapes,
+        source_shapes,
+    )
 
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
@@ -1644,7 +1685,7 @@ def run_partitioned_progressive(
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
                 source_shapes,
-                low_mask,
+                diagnostic_low_mask,
                 windows=(4, 20),
             )
             binding.metrics.event(
@@ -1962,7 +2003,7 @@ def run_partitioned_progressive(
             final_audio_report = measure_audio_latent_boundary(
                 final_internal,
                 target_shapes,
-                denoise_mask,
+                diagnostic_target_mask,
                 windows=(4, 20),
             )
             binding.metrics.event(
@@ -1973,7 +2014,7 @@ def run_partitioned_progressive(
             )
             if low_probe_clean_audio is None:
                 raise RuntimeError("audio stage diagnostics lost the low/probe clean reference")
-            _mask_video, exact_audio_mask = unpack_streams(denoise_mask, target_shapes)
+            _mask_video, exact_audio_mask = unpack_streams(diagnostic_target_mask, target_shapes)
             stage_delta = compare_audio_latent_stages(
                 low_probe_clean_audio,
                 final_internal_audio,
@@ -2157,6 +2198,7 @@ __all__ = [
     "SOL_RUNTIME_KEY",
     "PartitionedPreflightUnsupported",
     "_isolated_shadow_trajectory_capture",
+    "_resolve_audio_diagnostic_masks",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
