@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
+from h3_flow_regenerate.audio_guided_overlap import apply_audio_guided_overlap_mask
+from h3_flow_regenerate.geometry import pack_streams
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -24,6 +27,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     _source_uniform_primary_execution_controls,
     _validate_low_probe_execution_source_configuration,
+    _verify_source_uniform_primary_overlap_mask,
 )
 
 
@@ -71,6 +75,54 @@ def test_width32_overlap_is_rejected_on_main_then_shadow_execution():
     ):
         _validate_candidate(
             low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        )
+
+
+def test_source_uniform_width32_runtime_mask_is_verified_exactly():
+    video = torch.zeros(1, 24, 4, 4, 4)
+    audio = torch.zeros(1, 32, 2, 80)
+    _packed, shapes = pack_streams((video, audio))
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :1] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :65] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+    runtime_mask, guided = apply_audio_guided_overlap_mask(exact_mask, list(shapes), ticks=32)
+    assert guided["applied"] is True
+
+    report = _verify_source_uniform_primary_overlap_mask(
+        runtime_mask,
+        exact_mask,
+        list(shapes),
+        ticks=32,
+    )
+    assert report["audio_prefix_ticks"] == 65
+    assert report["fractional_audio_ticks"] == 32
+    assert report["ramp_start_tick"] == 33
+    assert report["ramp_stop_tick"] == 65
+    assert report["video_mask_unchanged"] is True
+    assert report["outside_ramp_audio_mask_unchanged"] is True
+
+
+def test_source_uniform_width32_runtime_mask_rejects_wrong_width():
+    video = torch.zeros(1, 24, 4, 4, 4)
+    audio = torch.zeros(1, 32, 2, 80)
+    _packed, shapes = pack_streams((video, audio))
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :1] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :65] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+    runtime_mask, guided = apply_audio_guided_overlap_mask(exact_mask, list(shapes), ticks=16)
+    assert guided["applied"] is True
+
+    with pytest.raises(RuntimeError, match="exactly the requested contiguous fractional audio tail"):
+        _verify_source_uniform_primary_overlap_mask(
+            runtime_mask,
+            exact_mask,
+            list(shapes),
+            ticks=32,
         )
 
 
