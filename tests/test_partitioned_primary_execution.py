@@ -13,6 +13,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
@@ -36,13 +37,13 @@ def _validate_candidate(**overrides):
         "av_handoff_source": PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         "guidance_trajectory_source": PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         "audio_guided_overlap_mode": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
-        "audio_guided_overlap_ticks": 16,
+        "audio_guided_overlap_ticks": 32,
     }
     values.update(overrides)
     _validate_low_probe_execution_source_configuration(**values)
 
 
-def test_source_uniform_primary_execution_requires_width16_sampler_mask_control_tuple():
+def test_source_uniform_primary_execution_requires_width32_sampler_mask_control_tuple():
     _validate_candidate()
 
     with pytest.raises(PartitionedPreflightUnsupported, match="av_handoff_source"):
@@ -58,7 +59,19 @@ def test_source_uniform_primary_execution_requires_width16_sampler_mask_control_
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
         _validate_candidate(audio_guided_overlap_ticks=4)
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
-        _validate_candidate(audio_guided_overlap_ticks=15)
+        _validate_candidate(audio_guided_overlap_ticks=16)
+    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
+        _validate_candidate(audio_guided_overlap_ticks=31)
+
+
+def test_width32_overlap_is_rejected_on_main_then_shadow_execution():
+    with pytest.raises(
+        PartitionedPreflightUnsupported,
+        match="reserved for source_carrier_uniform_only",
+    ):
+        _validate_candidate(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        )
 
 
 def test_source_uniform_primary_controls_are_bounded_and_restore_exactly():
