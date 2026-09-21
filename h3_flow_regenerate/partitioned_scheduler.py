@@ -119,6 +119,7 @@ def _validate_audio_handoff_shadow_configuration(
     audio_position_domain: str,
     audio_guided_overlap_mode: str,
     audio_guided_overlap_ticks: int,
+    source_uniform_primary_inner: bool = False,
 ) -> None:
     source = normalize_audio_handoff_source(audio_handoff_source)
     if source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
@@ -201,7 +202,7 @@ def _validate_low_probe_execution_source_configuration(
 ) -> None:
     source = normalize_low_probe_execution_source(low_probe_execution_source)
     if source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
-        if int(audio_guided_overlap_ticks) > 16:
+        if int(audio_guided_overlap_ticks) > 16 and not source_uniform_primary_inner:
             raise PartitionedPreflightUnsupported(
                 "audio_guided_overlap_ticks > 16 is reserved for source_carrier_uniform_only low/probe execution"
             )
@@ -1018,6 +1019,8 @@ def run_partitioned_progressive(
     seed,
     latent_shapes,
     exact_denoise_mask=None,
+    *,
+    _source_uniform_primary_inner: bool = False,
 ):
     """Execute exact-prefix low/probe/high continuation with a physical two-grid H3 stage."""
     chunk_started = time.perf_counter()
@@ -1085,6 +1088,7 @@ def run_partitioned_progressive(
         guidance_trajectory_source=guidance_trajectory_source,
         audio_guided_overlap_mode=audio_guided_overlap_mode,
         audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        source_uniform_primary_inner=_source_uniform_primary_inner,
     )
     if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
         # In the collapsed source-only diagnostic, the shadow selectors above are
@@ -1178,6 +1182,7 @@ def run_partitioned_progressive(
                 seed,
                 latent_shapes,
                 exact_denoise_mask=exact_denoise_mask,
+                _source_uniform_primary_inner=True,
             )
         _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_exit")
         sampler_delta = int(binding.metrics.counters.get("progressive_sampler_invocations", 0)) - sampler_calls_before
