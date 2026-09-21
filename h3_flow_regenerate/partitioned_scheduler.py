@@ -2291,7 +2291,9 @@ def run_partitioned_progressive(
             if shadow_audio_delta or shadow_av_low_delta or shadow_av_probe_delta:
                 raise RuntimeError("fast main width-16 candidate unexpectedly executed a shadow sampler lifetime")
             if source_uniform_call_delta != 0:
-                raise RuntimeError("fast main width-16 candidate unexpectedly executed source-uniform transformer calls")
+                raise RuntimeError(
+                    "fast main width-16 candidate unexpectedly executed source-uniform transformer calls"
+                )
             if exact_partitioned_call_delta <= 0:
                 raise RuntimeError("fast main width-16 candidate produced no exact-partitioned transformer calls")
             if model_timestep_call_delta != 0:
@@ -2374,7 +2376,6 @@ __all__ = [
     "PartitionedPreflightUnsupported",
     "_isolated_shadow_trajectory_capture",
     "_resolve_audio_diagnostic_masks",
-    "_validate_fast_main_width16_candidate_configuration",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
@@ -2382,6 +2383,7 @@ __all__ = [
     "_validate_audio_handoff_shadow_configuration",
     "_validate_audio_position_candidate_configuration",
     "_validate_av_handoff_shadow_configuration",
+    "_validate_fast_main_width16_candidate_configuration",
     "_validate_guidance_trajectory_shadow_configuration",
     "_verify_audio_position_domain_diagnostic",
     "_verify_fast_main_width16_sampler_mask",
