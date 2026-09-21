@@ -167,10 +167,10 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
 
 
 def test_temporal_transition_profile_localizes_strong_generated_change():
-    video = torch.zeros(1, 4, 8, 4, 4, dtype=torch.float32)
-    video[:, :, 3] = 0.1
-    video[:, :, 4] = 0.2
-    video[:, :, 5:] = 5.0
+    video = torch.ones(1, 4, 8, 4, 4, dtype=torch.float32)
+    video[:, :, 3] = 1.1
+    video[:, :, 4] = 1.2
+    video[:, :, 5:] = -5.0
 
     fields = measure_temporal_transition_profile(video, 3, forward_pairs=4)
 
@@ -178,7 +178,7 @@ def test_temporal_transition_profile_localizes_strong_generated_change():
     assert fields["prefix_t"] == 3
     assert fields["generated_offset_right"] == [0, 1, 2, 3]
     assert fields["peak_relative_delta_generated_offset"] == 2
-    assert fields["minimum_cosine_generated_offset"] in {0, 2}
+    assert fields["minimum_cosine_generated_offset"] == 2
     assert fields["extra_transformer_nfe"] == 0
     assert len(fields["relative_delta_rms"]) == 4
     assert len(fields["cosine_similarity"]) == 4
