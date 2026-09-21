@@ -215,13 +215,10 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         mismatches.append("guidance_trajectory_source='source_carrier_uniform_shadow'")
-    if audio_guided_overlap_mode not in {
-        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
-    }:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only' or 'sampler_mask'")
-    if int(audio_guided_overlap_ticks) != 4:
-        mismatches.append("audio_guided_overlap_ticks=4")
+    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
+        mismatches.append("audio_guided_overlap_mode='sampler_mask'")
+    if int(audio_guided_overlap_ticks) != 16:
+        mismatches.append("audio_guided_overlap_ticks=16")
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_only low/probe execution requires " + ", ".join(mismatches)
