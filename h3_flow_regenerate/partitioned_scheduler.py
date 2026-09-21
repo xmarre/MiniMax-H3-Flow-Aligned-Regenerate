@@ -230,6 +230,72 @@ def _validate_low_probe_execution_source_configuration(
         )
 
 
+def _verify_source_uniform_primary_overlap_mask(
+    runtime_mask: torch.Tensor | None,
+    exact_mask: torch.Tensor | None,
+    latent_shapes: list[tuple[int, ...]],
+    *,
+    ticks: int,
+) -> dict[str, Any]:
+    """Prove the fast source-only path received exactly the requested audio ramp."""
+
+    if runtime_mask is None or exact_mask is None:
+        raise RuntimeError("source-uniform width probe requires runtime and exact denoise masks")
+    runtime_video, runtime_audio = unpack_streams(runtime_mask, latent_shapes)
+    exact_video, exact_audio = unpack_streams(exact_mask, latent_shapes)
+    if not torch.equal(runtime_video, exact_video):
+        raise RuntimeError("source-uniform width probe unexpectedly changed the video denoise mask")
+    if tuple(runtime_audio.shape) != tuple(exact_audio.shape):
+        raise RuntimeError("source-uniform width probe audio mask geometry drifted")
+
+    exact_min = exact_audio.amin(dim=(0, 1, 2))
+    exact_max = exact_audio.amax(dim=(0, 1, 2))
+    exact_zero = exact_max <= 1e-8
+    exact_one = exact_min >= 1.0 - 1e-8
+    temporal = int(exact_audio.shape[-1])
+    prefix = 0
+    while prefix < temporal and bool(exact_zero[prefix].item()):
+        prefix += 1
+    if prefix <= int(ticks) or not bool(exact_one[prefix:].all().item()):
+        raise RuntimeError(
+            "source-uniform width probe requires a contiguous exact audio prefix longer than the requested ramp"
+        )
+
+    runtime_min = runtime_audio.amin(dim=(0, 1, 2))
+    runtime_max = runtime_audio.amax(dim=(0, 1, 2))
+    fractional = (runtime_min > 1e-8) & (runtime_max < 1.0 - 1e-8)
+    indices = torch.nonzero(fractional, as_tuple=False).flatten()
+    expected_indices = torch.arange(prefix - int(ticks), prefix, device=indices.device, dtype=indices.dtype)
+    if int(indices.numel()) != int(ticks) or not torch.equal(indices, expected_indices):
+        raise RuntimeError(
+            "source-uniform width probe did not receive exactly the requested contiguous fractional audio tail"
+        )
+    observed = runtime_min[indices].to(dtype=torch.float32)
+    observed_max = runtime_max[indices].to(dtype=torch.float32)
+    if not torch.equal(observed, observed_max):
+        raise RuntimeError("source-uniform width probe ramp is not uniform across audio rows")
+
+    raw = torch.arange(1, int(ticks) + 1, device=observed.device, dtype=torch.float32) / float(int(ticks) + 1)
+    expected = torch.ceil(raw * 256.0) / 256.0
+    if not torch.equal(observed, expected):
+        raise RuntimeError("source-uniform width probe ramp does not match the canonical 1/256 quantization")
+
+    if not torch.equal(runtime_audio[..., : prefix - int(ticks)], exact_audio[..., : prefix - int(ticks)]):
+        raise RuntimeError("source-uniform width probe changed audio before the requested overlap tail")
+    if not torch.equal(runtime_audio[..., prefix:], exact_audio[..., prefix:]):
+        raise RuntimeError("source-uniform width probe changed generated audio outside the overlap tail")
+
+    return {
+        "audio_prefix_ticks": prefix,
+        "fractional_audio_ticks": int(indices.numel()),
+        "ramp_start_tick": prefix - int(ticks),
+        "ramp_stop_tick": prefix,
+        "ramp_values": [float(value) for value in observed.detach().cpu().tolist()],
+        "video_mask_unchanged": True,
+        "outside_ramp_audio_mask_unchanged": True,
+    }
+
+
 @contextlib.contextmanager
 def _source_uniform_primary_execution_controls(transformer: dict[str, Any]):
     """Make the selected source-uniform pair the only low/probe execution."""
@@ -1057,6 +1123,19 @@ def run_partitioned_progressive(
                 "source_carrier_uniform_shadow guidance trajectory requires enabled Flow trajectory capture"
             )
     if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+        overlap_report = _verify_source_uniform_primary_overlap_mask(
+            denoise_mask,
+            exact_denoise_mask,
+            list(latent_shapes),
+            ticks=audio_guided_overlap_ticks,
+        )
+        binding.metrics.event(
+            "partitioned_source_uniform_overlap_verified",
+            source=low_probe_execution_source,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            **overlap_report,
+        )
         sampler_calls_before = int(binding.metrics.counters.get("progressive_sampler_invocations", 0))
         history_boundaries_before = int(binding.metrics.counters.get("progressive_history_boundaries", 0))
         source_calls_before = int(
@@ -1074,6 +1153,8 @@ def run_partitioned_progressive(
             ui_av_handoff_source=av_handoff_source,
             ui_guidance_trajectory_source=guidance_trajectory_source,
             duplicate_shadow_lifetimes_expected=0,
+            verified_fractional_audio_ticks=overlap_report["fractional_audio_ticks"],
+            verified_audio_prefix_ticks=overlap_report["audio_prefix_ticks"],
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
@@ -1131,6 +1212,8 @@ def run_partitioned_progressive(
             skipped_main_exact_partitioned_low_probe=True,
             duplicate_shadow_lifetimes_executed=0,
             production_shaped_single_path=True,
+            verified_fractional_audio_ticks=overlap_report["fractional_audio_ticks"],
+            verified_audio_prefix_ticks=overlap_report["audio_prefix_ticks"],
             diagnostic_only=True,
         )
         return result
