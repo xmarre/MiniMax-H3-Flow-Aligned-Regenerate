@@ -211,10 +211,10 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("audio_position_domain='source_carrier'")
     if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
         mismatches.append("audio_handoff_source='main_partitioned'")
-    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
-        mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
-    if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
-        mismatches.append("guidance_trajectory_source='source_carrier_uniform_shadow'")
+    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN:
+        mismatches.append("av_handoff_source='main_partitioned'")
+    if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+        mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
     if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
         mismatches.append("audio_guided_overlap_mode='sampler_mask'")
     if int(audio_guided_overlap_ticks) != 16:
@@ -1065,6 +1065,10 @@ def run_partitioned_progressive(
             raw_audio_owner="source_carrier_uniform_primary",
             clean_video_owner="source_carrier_uniform_primary_probe",
             guidance_trajectory_owner="source_carrier_uniform_primary",
+            ui_audio_handoff_source=audio_handoff_source,
+            ui_av_handoff_source=av_handoff_source,
+            ui_guidance_trajectory_source=guidance_trajectory_source,
+            duplicate_shadow_lifetimes_expected=0,
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
@@ -1120,6 +1124,8 @@ def run_partitioned_progressive(
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             skipped_main_exact_partitioned_low_probe=True,
+            duplicate_shadow_lifetimes_executed=0,
+            production_shaped_single_path=True,
             diagnostic_only=True,
         )
         return result
