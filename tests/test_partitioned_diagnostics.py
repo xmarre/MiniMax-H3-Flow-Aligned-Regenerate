@@ -494,10 +494,12 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         disable_pbar,
         seed,
         latent_shapes,
+        exact_denoise_mask=None,
     ):
         del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(call_mask, exact_mask)
+        assert torch.equal(exact_denoise_mask, exact_mask)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
         exact_audio = unpack_streams(call_mask, latent_shapes)[1]
