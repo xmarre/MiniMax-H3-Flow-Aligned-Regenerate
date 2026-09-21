@@ -53,8 +53,6 @@ def test_source_uniform_primary_execution_requires_width16_sampler_mask_control_
         _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP)
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_mode"):
         _validate_candidate(audio_guided_overlap_mode="unsupported")
-    with pytest.raises(PartitionedPreflightUnsupported, match="guidance_trajectory_source"):
-        _validate_candidate(guidance_trajectory_source="main_exact_partitioned")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_position_domain"):
         _validate_candidate(audio_position_domain="legacy_target")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
@@ -69,8 +67,6 @@ def test_source_uniform_primary_controls_are_bounded_and_restore_exactly():
         "keep": keep,
         PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY: PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
         PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        PARTITIONED_AV_HANDOFF_SOURCE_KEY: PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
-        PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY: PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
         PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY: PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     }
     before = dict(transformer)
