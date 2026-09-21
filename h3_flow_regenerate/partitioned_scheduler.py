@@ -172,6 +172,81 @@ def _validate_av_handoff_shadow_configuration(
         )
 
 
+def _validate_fast_main_width16_candidate_configuration(
+    *,
+    low_probe_execution_source: str,
+    prefix_transformer_context: str,
+    vdn_linear_diagnostic: str,
+    audio_position_domain: str,
+    audio_handoff_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    audio_guided_overlap_mode: str,
+    audio_guided_overlap_ticks: int,
+) -> bool:
+    """Fail-close the production-shaped width-16 candidate to one exact-main path."""
+
+    if (
+        normalize_low_probe_execution_source(low_probe_execution_source)
+        != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        or audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+        or int(audio_guided_overlap_ticks) != 16
+    ):
+        return False
+
+    mismatches = []
+    if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        mismatches.append("prefix_transformer_context='exact_target_partitioned'")
+    if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+        mismatches.append("vdn_linear_diagnostic='normal'")
+    if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+        mismatches.append("audio_position_domain='source_carrier'")
+    if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+        mismatches.append("audio_handoff_source='main_partitioned'")
+    if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN:
+        mismatches.append("av_handoff_source='main_partitioned'")
+    if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+        mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
+    if mismatches:
+        raise PartitionedPreflightUnsupported(
+            "fast main width-16 candidate requires " + ", ".join(mismatches)
+        )
+    return True
+
+
+def _verify_fast_main_width16_sampler_mask(
+    runtime_mask: torch.Tensor,
+    latent_shapes: list[tuple[int, ...]],
+    *,
+    ticks: int,
+) -> dict[str, Any]:
+    """Prove the single-path candidate received the canonical fractional audio ramp."""
+
+    _video_mask, audio_mask = unpack_streams(runtime_mask, latent_shapes)
+    temporal_min = audio_mask.amin(dim=(0, 1, 2))
+    temporal_max = audio_mask.amax(dim=(0, 1, 2))
+    fractional = (temporal_min > 1e-8) & (temporal_max < 1.0 - 1e-8)
+    fractional_ticks = int(fractional.sum().item())
+    if fractional_ticks != int(ticks):
+        raise RuntimeError(
+            "fast main width-16 candidate did not receive the requested fractional audio overlap "
+            f"(expected {int(ticks)}, observed {fractional_ticks})"
+        )
+    observed = temporal_min[fractional].to(dtype=torch.float32)
+    observed_max = temporal_max[fractional].to(dtype=torch.float32)
+    if not torch.equal(observed, observed_max):
+        raise RuntimeError("fast main width-16 audio overlap is not uniform across audio rows")
+    raw = torch.arange(1, int(ticks) + 1, device=observed.device, dtype=torch.float32) / float(int(ticks) + 1)
+    expected = torch.ceil(raw * 256.0) / 256.0
+    if not torch.equal(observed, expected):
+        raise RuntimeError("fast main width-16 audio overlap does not match the canonical quantized ramp")
+    return {
+        "sampler_mask_fractional_ticks": fractional_ticks,
+        "sampler_mask_ramp_verified": True,
+        "sampler_mask_ramp": [float(value) for value in observed.tolist()],
+    }
+
+
 def _validate_guidance_trajectory_shadow_configuration(
     guidance_trajectory_source: str,
     *,
@@ -1016,6 +1091,17 @@ def run_partitioned_progressive(
         audio_guided_overlap_mode=audio_guided_overlap_mode,
         audio_guided_overlap_ticks=audio_guided_overlap_ticks,
     )
+    fast_main_width16_candidate = _validate_fast_main_width16_candidate_configuration(
+        low_probe_execution_source=low_probe_execution_source,
+        prefix_transformer_context=prefix_transformer_context,
+        vdn_linear_diagnostic=vdn_linear_diagnostic,
+        audio_position_domain=audio_position_domain,
+        audio_handoff_source=audio_handoff_source,
+        av_handoff_source=av_handoff_source,
+        guidance_trajectory_source=guidance_trajectory_source,
+        audio_guided_overlap_mode=audio_guided_overlap_mode,
+        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+    )
     if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
         # In the collapsed source-only diagnostic, the shadow selectors above are
         # guard values proving the exact #64 control tuple; no shadow sampler
@@ -1206,6 +1292,32 @@ def run_partitioned_progressive(
         source_shapes,
     )
 
+    fast_main_mask_report = None
+    if fast_main_width16_candidate:
+        fast_main_mask_report = _verify_fast_main_width16_sampler_mask(
+            low_mask,
+            source_shapes,
+            ticks=audio_guided_overlap_ticks,
+        )
+        binding.metrics.event(
+            "partitioned_fast_main_width16_plan",
+            source="main_exact_partitioned",
+            low_probe_execution_source=low_probe_execution_source,
+            prefix_transformer_context=prefix_transformer_context,
+            audio_position_domain=audio_position_domain,
+            audio_handoff_source=audio_handoff_source,
+            av_handoff_source=av_handoff_source,
+            guidance_trajectory_source=guidance_trajectory_source,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            expected_sampler_invocations=3,
+            expected_history_boundaries=2,
+            shadow_sampler_lifetimes_expected=0,
+            production_shaped_single_path=True,
+            diagnostic_only=True,
+            **fast_main_mask_report,
+        )
+
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
         "partitioned_stage_plan",
@@ -1276,6 +1388,16 @@ def run_partitioned_progressive(
 
     sampler_invocation_count = 0
     history_boundary_count = 0
+    fast_main_shadow_audio_before = int(
+        binding.metrics.counters.get("partitioned_audio_handoff_shadow_low_invocations", 0)
+    )
+    fast_main_shadow_av_low_before = int(
+        binding.metrics.counters.get("partitioned_av_handoff_shadow_low_invocations", 0)
+    )
+    fast_main_shadow_av_probe_before = int(
+        binding.metrics.counters.get("partitioned_av_handoff_shadow_probe_invocations", 0)
+    )
+    fast_main_partitioned_calls_before = int(binding.metrics.counters.get("partitioned_transformer_calls", 0))
     bypass_calls_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_calls", 0))
     bypass_video_rows_before = int(binding.metrics.counters.get("partitioned_vdn_linear_bypass_video_rows", 0))
     suppression_calls_before = int(
@@ -2137,6 +2259,62 @@ def run_partitioned_progressive(
             transfer_mode="learned_3d_suffix_context",
             input_mode="partitioned_exact_prefix",
         )
+        if fast_main_width16_candidate:
+            shadow_audio_delta = (
+                int(binding.metrics.counters.get("partitioned_audio_handoff_shadow_low_invocations", 0))
+                - fast_main_shadow_audio_before
+            )
+            shadow_av_low_delta = (
+                int(binding.metrics.counters.get("partitioned_av_handoff_shadow_low_invocations", 0))
+                - fast_main_shadow_av_low_before
+            )
+            shadow_av_probe_delta = (
+                int(binding.metrics.counters.get("partitioned_av_handoff_shadow_probe_invocations", 0))
+                - fast_main_shadow_av_probe_before
+            )
+            source_uniform_call_delta = (
+                int(binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0))
+                - source_carrier_calls_before
+            )
+            exact_partitioned_call_delta = (
+                int(binding.metrics.counters.get("partitioned_transformer_calls", 0))
+                - fast_main_partitioned_calls_before
+            )
+            model_timestep_call_delta = (
+                int(binding.metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0))
+                - audio_model_timestep_calls_before
+            )
+            if sampler_invocation_count != 3 or history_boundary_count != 2:
+                raise RuntimeError(
+                    "fast main width-16 candidate did not preserve exactly low/probe/high sampler lifetimes"
+                )
+            if shadow_audio_delta or shadow_av_low_delta or shadow_av_probe_delta:
+                raise RuntimeError("fast main width-16 candidate unexpectedly executed a shadow sampler lifetime")
+            if source_uniform_call_delta != 0:
+                raise RuntimeError("fast main width-16 candidate unexpectedly executed source-uniform transformer calls")
+            if exact_partitioned_call_delta <= 0:
+                raise RuntimeError("fast main width-16 candidate produced no exact-partitioned transformer calls")
+            if model_timestep_call_delta != 0:
+                raise RuntimeError("fast main width-16 sampler-mask candidate executed model-timestep audio guidance")
+            binding.metrics.event(
+                "partitioned_fast_main_width16_complete",
+                source="main_exact_partitioned",
+                sampler_invocation_count=sampler_invocation_count,
+                history_boundary_count=history_boundary_count,
+                shadow_audio_low_invocation_delta=shadow_audio_delta,
+                shadow_av_low_invocation_delta=shadow_av_low_delta,
+                shadow_av_probe_invocation_delta=shadow_av_probe_delta,
+                source_uniform_transformer_call_delta=source_uniform_call_delta,
+                exact_partitioned_transformer_call_delta=exact_partitioned_call_delta,
+                model_timestep_override_call_delta=model_timestep_call_delta,
+                raw_audio_owner="main_exact_partitioned",
+                clean_video_owner="main_exact_partitioned_probe",
+                guidance_trajectory_owner="main_exact_partitioned",
+                production_shaped_single_path=True,
+                final_exact_prefix_requested=True,
+                diagnostic_only=True,
+                **(fast_main_mask_report or {}),
+            )
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:
             binding.metrics.event(
                 "partitioned_audio_handoff_shadow_complete",
@@ -2196,6 +2374,7 @@ __all__ = [
     "PartitionedPreflightUnsupported",
     "_isolated_shadow_trajectory_capture",
     "_resolve_audio_diagnostic_masks",
+    "_validate_fast_main_width16_candidate_configuration",
     "_select_source_uniform_shadow_clean_video",
     "_source_uniform_audio_shadow_controls",
     "_source_uniform_av_shadow_stage_contract",
@@ -2205,5 +2384,6 @@ __all__ = [
     "_validate_av_handoff_shadow_configuration",
     "_validate_guidance_trajectory_shadow_configuration",
     "_verify_audio_position_domain_diagnostic",
+    "_verify_fast_main_width16_sampler_mask",
     "run_partitioned_progressive",
 ]
