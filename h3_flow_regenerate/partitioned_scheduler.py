@@ -22,6 +22,7 @@ from .handoff import ProgressiveTargetInputConfig, build_handoff_state, determin
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
@@ -214,8 +215,11 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         mismatches.append("guidance_trajectory_source='source_carrier_uniform_shadow'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
+    if audio_guided_overlap_mode not in {
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    }:
+        mismatches.append("audio_guided_overlap_mode='model_timestep_only' or 'sampler_mask'")
     if int(audio_guided_overlap_ticks) != 4:
         mismatches.append("audio_guided_overlap_ticks=4")
     if mismatches:
@@ -984,27 +988,6 @@ def run_partitioned_progressive(
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
-    _validate_audio_handoff_shadow_configuration(
-        audio_handoff_source,
-        prefix_transformer_context=prefix_transformer_context,
-        vdn_linear_diagnostic=vdn_linear_diagnostic,
-        audio_position_domain=audio_position_domain,
-        audio_guided_overlap_mode=audio_guided_overlap_mode,
-        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
-    )
-    _validate_av_handoff_shadow_configuration(
-        av_handoff_source,
-        audio_handoff_source=audio_handoff_source,
-        prefix_transformer_context=prefix_transformer_context,
-        vdn_linear_diagnostic=vdn_linear_diagnostic,
-        audio_position_domain=audio_position_domain,
-        audio_guided_overlap_mode=audio_guided_overlap_mode,
-        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
-    )
-    _validate_guidance_trajectory_shadow_configuration(
-        guidance_trajectory_source,
-        av_handoff_source=av_handoff_source,
-    )
     _validate_low_probe_execution_source_configuration(
         low_probe_execution_source,
         prefix_transformer_context=prefix_transformer_context,
@@ -1016,6 +999,32 @@ def run_partitioned_progressive(
         audio_guided_overlap_mode=audio_guided_overlap_mode,
         audio_guided_overlap_ticks=audio_guided_overlap_ticks,
     )
+    if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+        # In the collapsed source-only diagnostic, the shadow selectors above are
+        # guard values proving the exact #64 control tuple; no shadow sampler
+        # lifetime executes. Validate shadow-specific overlap requirements only
+        # when those shadow lifetimes actually remain in the execution plan.
+        _validate_audio_handoff_shadow_configuration(
+            audio_handoff_source,
+            prefix_transformer_context=prefix_transformer_context,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_position_domain=audio_position_domain,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
+        _validate_av_handoff_shadow_configuration(
+            av_handoff_source,
+            audio_handoff_source=audio_handoff_source,
+            prefix_transformer_context=prefix_transformer_context,
+            vdn_linear_diagnostic=vdn_linear_diagnostic,
+            audio_position_domain=audio_position_domain,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        )
+        _validate_guidance_trajectory_shadow_configuration(
+            guidance_trajectory_source,
+            av_handoff_source=av_handoff_source,
+        )
     if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
         if binding.guidance is None or binding.guidance.mode == "off":
             raise PartitionedPreflightUnsupported(
@@ -1039,6 +1048,8 @@ def run_partitioned_progressive(
             raw_audio_owner="source_carrier_uniform_primary",
             clean_video_owner="source_carrier_uniform_primary_probe",
             guidance_trajectory_owner="source_carrier_uniform_primary",
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
             learned_transfer_unchanged=True,
             target_high_unchanged=True,
@@ -1088,6 +1099,8 @@ def run_partitioned_progressive(
             history_boundary_delta=history_delta,
             source_uniform_transformer_calls=source_call_delta,
             exact_partitioned_transformer_calls=partitioned_call_delta,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             skipped_main_exact_partitioned_low_probe=True,
             diagnostic_only=True,
         )
