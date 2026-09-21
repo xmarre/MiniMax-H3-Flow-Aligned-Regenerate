@@ -228,9 +228,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
                 "tooltip": (
-                    "sampler_mask preserves the existing A-run behavior. model_timestep_only "
-                    "keeps the sampler/exact audio prefix untouched and exposes the same ramp "
-                    "only to MiniMax-H3's inner audio timestep/modulation labels."
+                    "sampler_mask applies the overlap to sampler ownership and MiniMax-H3 timestep labels. "
+                    "model_timestep_only keeps sampler ownership exact and exposes the ramp only to inner "
+                    "timestep labels. sampler_mask_exact_timestep keeps the sampler-owned overlap but restores "
+                    "authoritative binary labels inside MiniMax-H3 to test boundary-tail semantic replay."
                 ),
             },
         )

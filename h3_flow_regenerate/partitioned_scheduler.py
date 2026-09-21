@@ -23,6 +23,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
@@ -215,8 +216,13 @@ def _validate_low_probe_execution_source_configuration(
         mismatches.append("av_handoff_source='main_partitioned'")
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
         mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
-        mismatches.append("audio_guided_overlap_mode='sampler_mask'")
+    if audio_guided_overlap_mode not in (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    ):
+        mismatches.append(
+            "audio_guided_overlap_mode in {'sampler_mask', 'sampler_mask_exact_timestep'}"
+        )
     if int(audio_guided_overlap_ticks) != 16:
         mismatches.append("audio_guided_overlap_ticks=16")
     if mismatches:
