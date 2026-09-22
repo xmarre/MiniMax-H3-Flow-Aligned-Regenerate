@@ -239,7 +239,6 @@ def compare_audio_latent_stages(
     return report
 
 
-
 def apply_audio_exact_restore_suffix_bridge(
     result: torch.Tensor,
     latent_image: torch.Tensor,
