@@ -216,9 +216,8 @@ def test_exact_mask_adapter_transfers_audio_transition_before_partitioned_restor
     _returned_video, returned_audio = unpack_streams(returned, shapes)
     returned_audio[..., 5] = 1.75
     returned_audio[..., 6] = 2.20
-    sampled_relation = (
-        returned_audio[..., 6].clone().to(torch.float32)
-        - returned_audio[..., 5].clone().to(torch.float32)
+    sampled_relation = returned_audio[..., 6].clone().to(torch.float32) - returned_audio[..., 5].clone().to(
+        torch.float32
     )
 
     binding = FlowBinding()
@@ -253,9 +252,7 @@ def test_exact_mask_adapter_transfers_audio_transition_before_partitioned_restor
     )
     assert torch.equal(result_audio[..., 7:], audio[..., 7:])
 
-    bridge_events = [
-        event for event in binding.metrics.events if event.kind == "audio_exact_restore_suffix_bridge"
-    ]
+    bridge_events = [event for event in binding.metrics.events if event.kind == "audio_exact_restore_suffix_bridge"]
     assert len(bridge_events) == 1
     bridge = bridge_events[0].fields
     assert bridge["source"] == "partitioned_exact_prefix_high"
