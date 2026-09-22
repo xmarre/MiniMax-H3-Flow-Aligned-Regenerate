@@ -344,17 +344,14 @@ def apply_audio_exact_restore_suffix_bridge(
     sampled_relation = suffix_before - sampled_last
     uncorrected_exact_relation = suffix_before - exact_last
     sampled_edge_rms = float(sampled_relation.square().mean().sqrt().item())
-    uncorrected_exact_edge_rms = float(
-        uncorrected_exact_relation.square().mean().sqrt().item()
-    )
+    uncorrected_exact_edge_rms = float(uncorrected_exact_relation.square().mean().sqrt().item())
     report.update(
         {
             "delta_rms": delta_rms,
             "delta_max_abs": delta_max,
             "sampled_edge_rms": sampled_edge_rms,
             "uncorrected_exact_edge_rms": uncorrected_exact_edge_rms,
-            "uncorrected_over_sampled_edge": uncorrected_exact_edge_rms
-            / max(sampled_edge_rms, 1.0e-12),
+            "uncorrected_over_sampled_edge": uncorrected_exact_edge_rms / max(sampled_edge_rms, 1.0e-12),
         }
     )
     if delta_max == 0.0:
@@ -376,8 +373,7 @@ def apply_audio_exact_restore_suffix_bridge(
             "reason": "exact_restore_transition_transfer",
             "corrected_ticks": 1,
             "corrected_exact_edge_rms": corrected_exact_edge_rms,
-            "corrected_over_uncorrected_edge": corrected_exact_edge_rms
-            / max(uncorrected_exact_edge_rms, 1.0e-12),
+            "corrected_over_uncorrected_edge": corrected_exact_edge_rms / max(uncorrected_exact_edge_rms, 1.0e-12),
             "relation_error_rms": float(relation_error.square().mean().sqrt().item()),
         }
     )
