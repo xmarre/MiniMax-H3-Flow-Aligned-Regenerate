@@ -324,7 +324,10 @@ def apply_audio_exact_restore_suffix_bridge(
         )
 
     sampled_last = result_audio[..., prefix - 1].detach().to(torch.float32)
-    exact_last = reference_audio[..., prefix - 1].detach().to(\n        device=result_audio.device,\n        dtype=torch.float32,\n    )
+    exact_last = reference_audio[..., prefix - 1].detach().to(
+        device=result_audio.device,
+        dtype=torch.float32,
+    )
     suffix_before = result_audio[..., prefix].detach().to(torch.float32)
     delta = exact_last - sampled_last
     delta_rms = float(delta.square().mean().sqrt().item())
