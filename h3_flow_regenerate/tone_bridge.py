@@ -1,4 +1,4 @@
-"""Experimental suffix-only DC bridge for mixed-grid exact-prefix handoffs."""
+"""Suffix-only DC continuity bridge for learned exact-prefix handoffs."""
 
 from __future__ import annotations
 

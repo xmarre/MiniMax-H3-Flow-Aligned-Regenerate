@@ -93,6 +93,11 @@ from .seam_diagnostics import (
     project_translation_trajectory_to_grid,
     recover_conditional_clean_for_diagnostics,
 )
+from .tone_bridge import (
+    apply_suffix_dc_bridge,
+    disabled_suffix_dc_bridge_metrics,
+    map_clean_bridge_to_conditional_state,
+)
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
@@ -848,9 +853,9 @@ def _preflight(
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
     if config.transfer_mode != "learned_3d":
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires learned_3d handoff transfer")
-    if config.suffix_dc_bridge or config.suffix_geometric_bridge:
+    if config.suffix_geometric_bridge:
         raise PartitionedPreflightUnsupported(
-            "partitioned exact-prefix does not inherit retired seam-repair heuristics"
+            "partitioned exact-prefix does not inherit the retired geometric seam-repair heuristic"
         )
     if denoise_mask is None or not _has_exact_video_protection(denoise_mask, latent_shapes):
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires an exact protected video prefix")
@@ -900,6 +905,49 @@ def _recover_partitioned_transfer_clean(
         diagnostic_noise,
         sigma=float(sigma),
     )
+
+
+def _apply_partitioned_suffix_dc_bridge(
+    target_video: torch.Tensor,
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    sigma: float,
+    enabled: bool,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float | int | bool]]:
+    """Preserve the learned handoff's native DC relation across exact-prefix restore.
+
+    The learned 3D transfer produces a coherent learned prefix/suffix pair, but
+    partitioned continuation must replace that prefix with caller-owned exact
+    target-grid context.  When enabled, transfer the resulting per-channel
+    spatial-mean offset onto only the first generated suffix token and map that
+    clean-space change onto the already re-noised conditional state.  The exact
+    prefix and every later suffix token remain untouched by the bridge itself.
+    """
+
+    prefix_t = int(exact_prefix.shape[2])
+    if not enabled:
+        return (
+            target_video.clone(),
+            learned_clean.clone(),
+            disabled_suffix_dc_bridge_metrics(prefix_t=prefix_t),
+        )
+
+    corrected_clean, bridge_metrics = apply_suffix_dc_bridge(
+        learned_clean,
+        exact_prefix,
+        weights=(1.0,),
+    )
+    corrected_tokens = int(bridge_metrics["suffix_dc_bridge_corrected_tokens"])
+    mapped_state = map_clean_bridge_to_conditional_state(
+        target_video,
+        learned_clean,
+        corrected_clean,
+        sigma=float(sigma),
+        prefix_t=prefix_t,
+        corrected_tokens=corrected_tokens,
+    )
+    return mapped_state, corrected_clean, bridge_metrics
 
 
 def _measure_partitioned_transfer_splice(
@@ -1857,17 +1905,38 @@ def run_partitioned_progressive(
             device=learned_clean.device,
             dtype=learned_clean.dtype,
         )
+        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
+            target_video,
+            learned_clean,
+            exact_prefix,
+            sigma=sigma,
+            enabled=bool(config.suffix_dc_bridge),
+        )
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
             exact_prefix,
+            corrected_clean_video=corrected_clean,
         )
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery="inverse_conditional_renoise",
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
-        restored_clean = learned_clean.clone()
-        restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix
+        binding.metrics.event(
+            "partitioned_suffix_dc_bridge",
+            source="learned_3d_exact_prefix_handoff",
+            state_mapping="conditional_renoise_affine",
+            authoritative_prefix_modified=False,
+            later_suffix_modified=False,
+            **dc_bridge_metrics,
+        )
+        if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
+            binding.metrics.increment("partitioned_suffix_dc_bridge_runs")
+
+        # Splice diagnostics above require the learned prefix.  From here on the
+        # clean diagnostic tensor mirrors the actual high-stage state: corrected
+        # first suffix token plus the authoritative exact target-grid prefix.
+        corrected_clean[:, :, : stage_plan.prefix_t] = exact_prefix
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             native_trajectory = measure_translation_trajectory(
                 learned_clean,
@@ -1878,7 +1947,7 @@ def run_partitioned_progressive(
                 max_shift=4,
             )
             restored_trajectory = measure_translation_trajectory(
-                restored_clean,
+                corrected_clean,
                 stage_plan.prefix_t,
                 forward_steps=4,
                 backward_steps=3,
@@ -1899,8 +1968,7 @@ def run_partitioned_progressive(
             )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
-        del restored_clean, learned_clean
-        target_video = target_video.clone()
+        del corrected_clean, learned_clean
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
@@ -1911,6 +1979,8 @@ def run_partitioned_progressive(
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
+            suffix_dc_bridge_state_mapping="conditional_renoise_affine",
+            **dc_bridge_metrics,
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             model_name=transfer_metrics.get("model_name"),

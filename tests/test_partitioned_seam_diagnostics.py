@@ -7,7 +7,10 @@ import torch
 
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
-from h3_flow_regenerate.partitioned_scheduler import _measure_partitioned_transfer_splice
+from h3_flow_regenerate.partitioned_scheduler import (
+    _apply_partitioned_suffix_dc_bridge,
+    _measure_partitioned_transfer_splice,
+)
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
 
 
@@ -161,3 +164,67 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
     assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)
     assert projected["target_equivalent_anchor_final_dy"] == pytest.approx(1.5)
     assert "target_equivalent_pairwise_response" not in projected
+
+
+def test_partitioned_suffix_dc_bridge_preserves_learned_native_dc_relation_and_scope():
+    learned = torch.zeros(1, 24, 5, 4, 4, dtype=torch.float32)
+    learned[:, :, 1] = 1.0
+    learned[:, :, 2] = 3.0
+    learned[:, :, 3] = 5.0
+    learned[:, :, 4] = 7.0
+    exact = learned[:, :, :2].clone()
+    exact[:, :, 1] = 10.0
+
+    sigma = 0.4
+    seed = 321
+    noise = deterministic_video_noise(
+        tuple(learned.shape),
+        seed=seed,
+        device=learned.device,
+        dtype=learned.dtype,
+    )
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+
+    mapped, corrected, metrics = _apply_partitioned_suffix_dc_bridge(
+        state,
+        learned,
+        exact,
+        sigma=sigma,
+        enabled=True,
+    )
+
+    learned_native = learned[:, :, 2].mean((-2, -1)) - learned[:, :, 1].mean((-2, -1))
+    corrected_exact = corrected[:, :, 2].mean((-2, -1)) - exact[:, :, 1].mean((-2, -1))
+    assert torch.allclose(corrected_exact, learned_native, rtol=0.0, atol=1e-6)
+    assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
+    assert torch.equal(corrected[:, :, 3:], learned[:, :, 3:])
+    assert torch.equal(mapped[:, :, :2], state[:, :, :2])
+    assert torch.equal(mapped[:, :, 3:], state[:, :, 3:])
+
+    expected = state.clone()
+    expected[:, :, 2] += (1.0 - sigma) * (corrected[:, :, 2] - learned[:, :, 2])
+    assert torch.allclose(mapped, expected, rtol=1e-6, atol=1e-6)
+    assert metrics["suffix_dc_bridge_enabled"] is True
+    assert metrics["suffix_dc_bridge_corrected_tokens"] == 1
+    assert metrics["suffix_dc_bridge_first_weight"] == 1.0
+
+
+def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
+    learned = torch.randn(1, 24, 4, 4, 4, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    state = torch.randn_like(learned)
+
+    mapped, corrected, metrics = _apply_partitioned_suffix_dc_bridge(
+        state,
+        learned,
+        exact,
+        sigma=0.5,
+        enabled=False,
+    )
+
+    assert torch.equal(mapped, state)
+    assert torch.equal(corrected, learned)
+    assert mapped.data_ptr() != state.data_ptr()
+    assert corrected.data_ptr() != learned.data_ptr()
+    assert metrics["suffix_dc_bridge_enabled"] is False
+    assert metrics["suffix_dc_bridge_corrected_tokens"] == 0

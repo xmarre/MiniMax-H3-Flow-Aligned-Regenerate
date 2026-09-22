@@ -109,7 +109,9 @@ class H3PartitionedExactPrefixHandoff:
             # new partitioned scheduler is selected by a separate model-local key
             # below, so no deprecated Mixed-Grid mode is reinterpreted.
             exact_prefix_mode="fallback",
-            suffix_dc_bridge=False,
+            # Preserve the learned upscaler's native one-token DC boundary
+            # relation when its transient prefix is replaced by exact context.
+            suffix_dc_bridge=True,
             suffix_geometric_bridge=False,
         )
         if source_mode == "scale":
@@ -182,6 +184,7 @@ class H3PartitionedExactPrefixHandoff:
             vdn_grouped_softmax_preserved=True,
             vdn_variable_grid_linear_enabled=True,
             guided_audio_overlap=True,
+            suffix_dc_bridge=True,
             preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
