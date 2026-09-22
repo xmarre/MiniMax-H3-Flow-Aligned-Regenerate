@@ -280,11 +280,19 @@ def test_audio_exact_restore_suffix_bridge_preserves_first_transition_without_to
     assert report["reason"] == "exact_restore_transition_transfer"
     assert report["audio_prefix_ticks"] == 6
     assert report["corrected_ticks"] == 1
-    assert report["sampled_edge_rms"] > 0.0
-    assert report["uncorrected_exact_edge_rms"] > report["sampled_edge_rms"]
-    assert report["corrected_exact_edge_rms"] < report["uncorrected_exact_edge_rms"]
-    assert report["uncorrected_over_sampled_edge"] > 1.0
-    assert report["corrected_over_uncorrected_edge"] < 1.0
+    expected_sampled_edge_rms = float(sampled_relation.square().mean().sqrt().item())
+    expected_uncorrected_edge = before_first_suffix.to(torch.float32) - reference_audio[..., 5].to(torch.float32)
+    expected_uncorrected_edge_rms = float(expected_uncorrected_edge.square().mean().sqrt().item())
+    assert report["sampled_edge_rms"] == pytest.approx(expected_sampled_edge_rms)
+    assert report["uncorrected_exact_edge_rms"] == pytest.approx(expected_uncorrected_edge_rms)
+    assert report["corrected_exact_edge_rms"] == pytest.approx(expected_sampled_edge_rms, abs=1.0e-6)
+    assert report["uncorrected_over_sampled_edge"] == pytest.approx(
+        expected_uncorrected_edge_rms / max(expected_sampled_edge_rms, 1.0e-12)
+    )
+    assert report["corrected_over_uncorrected_edge"] == pytest.approx(
+        expected_sampled_edge_rms / max(expected_uncorrected_edge_rms, 1.0e-12),
+        abs=1.0e-6,
+    )
     assert report["relation_error_rms"] <= 1.0e-6
     assert report["protected_prefix_modified"] is False
     assert report["later_suffix_modified"] is False
