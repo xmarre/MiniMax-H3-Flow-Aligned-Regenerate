@@ -245,7 +245,7 @@ def test_audio_exact_restore_suffix_bridge_preserves_first_transition_without_to
     packed, shapes, exact_mask = _packed_case(audio_t=12, audio_prefix=6)
     result = packed.clone()
     result_video, result_audio = unpack_streams(result, shapes)
-    reference_video, reference_audio = unpack_streams(packed, shapes)
+    _reference_video, reference_audio = unpack_streams(packed, shapes)
 
     result_audio[..., 5] += 0.75
     result_audio[..., 6] -= 0.20
