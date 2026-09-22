@@ -280,6 +280,12 @@ def test_audio_exact_restore_suffix_bridge_preserves_first_transition_without_to
     assert report["reason"] == "exact_restore_transition_transfer"
     assert report["audio_prefix_ticks"] == 6
     assert report["corrected_ticks"] == 1
+    assert report["sampled_edge_rms"] > 0.0
+    assert report["uncorrected_exact_edge_rms"] > report["sampled_edge_rms"]
+    assert report["corrected_exact_edge_rms"] < report["uncorrected_exact_edge_rms"]
+    assert report["uncorrected_over_sampled_edge"] > 1.0
+    assert report["corrected_over_uncorrected_edge"] < 1.0
+    assert report["relation_error_rms"] <= 1.0e-6
     assert report["protected_prefix_modified"] is False
     assert report["later_suffix_modified"] is False
     assert report["extra_h3_nfe"] == 0
