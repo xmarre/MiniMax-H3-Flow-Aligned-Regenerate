@@ -6,8 +6,8 @@ from types import ModuleType, SimpleNamespace
 import torch
 
 from h3_flow_regenerate.comfy_compat import (
-    _ProgressiveExactMaskExecutor,
     _canonicalize_exact_masked_output,
+    _ProgressiveExactMaskExecutor,
     flow_outer_wrapper_with_exact_mask,
 )
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
