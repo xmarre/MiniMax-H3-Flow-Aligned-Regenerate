@@ -42,6 +42,40 @@ offload_after_upscale  = false
 
 Historical benchmark configurations in `BENCHMARKS.md`, `PERFORMANCE.md`, and `workflows/benchmark-matrix.json` retain the values that were actually measured. They are evidence records, not current-default declarations.
 
+## Partitioned exact-prefix Continuum defaults
+
+For the coordinated Sol-H3/VDN-H3-Plus Continuum stack, use **MiniMax H3 Partitioned Exact-Prefix Handoff**. The displayed production defaults are:
+
+```text
+source_mode                = scale
+source_scale               = 0.70
+source_width               = 864
+source_height              = 640
+handoff_coordinate         = 0.35
+handoff_selection          = fixed
+guidance_mode              = direction+temporal
+direction_weight           = 0.25
+acceleration_weight        = 0.25
+consistency_weight         = 0.25
+low_frequency_cutoff       = 0.25
+temporal_weight            = 0.20
+vdn_linear_diagnostic      = normal
+audio_guided_overlap_ticks = 4
+audio_guided_overlap_mode  = sampler_mask_exact_timestep
+prefix_transformer_context = exact_target_partitioned
+audio_position_domain      = source_carrier
+audio_handoff_source       = main_partitioned
+av_handoff_source          = main_partitioned
+guidance_trajectory_source = main_exact_partitioned
+low_probe_execution_source = source_carrier_uniform_only
+```
+
+The historical class/node ID is retained for serialized-workflow compatibility, but the displayed node name no longer includes `[Diagnostic]`.
+
+This profile runs a single source-uniform low/probe continuation path and then target-high. The four-tick sampler-owned audio ramp is approximately 100 ms at H3's 40 Hz audio-latent rate, while `sampler_mask_exact_timestep` keeps MiniMax-H3's inner timestep/modulation labels on the authoritative exact-prefix mask. The width remains user-selectable from 0 through 16; four ticks is the validated default rather than a hard preflight requirement.
+
+The learned-transfer boundary applies the partitioned one-token DC continuity correction before restoring the authoritative target-grid prefix. The bridge changes only the first generated video suffix token; the exact prefix and later suffix tokens remain untouched by the bridge itself.
+
 ## Common concepts
 
 ### Flow trajectory
