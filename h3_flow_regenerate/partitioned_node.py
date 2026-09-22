@@ -219,8 +219,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "Node-local 40-Hz audio overlap width. Use 4 for the current "
-                    "production-shaped behavior and 0 for the matched audio A/B control."
+                    "Node-local 40-Hz audio overlap width in the supported 0..16 range. "
+                    "The source-uniform fast path accepts the selected width. 16 ticks is "
+                    "the previously hardware-validated production tuple; smaller widths, "
+                    "including 4 and 0, are diagnostic A/B settings."
                 ),
             },
         )
