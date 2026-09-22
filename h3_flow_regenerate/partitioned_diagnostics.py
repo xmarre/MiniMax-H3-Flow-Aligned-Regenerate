@@ -30,9 +30,11 @@ PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY = "h3_flow_partitioned_audio_guided_o
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY = "h3_flow_partitioned_audio_guided_overlap_mode_v1"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER = "sampler_mask"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP = "model_timestep_only"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP = "sampler_mask_exact_timestep"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS = (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
 )
 PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY = "h3_flow_partitioned_audio_model_timestep_context_v1"
 
@@ -88,12 +90,13 @@ VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 @dataclass(slots=True)
 class PartitionedAudioModelTimestepContext:
-    """Call-scoped audio timestep mask consumed only inside MiniMax-H3's inner forward."""
+    """Call-scoped audio mask consumed only inside MiniMax-H3's inner forward."""
 
     audio_mask: Any
     metrics: Any
     ticks: int
     audio_prefix_ticks: int
+    mask_kind: str = "guided_overlap"
     calls: int = 0
 
     def record_call(self) -> None:
@@ -286,6 +289,7 @@ __all__ = [
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN",

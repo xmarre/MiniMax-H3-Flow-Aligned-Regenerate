@@ -290,16 +290,16 @@ def _audio_model_timestep_kwargs(options, kwargs):
         return kwargs
     if not isinstance(context, PartitionedAudioModelTimestepContext):
         raise RuntimeError("partitioned audio model-timestep context is malformed")
-    exact_audio_mask = kwargs.get("audio_denoise_mask")
-    if not torch.is_tensor(exact_audio_mask):
-        raise RuntimeError("model-timestep-only audio guidance requires the exact native audio denoise mask")
+    runtime_audio_mask = kwargs.get("audio_denoise_mask")
+    if not torch.is_tensor(runtime_audio_mask):
+        raise RuntimeError("partitioned audio timestep override requires the native runtime audio denoise mask")
     context_audio_mask = context.audio_mask
-    if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(exact_audio_mask.shape):
-        raise RuntimeError("model-timestep-only audio guidance mask geometry drifted")
+    if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(runtime_audio_mask.shape):
+        raise RuntimeError("partitioned audio timestep override mask geometry drifted")
     local = dict(kwargs)
     local["audio_denoise_mask"] = context_audio_mask.to(
-        device=exact_audio_mask.device,
-        dtype=exact_audio_mask.dtype,
+        device=runtime_audio_mask.device,
+        dtype=runtime_audio_mask.dtype,
     )
     context.record_call()
     return local
