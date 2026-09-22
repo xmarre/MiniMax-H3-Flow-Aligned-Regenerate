@@ -365,7 +365,6 @@ def measure_translation_trajectory(
     }
 
 
-
 def _weighted_axis_affine_fit(
     positions: list[float],
     displacements: list[float],
