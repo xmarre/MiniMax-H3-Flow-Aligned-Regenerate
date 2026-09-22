@@ -69,6 +69,8 @@ jobs:
         run: |
           git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyUI
           git -C .contracts/ComfyUI checkout 1af040bf022569d7a890241c8dd79b296cda483f
+          git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyMask
+          git -C .contracts/ComfyMask checkout 421a1c245c682c04d4325ba365f40c834c66f5b0
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
           git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
@@ -80,13 +82,18 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
-          git -C .contracts/Upscaler checkout bdc670e5926bcefbe4022e17fe8b171fbfcf15de
+          git -C .contracts/Upscaler checkout 620165a311de9b28a36260219fb5cd370a304e3c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
+          git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
+          git -C .contracts/VDNPartitioned checkout 1c01d53504c7585b72843e0bd3d3c3b6f72d6628
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
             --comfy .contracts/ComfyUI \
+            --comfy-mask .contracts/ComfyMask \
             --spectrum .contracts/Spectrum \
             --continuum .contracts/Continuum \
             --diffaid .contracts/DiffAid \
@@ -106,3 +113,8 @@ jobs:
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
           python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
+      - name: Validate partitioned exact-prefix cross-repo contracts
+        run: |
+          python tools/check_partitioned_exact_prefix_contracts.py \
+            --sol .contracts/SolPartitioned \
+            --vdn .contracts/VDNPartitioned

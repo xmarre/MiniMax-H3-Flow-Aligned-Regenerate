@@ -1,3 +1,49 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.6
+
+## Fast exact-prefix continuation
+
+v0.3.6 promotes the hardware-validated Flow #70 production path for exact-prefix progressive continuation. The later continuation no longer pays for duplicated exact-main plus shadow low/probe executions. It keeps one source-uniform low/probe path followed by the target-high stage:
+
+```text
+continuation sampler lifetimes: 3
+history boundaries:             2
+source-uniform transformer:     6 calls
+duplicate shadow lifetimes:     0
+```
+
+The production tuple uses the source-carrier uniform low/probe execution, learned 3D suffix transfer, the existing mapped Sol/VDN contracts, and exact caller-visible output restoration.
+
+## 16-tick sampler-owned audio overlap
+
+The released fast path carries the width-16 sampler-owned audio overlap that repaired the decoded continuation seam in controlled hardware runs. The overlap is applied only during sampling; the original exact prefix remains authoritative at output.
+
+Run 00575 validated the final #70 implementation:
+
+- continuation sampler wall: **228.895 s**;
+- low: **106.277 s**;
+- probe: **22.860 s**;
+- target-high: **98.709 s**;
+- exactly 3 sampler invocations / 2 history boundaries;
+- six source-uniform transformer calls and zero duplicate exact-partitioned/shadow calls;
+- PT213 remained in the accepted repaired class at **+2.3707 dB**;
+- PT214's decoder-safe carried-prefix interior remained exact;
+- decoded video and float32 stereo audio streams were byte-identical to the accepted width-16 00567 run.
+
+Direct re-indexing also corrected the earlier false visual-timing premise: the frame-186 transition in 00567/00575 is within one frame of the 00562/00563 controls and is not a demonstrated #70 semantic regression.
+
+## Production topology
+
+The release keeps the exact-prefix partitioned backend contract needed by the companion Sol/VDN stack while avoiding the #68/#69 duplicated execution topology. It does not add an H3 NFE, change the scheduler, alter the learned transfer, or move ownership of the final exact prefix.
+
+## Release scope
+
+Flow #70 is the production source line. Historical duplicated-shadow experiments and later Flow #72's inner-audio-timestep arm remain diagnostic-only and are **not merged or promoted** in v0.3.6. Keyless research is also excluded.
+
+Important validation scope: the later Continuum 00603/00604 confirmation renders were run with an additional Flow diagnostic overlay while testing the Continuum prompt/audio fix. That overlay is intentionally not part of this release. Flow v0.3.6 is based on the independently hardware-validated #70/00575 production result.
+
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.5
 
 v0.3.5 makes **MiniMax H3 Progressive Handoff (Target Input)** the standard target-input/Continuum progressive path and retires Mixed-Grid from the production acceptance matrix.
