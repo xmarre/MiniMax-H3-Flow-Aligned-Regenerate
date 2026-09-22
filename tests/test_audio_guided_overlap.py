@@ -10,6 +10,8 @@ from h3_flow_regenerate.audio_guided_overlap import (
     DEFAULT_AUDIO_GUIDED_OVERLAP_TICKS,
     apply_audio_guided_overlap_mask,
     configured_audio_guided_overlap_ticks,
+    measure_audio_latent_boundary,
+    validate_audio_guided_overlap_ticks,
 )
 from h3_flow_regenerate.comfy_compat import flow_outer_wrapper_with_exact_mask
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
@@ -175,3 +177,61 @@ def test_fallback_sampler_sees_guided_audio_but_return_restores_original_exact_p
     assert len(exact_events) == 1
     assert exact_events[0].fields["source"] == "target_input_fallback_return"
     assert exact_events[0].fields["final_exact"] is True
+
+
+def test_explicit_audio_guided_overlap_validation_rejects_bool_and_out_of_range_values():
+    assert validate_audio_guided_overlap_ticks(0) == 0
+    assert validate_audio_guided_overlap_ticks(16) == 16
+    with pytest.raises(ValueError):
+        validate_audio_guided_overlap_ticks(True)
+    with pytest.raises(ValueError):
+        validate_audio_guided_overlap_ticks(-1)
+    with pytest.raises(ValueError):
+        validate_audio_guided_overlap_ticks(17)
+
+
+def test_audio_latent_boundary_measurement_reports_fixed_physical_windows():
+    video = torch.zeros(1, 24, 3, 4, 4)
+    audio = torch.ones(1, 32, 2, 50)
+    audio[..., 25:] = 2.0
+    packed, shapes = pack_streams((video, audio))
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :1] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :25] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
+
+    report = measure_audio_latent_boundary(
+        packed,
+        list(shapes),
+        mask,
+        windows=(4, 20),
+    )
+
+    assert report["available"] is True
+    assert report["audio_prefix_ticks"] == 25
+    assert report["audio_total_ticks"] == 50
+    assert set(report["windows"]) == {"4", "20"}
+    for key, expected_ms in (("4", 100.0), ("20", 500.0)):
+        window = report["windows"][key]
+        assert window["duration_ms_at_40hz"] == expected_ms
+        assert window["pre_rms"] == pytest.approx(1.0)
+        assert window["post_rms"] == pytest.approx(2.0)
+        assert window["post_over_pre_rms_ratio"] == pytest.approx(2.0)
+        assert window["post_over_pre_db"] == pytest.approx(6.020599913, rel=1e-6)
+        assert window["pre_mean_abs"] == pytest.approx(1.0)
+        assert window["post_mean_abs"] == pytest.approx(2.0)
+
+
+def test_audio_latent_boundary_measurement_uses_original_exact_mask_not_guided_mask():
+    packed, shapes, exact_mask = _packed_case(audio_t=12, audio_prefix=6)
+    guided_mask, guided = apply_audio_guided_overlap_mask(exact_mask, shapes, ticks=4)
+    assert guided["applied"] is True
+
+    exact_report = measure_audio_latent_boundary(packed, shapes, exact_mask, windows=(4,))
+
+    assert exact_report["audio_prefix_ticks"] == 6
+    assert exact_report["available"] is True
+    with pytest.raises(ValueError, match="contiguous exact audio prefix"):
+        measure_audio_latent_boundary(packed, shapes, guided_mask, windows=(4,))
