@@ -853,9 +853,9 @@ def _preflight(
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
     if config.transfer_mode != "learned_3d":
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires learned_3d handoff transfer")
-    if config.suffix_geometric_bridge:
+    if config.suffix_dc_bridge or config.suffix_geometric_bridge:
         raise PartitionedPreflightUnsupported(
-            "partitioned exact-prefix does not inherit the retired geometric seam-repair heuristic"
+            "partitioned exact-prefix owns its DC bridge locally and does not inherit generic seam-repair flags"
         )
     if denoise_mask is None or not _has_exact_video_protection(denoise_mask, latent_shapes):
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires an exact protected video prefix")
@@ -1910,7 +1910,7 @@ def run_partitioned_progressive(
             learned_clean,
             exact_prefix,
             sigma=sigma,
-            enabled=bool(config.suffix_dc_bridge),
+            enabled=True,
         )
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
