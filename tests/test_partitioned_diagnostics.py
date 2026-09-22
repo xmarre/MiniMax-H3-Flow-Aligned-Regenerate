@@ -52,6 +52,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     resolve_partitioned_audio_guided_overlap_ticks,
 )
 from h3_flow_regenerate.partitioned_node import (
+    NODE_DISPLAY_NAME_MAPPINGS,
     H3PartitionedExactPrefixDiagnosticHandoff,
     H3PartitionedExactPrefixHandoff,
 )
@@ -86,7 +87,7 @@ class _Metrics:
         return dict(self._counters)
 
 
-def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_node():
+def test_partitioned_production_node_exposes_advanced_controls_without_changing_compatibility_node():
     ordinary = H3PartitionedExactPrefixHandoff.INPUT_TYPES()["required"]
     diagnostic = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]
 
@@ -112,14 +113,17 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     ]
-    assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+    assert (
+        diagnostic["audio_guided_overlap_mode"][1]["default"]
+        == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
+    )
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
     assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
     assert diagnostic["audio_position_domain"][0] == list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS)
-    assert diagnostic["audio_position_domain"][1]["default"] == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
+    assert diagnostic["audio_position_domain"][1]["default"] == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
     assert diagnostic["audio_handoff_source"][0] == list(PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS)
     assert diagnostic["audio_handoff_source"][1]["default"] == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
     assert diagnostic["av_handoff_source"][0] == list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS)
@@ -129,8 +133,27 @@ def test_diagnostic_node_exposes_bounded_ab_controls_without_changing_ordinary_n
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert (
         diagnostic["low_probe_execution_source"][1]["default"]
-        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     )
+    assert diagnostic["source_mode"][1]["default"] == "scale"
+    assert diagnostic["source_scale"][1]["default"] == 0.70
+    assert diagnostic["source_width"][1]["default"] == 864
+    assert diagnostic["source_height"][1]["default"] == 640
+    assert diagnostic["handoff_coordinate"][1]["default"] == 0.35
+    assert diagnostic["handoff_selection"][1]["default"] == "fixed"
+    assert diagnostic["guidance_mode"][1]["default"] == "direction+temporal"
+    assert diagnostic["direction_weight"][1]["default"] == 0.25
+    assert diagnostic["acceleration_weight"][1]["default"] == 0.25
+    assert diagnostic["consistency_weight"][1]["default"] == 0.25
+    assert diagnostic["low_frequency_cutoff"][1]["default"] == 0.25
+    assert diagnostic["temporal_weight"][1]["default"] == 0.20
+    assert H3PartitionedExactPrefixDiagnosticHandoff.CATEGORY == "MiniMax H3/flow regenerate"
+    assert (
+        NODE_DISPLAY_NAME_MAPPINGS["H3PartitionedExactPrefixDiagnosticHandoff"]
+        == "MiniMax H3 Partitioned Exact-Prefix Handoff"
+    )
+    assert "[Diagnostic]" not in NODE_DISPLAY_NAME_MAPPINGS["H3PartitionedExactPrefixDiagnosticHandoff"]
+
     keys = list(diagnostic)
     assert keys.index("audio_guided_overlap_ticks") < keys.index("audio_guided_overlap_mode")
     assert keys.index("audio_guided_overlap_mode") < keys.index("prefix_transformer_context")

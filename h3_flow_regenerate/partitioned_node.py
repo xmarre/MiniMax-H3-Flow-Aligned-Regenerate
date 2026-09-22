@@ -1,4 +1,4 @@
-"""Experimental production-shaped node for exact-prefix progressive continuation."""
+"""Partitioned exact-prefix progressive continuation for the coordinated Continuum stack."""
 
 from __future__ import annotations
 
@@ -12,16 +12,19 @@ from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
+    PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -192,7 +195,11 @@ class H3PartitionedExactPrefixHandoff:
 
 
 class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff):
-    """Expose bounded A/B controls without changing the production-shaped node."""
+    """Production partitioned exact-prefix handoff.
+
+    The historical class/node ID is retained so existing serialized workflows
+    continue to load. The user-facing node is no longer labeled diagnostic.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -219,8 +226,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "Node-local 40-Hz audio overlap width. Use 4 for the current "
-                    "production-shaped behavior and 0 for the matched audio A/B control."
+                    "40-Hz sampler-owned audio overlap width. The production default is 4 ticks "
+                    "(100 ms), validated with sampler_mask_exact_timestep. Values 0..16 remain "
+                    "available for controlled compatibility and diagnostics."
                 ),
             },
         )
@@ -229,12 +237,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_mode"] = (
             list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
                 "tooltip": (
-                    "sampler_mask applies the overlap to sampler ownership and MiniMax-H3 timestep labels. "
-                    "model_timestep_only keeps sampler ownership exact and exposes the ramp only to inner "
-                    "timestep labels. sampler_mask_exact_timestep keeps the sampler-owned overlap but restores "
-                    "authoritative binary labels inside MiniMax-H3 to test boundary-tail semantic replay."
+                    "sampler_mask_exact_timestep is the production default: the sampler owns the overlap "
+                    "while MiniMax-H3 inner timestep/modulation labels retain the authoritative exact-prefix mask. "
+                    "sampler_mask and model_timestep_only remain advanced comparison modes."
                 ),
             },
         )
@@ -255,11 +262,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_position_domain"] = (
             list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+                "default": PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
                 "tooltip": (
-                    "legacy_target preserves current target-audio spatial RoPE coordinates. "
-                    "source_carrier changes only the target audio segment spatial RoPE coordinates "
-                    "during heterogeneous low/probe execution; latent and mask ownership is unchanged."
+                    "source_carrier is the production default for the fast source-uniform low/probe path. "
+                    "legacy_target remains available as the historical comparison domain."
                 ),
             },
         )
@@ -308,23 +314,22 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["low_probe_execution_source"] = (
             list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
                 "tooltip": (
-                    "main_then_shadow preserves the exact-main diagnostic path. "
-                    "source_carrier_uniform_only executes one source-uniform low/probe pair only, "
-                    "avoiding duplicate shadow lifetimes while preserving learned transfer, exact "
-                    "target-prefix restoration, and target-high sampling."
+                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
+                    "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
+                    "remains available for historical diagnostics."
                 ),
             },
         )
         return spec
 
+    CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Diagnostic variant of the partitioned exact-prefix handoff. Adds model-local "
-        "controls for isolating the partitioned VDN learned-linear boundary path, selecting "
-        "the audio guided-overlap mode/width, and comparing the heterogeneous exact-prefix "
-        "transformer against its native uniform source-grid carrier. Ordinary/native VDN and "
-        "the production-shaped partitioned node remain unchanged."
+        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
+        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
+        "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
+        "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
 
     def patch(
@@ -347,11 +352,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_guided_overlap_mode,
         audio_guided_overlap_ticks,
         prefix_transformer_context,
-        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
-        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -393,8 +398,8 @@ NODE_CLASS_MAPPINGS = {
     "H3PartitionedExactPrefixDiagnosticHandoff": H3PartitionedExactPrefixDiagnosticHandoff,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Experimental]",
-    "H3PartitionedExactPrefixDiagnosticHandoff": ("MiniMax H3 Partitioned Exact-Prefix Handoff [Diagnostic]"),
+    "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Compatibility]",
+    "H3PartitionedExactPrefixDiagnosticHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
