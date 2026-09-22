@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Any
 
 import torch
@@ -41,14 +42,27 @@ class AttentionConfig:
             raise ValueError(f"unsupported VDN anchor mode {self.vdn_anchor_mode!r}")
 
 
+def _layout_signature_value(value: Any) -> Any:
+    """Normalize packed-layout identity for bounded telemetry without flattening it."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        return float(value)
+    if isinstance(value, (tuple, list)):
+        return tuple(_layout_signature_value(item) for item in value)
+    raise TypeError(f"unsupported H3 layout signature value {type(value).__name__}")
+
+
 def layout_summary(layout: Any) -> dict[str, Any]:
     segments = tuple((int(a), int(b), str(kind)) for a, b, kind in layout.segments)
     counts: dict[str, int] = {}
     for start, stop, kind in segments:
         counts[kind] = counts.get(kind, 0) + (stop - start)
-    signature = tuple(layout.signature)
-    if not signature or signature[0] != "h3_flow_mixed_grid_v1":
-        signature = tuple(int(v) for v in signature)
+    signature = tuple(_layout_signature_value(value) for value in layout.signature)
     return {
         "signature": signature,
         "segments": segments,
