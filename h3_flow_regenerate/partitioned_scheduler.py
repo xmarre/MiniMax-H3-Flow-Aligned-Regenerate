@@ -1986,6 +1986,30 @@ def run_partitioned_progressive(
         # clean diagnostic tensor mirrors the actual high-stage state: corrected
         # first suffix token plus the authoritative exact target-grid prefix.
         corrected_clean[:, :, : stage_plan.prefix_t] = exact_prefix
+
+        # Build a bounded diagnostic-only counterfactual for the exact same
+        # transfer state with the authoritative prefix restored but without the
+        # one-token DC bridge. This recreates the pre-high boundary relation used
+        # before #75 without changing the state consumed by target-high.
+        counterfactual_pre_frames = min(4, int(stage_plan.prefix_t))
+        counterfactual_forward_frames = min(
+            3,
+            int(learned_clean.shape[2]) - int(stage_plan.prefix_t),
+        )
+        uncorrected_exact_window = None
+        if counterfactual_pre_frames >= 2 and counterfactual_forward_frames >= 1:
+            uncorrected_exact_window = torch.cat(
+                (
+                    exact_prefix[:, :, -counterfactual_pre_frames:],
+                    learned_clean[
+                        :,
+                        :,
+                        stage_plan.prefix_t : stage_plan.prefix_t + counterfactual_forward_frames,
+                    ],
+                ),
+                dim=2,
+            )
+
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             native_trajectory = measure_translation_trajectory(
                 learned_clean,
@@ -2043,8 +2067,29 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **restored_affine,
             )
+            if uncorrected_exact_window is not None:
+                counterfactual_affine = measure_affine_trajectory(
+                    uncorrected_exact_window,
+                    counterfactual_pre_frames,
+                    forward_steps=counterfactual_forward_frames,
+                    backward_steps=min(3, counterfactual_pre_frames - 1),
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_affine_trajectory",
+                    stage="exact_restored_no_dc_counterfactual",
+                    roi=roi_name,
+                    counterfactual_only=True,
+                    production_state_mutated=False,
+                    actual_dc_bridge_enabled=bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]),
+                    **counterfactual_affine,
+                )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
+        if uncorrected_exact_window is not None:
+            binding.metrics.increment("partitioned_affine_no_dc_counterfactual_runs")
+            del uncorrected_exact_window
         del corrected_clean, learned_clean
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
