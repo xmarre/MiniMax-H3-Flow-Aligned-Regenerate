@@ -394,7 +394,7 @@ def _weighted_axis_affine_fit(
     ) / weight_sum
     position_energy = sum(
         weight * (value - mean_position) ** 2
-        for weight, value in zip(weights, positions)
+        for weight, value in zip(weights, positions, strict=True)
     )
     slope = (
         sum(
@@ -402,7 +402,7 @@ def _weighted_axis_affine_fit(
             * (position - mean_position)
             * (displacement - mean_displacement)
             for weight, position, displacement in zip(
-                weights, positions, displacements
+                weights, positions, displacements, strict=True
             )
         )
         / position_energy
@@ -414,7 +414,7 @@ def _weighted_axis_affine_fit(
         sum(
             weight * (displacement - (slope * position + translation)) ** 2
             for weight, position, displacement in zip(
-                weights, positions, displacements
+                weights, positions, displacements, strict=True
             )
         )
         / weight_sum
@@ -422,7 +422,7 @@ def _weighted_axis_affine_fit(
     translation_only_residual = math.sqrt(
         sum(
             weight * (displacement - mean_displacement) ** 2
-            for weight, displacement in zip(weights, displacements)
+            for weight, displacement in zip(weights, displacements, strict=True)
         )
         / weight_sum
     )
