@@ -377,33 +377,20 @@ def _weighted_axis_affine_fit(
     weight. scale_confidence is the relative residual improvement over a
     translation-only fit; it is diagnostic evidence, not a probability.
     """
-    if (
-        not positions
-        or len(positions) != len(displacements)
-        or len(positions) != len(responses)
-    ):
+    if not positions or len(positions) != len(displacements) or len(positions) != len(responses):
         raise ValueError("affine diagnostic fit requires matching non-empty samples")
 
     weights = [max(1.0, min(50.0, float(value))) for value in responses]
     weight_sum = sum(weights)
-    mean_position = sum(
-        weight * value for weight, value in zip(weights, positions, strict=True)
-    ) / weight_sum
-    mean_displacement = sum(
-        weight * value for weight, value in zip(weights, displacements, strict=True)
-    ) / weight_sum
+    mean_position = sum(weight * value for weight, value in zip(weights, positions, strict=True)) / weight_sum
+    mean_displacement = sum(weight * value for weight, value in zip(weights, displacements, strict=True)) / weight_sum
     position_energy = sum(
-        weight * (value - mean_position) ** 2
-        for weight, value in zip(weights, positions, strict=True)
+        weight * (value - mean_position) ** 2 for weight, value in zip(weights, positions, strict=True)
     )
     slope = (
         sum(
-            weight
-            * (position - mean_position)
-            * (displacement - mean_displacement)
-            for weight, position, displacement in zip(
-                weights, positions, displacements, strict=True
-            )
+            weight * (position - mean_position) * (displacement - mean_displacement)
+            for weight, position, displacement in zip(weights, positions, displacements, strict=True)
         )
         / position_energy
         if position_energy > _EPS
@@ -413,9 +400,7 @@ def _weighted_axis_affine_fit(
     residual = math.sqrt(
         sum(
             weight * (displacement - (slope * position + translation)) ** 2
-            for weight, position, displacement in zip(
-                weights, positions, displacements, strict=True
-            )
+            for weight, position, displacement in zip(weights, positions, displacements, strict=True)
         )
         / weight_sum
     )
@@ -430,8 +415,7 @@ def _weighted_axis_affine_fit(
         0.0,
         min(
             1.0,
-            (translation_only_residual - residual)
-            / max(translation_only_residual, 0.05),
+            (translation_only_residual - residual) / max(translation_only_residual, 0.05),
         ),
     )
     values = (
@@ -514,9 +498,7 @@ def _local_affine_fit(
 
     x_fit = _weighted_axis_affine_fit(sample_x, sample_dx, sample_response)
     y_fit = _weighted_axis_affine_fit(sample_y, sample_dy, sample_response)
-    median_response = float(
-        torch.tensor(sample_response, dtype=torch.float32).median().item()
-    )
+    median_response = float(torch.tensor(sample_response, dtype=torch.float32).median().item())
     return {
         "scale_x": float(x_fit["scale"]),
         "scale_y": float(y_fit["scale"]),
@@ -524,17 +506,12 @@ def _local_affine_fit(
         "translation_y": float(y_fit["translation"]),
         "fit_residual_x": float(x_fit["residual"]),
         "fit_residual_y": float(y_fit["residual"]),
-        "translation_only_residual_x": float(
-            x_fit["translation_only_residual"]
-        ),
-        "translation_only_residual_y": float(
-            y_fit["translation_only_residual"]
-        ),
+        "translation_only_residual_x": float(x_fit["translation_only_residual"]),
+        "translation_only_residual_y": float(y_fit["translation_only_residual"]),
         "scale_confidence_x": float(x_fit["scale_confidence"]),
         "scale_confidence_y": float(y_fit["scale_confidence"]),
         "median_patch_response": median_response,
-        "clipped_patch_fraction": float(clipped_count)
-        / float(len(sample_response)),
+        "clipped_patch_fraction": float(clipped_count) / float(len(sample_response)),
         "patch_count": len(sample_response),
         "roi_height": roi_height,
     }
@@ -556,15 +533,11 @@ def measure_affine_trajectory(
     instead of assuming that all motion is translational.
     """
     if video.ndim != 5 or not video.is_floating_point():
-        raise ValueError(
-            "affine trajectory diagnostics expect floating BxCxTxHxW video"
-        )
+        raise ValueError("affine trajectory diagnostics expect floating BxCxTxHxW video")
     boundary_t = int(boundary_t)
     temporal = int(video.shape[2])
     if boundary_t < 1 or boundary_t >= temporal:
-        raise ValueError(
-            "affine trajectory boundary must separate a prefix from a suffix"
-        )
+        raise ValueError("affine trajectory boundary must separate a prefix from a suffix")
     steps = min(max(1, int(forward_steps)), temporal - boundary_t)
     pre_steps = min(max(0, int(backward_steps)), max(0, boundary_t - 1))
 
@@ -597,23 +570,15 @@ def measure_affine_trajectory(
         return result
 
     pre_start = boundary_t - pre_steps - 1
-    pre_pairs = [
-        (left_index, left_index + 1)
-        for left_index in range(pre_start, boundary_t - 1)
-    ]
-    pairwise_pairs = [
-        (boundary_t - 1 + offset, boundary_t + offset)
-        for offset in range(steps)
-    ]
+    pre_pairs = [(left_index, left_index + 1) for left_index in range(pre_start, boundary_t - 1)]
+    pairwise_pairs = [(boundary_t - 1 + offset, boundary_t + offset) for offset in range(steps)]
     pre = collect(pre_pairs)
     pairwise = collect(pairwise_pairs)
 
     def median_or(values: list[float], default: float) -> float:
         if not values:
             return default
-        return float(
-            torch.tensor(values, dtype=torch.float32).median().item()
-        )
+        return float(torch.tensor(values, dtype=torch.float32).median().item())
 
     result: dict[str, float | int | list[float]] = {
         "affine_diagnostic_version": 1,
@@ -631,31 +596,20 @@ def measure_affine_trajectory(
         {
             "pre_median_scale_x": median_or(pre["scale_x"], 1.0),
             "pre_median_scale_y": median_or(pre["scale_y"], 1.0),
-            "post_first3_median_scale_x": median_or(
-                pairwise["scale_x"][:3], 1.0
-            ),
-            "post_first3_median_scale_y": median_or(
-                pairwise["scale_y"][:3], 1.0
-            ),
+            "post_first3_median_scale_x": median_or(pairwise["scale_x"][:3], 1.0),
+            "post_first3_median_scale_y": median_or(pairwise["scale_y"][:3], 1.0),
             "boundary_scale_x": float(pairwise["scale_x"][0]),
             "boundary_scale_y": float(pairwise["scale_y"][0]),
             "boundary_translation_x": float(pairwise["translation_x"][0]),
             "boundary_translation_y": float(pairwise["translation_y"][0]),
-            "boundary_fit_residual_x": float(
-                pairwise["fit_residual_x"][0]
-            ),
-            "boundary_fit_residual_y": float(
-                pairwise["fit_residual_y"][0]
-            ),
-            "boundary_scale_confidence_x": float(
-                pairwise["scale_confidence_x"][0]
-            ),
-            "boundary_scale_confidence_y": float(
-                pairwise["scale_confidence_y"][0]
-            ),
+            "boundary_fit_residual_x": float(pairwise["fit_residual_x"][0]),
+            "boundary_fit_residual_y": float(pairwise["fit_residual_y"][0]),
+            "boundary_scale_confidence_x": float(pairwise["scale_confidence_x"][0]),
+            "boundary_scale_confidence_y": float(pairwise["scale_confidence_y"][0]),
         }
     )
     return result
+
 
 def recover_conditional_clean_for_diagnostics(
     state: torch.Tensor,
