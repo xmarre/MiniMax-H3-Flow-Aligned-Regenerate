@@ -16,12 +16,12 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
+    PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
-    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -283,12 +283,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["av_handoff_source"] = (
             list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+                "default": PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
                 "tooltip": (
-                    "main_partitioned preserves the #60/#61 handoff. "
-                    "source_carrier_uniform_shadow runs a separate uniform source-grid low+probe "
-                    "pair, selects its raw audio sampler state and clean generated video for the "
-                    "learned handoff, but keeps the main exact-partitioned captured Flow trajectory."
+                    "source_carrier_uniform_shadow is the quality-first boundary-continuity candidate: "
+                    "the main exact-partitioned low/probe trajectory remains authoritative while an isolated "
+                    "source-grid low+probe pair supplies the raw audio state and clean generated video suffix "
+                    "used at the learned handoff. main_partitioned keeps the faster single-state handoff."
                 ),
             },
         )
@@ -311,11 +311,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["low_probe_execution_source"] = (
             list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
                 "tooltip": (
-                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
-                    "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
-                    "remains available for historical diagnostics."
+                    "main_then_shadow is the quality-first boundary-continuity candidate: execute the main "
+                    "exact-partitioned low/probe pair, then the isolated source-uniform AV shadow pair, then "
+                    "target-high. source_carrier_uniform_only remains the faster three-lifetime path but is "
+                    "not the default on this corrective candidate."
                 ),
             },
         )
@@ -323,10 +324,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
-        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
-        "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
-        "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
+        "Corrective quality-first exact-prefix Continuum handoff. The default candidate restores the "
+        "main exact-partitioned trajectory plus isolated source-uniform AV handoff topology that previously "
+        "removed the physical-boundary framing shift, while retaining the four-tick sampler-owned overlap "
+        "and authoritative exact MiniMax-H3 inner timestep labels. The faster source-only path remains selectable."
     )
 
     def patch(
@@ -351,9 +352,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         prefix_transformer_context,
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
-        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
-        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         metrics=None,
         temporal_weight=0.20,
     ):
