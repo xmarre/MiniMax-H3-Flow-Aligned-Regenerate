@@ -43,9 +43,13 @@ def _validate_candidate(**overrides):
     _validate_low_probe_execution_source_configuration(**values)
 
 
-def test_source_uniform_primary_execution_requires_width16_sampler_owned_control_tuple():
-    _validate_candidate()
-    _validate_candidate(audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP)
+def test_source_uniform_primary_execution_accepts_configured_sampler_owned_overlap_width():
+    for ticks in (0, 1, 4, 15, 16):
+        _validate_candidate(audio_guided_overlap_ticks=ticks)
+        _validate_candidate(
+            audio_guided_overlap_ticks=ticks,
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+        )
 
     with pytest.raises(PartitionedPreflightUnsupported, match="av_handoff_source"):
         _validate_candidate(av_handoff_source="source_carrier_uniform_shadow")
@@ -57,10 +61,6 @@ def test_source_uniform_primary_execution_requires_width16_sampler_owned_control
         _validate_candidate(audio_guided_overlap_mode="unsupported")
     with pytest.raises(PartitionedPreflightUnsupported, match="audio_position_domain"):
         _validate_candidate(audio_position_domain="legacy_target")
-    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
-        _validate_candidate(audio_guided_overlap_ticks=4)
-    with pytest.raises(PartitionedPreflightUnsupported, match="audio_guided_overlap_ticks"):
-        _validate_candidate(audio_guided_overlap_ticks=15)
 
 
 def test_source_uniform_primary_controls_are_bounded_and_restore_exactly():
