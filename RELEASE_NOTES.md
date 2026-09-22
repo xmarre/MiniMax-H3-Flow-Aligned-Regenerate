@@ -1,3 +1,47 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.7
+
+Corrective production release for the Flow #72 omission in v0.3.6.
+
+## Exact inner audio timestep ownership
+
+v0.3.7 includes Flow #72's `sampler_mask_exact_timestep` contract on top of the already released #70 fast continuation path.
+
+The sampler retains the validated 16-tick fractional overlap, while MiniMax-H3's inner `audio_denoise_mask` receives the authoritative binary exact-prefix mask. Core's outer velocity conversion still sees the fractional runtime mask, but H3's inner timestep/modulation labels no longer present carried-prefix rows as partially fresh semantic audio.
+
+The path requires the reviewed ComfyUI MiniMax-H3 denoise-mask velocity contract from Core #15988. Existing selector ordering is preserved.
+
+## Hardware evidence
+
+The final clean Continuum confirmation runs executed this exact Flow mode. Their receipts show `audio_guided_overlap_mode=sampler_mask_exact_timestep`, 16 overlap ticks, `mask_kind=exact_authoritative`, `sampler_mask_modified=True`, and final exact restoration true.
+
+Both final renders were clean after the Continuum prompt-boundary repair: no repeated prior-chunk speech/gibberish, no Reference Image restage, and no vocalized terminal-control prose. The Flow #72 ownership contract was active throughout those successful runs.
+
+This later evidence supersedes the stale #72 PR description that still says SM120 promotion is pending. Excluding #72 from v0.3.6 was a release-selection error.
+
+## Preserved #70 topology
+
+The correction does not reintroduce #68/#69 duplicate shadow execution:
+
+```text
+continuation sampler lifetimes: 3
+history boundaries:             2
+duplicate shadow lifetimes:     0
+audio overlap width:           16 ticks
+inner audio timestep mask:     exact authoritative prefix
+```
+
+No scheduler/NFE, learned-transfer, VDN/Sol ownership, or final exact-output ownership change is introduced beyond #72's inner timestep-label correction.
+
+## Release scope
+
+Included: the v0.3.6/#70 production tree plus exactly the seven source/test files changed by #72.
+
+Excluded: Keyless PRs, #68/#69 duplicated-shadow experiments, arithmetic-validation diagnostics, VAE diagnostics, and unrelated historical A/B branches.
+
+v0.3.6 is superseded by v0.3.7 for the coordinated production stack.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.6
 
 ## Fast exact-prefix continuation
