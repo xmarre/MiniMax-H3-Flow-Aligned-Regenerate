@@ -8,6 +8,7 @@ import torch
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_AUDIO_POSITION_DOMAIN_KEY,
@@ -168,15 +169,19 @@ def test_shadow_audio_splice_rejects_protected_prefix_mutation_or_noop():
 
 
 def test_av_handoff_shadow_configuration_is_strictly_one_axis():
-    _validate_av_handoff_shadow_configuration(
-        PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
-        audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
-        prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-        audio_guided_overlap_ticks=4,
-    )
+    for audio_mode in (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    ):
+        _validate_av_handoff_shadow_configuration(
+            PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+            audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            audio_guided_overlap_mode=audio_mode,
+            audio_guided_overlap_ticks=4,
+        )
     bad = (
         {"audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW},
         {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},

@@ -168,8 +168,13 @@ def _validate_av_handoff_shadow_configuration(
         mismatches.append("vdn_linear_diagnostic='normal'")
     if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
         mismatches.append("audio_position_domain='source_carrier'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
+    if audio_guided_overlap_mode not in (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    ):
+        mismatches.append(
+            "audio_guided_overlap_mode in {'model_timestep_only', 'sampler_mask_exact_timestep'}"
+        )
     if int(audio_guided_overlap_ticks) != 4:
         mismatches.append("audio_guided_overlap_ticks=4")
     if mismatches:

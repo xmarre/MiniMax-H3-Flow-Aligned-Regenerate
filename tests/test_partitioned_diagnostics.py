@@ -127,11 +127,14 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["audio_handoff_source"][0] == list(PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS)
     assert diagnostic["audio_handoff_source"][1]["default"] == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
     assert diagnostic["av_handoff_source"][0] == list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS)
-    assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+    assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
-    assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    assert (
+        diagnostic["low_probe_execution_source"][1]["default"]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+    )
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
