@@ -274,6 +274,11 @@ def apply_audio_exact_restore_suffix_bridge(
         "corrected_ticks": 0,
         "delta_rms": 0.0,
         "delta_max_abs": 0.0,
+        "sampled_edge_rms": 0.0,
+        "uncorrected_exact_edge_rms": 0.0,
+        "corrected_exact_edge_rms": 0.0,
+        "uncorrected_over_sampled_edge": 1.0,
+        "corrected_over_uncorrected_edge": 1.0,
         "relation_error_rms": 0.0,
         "protected_prefix_modified": False,
         "later_suffix_modified": False,
@@ -336,21 +341,43 @@ def apply_audio_exact_restore_suffix_bridge(
     delta = exact_last - sampled_last
     delta_rms = float(delta.square().mean().sqrt().item())
     delta_max = float(delta.abs().max().item())
-    report["delta_rms"] = delta_rms
-    report["delta_max_abs"] = delta_max
+    sampled_relation = suffix_before - sampled_last
+    uncorrected_exact_relation = suffix_before - exact_last
+    sampled_edge_rms = float(sampled_relation.square().mean().sqrt().item())
+    uncorrected_exact_edge_rms = float(
+        uncorrected_exact_relation.square().mean().sqrt().item()
+    )
+    report.update(
+        {
+            "delta_rms": delta_rms,
+            "delta_max_abs": delta_max,
+            "sampled_edge_rms": sampled_edge_rms,
+            "uncorrected_exact_edge_rms": uncorrected_exact_edge_rms,
+            "uncorrected_over_sampled_edge": uncorrected_exact_edge_rms
+            / max(sampled_edge_rms, 1.0e-12),
+        }
+    )
     if delta_max == 0.0:
-        report["reason"] = "sampler_prefix_already_exact"
+        report.update(
+            {
+                "reason": "sampler_prefix_already_exact",
+                "corrected_exact_edge_rms": uncorrected_exact_edge_rms,
+            }
+        )
         return result, report
 
-    sampled_relation = suffix_before - sampled_last
     result_audio[..., prefix].copy_((suffix_before + delta).to(dtype=result_audio.dtype))
     corrected_relation = result_audio[..., prefix].detach().to(torch.float32) - exact_last
+    corrected_exact_edge_rms = float(corrected_relation.square().mean().sqrt().item())
     relation_error = corrected_relation - sampled_relation
     report.update(
         {
             "applied": True,
             "reason": "exact_restore_transition_transfer",
             "corrected_ticks": 1,
+            "corrected_exact_edge_rms": corrected_exact_edge_rms,
+            "corrected_over_uncorrected_edge": corrected_exact_edge_rms
+            / max(uncorrected_exact_edge_rms, 1.0e-12),
             "relation_error_rms": float(relation_error.square().mean().sqrt().item()),
         }
     )
