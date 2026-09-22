@@ -93,12 +93,12 @@ from .seam_diagnostics import (
     project_translation_trajectory_to_grid,
     recover_conditional_clean_for_diagnostics,
 )
+from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 from .tone_bridge import (
     apply_suffix_dc_bridge,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
-from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
