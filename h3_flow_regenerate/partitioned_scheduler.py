@@ -226,8 +226,8 @@ def _validate_low_probe_execution_source_configuration(
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     ):
         mismatches.append("audio_guided_overlap_mode in {'sampler_mask', 'sampler_mask_exact_timestep'}")
-    if int(audio_guided_overlap_ticks) != 16:
-        mismatches.append("audio_guided_overlap_ticks=16")
+    # Overlap width is a bounded runtime control, not a structural requirement
+    # of source-uniform execution. The node-level validator constrains it to 0..16.
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_only low/probe execution requires " + ", ".join(mismatches)
