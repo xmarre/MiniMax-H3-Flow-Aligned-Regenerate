@@ -387,10 +387,10 @@ def _weighted_axis_affine_fit(
     weights = [max(1.0, min(50.0, float(value))) for value in responses]
     weight_sum = sum(weights)
     mean_position = sum(
-        weight * value for weight, value in zip(weights, positions)
+        weight * value for weight, value in zip(weights, positions, strict=True)
     ) / weight_sum
     mean_displacement = sum(
-        weight * value for weight, value in zip(weights, displacements)
+        weight * value for weight, value in zip(weights, displacements, strict=True)
     ) / weight_sum
     position_energy = sum(
         weight * (value - mean_position) ** 2
