@@ -1,3 +1,75 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.8
+
+v0.3.8 promotes the partitioned exact-prefix Continuum path from the diagnostic development line into the shipped production node and closes both boundary regressions reproduced on v0.3.7.
+
+## Production node and defaults
+
+The user-facing node is now **MiniMax H3 Partitioned Exact-Prefix Handoff**. The historical node ID `H3PartitionedExactPrefixDiagnosticHandoff` is retained so existing serialized workflows continue to load; only the display/status changes.
+
+The production defaults are:
+
+```text
+source_mode                = scale
+source_scale               = 0.70
+source_width               = 864
+source_height              = 640
+handoff_coordinate         = 0.35
+handoff_selection          = fixed
+guidance_mode              = direction+temporal
+direction_weight           = 0.25
+acceleration_weight        = 0.25
+consistency_weight         = 0.25
+low_frequency_cutoff       = 0.25
+temporal_weight            = 0.20
+vdn_linear_diagnostic      = normal
+audio_guided_overlap_ticks = 4
+audio_guided_overlap_mode  = sampler_mask_exact_timestep
+prefix_transformer_context = exact_target_partitioned
+audio_position_domain      = source_carrier
+audio_handoff_source       = main_partitioned
+av_handoff_source          = main_partitioned
+guidance_trajectory_source = main_exact_partitioned
+low_probe_execution_source = source_carrier_uniform_only
+```
+
+The companion learned 3D upscaler remains required.
+
+## Audio boundary repair
+
+The source-uniform preflight no longer hardcodes a 16-tick overlap. Width remains bounded to `0..16`, and four ticks is now the node default.
+
+Run 00611 provides a matched first-boundary A/B for `sampler_mask_exact_timestep`: the preceding decoded side is identical while changing 16 -> 4 ticks reduces PT213 from **+11.1495 dB** to **+0.2106 dB** before assembly and from **+11.1234 dB** to **+0.1636 dB** after assembly. The generated-side RMS falls from `0.131275311` to `0.037259769`.
+
+The next physical boundary remains clean at **+0.7400 dB** pre-assembly / **+0.7316 dB** post-assembly. PT214's decoder-context-safe carried-prefix interiors remain effectively exact at both boundaries (correlation 1.0, approximately 0 dB).
+
+The four-tick default is not encoded as a new structural equality check. Historical `sampler_mask/16` evidence remains valid for that older mode/conditioning; the release keeps width selectable instead of replacing one hardcoded value with another.
+
+## Visual boundary repair
+
+The partitioned learned-transfer path now owns the bounded one-token suffix DC continuity bridge restored by #75. It preserves the learned handoff's channel-wise spatial-mean relation when the transient learned prefix is replaced by authoritative exact target-grid context.
+
+Run 00611 confirms the bridge modifies only the first generated suffix token and leaves the authoritative prefix and all later suffix tokens untouched. At the measured splice, spatial-mean seam RMS drops from `0.300317` to `0.137286` and matches the learned-native spatial-mean boundary to numerical tolerance. Low-pass and raw seam RMS also improve. Continuum PT212 classifies both physical joins as clean boundaries with no decoded-space assembly patch applied.
+
+## Runtime topology
+
+The promoted profile retains the fast #70 topology:
+
+```text
+continuation sampler lifetimes: 3
+history boundaries:             2
+source-uniform transformer:     6 calls per continuation
+exact-partitioned duplicate:    0 calls
+duplicate shadow lifetimes:     0
+audio overlap width:            4 ticks
+inner audio timestep mask:      exact authoritative prefix
+```
+
+No extra H3 NFE, duplicate shadow sampler, decoded-space crossfade, learned-upscaler invocation, or final exact-prefix ownership change is introduced.
+
+v0.3.8 supersedes v0.3.7 for the coordinated production stack.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.7
 
 Corrective production release for the Flow #72 omission in v0.3.6.

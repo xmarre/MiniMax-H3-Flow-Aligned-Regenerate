@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For target-input workflows, including Continuum exact-prefix continuation, the standard production path is **MiniMax H3 Progressive Handoff (Target Input)**.
+For general target-input workflows, **MiniMax H3 Progressive Handoff (Target Input)** remains available. For the coordinated Sol-H3/VDN-H3-Plus Continuum exact-prefix stack, the validated production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**.
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -71,6 +71,42 @@ On canonical exact-prefix continuation, the sampler-time audio mask additionally
 ```
 
 The video mask remains byte-for-byte unchanged and the original exact video/audio mask remains authoritative at output. `H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` is the explicit disable/bisect hook.
+
+## Partitioned exact-prefix Continuum path
+
+Use **MiniMax H3 Partitioned Exact-Prefix Handoff** for the coordinated Continuum stack with the matching Sol-H3 and VDN-H3-Plus partitioned backends. The historical serialized node ID `H3PartitionedExactPrefixDiagnosticHandoff` is retained for workflow compatibility, but the user-facing node is no longer labeled diagnostic.
+
+The production defaults are:
+
+```text
+source_mode                = scale
+source_scale               = 0.70
+source_width               = 864
+source_height              = 640
+handoff_coordinate         = 0.35
+handoff_selection          = fixed
+guidance_mode              = direction+temporal
+direction_weight           = 0.25
+acceleration_weight        = 0.25
+consistency_weight         = 0.25
+low_frequency_cutoff       = 0.25
+temporal_weight            = 0.20
+vdn_linear_diagnostic      = normal
+audio_guided_overlap_ticks = 4
+audio_guided_overlap_mode  = sampler_mask_exact_timestep
+prefix_transformer_context = exact_target_partitioned
+audio_position_domain      = source_carrier
+audio_handoff_source       = main_partitioned
+av_handoff_source          = main_partitioned
+guidance_trajectory_source = main_exact_partitioned
+low_probe_execution_source = source_carrier_uniform_only
+```
+
+The learned 3D upscaler input is required. The fast continuation uses one source-uniform low/probe path followed by target-high: three continuation sampler lifetimes, two history boundaries, no duplicate shadow lifetime, and exact caller-visible prefix restoration.
+
+The four-tick audio width is the shipped default, not a hard invariant. Values `0..16` remain selectable because overlap behavior is conditioning- and mode-sensitive. Run 00611 validated the default `sampler_mask_exact_timestep / 4` tuple on a previously failing three-chunk continuation: the first decoded boundary changed from about +11.15 dB at 16 ticks to +0.21 dB at 4 ticks with the same preceding realization, while the decoder-context-safe carried-prefix interior remained effectively exact.
+
+The partitioned learned-transfer splice also applies a bounded one-token video DC continuity correction before target-high. It does not modify the authoritative exact prefix or later suffix tokens.
 
 ## Mixed-Grid compatibility window
 
@@ -136,7 +172,8 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 | **MiniMax H3 Flow-Aligned Regenerate** | Guides a later H3 pass from the matching captured trajectory state. |
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum `refine_state` version of flow-aligned guidance. |
 | **MiniMax H3 Progressive Handoff** | Generic source-sized progressive resolution handoff. |
-| **MiniMax H3 Progressive Handoff (Target Input)** | Standard target-input progressive path; exact protected prefixes use the target-grid fallback. |
+| **MiniMax H3 Progressive Handoff (Target Input)** | General target-input progressive path; exact protected prefixes use the target-grid fallback. |
+| **MiniMax H3 Partitioned Exact-Prefix Handoff** | Coordinated Continuum production path using source-uniform low/probe execution, learned transfer, exact prefix restoration and the validated four-tick exact-timestep audio overlap. |
 | **MiniMax H3 Continuum Decode Context** | Supplies right context to the native temporal VAE at exact Continuum joins. |
 
 ### Compatibility / research nodes
