@@ -87,6 +87,7 @@ from .runtime import (
     _validate_progressive_sampler_state,
 )
 from .seam_diagnostics import (
+    measure_affine_trajectory,
     measure_exact_prefix_splice,
     measure_translation_trajectory,
     measure_video_boundary,
@@ -1771,6 +1772,22 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
+            source_native_affine = measure_affine_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="source_low_native",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_native_affine,
+            )
         exact_prefix_source = resize_spatial_5d(
             stage_plan.prefix.to(clean_video),
             source_h,
@@ -1802,6 +1819,22 @@ def run_partitioned_progressive(
                         source_hw=(source_h, source_w),
                         target_hw=(target_h, target_w),
                     ),
+                )
+                shadow_native_affine = measure_affine_trajectory(
+                    shadow_clean_video,
+                    stage_plan.prefix_t,
+                    forward_steps=3,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_affine_trajectory",
+                    stage="source_uniform_shadow_clean_native",
+                    roi=roi_name,
+                    source_hw=(source_h, source_w),
+                    target_hw=(target_h, target_w),
+                    **shadow_native_affine,
                 )
             source_x0 = _select_source_uniform_shadow_clean_video(
                 source_x0,
@@ -1838,6 +1871,22 @@ def run_partitioned_progressive(
                     source_hw=(source_h, source_w),
                     target_hw=(target_h, target_w),
                 ),
+            )
+            source_exact_affine = measure_affine_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="source_low_exact_context",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_exact_affine,
             )
 
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:
@@ -1965,6 +2014,34 @@ def run_partitioned_progressive(
                 stage="exact_restored_pre_high",
                 roi=roi_name,
                 **restored_trajectory,
+            )
+            native_affine = measure_affine_trajectory(
+                learned_clean,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            restored_affine = measure_affine_trajectory(
+                corrected_clean,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="learned_native",
+                roi=roi_name,
+                **native_affine,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="exact_restored_pre_high",
+                roi=roi_name,
+                **restored_affine,
             )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
@@ -2173,6 +2250,20 @@ def run_partitioned_progressive(
                 stage="final_post_high",
                 roi=roi_name,
                 **final_trajectory,
+            )
+            final_affine = measure_affine_trajectory(
+                final_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="final_post_high",
+                roi=roi_name,
+                **final_affine,
             )
         if not splice_diagnostics:
             raise RuntimeError(
