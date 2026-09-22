@@ -192,6 +192,11 @@ def partitioned_outer_wrapper(
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
+    audio_exact_restore_suffix_bridge = bool(
+        guided_report
+        and guided_report.get("applied")
+        and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
+    )
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
@@ -199,6 +204,8 @@ def partitioned_outer_wrapper(
         latent_image=latent_image,
         denoise_mask=denoise_mask,
         sampler=sampler,
+        latent_shapes=latent_shapes,
+        audio_exact_restore_suffix_bridge=audio_exact_restore_suffix_bridge,
     )
 
     transformer_options = model_options.setdefault("transformer_options", {})
