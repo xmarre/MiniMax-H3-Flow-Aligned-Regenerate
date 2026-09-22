@@ -109,6 +109,8 @@ class H3PartitionedExactPrefixHandoff:
             # new partitioned scheduler is selected by a separate model-local key
             # below, so no deprecated Mixed-Grid mode is reinterpreted.
             exact_prefix_mode="fallback",
+            # The generic bridge flag stays off: partitioned continuation owns
+            # its boundary correction after learned transfer, before target-high.
             suffix_dc_bridge=False,
             suffix_geometric_bridge=False,
         )
@@ -182,6 +184,7 @@ class H3PartitionedExactPrefixHandoff:
             vdn_grouped_softmax_preserved=True,
             vdn_variable_grid_linear_enabled=True,
             guided_audio_overlap=True,
+            partitioned_suffix_dc_bridge=True,
             preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
