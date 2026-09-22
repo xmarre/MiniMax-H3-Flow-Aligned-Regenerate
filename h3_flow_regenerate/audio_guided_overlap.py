@@ -239,6 +239,117 @@ def compare_audio_latent_stages(
     return report
 
 
+def apply_audio_exact_restore_suffix_bridge(
+    result: torch.Tensor,
+    latent_image: torch.Tensor,
+    exact_denoise_mask: torch.Tensor | None,
+    latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,
+    *,
+    enabled: bool,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Preserve the sampler's first audio-suffix transition across exact restore.
+
+    Sampler-owned guided overlap deliberately makes the tail of the carried
+    audio prefix fractional during sampling. The final framework boundary then
+    restores the caller-owned exact prefix. Without a matching suffix update,
+    the first generated audio tick keeps the relation it learned against the
+    temporary sampler prefix rather than the restored exact prefix.
+
+    This bridge transfers only that one-step relation:
+
+        corrected_suffix0 - exact_prefix_last
+        == sampled_suffix0 - sampled_prefix_last
+
+    It changes one generated audio tick in place and leaves video, the complete
+    protected audio prefix, and every later generated audio tick untouched.
+    There is no model call, sampler lifetime, VAE call, resampling, or decoded
+    audio crossfade.
+    """
+
+    report: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "applied": False,
+        "reason": "disabled" if not enabled else "pending",
+        "audio_prefix_ticks": 0,
+        "corrected_ticks": 0,
+        "delta_rms": 0.0,
+        "delta_max_abs": 0.0,
+        "relation_error_rms": 0.0,
+        "protected_prefix_modified": False,
+        "later_suffix_modified": False,
+        "extra_h3_nfe": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_vae_calls": 0,
+    }
+    if not enabled:
+        return result, report
+    if exact_denoise_mask is None:
+        report["reason"] = "no_exact_denoise_mask"
+        return result, report
+    if latent_shapes is None or len(latent_shapes) != 2:
+        raise ValueError("audio exact-restore suffix bridge requires native packed H3 AV shapes")
+    if result.shape != latent_image.shape or result.shape != exact_denoise_mask.shape:
+        raise ValueError("audio exact-restore suffix bridge requires matching packed sampler tensors")
+
+    result_audio = unpack_streams(result, latent_shapes)[1]
+    reference_audio = unpack_streams(latent_image, latent_shapes)[1]
+    mask_audio = unpack_streams(exact_denoise_mask, latent_shapes)[1]
+    if result_audio.ndim != 4 or int(result_audio.shape[2]) != 2:
+        raise ValueError("audio exact-restore suffix bridge requires native BxCx2xT audio latents")
+    if tuple(reference_audio.shape) != tuple(result_audio.shape) or tuple(mask_audio.shape) != tuple(
+        result_audio.shape
+    ):
+        raise ValueError("audio exact-restore suffix bridge audio geometry drifted")
+
+    temporal_min = mask_audio.amin(dim=(0, 1, 2))
+    temporal_max = mask_audio.amax(dim=(0, 1, 2))
+    exact_zero = temporal_max <= 1e-8
+    exact_one = temporal_min >= 1.0 - 1e-8
+    temporal = int(result_audio.shape[-1])
+    if bool(exact_one.all().item()):
+        report["reason"] = "no_exact_audio_prefix"
+        return result, report
+    if bool(exact_zero.all().item()):
+        report.update(reason="no_generated_audio_suffix", audio_prefix_ticks=temporal)
+        return result, report
+
+    prefix = 0
+    while prefix < temporal and bool(exact_zero[prefix].item()):
+        prefix += 1
+    report["audio_prefix_ticks"] = prefix
+    if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
+        raise ValueError(
+            "audio exact-restore suffix bridge requires a contiguous exact audio prefix "
+            "followed by a fully generated suffix"
+        )
+
+    sampled_last = result_audio[..., prefix - 1].detach().to(torch.float32)
+    exact_last = reference_audio[..., prefix - 1].detach().to(torch.float32)
+    suffix_before = result_audio[..., prefix].detach().to(torch.float32)
+    delta = exact_last - sampled_last
+    delta_rms = float(delta.square().mean().sqrt().item())
+    delta_max = float(delta.abs().max().item())
+    report["delta_rms"] = delta_rms
+    report["delta_max_abs"] = delta_max
+    if delta_max == 0.0:
+        report["reason"] = "sampler_prefix_already_exact"
+        return result, report
+
+    sampled_relation = suffix_before - sampled_last
+    result_audio[..., prefix].copy_((suffix_before + delta).to(dtype=result_audio.dtype))
+    corrected_relation = result_audio[..., prefix].detach().to(torch.float32) - exact_last
+    relation_error = corrected_relation - sampled_relation
+    report.update(
+        {
+            "applied": True,
+            "reason": "exact_restore_transition_transfer",
+            "corrected_ticks": 1,
+            "relation_error_rms": float(relation_error.square().mean().sqrt().item()),
+        }
+    )
+    return result, report
+
+
 def apply_audio_guided_overlap_mask(
     denoise_mask: torch.Tensor | None,
     latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,

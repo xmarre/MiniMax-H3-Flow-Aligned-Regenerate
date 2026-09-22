@@ -8,12 +8,16 @@ import torch
 from h3_flow_regenerate.audio_guided_overlap import (
     AUDIO_GUIDED_OVERLAP_ENV,
     DEFAULT_AUDIO_GUIDED_OVERLAP_TICKS,
+    apply_audio_exact_restore_suffix_bridge,
     apply_audio_guided_overlap_mask,
     configured_audio_guided_overlap_ticks,
     measure_audio_latent_boundary,
     validate_audio_guided_overlap_ticks,
 )
-from h3_flow_regenerate.comfy_compat import flow_outer_wrapper_with_exact_mask
+from h3_flow_regenerate.comfy_compat import (
+    _canonicalize_exact_masked_output,
+    flow_outer_wrapper_with_exact_mask,
+)
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, PROGRESSIVE_KEY, FlowBinding
@@ -235,3 +239,84 @@ def test_audio_latent_boundary_measurement_uses_original_exact_mask_not_guided_m
     assert exact_report["available"] is True
     with pytest.raises(ValueError, match="contiguous exact audio prefix"):
         measure_audio_latent_boundary(packed, shapes, guided_mask, windows=(4,))
+
+
+def test_audio_exact_restore_suffix_bridge_preserves_first_transition_without_touching_other_regions():
+    packed, shapes, exact_mask = _packed_case(audio_t=12, audio_prefix=6)
+    result = packed.clone()
+    result_video, result_audio = unpack_streams(result, shapes)
+    _reference_video, reference_audio = unpack_streams(packed, shapes)
+
+    result_audio[..., 5] += 0.75
+    result_audio[..., 6] -= 0.20
+    before_video = result_video.clone()
+    before_prefix = result_audio[..., :6].clone()
+    before_first_suffix = result_audio[..., 6].clone()
+    before_later_suffix = result_audio[..., 7:].clone()
+    sampled_relation = before_first_suffix.to(torch.float32) - before_prefix[..., -1].to(torch.float32)
+    expected_delta = reference_audio[..., 5].to(torch.float32) - before_prefix[..., -1].to(torch.float32)
+
+    bridged, report = apply_audio_exact_restore_suffix_bridge(
+        result,
+        packed,
+        exact_mask,
+        shapes,
+        enabled=True,
+    )
+    bridged_video, bridged_audio = unpack_streams(bridged, shapes)
+
+    assert bridged.data_ptr() == result.data_ptr()
+    assert torch.equal(bridged_video, before_video)
+    assert torch.equal(bridged_audio[..., :6], before_prefix)
+    assert torch.equal(bridged_audio[..., 7:], before_later_suffix)
+    torch.testing.assert_close(
+        bridged_audio[..., 6].to(torch.float32),
+        before_first_suffix.to(torch.float32) + expected_delta,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert report["enabled"] is True
+    assert report["applied"] is True
+    assert report["reason"] == "exact_restore_transition_transfer"
+    assert report["audio_prefix_ticks"] == 6
+    assert report["corrected_ticks"] == 1
+    assert report["protected_prefix_modified"] is False
+    assert report["later_suffix_modified"] is False
+    assert report["extra_h3_nfe"] == 0
+    assert report["extra_sampler_lifetimes"] == 0
+    assert report["extra_vae_calls"] == 0
+
+    canonical, exact_stats = _canonicalize_exact_masked_output(
+        bridged,
+        packed,
+        exact_mask,
+    )
+    _canonical_video, canonical_audio = unpack_streams(canonical, shapes)
+    assert exact_stats["final_exact"] is True
+    assert torch.equal(canonical_audio[..., :6], reference_audio[..., :6])
+    torch.testing.assert_close(
+        canonical_audio[..., 6].to(torch.float32) - canonical_audio[..., 5].to(torch.float32),
+        sampled_relation,
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+
+
+def test_audio_exact_restore_suffix_bridge_disabled_is_identity():
+    packed, shapes, exact_mask = _packed_case(audio_t=12, audio_prefix=6)
+    result = packed.clone()
+    pointer = result.data_ptr()
+
+    bridged, report = apply_audio_exact_restore_suffix_bridge(
+        result,
+        packed,
+        exact_mask,
+        shapes,
+        enabled=False,
+    )
+
+    assert bridged.data_ptr() == pointer
+    assert torch.equal(bridged, result)
+    assert report["enabled"] is False
+    assert report["applied"] is False
+    assert report["reason"] == "disabled"
