@@ -297,7 +297,10 @@ def apply_audio_exact_restore_suffix_bridge(
     mask_audio = unpack_streams(exact_denoise_mask, latent_shapes)[1]
     if result_audio.ndim != 4 or int(result_audio.shape[2]) != 2:
         raise ValueError("audio exact-restore suffix bridge requires native BxCx2xT audio latents")
-    if tuple(reference_audio.shape) != tuple(result_audio.shape) or tuple(mask_audio.shape) != tuple(\n        result_audio.shape\n    ):\n        raise ValueError("audio exact-restore suffix bridge audio geometry drifted")
+    if tuple(reference_audio.shape) != tuple(result_audio.shape) or tuple(mask_audio.shape) != tuple(
+        result_audio.shape
+    ):
+        raise ValueError("audio exact-restore suffix bridge audio geometry drifted")
 
     temporal_min = mask_audio.amin(dim=(0, 1, 2))
     temporal_max = mask_audio.amax(dim=(0, 1, 2))
