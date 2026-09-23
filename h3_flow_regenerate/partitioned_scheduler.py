@@ -19,7 +19,6 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .contracts import H3FlowTrajectory
 from .geometry import (
     pack_streams,
-    resize_spatial_5d,
     resize_spatial_5d_h3_patch_lattice,
     unpack_streams,
 )
