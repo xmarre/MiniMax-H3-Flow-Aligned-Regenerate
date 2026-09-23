@@ -194,6 +194,74 @@ def normalize_target_geometry(
     return h, w
 
 
+def normalize_source_geometry_preserving_aspect(
+    *,
+    target_h: int,
+    target_w: int,
+    scale: float,
+) -> tuple[int, int]:
+    """Resolve a patch-safe source grid without increasing the nearest-rounding budget.
+
+    Independent H/W rounding can introduce avoidable anisotropic squeeze when the
+    requested scale falls between H3's two-latent-cell patch steps.  Continuation
+    prefixes are then resized into that distorted carrier before the generated
+    suffix is sampled.  Search only the local +/-2-patch neighborhood around the
+    ordinary nearest result, keep candidates at or below its latent-area budget,
+    and use the same aspect-first scoring family as H3 refine-canvas sizing.
+
+    This deliberately changes only quantization.  It never increases source token
+    area, never changes an already preferred nearest candidate, and does not alter
+    explicit source H/W requests.
+    """
+    if isinstance(target_h, bool) or isinstance(target_w, bool):
+        raise TypeError("target latent H/W must be integers")
+    target_h, target_w = int(target_h), int(target_w)
+    if target_h < 4 or target_w < 4 or target_h % H3_PATCH_H or target_w % H3_PATCH_W:
+        raise ValueError("target latent H/W must be even and at least 4")
+    if not isinstance(scale, (float, int)) or isinstance(scale, bool):
+        raise TypeError("source scale must be numeric")
+    scale = float(scale)
+    if not math.isfinite(scale) or not 0.0 < scale < 1.0:
+        raise ValueError("source scale must be finite and inside (0, 1)")
+
+    nearest_h, nearest_w = normalize_target_geometry(
+        source_h=target_h,
+        source_w=target_w,
+        scale=scale,
+        policy="nearest",
+    )
+    budget = nearest_h * nearest_w
+    raw_h = target_h * scale
+    raw_w = target_w * scale
+    target_aspect = target_w / target_h
+    patch = H3_PATCH_H
+    h_center = nearest_h // patch
+    w_center = nearest_w // patch
+
+    best: tuple[tuple[float, float, float, float, int], int, int] | None = None
+    for h_units in range(max(1, h_center - 2), h_center + 3):
+        for w_units in range(max(1, w_center - 2), w_center + 3):
+            h = h_units * patch
+            w = w_units * patch
+            if h >= target_h or w >= target_w or h * w > budget:
+                continue
+            ratio_error = abs(math.log((w / h) / target_aspect))
+            size_error = abs(h / raw_h - 1.0) + abs(w / raw_w - 1.0)
+            score = (
+                ratio_error * 4.0 + size_error,
+                ratio_error,
+                size_error,
+                abs(h - raw_h) + abs(w - raw_w),
+                -(h * w),
+            )
+            if best is None or score < best[0]:
+                best = (score, h, w)
+
+    if best is None:
+        raise ValueError("no patch-safe source geometry fits the nearest-rounding area budget")
+    return best[1], best[2]
+
+
 def pixel_to_safe_latent(height: int, width: int, *, policy: str = "ceil") -> tuple[int, int]:
     if height < H3_PIXEL_ALIGNMENT or width < H3_PIXEL_ALIGNMENT:
         raise ValueError(f"target pixels must be at least {H3_PIXEL_ALIGNMENT}x{H3_PIXEL_ALIGNMENT}")
