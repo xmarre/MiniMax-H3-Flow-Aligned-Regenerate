@@ -11,12 +11,13 @@ import contextlib
 import copy
 import math
 import time
+from dataclasses import replace
 from typing import Any
 
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
-from .contracts import H3FlowTrajectory
+from .contracts import H3FlowTrajectory, TrajectoryRun
 from .geometry import (
     pack_streams,
     resize_spatial_5d_h3_patch_lattice,
@@ -122,6 +123,36 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
 class PartitionedPreflightUnsupported(RuntimeError):
     """A condition detected before sampling that must use the exact target fallback."""
 
+
+def _align_guidance_run_suffix_gauge(
+    run: TrajectoryRun,
+    *,
+    prefix_t: int,
+    target_hw: tuple[int, int],
+    correction_dx: float,
+    correction_dy: float,
+) -> tuple[TrajectoryRun, float, float]:
+    """Create a transient Flow trajectory in the same suffix gauge as target-high."""
+    target_h, target_w = map(int, target_hw)
+    if target_h <= 0 or target_w <= 0:
+        raise ValueError("guidance gauge alignment requires positive target H/W")
+    source_h = int(run.geometry.latent_h)
+    source_w = int(run.geometry.latent_w)
+    source_dx = float(correction_dx) * source_w / target_w
+    source_dy = float(correction_dy) * source_h / target_h
+    aligned_samples = tuple(
+        replace(
+            sample,
+            video_x0=translate_spatial_suffix_5d(
+                sample.video_x0,
+                start_t=prefix_t,
+                dx=source_dx,
+                dy=source_dy,
+            ),
+        )
+        for sample in run.samples
+    )
+    return replace(run, samples=aligned_samples), source_dx, source_dy
 
 def _validate_audio_handoff_shadow_configuration(
     audio_handoff_source: str,
@@ -2139,7 +2170,28 @@ def run_partitioned_progressive(
                 )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
+            run, guidance_source_dx, guidance_source_dy = _align_guidance_run_suffix_gauge(
+                run,
+                prefix_t=stage_plan.prefix_t,
+                target_hw=(target_h, target_w),
+                correction_dx=correction_dx,
+                correction_dy=correction_dy,
+            )
             binding.active_guidance_run = run
+            binding.metrics.event(
+                "partitioned_guidance_gauge_alignment",
+                source="prefix_rigid_alignment",
+                transient_copy_only=True,
+                shared_trajectory_handle_unchanged=True,
+                target_correction_dx=correction_dx,
+                target_correction_dy=correction_dy,
+                source_correction_dx=guidance_source_dx,
+                source_correction_dy=guidance_source_dy,
+                prefix_t=stage_plan.prefix_t,
+                samples_aligned=len(run.samples),
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+            )
             binding.metrics.event(
                 "partitioned_guidance_trajectory_selection",
                 source=guidance_trajectory_source,
