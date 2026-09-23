@@ -113,11 +113,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     ]
-    assert (
-        diagnostic["audio_guided_overlap_mode"][1]["default"]
-        == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-    )
-    assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
+    assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+    assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 16
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
