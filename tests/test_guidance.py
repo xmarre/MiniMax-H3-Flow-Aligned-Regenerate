@@ -123,6 +123,7 @@ def test_cross_grid_direction_guidance_uses_h3_physical_patch_lattice():
     )
 
     state = GuidanceState()
+    state.spatial_transfer_policy = "h3_physical_patch_lattice_v1"
     result = apply_guidance(high, run=trajectory, coordinate=0.8, config=config, state=state)
     physical = resize_spatial_5d_h3_patch_lattice(source, 8, 10)
     generic = resize_video(source, 8, 10, mode="bicubic")
@@ -133,6 +134,27 @@ def test_cross_grid_direction_guidance_uses_h3_physical_patch_lattice():
     assert state.last_spatial_transfer_cross_grid is True
     assert state.last_spatial_transfer_source_hw == (4, 6)
     assert state.last_spatial_transfer_target_hw == (8, 10)
+
+
+def test_cross_grid_direction_guidance_preserves_generic_default():
+    torch.manual_seed(102)
+    source = 0.2 * torch.randn(1, 24, 2, 4, 6)
+    trajectory = run_video(source, coords=(0.8, 0.2))
+    high = torch.ones(1, 24, 2, 8, 10)
+    config = GuidanceConfig(
+        mode="direction",
+        direction_weight=1.0,
+        cutoff=1.0,
+        max_correction_rms_ratio=100.0,
+    )
+
+    state = GuidanceState()
+    result = apply_guidance(high, run=trajectory, coordinate=0.8, config=config, state=state)
+    generic = resize_video(source, 8, 10, mode="bicubic")
+
+    assert torch.allclose(result, generic, atol=1e-6, rtol=1e-6)
+    assert state.last_spatial_transfer_policy == "generic_resize_v1"
+    assert state.last_spatial_transfer_cross_grid is True
 
 
 def test_direction_schedule_is_normalized_to_refine_start_coordinate():
