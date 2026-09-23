@@ -19,6 +19,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .contracts import H3FlowTrajectory
 from .geometry import (
     pack_streams,
+    resize_spatial_5d,
     resize_spatial_5d_h3_patch_lattice,
     unpack_streams,
 )
@@ -1807,7 +1808,27 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        exact_prefix_source = physical_prefix_source.to(clean_video)
+        exact_prefix_source = resize_spatial_5d(
+            stage_plan.prefix.to(clean_video),
+            source_h,
+            source_w,
+            mode="bicubic",
+        )
+        handoff_prefix_delta = exact_prefix_source.to(torch.float32) - physical_prefix_source.to(torch.float32)
+        binding.metrics.event(
+            "partitioned_prefix_handoff_context",
+            low_probe_prefix_policy="h3_physical_patch_lattice_v1",
+            learned_transfer_prefix_policy="generic_bicubic_half_pixel_v1",
+            exact_target_restore_policy="authoritative_target_prefix",
+            low_probe_and_handoff_prefix_decoupled=True,
+            physical_vs_handoff_delta_rms=float(handoff_prefix_delta.square().mean().sqrt().item()),
+            physical_vs_handoff_delta_abs_max=float(handoff_prefix_delta.abs().max().item()),
+            numerical_change_observed=bool(handoff_prefix_delta.abs().max().item() > 0.0),
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
+        del handoff_prefix_delta
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
                 raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
