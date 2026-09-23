@@ -29,6 +29,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
@@ -131,7 +132,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
-    assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
@@ -907,6 +908,10 @@ def test_low_probe_execution_source_is_bounded_and_model_local():
         normalize_low_probe_execution_source(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY)
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     )
+    assert (
+        normalize_low_probe_execution_source(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY)
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
+    )
     with pytest.raises(ValueError, match="low/probe execution source"):
         normalize_low_probe_execution_source("invented")
 
@@ -937,3 +942,19 @@ def test_low_probe_execution_source_is_bounded_and_model_local():
         candidate_metrics.events[-1][1]["low_probe_execution_source"]
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     )
+
+    exact_model = SimpleNamespace(model_options={"transformer_options": {}})
+    exact_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        exact_model,
+        exact_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
+    )
+    assert (
+        exact_model.model_options["transformer_options"][PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
+    )
+    exact_source = exact_metrics.events[-1][1]["low_probe_execution_source"]
+    assert exact_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY

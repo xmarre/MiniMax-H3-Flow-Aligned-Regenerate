@@ -13,6 +13,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -41,6 +42,30 @@ def _validate_candidate(**overrides):
     }
     values.update(overrides)
     _validate_low_probe_execution_source_configuration(**values)
+
+
+def test_exact_onepass_execution_requires_main_owners_and_exact_context():
+    for ticks in (0, 4, 16):
+        _validate_candidate(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
+            audio_guided_overlap_ticks=ticks,
+        )
+        _validate_candidate(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
+            audio_guided_overlap_ticks=ticks,
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+        )
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="prefix_transformer_context"):
+        _validate_candidate(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+        )
+    with pytest.raises(PartitionedPreflightUnsupported, match="av_handoff_source"):
+        _validate_candidate(
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
+            av_handoff_source="source_carrier_uniform_shadow",
+        )
 
 
 def test_source_uniform_primary_execution_accepts_configured_sampler_owned_overlap_width():
