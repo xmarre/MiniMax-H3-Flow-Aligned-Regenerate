@@ -182,6 +182,13 @@ def _validate_av_handoff_shadow_configuration(
         )
 
 
+def _resolve_guidance_spatial_transfer_policy(prefix_transformer_context: str) -> str:
+    context = normalize_prefix_transformer_context(prefix_transformer_context)
+    if context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE:
+        return "h3_physical_patch_lattice_v1"
+    return "generic_resize_v1"
+
+
 def _validate_guidance_trajectory_shadow_configuration(
     guidance_trajectory_source: str,
     *,
@@ -2052,11 +2059,7 @@ def run_partitioned_progressive(
                 )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
-            guidance_spatial_transfer_policy = (
-                "h3_physical_patch_lattice_v1"
-                if prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
-                else "generic_resize_v1"
-            )
+            guidance_spatial_transfer_policy = _resolve_guidance_spatial_transfer_policy(prefix_transformer_context)
             binding.guidance_state.spatial_transfer_policy = guidance_spatial_transfer_policy
             binding.active_guidance_run = run
             binding.metrics.event(
