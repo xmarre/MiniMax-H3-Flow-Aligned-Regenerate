@@ -11,17 +11,18 @@ from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-    PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
+    PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
-    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -218,13 +219,13 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_ticks"] = (
             "INT",
             {
-                "default": 4,
+                "default": 16,
                 "min": 0,
                 "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "40-Hz sampler-owned audio overlap width. The production default is 4 ticks "
-                    "(100 ms), validated with sampler_mask_exact_timestep. Values 0..16 remain "
+                    "40-Hz sampler-owned audio overlap width. This quality-first corrective candidate "
+                    "defaults to the user-validated 16-tick sampler_mask contract. Values 0..16 remain "
                     "available for controlled compatibility and diagnostics."
                 ),
             },
@@ -234,11 +235,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_mode"] = (
             list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
                 "tooltip": (
-                    "sampler_mask_exact_timestep is the production default: the sampler owns the overlap "
-                    "while MiniMax-H3 inner timestep/modulation labels retain the authoritative exact-prefix mask. "
-                    "sampler_mask and model_timestep_only remain advanced comparison modes."
+                    "sampler_mask / 16 is the current user-validated audio contract for this quality-first "
+                    "boundary-continuity candidate. sampler_mask_exact_timestep and model_timestep_only remain "
+                    "available only for historical comparison."
                 ),
             },
         )
@@ -283,12 +284,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["av_handoff_source"] = (
             list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+                "default": PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
                 "tooltip": (
-                    "main_partitioned preserves the #60/#61 handoff. "
-                    "source_carrier_uniform_shadow runs a separate uniform source-grid low+probe "
-                    "pair, selects its raw audio sampler state and clean generated video for the "
-                    "learned handoff, but keeps the main exact-partitioned captured Flow trajectory."
+                    "source_carrier_uniform_shadow is the quality-first boundary-continuity candidate: "
+                    "the main exact-partitioned low/probe trajectory remains authoritative while an isolated "
+                    "source-grid low+probe pair supplies the raw audio state and clean generated video suffix "
+                    "used at the learned handoff. main_partitioned keeps the faster single-state handoff."
                 ),
             },
         )
@@ -311,11 +312,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["low_probe_execution_source"] = (
             list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
                 "tooltip": (
-                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
-                    "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
-                    "remains available for historical diagnostics."
+                    "main_then_shadow is the quality-first boundary-continuity candidate: execute the main "
+                    "exact-partitioned low/probe pair, then the isolated source-uniform AV shadow pair, then "
+                    "target-high. source_carrier_uniform_only remains the faster three-lifetime path but is "
+                    "not the default on this corrective candidate."
                 ),
             },
         )
@@ -323,10 +325,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
-        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
-        "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
-        "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
+        "Corrective quality-first exact-prefix Continuum handoff. The default candidate restores the "
+        "main exact-partitioned trajectory plus isolated source-uniform AV handoff topology that previously "
+        "removed the physical-boundary framing shift, while retaining the currently accepted 16-tick "
+        "sampler-owned audio overlap. The faster source-only path remains selectable."
     )
 
     def patch(
@@ -351,12 +353,37 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         prefix_transformer_context,
         audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
-        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
-        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         metrics=None,
         temporal_weight=0.20,
     ):
+        candidate_mismatches = []
+        if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+            candidate_mismatches.append("low_probe_execution_source='main_then_shadow'")
+        if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+            candidate_mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
+        if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+            candidate_mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
+        if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+            candidate_mismatches.append("audio_handoff_source='main_partitioned'")
+        if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            candidate_mismatches.append("prefix_transformer_context='exact_target_partitioned'")
+        if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+            candidate_mismatches.append("audio_position_domain='source_carrier'")
+        if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+            candidate_mismatches.append("vdn_linear_diagnostic='normal'")
+        if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
+            candidate_mismatches.append("audio_guided_overlap_mode='sampler_mask'")
+        if int(audio_guided_overlap_ticks) != 16:
+            candidate_mismatches.append("audio_guided_overlap_ticks=16")
+        if candidate_mismatches:
+            raise RuntimeError(
+                "PR #77 quality-first hardware candidate requires "
+                + ", ".join(candidate_mismatches)
+            )
+
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
