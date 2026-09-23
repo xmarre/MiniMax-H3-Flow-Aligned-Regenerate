@@ -956,4 +956,7 @@ def test_low_probe_execution_source_is_bounded_and_model_local():
         exact_model.model_options["transformer_options"][PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY]
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
     )
-    assert exact_metrics.events[-1][1]["low_probe_execution_source"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
+    assert (
+        exact_metrics.events[-1][1]["low_probe_execution_source"]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY
+    )
