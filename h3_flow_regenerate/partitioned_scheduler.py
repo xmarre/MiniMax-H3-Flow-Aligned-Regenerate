@@ -17,7 +17,11 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .contracts import H3FlowTrajectory
-from .geometry import pack_streams, resize_spatial_5d, unpack_streams
+from .geometry import (
+    pack_streams,
+    resize_spatial_5d_h3_patch_lattice,
+    unpack_streams,
+)
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -96,6 +100,7 @@ from .seam_diagnostics import (
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 from .tone_bridge import (
     apply_suffix_dc_bridge,
+    apply_suffix_residual_transport,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
@@ -1255,6 +1260,38 @@ def run_partitioned_progressive(
     )
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+    low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
+    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
+        stage_plan.prefix.to(low_video),
+        source_h,
+        source_w,
+    )
+    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
+    generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
+    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
+    prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
+    low_video = low_video.clone()
+    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_latent_image = pack_streams((low_video, low_audio))[0]
+    binding.metrics.event(
+        "partitioned_prefix_source_resample",
+        policy="h3_physical_patch_lattice_v1",
+        prefix_source="authoritative_exact_target_prefix",
+        prefix_t=int(stage_plan.prefix_t),
+        target_hw=(int(target_h), int(target_w)),
+        source_hw=(int(source_h), int(source_w)),
+        generic_half_pixel_prefix_replaced=True,
+        generic_vs_physical_delta_rms=prefix_resample_delta_rms,
+        generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
+        numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    del prefix_resample_delta
+    del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
     diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
@@ -1771,11 +1808,17 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        exact_prefix_source = resize_spatial_5d(
-            stage_plan.prefix.to(clean_video),
-            source_h,
-            source_w,
-            mode="bicubic",
+        exact_prefix_source = physical_prefix_source.to(clean_video)
+        binding.metrics.event(
+            "partitioned_prefix_handoff_context",
+            low_probe_prefix_policy="h3_physical_patch_lattice_v1",
+            learned_transfer_prefix_policy="h3_physical_patch_lattice_v1",
+            exact_target_restore_policy="authoritative_target_prefix",
+            low_probe_and_handoff_prefix_decoupled=False,
+            quality_preserving_physical_context_retained=True,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
         )
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
@@ -1905,13 +1948,24 @@ def run_partitioned_progressive(
             device=learned_clean.device,
             dtype=learned_clean.dtype,
         )
-        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
-            target_video,
+        corrected_clean, residual_transport_metrics = apply_suffix_residual_transport(
             learned_clean,
             exact_prefix,
-            sigma=sigma,
-            enabled=True,
         )
+        corrected_tokens = int(residual_transport_metrics["suffix_residual_transport_corrected_tokens"])
+        target_video = map_clean_bridge_to_conditional_state(
+            target_video,
+            learned_clean,
+            corrected_clean,
+            sigma=float(sigma),
+            prefix_t=int(stage_plan.prefix_t),
+            corrected_tokens=corrected_tokens,
+        )
+        if not bool(residual_transport_metrics["suffix_residual_transport_pointwise_boundary_preserved"]):
+            raise RuntimeError("exact-prefix residual transport failed to preserve the learned native boundary")
+        if not bool(residual_transport_metrics["suffix_residual_transport_internal_deltas_preserved"]):
+            raise RuntimeError("exact-prefix residual transport changed learned suffix temporal deltas")
+        dc_bridge_metrics = disabled_suffix_dc_bridge_metrics(prefix_t=int(stage_plan.prefix_t))
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
             exact_prefix,
@@ -1923,15 +1977,26 @@ def run_partitioned_progressive(
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
         binding.metrics.event(
-            "partitioned_suffix_dc_bridge",
+            "partitioned_suffix_residual_transport",
             source="learned_3d_exact_prefix_handoff",
             state_mapping="conditional_renoise_affine",
+            authoritative_prefix_modified=False,
+            suffix_temporal_deltas_preserved=True,
+            spatial_resampling_applied=False,
+            suffix_geometric_translation_applied=False,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            **residual_transport_metrics,
+        )
+        binding.metrics.event(
+            "partitioned_suffix_dc_bridge",
+            source="replaced_by_suffix_residual_transport",
+            state_mapping="disabled",
             authoritative_prefix_modified=False,
             later_suffix_modified=False,
             **dc_bridge_metrics,
         )
-        if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
-            binding.metrics.increment("partitioned_suffix_dc_bridge_runs")
+        binding.metrics.increment("partitioned_suffix_residual_transport_runs")
 
         # Splice diagnostics above require the learned prefix.  From here on the
         # clean diagnostic tensor mirrors the actual high-stage state: corrected
@@ -1979,8 +2044,10 @@ def run_partitioned_progressive(
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
-            suffix_dc_bridge_state_mapping="conditional_renoise_affine",
+            suffix_dc_bridge_state_mapping="disabled_replaced_by_full_residual_transport",
+            suffix_residual_transport_state_mapping="conditional_renoise_affine",
             **dc_bridge_metrics,
+            **residual_transport_metrics,
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             model_name=transfer_metrics.get("model_name"),
