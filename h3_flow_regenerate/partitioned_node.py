@@ -322,11 +322,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["suffix_dc_bridge_enabled"] = (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": (
-                    "Diagnostic A/B for the partitioned one-token suffix DC bridge. Disable only for "
-                    "matched regression testing against the pre-#75 transfer state; exact-prefix restore, "
-                    "target-high sampling, audio state, and sampler/NFE topology are unchanged."
+                    "PR #79 no-DC A/B guard. This diagnostic head requires False and aborts before "
+                    "sampling if True reaches the backend. Exact-prefix restore, target-high sampling, "
+                    "audio state, and sampler/NFE topology are otherwise unchanged."
                 ),
             },
         )
@@ -365,10 +365,15 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
-        suffix_dc_bridge_enabled=True,
+        suffix_dc_bridge_enabled=False,
         metrics=None,
         temporal_weight=0.20,
     ):
+        if suffix_dc_bridge_enabled:
+            raise RuntimeError(
+                "PR #79 no-DC A/B requires suffix_dc_bridge_enabled=False; "
+                "reload the node schema if the frontend still submits True"
+            )
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
