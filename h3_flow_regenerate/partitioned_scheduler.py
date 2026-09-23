@@ -37,6 +37,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
@@ -230,7 +231,7 @@ def _validate_low_probe_execution_source_configuration(
     # of source-uniform execution. The node-level validator constrains it to 0..16.
     if mismatches:
         raise PartitionedPreflightUnsupported(
-            "source_carrier_uniform_only low/probe execution requires " + ", ".join(mismatches)
+            f"{source} low/probe execution requires " + ", ".join(mismatches)
         )
 
 
@@ -1103,6 +1104,34 @@ def run_partitioned_progressive(
             raise PartitionedPreflightUnsupported(
                 "source_carrier_uniform_shadow guidance trajectory requires enabled Flow trajectory capture"
             )
+    exact_onepass_partitioned_calls_before = int(
+        binding.metrics.counters.get("partitioned_transformer_calls", 0)
+    )
+    exact_onepass_source_calls_before = int(
+        binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
+    )
+    if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY:
+        binding.metrics.event(
+            "partitioned_low_probe_execution_plan",
+            source=low_probe_execution_source,
+            skipped_main_exact_partitioned_low_probe=False,
+            raw_audio_owner="main_exact_partitioned",
+            clean_video_owner="main_exact_partitioned_probe",
+            guidance_trajectory_owner="main_exact_partitioned",
+            ui_audio_handoff_source=audio_handoff_source,
+            ui_av_handoff_source=av_handoff_source,
+            ui_guidance_trajectory_source=guidance_trajectory_source,
+            duplicate_shadow_lifetimes_expected=0,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            exact_target_prefix_transformer_context=True,
+            exact_target_prefix_restore_unchanged=True,
+            learned_transfer_unchanged=True,
+            target_high_unchanged=True,
+            production_shaped_single_path=True,
+            diagnostic_only=True,
+        )
+
     if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
         sampler_calls_before = int(binding.metrics.counters.get("progressive_sampler_invocations", 0))
         history_boundaries_before = int(binding.metrics.counters.get("progressive_history_boundaries", 0))
@@ -2201,6 +2230,43 @@ def run_partitioned_progressive(
             / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
             deprecated_mixed_grid_contract_active=False,
         )
+        if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY:
+            exact_partitioned_call_delta = (
+                int(binding.metrics.counters.get("partitioned_transformer_calls", 0))
+                - exact_onepass_partitioned_calls_before
+            )
+            source_uniform_call_delta = (
+                int(binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0))
+                - exact_onepass_source_calls_before
+            )
+            if sampler_invocation_count != 3 or history_boundary_count != 2:
+                raise RuntimeError(
+                    "exact one-pass execution did not produce exactly low/probe/high sampler lifetimes"
+                )
+            if exact_partitioned_call_delta <= 0 or source_uniform_call_delta != 0:
+                raise RuntimeError(
+                    "exact one-pass execution did not isolate heterogeneous exact low/probe transformer calls"
+                )
+            if (
+                audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+                or av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+                or guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            ):
+                raise RuntimeError("exact one-pass execution unexpectedly selected a shadow handoff owner")
+            binding.metrics.event(
+                "partitioned_low_probe_execution_complete",
+                source=low_probe_execution_source,
+                sampler_invocation_delta=sampler_invocation_count,
+                history_boundary_delta=history_boundary_count,
+                source_uniform_transformer_calls=source_uniform_call_delta,
+                exact_partitioned_transformer_calls=exact_partitioned_call_delta,
+                duplicate_shadow_lifetimes_executed=0,
+                exact_target_prefix_transformer_context=True,
+                production_shaped_single_path=True,
+                extra_h3_nfe=0,
+                diagnostic_only=True,
+            )
+
         binding.metrics.event(
             "handoff_complete",
             sigma=sigma,
