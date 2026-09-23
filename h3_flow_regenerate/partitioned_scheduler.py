@@ -176,8 +176,7 @@ def _validate_av_handoff_shadow_configuration(
     }
     if audio_contract not in allowed_audio_contracts:
         mismatches.append(
-            "audio overlap contract in "
-            "{model_timestep_only/4, sampler_mask_exact_timestep/4, sampler_mask/16}"
+            "audio overlap contract in {model_timestep_only/4, sampler_mask_exact_timestep/4, sampler_mask/16}"
         )
     if mismatches:
         raise PartitionedPreflightUnsupported(
