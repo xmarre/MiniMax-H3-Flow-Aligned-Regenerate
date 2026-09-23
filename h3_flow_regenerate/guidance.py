@@ -98,6 +98,10 @@ class GuidanceState:
     last_temporal_cache_hit: bool = False
     last_temporal_reference_coordinate: float | None = None
     last_temporal_reference_clamped: bool = False
+    last_spatial_transfer_policy: str | None = None
+    last_spatial_transfer_cross_grid: bool = False
+    last_spatial_transfer_source_hw: tuple[int, int] | None = None
+    last_spatial_transfer_target_hw: tuple[int, int] | None = None
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -129,6 +133,10 @@ class GuidanceState:
         self.last_temporal_cache_hit = False
         self.last_temporal_reference_coordinate = None
         self.last_temporal_reference_clamped = False
+        self.last_spatial_transfer_policy = None
+        self.last_spatial_transfer_cross_grid = False
+        self.last_spatial_transfer_source_hw = None
+        self.last_spatial_transfer_target_hw = None
 
 
 _PHASE_PRIORITY = {
@@ -562,7 +570,14 @@ def apply_guidance(
 
     source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
     source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
-    ref = _resize_h3_spatial_reference(source_ref, high_x0.shape[-2], high_x0.shape[-1])
+    source_hw = (int(source_ref.shape[-2]), int(source_ref.shape[-1]))
+    target_hw = (int(high_x0.shape[-2]), int(high_x0.shape[-1]))
+    cross_grid = source_hw != target_hw
+    ref = _resize_h3_spatial_reference(source_ref, *target_hw)
+    state.last_spatial_transfer_policy = "h3_physical_patch_lattice_v1" if cross_grid else "identity_same_grid"
+    state.last_spatial_transfer_cross_grid = cross_grid
+    state.last_spatial_transfer_source_hw = source_hw
+    state.last_spatial_transfer_target_hw = target_hw
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
