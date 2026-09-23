@@ -230,20 +230,22 @@ def normalize_source_geometry_preserving_aspect(
         scale=scale,
         policy="nearest",
     )
+    if nearest_h == target_h and nearest_w == target_w:
+        raise ValueError("source scale rounds to the unchanged target geometry")
+
     budget = nearest_h * nearest_w
     raw_h = target_h * scale
     raw_w = target_w * scale
     target_aspect = target_w / target_h
-    patch = H3_PATCH_H
-    h_center = nearest_h // patch
-    w_center = nearest_w // patch
+    h_center = nearest_h // H3_PATCH_H
+    w_center = nearest_w // H3_PATCH_W
 
     best: tuple[tuple[float, float, float, float, int], int, int] | None = None
     for h_units in range(max(1, h_center - 2), h_center + 3):
         for w_units in range(max(1, w_center - 2), w_center + 3):
-            h = h_units * patch
-            w = w_units * patch
-            if h >= target_h or w >= target_w or h * w > budget:
+            h = h_units * H3_PATCH_H
+            w = w_units * H3_PATCH_W
+            if h > target_h or w > target_w or (h == target_h and w == target_w) or h * w > budget:
                 continue
             ratio_error = abs(math.log((w / h) / target_aspect))
             size_error = abs(h / raw_h - 1.0) + abs(w / raw_w - 1.0)
