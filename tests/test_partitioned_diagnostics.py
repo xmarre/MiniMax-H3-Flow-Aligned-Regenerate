@@ -161,6 +161,36 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("guidance_trajectory_source") < keys.index("low_probe_execution_source")
 
 
+def test_pr77_quality_candidate_rejects_fast_baseline_before_sampling():
+    node = H3PartitionedExactPrefixDiagnosticHandoff()
+    with pytest.raises(RuntimeError, match="PR #77 quality-first hardware candidate requires"):
+        node.patch(
+            model=None,
+            trajectory=None,
+            source_mode="scale",
+            source_scale=0.7,
+            source_width=864,
+            source_height=640,
+            handoff_coordinate=0.35,
+            handoff_selection="fixed",
+            guidance_mode="direction+temporal",
+            direction_weight=0.25,
+            acceleration_weight=0.25,
+            consistency_weight=0.25,
+            low_frequency_cutoff=0.25,
+            learned_upscaler=None,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            audio_guided_overlap_ticks=16,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
+            av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+            guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
+            low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        )
+
+
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
     model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
     metrics = _Metrics()
