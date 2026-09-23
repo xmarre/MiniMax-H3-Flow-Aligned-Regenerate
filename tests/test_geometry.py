@@ -1,9 +1,12 @@
+import math
+
 import pytest
 import torch
 
 from h3_flow_regenerate.geometry import (
     geometry_from_video,
     h3_refine_scale_target_canvas,
+    normalize_source_geometry_preserving_aspect,
     normalize_target_geometry,
     pack_streams,
     pixel_to_safe_latent,
@@ -31,6 +34,45 @@ def test_h3_geometry_and_pixel_scale():
 def test_known_76_by_57_regression_normalizes_even():
     assert normalize_target_geometry(source_h=64, source_w=48, scale=1.2) == (78, 58)
     assert normalize_target_geometry(source_h=76, source_w=57, target_h=76, target_w=57) == (76, 58)
+
+
+def test_partitioned_source_geometry_preserves_accepted_56x76_case():
+    assert normalize_source_geometry_preserving_aspect(
+        target_h=56,
+        target_w=76,
+        scale=0.70,
+    ) == (40, 54)
+
+
+def test_partitioned_source_geometry_reduces_56x74_anisotropic_rounding_without_more_area():
+    selected = normalize_source_geometry_preserving_aspect(
+        target_h=56,
+        target_w=74,
+        scale=0.70,
+    )
+    assert selected == (38, 50)
+
+    nearest = normalize_target_geometry(
+        source_h=56,
+        source_w=74,
+        scale=0.70,
+        policy="nearest",
+    )
+    assert nearest == (40, 52)
+    assert selected[0] * selected[1] < nearest[0] * nearest[1]
+
+    target_aspect = 74 / 56
+    nearest_error = abs(math.log((nearest[1] / nearest[0]) / target_aspect))
+    selected_error = abs(math.log((selected[1] / selected[0]) / target_aspect))
+    assert selected_error < nearest_error / 3
+
+
+def test_partitioned_source_geometry_is_orientation_symmetric():
+    assert normalize_source_geometry_preserving_aspect(
+        target_h=74,
+        target_w=56,
+        scale=0.70,
+    ) == (50, 38)
 
 
 def test_pixel_target_maps_to_safe_latent():
