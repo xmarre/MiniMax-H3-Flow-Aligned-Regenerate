@@ -412,12 +412,7 @@ def translate_spatial_suffix_5d(
     suffix_t = temporal - start_t
     h = int(tensor.shape[3])
     w = int(tensor.shape[4])
-    suffix = (
-        tensor[:, :, start_t:]
-        .permute(0, 2, 1, 3, 4)
-        .reshape(b * suffix_t, c, h, w)
-        .float()
-    )
+    suffix = tensor[:, :, start_t:].permute(0, 2, 1, 3, 4).reshape(b * suffix_t, c, h, w).float()
 
     y = torch.linspace(-1.0, 1.0, h, device=suffix.device, dtype=torch.float32)
     x = torch.linspace(-1.0, 1.0, w, device=suffix.device, dtype=torch.float32)
@@ -434,11 +429,7 @@ def translate_spatial_suffix_5d(
         padding_mode="border",
         align_corners=True,
     )
-    shifted = (
-        shifted.reshape(b, suffix_t, c, h, w)
-        .permute(0, 2, 1, 3, 4)
-        .to(device=tensor.device, dtype=tensor.dtype)
-    )
+    shifted = shifted.reshape(b, suffix_t, c, h, w).permute(0, 2, 1, 3, 4).to(device=tensor.device, dtype=tensor.dtype)
 
     result = tensor.clone()
     result[:, :, start_t:] = shifted
