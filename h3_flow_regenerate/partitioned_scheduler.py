@@ -43,6 +43,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -1054,6 +1055,12 @@ def run_partitioned_progressive(
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         )
     )
+    suffix_dc_bridge_enabled = initial_transformer.get(
+        PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY,
+        True,
+    )
+    if not isinstance(suffix_dc_bridge_enabled, bool):
+        raise PartitionedPreflightUnsupported("suffix DC bridge diagnostic control must be boolean")
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -1127,6 +1134,7 @@ def run_partitioned_progressive(
             exact_target_prefix_restore_unchanged=True,
             learned_transfer_unchanged=True,
             target_high_unchanged=True,
+            suffix_dc_bridge_enabled=suffix_dc_bridge_enabled,
             diagnostic_only=True,
         )
         _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_entry")
@@ -1959,7 +1967,7 @@ def run_partitioned_progressive(
             learned_clean,
             exact_prefix,
             sigma=sigma,
-            enabled=True,
+            enabled=suffix_dc_bridge_enabled,
         )
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
@@ -1977,6 +1985,7 @@ def run_partitioned_progressive(
             state_mapping="conditional_renoise_affine",
             authoritative_prefix_modified=False,
             later_suffix_modified=False,
+            diagnostic_control_enabled=suffix_dc_bridge_enabled,
             **dc_bridge_metrics,
         )
         if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
