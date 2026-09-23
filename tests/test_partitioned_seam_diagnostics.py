@@ -11,7 +11,10 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
 )
-from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+from h3_flow_regenerate.seam_diagnostics import (
+    estimate_prefix_rigid_alignment,
+    project_translation_trajectory_to_grid,
+)
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
@@ -64,6 +67,28 @@ def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_rest
     assert required <= fields.keys()
     assert all(math.isfinite(float(fields[key])) for key in required)
 
+
+def test_prefix_rigid_alignment_recovers_same_frame_gauge_offset():
+    torch.manual_seed(812)
+    exact = torch.randn(1, 8, 5, 32, 40, dtype=torch.float32)
+    learned = torch.roll(exact, shifts=(1, -2), dims=(-2, -1))
+
+    fields = estimate_prefix_rigid_alignment(
+        learned,
+        exact,
+        frames=4,
+        max_shift=3,
+    )
+
+    assert fields["prefix_alignment_version"] == 1
+    assert fields["prefix_alignment_frames"] == 4
+    assert fields["learned_relative_median_dx"] == pytest.approx(-2.0, abs=0.05)
+    assert fields["learned_relative_median_dy"] == pytest.approx(1.0, abs=0.05)
+    assert fields["correction_dx"] == pytest.approx(2.0, abs=0.05)
+    assert fields["correction_dy"] == pytest.approx(-1.0, abs=0.05)
+    assert fields["learned_relative_mad_dx"] < 0.05
+    assert fields["learned_relative_mad_dy"] < 0.05
+    assert fields["median_response"] > 1.0
 
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
     torch.manual_seed(123)
