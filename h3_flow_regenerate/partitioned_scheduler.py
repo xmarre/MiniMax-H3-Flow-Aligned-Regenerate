@@ -17,7 +17,13 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .contracts import H3FlowTrajectory
-from .geometry import pack_streams, resize_spatial_5d, unpack_streams
+from .geometry import (
+    normalize_source_geometry_preserving_aspect,
+    normalize_target_geometry,
+    pack_streams,
+    resize_spatial_5d,
+    unpack_streams,
+)
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -873,7 +879,14 @@ def _preflight(
     _validate_partitioned_sol_compat(guider)
 
     try:
-        source_h, source_w = config.resolve_source(target_h, target_w)
+        if config.source_scale is not None:
+            source_h, source_w = normalize_source_geometry_preserving_aspect(
+                target_h=target_h,
+                target_w=target_w,
+                scale=float(config.source_scale),
+            )
+        else:
+            source_h, source_w = config.resolve_source(target_h, target_w)
         internal = _process_latent_in(guider.model_patcher.model, latent_image, latent_shapes)
         stage_plan = build_partitioned_stage_plan(
             denoise_mask,
@@ -1203,6 +1216,37 @@ def run_partitioned_progressive(
         latent_shapes,
         required_vdn_linear_diagnostic=vdn_linear_diagnostic,
     )
+    if config.source_scale is not None:
+        target_h, target_w = map(int, latent_shapes[0][-2:])
+        nearest_h, nearest_w = normalize_target_geometry(
+            source_h=target_h,
+            source_w=target_w,
+            scale=float(config.source_scale),
+            policy="nearest",
+        )
+        selected_area = int(source_h * source_w)
+        nearest_area = int(nearest_h * nearest_w)
+        if selected_area > nearest_area:
+            raise RuntimeError("aspect-preserving source geometry exceeded the nearest-rounding compute budget")
+        target_aspect = target_w / target_h
+        nearest_aspect_error = abs(math.log((nearest_w / nearest_h) / target_aspect))
+        selected_aspect_error = abs(math.log((source_w / source_h) / target_aspect))
+        binding.metrics.event(
+            "partitioned_source_geometry",
+            policy="aspect_preserving_local_budget_v1",
+            requested_scale=float(config.source_scale),
+            target_hw=(target_h, target_w),
+            nearest_hw=(nearest_h, nearest_w),
+            selected_hw=(source_h, source_w),
+            nearest_area=nearest_area,
+            selected_area=selected_area,
+            area_ratio_vs_nearest=selected_area / nearest_area,
+            nearest_aspect_error=nearest_aspect_error,
+            selected_aspect_error=selected_aspect_error,
+            aspect_error_reduced=selected_aspect_error <= nearest_aspect_error,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+        )
 
     # All unsupported conditions above are checked before any sampler lifetime.
     # From this point onward a failure is a real candidate failure and must not
