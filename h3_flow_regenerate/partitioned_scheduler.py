@@ -1267,6 +1267,10 @@ def run_partitioned_progressive(
     )
     if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
         raise RuntimeError("H3 physical prefix resample changed temporal ownership")
+    generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
+    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
+    prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
     low_video = low_video.clone()
     low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
     low_latent_image = pack_streams((low_video, low_audio))[0]
@@ -1278,10 +1282,14 @@ def run_partitioned_progressive(
         target_hw=(int(target_h), int(target_w)),
         source_hw=(int(source_h), int(source_w)),
         generic_half_pixel_prefix_replaced=True,
+        generic_vs_physical_delta_rms=prefix_resample_delta_rms,
+        generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
+        numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
         extra_h3_nfe=0,
         extra_sampler_lifetimes=0,
         extra_history_boundaries=0,
     )
+    del prefix_resample_delta
     del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
