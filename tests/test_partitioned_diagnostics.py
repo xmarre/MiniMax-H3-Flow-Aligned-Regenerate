@@ -233,10 +233,7 @@ def test_suffix_dc_bridge_control_is_model_local_and_default_true():
         audio_guided_overlap_ticks=4,
         suffix_dc_bridge_enabled=False,
     )
-    assert (
-        disabled_model.model_options["transformer_options"][PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY]
-        is False
-    )
+    assert disabled_model.model_options["transformer_options"][PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY] is False
     assert disabled_metrics.events[-1][1]["suffix_dc_bridge_enabled"] is False
 
     with pytest.raises(ValueError, match="suffix DC bridge enabled"):
