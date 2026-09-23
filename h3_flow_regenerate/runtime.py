@@ -1829,9 +1829,7 @@ def _run_progressive(
             target_latent_internal_signature=_bounded_tensor_provenance(target_latent_internal),
             target_noise_signature=_bounded_tensor_provenance(target_noise),
             guidance_run_id=(guidance_run.run_id if guidance_run is not None else None),
-            guidance_conditioning_signature=(
-                guidance_run.conditioning_signature if guidance_run is not None else None
-            ),
+            guidance_conditioning_signature=(guidance_run.conditioning_signature if guidance_run is not None else None),
             guidance_sample_count=(len(guidance_run.samples) if guidance_run is not None else 0),
             guidance_samples=_trajectory_sample_provenance(guidance_run),
             transfer_mode=str(config.transfer_mode),
