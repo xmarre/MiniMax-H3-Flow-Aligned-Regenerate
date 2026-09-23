@@ -378,10 +378,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         if int(audio_guided_overlap_ticks) != 16:
             candidate_mismatches.append("audio_guided_overlap_ticks=16")
         if candidate_mismatches:
-            raise RuntimeError(
-                "PR #77 quality-first hardware candidate requires "
-                + ", ".join(candidate_mismatches)
-            )
+            raise RuntimeError("PR #77 quality-first hardware candidate requires " + ", ".join(candidate_mismatches))
 
         patched, metrics = super().patch(
             model=model,
