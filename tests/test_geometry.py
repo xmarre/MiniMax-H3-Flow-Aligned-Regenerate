@@ -12,6 +12,7 @@ from h3_flow_regenerate.geometry import (
     resize_spatial_5d,
     resize_spatial_5d_h3_patch_lattice,
     resize_video,
+    translate_spatial_suffix_5d,
     unpack_streams,
     validate_av,
 )
@@ -144,6 +145,25 @@ def test_h3_patch_lattice_resize_preserves_patch_subcell_layout():
     assert torch.allclose(mapped[..., 1::2, 0::2], torch.full_like(mapped[..., 1::2, 0::2], 10.0), atol=1e-6)
     assert torch.allclose(mapped[..., 1::2, 1::2], torch.full_like(mapped[..., 1::2, 1::2], 11.0), atol=1e-6)
 
+
+def test_translate_spatial_suffix_preserves_prefix_and_moves_content_in_requested_direction():
+    video = torch.zeros(1, 1, 3, 9, 9, dtype=torch.float32)
+    video[:, :, 0] = torch.arange(81, dtype=torch.float32).reshape(1, 1, 9, 9)
+    video[:, :, 1:, 4, 4] = 1.0
+
+    shifted = translate_spatial_suffix_5d(video, start_t=1, dx=1.0, dy=-1.0)
+
+    assert torch.equal(shifted[:, :, :1], video[:, :, :1])
+    assert shifted[0, 0, 1, 3, 5] == pytest.approx(1.0, abs=1e-6)
+    assert shifted[0, 0, 2, 3, 5] == pytest.approx(1.0, abs=1e-6)
+    assert shifted[0, 0, 1, 4, 4] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_translate_spatial_suffix_zero_offset_is_value_preserving_clone():
+    video = torch.randn(1, 3, 4, 8, 10)
+    shifted = translate_spatial_suffix_5d(video, start_t=2, dx=0.0, dy=0.0)
+    assert torch.equal(shifted, video)
+    assert shifted.data_ptr() != video.data_ptr()
 
 def test_resize_is_spatial_only():
     source = video(40, 54, t=5)
