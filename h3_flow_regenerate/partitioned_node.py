@@ -24,6 +24,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
+    PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -319,6 +320,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["suffix_dc_bridge_enabled"] = (
+            "BOOLEAN",
+            {
+                "default": True,
+                "tooltip": (
+                    "Diagnostic A/B for the partitioned one-token suffix DC bridge. Disable only for "
+                    "matched regression testing against the pre-#75 transfer state; exact-prefix restore, "
+                    "target-high sampling, audio state, and sampler/NFE topology are unchanged."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -354,6 +366,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        suffix_dc_bridge_enabled=True,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -387,6 +400,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             av_handoff_source=av_handoff_source,
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
+            suffix_dc_bridge_enabled=suffix_dc_bridge_enabled,
         )
 
 
