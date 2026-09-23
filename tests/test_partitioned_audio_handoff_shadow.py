@@ -8,6 +8,7 @@ import torch
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
@@ -69,7 +70,8 @@ def test_audio_handoff_shadow_configuration_is_strictly_one_axis():
         {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
         {"vdn_linear_diagnostic": "bypass_partitioned_linear"},
         {"audio_position_domain": "legacy_target"},
-        {"audio_guided_overlap_mode": "sampler_mask"},
+        {"audio_guided_overlap_mode": "sampler_mask", "audio_guided_overlap_ticks": 4},
+        {"audio_guided_overlap_mode": "model_timestep_only", "audio_guided_overlap_ticks": 16},
         {"audio_guided_overlap_ticks": 3},
     )
     for override in bad_cases:
@@ -169,9 +171,10 @@ def test_shadow_audio_splice_rejects_protected_prefix_mutation_or_noop():
 
 
 def test_av_handoff_shadow_configuration_is_strictly_one_axis():
-    for audio_mode in (
-        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    for audio_mode, audio_ticks in (
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, 16),
     ):
         _validate_av_handoff_shadow_configuration(
             PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
@@ -180,7 +183,7 @@ def test_av_handoff_shadow_configuration_is_strictly_one_axis():
             vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
             audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
             audio_guided_overlap_mode=audio_mode,
-            audio_guided_overlap_ticks=4,
+            audio_guided_overlap_ticks=audio_ticks,
         )
     bad = (
         {"audio_handoff_source": PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW},
