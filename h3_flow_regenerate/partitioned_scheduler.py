@@ -2052,6 +2052,12 @@ def run_partitioned_progressive(
                 )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
+            guidance_spatial_transfer_policy = (
+                "h3_physical_patch_lattice_v1"
+                if prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+                else "generic_resize_v1"
+            )
+            binding.guidance_state.spatial_transfer_policy = guidance_spatial_transfer_policy
             binding.active_guidance_run = run
             binding.metrics.event(
                 "partitioned_guidance_trajectory_selection",
@@ -2062,6 +2068,7 @@ def run_partitioned_progressive(
                 target_hw=(target_h, target_w),
                 main_captured_run_id=(committed_low_run.run_id if committed_low_run is not None else None),
                 shared_trajectory_handle_preserved=True,
+                guidance_spatial_transfer_policy=guidance_spatial_transfer_policy,
                 audio_latent_trajectory_present=False,
                 diagnostic_only=(guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW),
             )
