@@ -154,6 +154,7 @@ def _align_guidance_run_suffix_gauge(
     )
     return replace(run, samples=aligned_samples), source_dx, source_dy
 
+
 def _validate_audio_handoff_shadow_configuration(
     audio_handoff_source: str,
     *,
