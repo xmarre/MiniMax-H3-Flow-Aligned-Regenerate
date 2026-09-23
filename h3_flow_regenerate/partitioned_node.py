@@ -354,7 +354,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         audio_handoff_source=PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
-        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
         metrics=None,
         temporal_weight=0.20,
     ):
