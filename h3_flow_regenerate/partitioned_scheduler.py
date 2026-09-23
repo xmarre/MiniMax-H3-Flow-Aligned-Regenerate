@@ -11,13 +11,19 @@ import contextlib
 import copy
 import math
 import time
+from dataclasses import replace
 from typing import Any
 
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .contracts import H3FlowTrajectory
-from .geometry import pack_streams, resize_spatial_5d, unpack_streams
+from .geometry import (
+    pack_streams,
+    resize_spatial_5d_h3_patch_lattice,
+    unpack_streams,
+)
+from .guidance import H3_PHYSICAL_GUIDANCE_TRANSFER_MODE
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -115,6 +121,47 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
 
 class PartitionedPreflightUnsupported(RuntimeError):
     """A condition detected before sampling that must use the exact target fallback."""
+
+
+@contextlib.contextmanager
+def _partitioned_h3_physical_guidance_transfer(
+    binding,
+    *,
+    source_hw: tuple[int, int],
+    target_hw: tuple[int, int],
+):
+    """Scope partitioned target-high guidance to H3's physical patch lattice."""
+    guidance = binding.guidance
+    if guidance is None or guidance.mode == "off":
+        yield
+        return
+
+    source_hw = tuple(map(int, source_hw))
+    target_hw = tuple(map(int, target_hw))
+    if min(*source_hw, *target_hw) <= 0:
+        raise ValueError("partitioned guidance transfer requires positive source/target geometry")
+
+    configured_transfer_mode = str(guidance.transfer_mode)
+    binding.guidance = replace(
+        guidance,
+        transfer_mode=H3_PHYSICAL_GUIDANCE_TRANSFER_MODE,
+    )
+    binding.metrics.event(
+        "partitioned_guidance_reference_resample",
+        policy="h3_physical_patch_lattice_v1",
+        scope="target_high_guidance_only",
+        configured_transfer_mode=configured_transfer_mode,
+        effective_transfer_mode=H3_PHYSICAL_GUIDANCE_TRANSFER_MODE,
+        source_hw=source_hw,
+        target_hw=target_hw,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    try:
+        yield
+    finally:
+        binding.guidance = guidance
 
 
 def _validate_audio_handoff_shadow_configuration(
@@ -1255,6 +1302,38 @@ def run_partitioned_progressive(
     )
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+    low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
+    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
+        stage_plan.prefix.to(low_video),
+        source_h,
+        source_w,
+    )
+    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
+    generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
+    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
+    prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
+    low_video = low_video.clone()
+    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_latent_image = pack_streams((low_video, low_audio))[0]
+    binding.metrics.event(
+        "partitioned_prefix_source_resample",
+        policy="h3_physical_patch_lattice_v1",
+        prefix_source="authoritative_exact_target_prefix",
+        prefix_t=int(stage_plan.prefix_t),
+        target_hw=(int(target_h), int(target_w)),
+        source_hw=(int(source_h), int(source_w)),
+        generic_half_pixel_prefix_replaced=True,
+        generic_vs_physical_delta_rms=prefix_resample_delta_rms,
+        generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
+        numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    del prefix_resample_delta
+    del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
     diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
@@ -1771,12 +1850,7 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        exact_prefix_source = resize_spatial_5d(
-            stage_plan.prefix.to(clean_video),
-            source_h,
-            source_w,
-            mode="bicubic",
-        )
+        exact_prefix_source = physical_prefix_source.to(clean_video)
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
                 raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
@@ -2048,7 +2122,15 @@ def run_partitioned_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with (
+            _partitioned_h3_physical_guidance_transfer(
+                binding,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+            ),
+            _flow_stage_contract(guider, "high"),
+            _high_stage_contract(guider),
+        ):
             result = executor(
                 target_noise,
                 latent_image,

@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import H3FlowTrajectory, TrajectorySample
+from h3_flow_regenerate.guidance import H3_PHYSICAL_GUIDANCE_TRANSFER_MODE, GuidanceConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
@@ -16,6 +17,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
 from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     _isolated_shadow_trajectory_capture,
+    _partitioned_h3_physical_guidance_transfer,
     _validate_guidance_trajectory_shadow_configuration,
 )
 from h3_flow_regenerate.runtime import FlowBinding
@@ -26,6 +28,43 @@ def _sampler():
         del args, kwargs
 
     return SimpleNamespace(sampler_function=sample_test, extra_options={})
+
+
+def test_partitioned_h3_physical_guidance_transfer_is_scoped_and_restored():
+    configured = GuidanceConfig(mode="direction+temporal", transfer_mode="bicubic")
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(guidance=configured, metrics=metrics)
+
+    with _partitioned_h3_physical_guidance_transfer(
+        binding,
+        source_hw=(40, 52),
+        target_hw=(56, 74),
+    ):
+        assert binding.guidance is not configured
+        assert binding.guidance is not None
+        assert binding.guidance.transfer_mode == H3_PHYSICAL_GUIDANCE_TRANSFER_MODE
+
+    assert binding.guidance is configured
+    receipts = [event for event in metrics.events if event.kind == "partitioned_guidance_reference_resample"]
+    assert len(receipts) == 1
+    assert receipts[0].fields["configured_transfer_mode"] == "bicubic"
+    assert receipts[0].fields["effective_transfer_mode"] == H3_PHYSICAL_GUIDANCE_TRANSFER_MODE
+    assert tuple(receipts[0].fields["source_hw"]) == (40, 52)
+    assert tuple(receipts[0].fields["target_hw"]) == (56, 74)
+
+
+def test_partitioned_h3_physical_guidance_transfer_restores_after_error():
+    configured = GuidanceConfig(mode="direction", transfer_mode="bicubic")
+    binding = FlowBinding(guidance=configured, metrics=H3FlowMetrics())
+
+    with pytest.raises(RuntimeError, match="sentinel"), _partitioned_h3_physical_guidance_transfer(
+        binding,
+        source_hw=(40, 52),
+        target_hw=(56, 74),
+    ):
+        raise RuntimeError("sentinel")
+
+    assert binding.guidance is configured
 
 
 def test_guidance_trajectory_shadow_requires_av_shadow_handoff():
