@@ -4,6 +4,7 @@ import torch
 
 from h3_flow_regenerate.runtime import (
     _bounded_tensor_provenance,
+    _nested_tensor_provenance,
     _trajectory_sample_provenance,
 )
 
@@ -60,3 +61,22 @@ def test_trajectory_sample_provenance_records_bounded_anchor_receipts():
         }
     ]
     assert _trajectory_sample_provenance(None) == []
+
+
+def test_nested_tensor_provenance_reports_paths_without_rng_use():
+    first = torch.arange(16, dtype=torch.float32).reshape(1, 4, 4)
+    second = torch.arange(8, dtype=torch.int64)
+    payload = {"z": [second], "a": {"tensor": first}}
+    rng_before = torch.random.get_rng_state().clone()
+
+    receipts = _nested_tensor_provenance(payload, path="conditioning")
+
+    assert [receipt["path"] for receipt in receipts] == [
+        "conditioning.a.tensor",
+        "conditioning.z[0]",
+    ]
+    assert receipts[0]["shape"] == (1, 4, 4)
+    assert receipts[0]["dtype"] == "torch.float32"
+    assert receipts[1]["dtype"] == "torch.int64"
+    assert all(len(receipt["signature"]) == 64 for receipt in receipts)
+    assert torch.equal(torch.random.get_rng_state(), rng_before)
