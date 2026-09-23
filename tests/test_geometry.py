@@ -165,6 +165,7 @@ def test_translate_spatial_suffix_zero_offset_is_value_preserving_clone():
     assert torch.equal(shifted, video)
     assert shifted.data_ptr() != video.data_ptr()
 
+
 def test_resize_is_spatial_only():
     source = video(40, 54, t=5)
     resized = resize_video(source, 48, 64)
