@@ -168,10 +168,16 @@ def _validate_av_handoff_shadow_configuration(
         mismatches.append("vdn_linear_diagnostic='normal'")
     if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
         mismatches.append("audio_position_domain='source_carrier'")
-    if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-        mismatches.append("audio_guided_overlap_mode='model_timestep_only'")
-    if int(audio_guided_overlap_ticks) != 4:
-        mismatches.append("audio_guided_overlap_ticks=4")
+    audio_contract = (audio_guided_overlap_mode, int(audio_guided_overlap_ticks))
+    allowed_audio_contracts = {
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP, 4),
+        (PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, 16),
+    }
+    if audio_contract not in allowed_audio_contracts:
+        mismatches.append(
+            "audio overlap contract in {model_timestep_only/4, sampler_mask_exact_timestep/4, sampler_mask/16}"
+        )
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "source_carrier_uniform_shadow AV handoff requires " + ", ".join(mismatches)
