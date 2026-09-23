@@ -135,7 +135,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["suffix_dc_bridge_enabled"][0] == "BOOLEAN"
-    assert diagnostic["suffix_dc_bridge_enabled"][1]["default"] is True
+    assert diagnostic["suffix_dc_bridge_enabled"][1]["default"] is False
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
@@ -164,6 +164,32 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("av_handoff_source") < keys.index("guidance_trajectory_source")
     assert keys.index("guidance_trajectory_source") < keys.index("low_probe_execution_source")
     assert keys.index("low_probe_execution_source") < keys.index("suffix_dc_bridge_enabled")
+
+
+def test_pr79_no_dc_ab_rejects_true_before_sampling():
+    node = H3PartitionedExactPrefixDiagnosticHandoff()
+    with pytest.raises(RuntimeError, match="PR #79 no-DC A/B requires suffix_dc_bridge_enabled=False"):
+        node.patch(
+            model=None,
+            trajectory=None,
+            source_mode="scale",
+            source_scale=0.7,
+            source_width=864,
+            source_height=640,
+            handoff_coordinate=0.35,
+            handoff_selection="fixed",
+            guidance_mode="direction+temporal",
+            direction_weight=0.25,
+            acceleration_weight=0.25,
+            consistency_weight=0.25,
+            low_frequency_cutoff=0.25,
+            learned_upscaler=None,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            audio_guided_overlap_mode=PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
+            audio_guided_overlap_ticks=16,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            suffix_dc_bridge_enabled=True,
+        )
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
