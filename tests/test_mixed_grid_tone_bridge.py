@@ -5,6 +5,7 @@ import torch
 
 from h3_flow_regenerate.tone_bridge import (
     apply_suffix_dc_bridge,
+    apply_suffix_residual_transport,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
@@ -25,6 +26,44 @@ def _fixture(dtype=torch.float32):
     exact[:, 1, 1] -= 2.0
     exact[:, 2, 1] += 5.0
     return learned, exact
+
+
+def test_residual_transport_preserves_pointwise_native_boundary_and_all_suffix_deltas():
+    learned, exact = _fixture()
+    corrected, metrics = apply_suffix_residual_transport(learned, exact)
+
+    learned_boundary = learned[:, :, 2].float() - learned[:, :, 1].float()
+    corrected_boundary = corrected[:, :, 2].float() - exact[:, :, 1].float()
+    assert torch.allclose(corrected_boundary, learned_boundary, rtol=0.0, atol=1e-6)
+
+    learned_suffix_deltas = learned[:, :, 3:].float() - learned[:, :, 2:-1].float()
+    corrected_suffix_deltas = corrected[:, :, 3:].float() - corrected[:, :, 2:-1].float()
+    assert torch.allclose(corrected_suffix_deltas, learned_suffix_deltas, rtol=0.0, atol=1e-6)
+
+    assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
+    assert metrics["suffix_residual_transport_corrected_tokens"] == 3
+    assert metrics["suffix_residual_transport_pointwise_boundary_preserved"] is True
+    assert metrics["suffix_residual_transport_internal_deltas_preserved"] is True
+
+
+def test_residual_transport_maps_entire_suffix_to_conditional_state_exactly():
+    learned, exact = _fixture()
+    corrected, metrics = apply_suffix_residual_transport(learned, exact)
+    sigma = 0.73
+    torch.manual_seed(11)
+    noise = torch.randn_like(learned)
+    state = (1.0 - sigma) * learned + sigma * noise
+    mapped = map_clean_bridge_to_conditional_state(
+        state,
+        learned,
+        corrected,
+        sigma=sigma,
+        prefix_t=2,
+        corrected_tokens=int(metrics["suffix_residual_transport_corrected_tokens"]),
+    )
+    direct = (1.0 - sigma) * corrected + sigma * noise
+    assert torch.allclose(mapped, direct, rtol=1e-6, atol=1e-6)
+    assert torch.equal(mapped[:, :, :2], state[:, :, :2])
 
 
 def test_weight_one_restores_native_per_channel_dc_boundary_exactly():
