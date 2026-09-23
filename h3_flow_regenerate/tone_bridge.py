@@ -109,6 +109,93 @@ def apply_suffix_dc_bridge(
     }
 
 
+def apply_suffix_residual_transport(
+    upscaled_clean_video: torch.Tensor,
+    exact_prefix: torch.Tensor,
+) -> tuple[torch.Tensor, dict[str, float | int | bool]]:
+    """Move the learned suffix into the authoritative prefix's latent frame.
+
+    The learned 3D upscaler produces one coherent target-grid sequence. Exact
+    continuation must then discard its learned prefix and restore caller-owned
+    prefix latents. A pointwise residual between the two last-prefix frames is
+    therefore a coordinate/content-frame change, not new generated content.
+
+    Add that same residual to every generated suffix frame. This preserves the
+    learned sequence's first boundary delta exactly after authoritative prefix
+    restoration and leaves every suffix-to-suffix temporal delta unchanged.
+    """
+
+    prefix_t = _validate_video_pair(upscaled_clean_video, exact_prefix)
+    suffix_t = int(upscaled_clean_video.shape[2]) - prefix_t
+    exact_last = exact_prefix[:, :, -1].to(device=upscaled_clean_video.device, dtype=torch.float32)
+    learned_last = upscaled_clean_video[:, :, prefix_t - 1].float()
+    residual = exact_last - learned_last
+    if not bool(torch.isfinite(residual).all().item()):
+        raise RuntimeError("suffix residual transport produced a non-finite latent residual")
+
+    corrected = upscaled_clean_video.clone()
+    corrected[:, :, prefix_t:].add_(residual.unsqueeze(2).to(dtype=corrected.dtype))
+    if not bool(torch.isfinite(corrected).all().item()):
+        raise RuntimeError("suffix residual transport produced NaN or Inf values")
+
+    learned_boundary = (
+        upscaled_clean_video[:, :, prefix_t].float()
+        - upscaled_clean_video[:, :, prefix_t - 1].float()
+    )
+    corrected_boundary = corrected[:, :, prefix_t].float() - exact_last
+    boundary_error = corrected_boundary - learned_boundary
+
+    if suffix_t > 1:
+        learned_suffix_delta = (
+            upscaled_clean_video[:, :, prefix_t + 1 :].float()
+            - upscaled_clean_video[:, :, prefix_t:-1].float()
+        )
+        corrected_suffix_delta = (
+            corrected[:, :, prefix_t + 1 :].float()
+            - corrected[:, :, prefix_t:-1].float()
+        )
+        suffix_delta_error = corrected_suffix_delta - learned_suffix_delta
+        suffix_delta_abs_max = float(suffix_delta_error.abs().max().item())
+    else:
+        suffix_delta_abs_max = 0.0
+
+    summary = (
+        torch.stack(
+            (
+                residual.square().mean().sqrt(),
+                residual.abs().mean(),
+                residual.abs().max(),
+                boundary_error.square().mean().sqrt(),
+                boundary_error.abs().max(),
+            )
+        )
+        .detach()
+        .to(device="cpu", dtype=torch.float64)
+    )
+    (
+        residual_rms,
+        residual_abs_mean,
+        residual_abs_max,
+        boundary_error_rms,
+        boundary_error_abs_max,
+    ) = map(float, summary.tolist())
+
+    return corrected, {
+        "suffix_residual_transport_version": 1,
+        "suffix_residual_transport_enabled": True,
+        "suffix_residual_transport_prefix_t": prefix_t,
+        "suffix_residual_transport_corrected_tokens": suffix_t,
+        "suffix_residual_transport_residual_rms": residual_rms,
+        "suffix_residual_transport_residual_abs_mean": residual_abs_mean,
+        "suffix_residual_transport_residual_abs_max": residual_abs_max,
+        "suffix_residual_transport_boundary_error_rms": boundary_error_rms,
+        "suffix_residual_transport_boundary_error_abs_max": boundary_error_abs_max,
+        "suffix_residual_transport_suffix_delta_abs_max": suffix_delta_abs_max,
+        "suffix_residual_transport_pointwise_boundary_preserved": boundary_error_abs_max <= 2e-5,
+        "suffix_residual_transport_internal_deltas_preserved": suffix_delta_abs_max <= 2e-5,
+    }
+
+
 def map_clean_bridge_to_conditional_state(
     state: torch.Tensor,
     clean_before: torch.Tensor,
