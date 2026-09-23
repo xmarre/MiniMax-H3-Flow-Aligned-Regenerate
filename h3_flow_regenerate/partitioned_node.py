@@ -319,6 +319,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["suffix_dc_bridge_enabled"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "PR #79 no-DC A/B guard. This diagnostic head requires False and aborts before "
+                    "sampling if True reaches the backend. Exact-prefix restore, target-high sampling, "
+                    "audio state, and sampler/NFE topology are otherwise unchanged."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -354,9 +365,15 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        suffix_dc_bridge_enabled=False,
         metrics=None,
         temporal_weight=0.20,
     ):
+        if suffix_dc_bridge_enabled:
+            raise RuntimeError(
+                "PR #79 no-DC A/B requires suffix_dc_bridge_enabled=False; "
+                "reload the node schema if the frontend still submits True"
+            )
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
@@ -387,6 +404,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             av_handoff_source=av_handoff_source,
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
+            suffix_dc_bridge_enabled=suffix_dc_bridge_enabled,
         )
 
 

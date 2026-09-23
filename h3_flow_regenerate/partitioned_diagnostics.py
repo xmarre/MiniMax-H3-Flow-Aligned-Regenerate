@@ -85,6 +85,8 @@ PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS = (
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
 )
+
+PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY = "h3_flow_partitioned_suffix_dc_bridge_enabled_v1"
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -179,6 +181,12 @@ def normalize_low_probe_execution_source(value: str) -> str:
     return value
 
 
+def normalize_suffix_dc_bridge_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"suffix DC bridge enabled must be a boolean, got {value!r}")
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -213,6 +221,7 @@ def apply_partitioned_diagnostic_controls(
     av_handoff_source: str = PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     guidance_trajectory_source: str = PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     low_probe_execution_source: str = PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    suffix_dc_bridge_enabled: bool = True,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -228,6 +237,7 @@ def apply_partitioned_diagnostic_controls(
     av_handoff = normalize_av_handoff_source(av_handoff_source)
     guidance_source = normalize_guidance_trajectory_source(guidance_trajectory_source)
     execution_source = normalize_low_probe_execution_source(low_probe_execution_source)
+    dc_bridge_enabled = normalize_suffix_dc_bridge_enabled(suffix_dc_bridge_enabled)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -255,6 +265,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY, None)
     else:
         transformer_options[PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY] = execution_source
+    if dc_bridge_enabled:
+        transformer_options.pop(PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY, None)
+    else:
+        transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY] = False
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -266,6 +280,7 @@ def apply_partitioned_diagnostic_controls(
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
             "prefix_transformer_context": prefix_context,
+            "suffix_dc_bridge_enabled": dc_bridge_enabled,
             "model_local": True,
             "native_vdn_unchanged": True,
             "production_default_changed": False,
@@ -316,6 +331,7 @@ __all__ = [
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE",
+    "PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -332,6 +348,7 @@ __all__ = [
     "normalize_guidance_trajectory_source",
     "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
+    "normalize_suffix_dc_bridge_enabled",
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",

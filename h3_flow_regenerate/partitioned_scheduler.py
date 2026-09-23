@@ -43,6 +43,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -87,6 +88,7 @@ from .runtime import (
     _validate_progressive_sampler_state,
 )
 from .seam_diagnostics import (
+    measure_affine_trajectory,
     measure_exact_prefix_splice,
     measure_translation_trajectory,
     measure_video_boundary,
@@ -1053,6 +1055,12 @@ def run_partitioned_progressive(
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         )
     )
+    suffix_dc_bridge_enabled = initial_transformer.get(
+        PARTITIONED_SUFFIX_DC_BRIDGE_ENABLED_KEY,
+        True,
+    )
+    if not isinstance(suffix_dc_bridge_enabled, bool):
+        raise PartitionedPreflightUnsupported("suffix DC bridge diagnostic control must be boolean")
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -1126,6 +1134,7 @@ def run_partitioned_progressive(
             exact_target_prefix_restore_unchanged=True,
             learned_transfer_unchanged=True,
             target_high_unchanged=True,
+            suffix_dc_bridge_enabled=suffix_dc_bridge_enabled,
             diagnostic_only=True,
         )
         _cuda_allocator_checkpoint(binding.metrics, "source_uniform_primary_entry")
@@ -1771,6 +1780,22 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
+            source_native_affine = measure_affine_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="source_low_native",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_native_affine,
+            )
         exact_prefix_source = resize_spatial_5d(
             stage_plan.prefix.to(clean_video),
             source_h,
@@ -1802,6 +1827,22 @@ def run_partitioned_progressive(
                         source_hw=(source_h, source_w),
                         target_hw=(target_h, target_w),
                     ),
+                )
+                shadow_native_affine = measure_affine_trajectory(
+                    shadow_clean_video,
+                    stage_plan.prefix_t,
+                    forward_steps=3,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_affine_trajectory",
+                    stage="source_uniform_shadow_clean_native",
+                    roi=roi_name,
+                    source_hw=(source_h, source_w),
+                    target_hw=(target_h, target_w),
+                    **shadow_native_affine,
                 )
             source_x0 = _select_source_uniform_shadow_clean_video(
                 source_x0,
@@ -1838,6 +1879,22 @@ def run_partitioned_progressive(
                     source_hw=(source_h, source_w),
                     target_hw=(target_h, target_w),
                 ),
+            )
+            source_exact_affine = measure_affine_trajectory(
+                clean_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="source_low_exact_context",
+                roi=roi_name,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                **source_exact_affine,
             )
 
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:
@@ -1910,7 +1967,7 @@ def run_partitioned_progressive(
             learned_clean,
             exact_prefix,
             sigma=sigma,
-            enabled=True,
+            enabled=suffix_dc_bridge_enabled,
         )
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
@@ -1928,6 +1985,7 @@ def run_partitioned_progressive(
             state_mapping="conditional_renoise_affine",
             authoritative_prefix_modified=False,
             later_suffix_modified=False,
+            diagnostic_control_enabled=suffix_dc_bridge_enabled,
             **dc_bridge_metrics,
         )
         if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
@@ -1937,6 +1995,30 @@ def run_partitioned_progressive(
         # clean diagnostic tensor mirrors the actual high-stage state: corrected
         # first suffix token plus the authoritative exact target-grid prefix.
         corrected_clean[:, :, : stage_plan.prefix_t] = exact_prefix
+
+        # Build a bounded diagnostic-only counterfactual for the exact same
+        # transfer state with the authoritative prefix restored but without the
+        # one-token DC bridge. This recreates the pre-high boundary relation used
+        # before #75 without changing the state consumed by target-high.
+        counterfactual_pre_frames = min(4, int(stage_plan.prefix_t))
+        counterfactual_forward_frames = min(
+            3,
+            int(learned_clean.shape[2]) - int(stage_plan.prefix_t),
+        )
+        uncorrected_exact_window = None
+        if counterfactual_pre_frames >= 2 and counterfactual_forward_frames >= 1:
+            uncorrected_exact_window = torch.cat(
+                (
+                    exact_prefix[:, :, -counterfactual_pre_frames:],
+                    learned_clean[
+                        :,
+                        :,
+                        stage_plan.prefix_t : stage_plan.prefix_t + counterfactual_forward_frames,
+                    ],
+                ),
+                dim=2,
+            )
+
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             native_trajectory = measure_translation_trajectory(
                 learned_clean,
@@ -1966,8 +2048,57 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **restored_trajectory,
             )
+            native_affine = measure_affine_trajectory(
+                learned_clean,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            restored_affine = measure_affine_trajectory(
+                corrected_clean,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="learned_native",
+                roi=roi_name,
+                **native_affine,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="exact_restored_pre_high",
+                roi=roi_name,
+                **restored_affine,
+            )
+            if uncorrected_exact_window is not None:
+                counterfactual_affine = measure_affine_trajectory(
+                    uncorrected_exact_window,
+                    counterfactual_pre_frames,
+                    forward_steps=counterfactual_forward_frames,
+                    backward_steps=min(3, counterfactual_pre_frames - 1),
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_affine_trajectory",
+                    stage="exact_restored_no_dc_counterfactual",
+                    roi=roi_name,
+                    counterfactual_only=True,
+                    production_state_mutated=False,
+                    actual_dc_bridge_enabled=bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]),
+                    **counterfactual_affine,
+                )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
+        if uncorrected_exact_window is not None:
+            binding.metrics.increment("partitioned_affine_no_dc_counterfactual_runs")
+            del uncorrected_exact_window
         del corrected_clean, learned_clean
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -2173,6 +2304,20 @@ def run_partitioned_progressive(
                 stage="final_post_high",
                 roi=roi_name,
                 **final_trajectory,
+            )
+            final_affine = measure_affine_trajectory(
+                final_video,
+                stage_plan.prefix_t,
+                forward_steps=3,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            binding.metrics.event(
+                "partitioned_affine_trajectory",
+                stage="final_post_high",
+                roi=roi_name,
+                **final_affine,
             )
         if not splice_diagnostics:
             raise RuntimeError(

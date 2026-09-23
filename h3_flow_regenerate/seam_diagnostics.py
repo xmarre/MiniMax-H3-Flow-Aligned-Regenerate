@@ -365,6 +365,251 @@ def measure_translation_trajectory(
     }
 
 
+def _weighted_axis_affine_fit(
+    positions: list[float],
+    displacements: list[float],
+    responses: list[float],
+) -> dict[str, float]:
+    """Fit displacement = slope * position + translation.
+
+    Local phase-correlation response is used only as a bounded reliability
+    weight. scale_confidence is the relative residual improvement over a
+    translation-only fit; it is diagnostic evidence, not a probability.
+    """
+    if not positions or len(positions) != len(displacements) or len(positions) != len(responses):
+        raise ValueError("affine diagnostic fit requires matching non-empty samples")
+
+    weights = [max(1.0, min(50.0, float(value))) for value in responses]
+    weight_sum = sum(weights)
+    mean_position = sum(weight * value for weight, value in zip(weights, positions, strict=True)) / weight_sum
+    mean_displacement = sum(weight * value for weight, value in zip(weights, displacements, strict=True)) / weight_sum
+    position_energy = sum(
+        weight * (value - mean_position) ** 2 for weight, value in zip(weights, positions, strict=True)
+    )
+    slope = (
+        sum(
+            weight * (position - mean_position) * (displacement - mean_displacement)
+            for weight, position, displacement in zip(weights, positions, displacements, strict=True)
+        )
+        / position_energy
+        if position_energy > _EPS
+        else 0.0
+    )
+    translation = mean_displacement - slope * mean_position
+    residual = math.sqrt(
+        sum(
+            weight * (displacement - (slope * position + translation)) ** 2
+            for weight, position, displacement in zip(weights, positions, displacements, strict=True)
+        )
+        / weight_sum
+    )
+    translation_only_residual = math.sqrt(
+        sum(
+            weight * (displacement - mean_displacement) ** 2
+            for weight, displacement in zip(weights, displacements, strict=True)
+        )
+        / weight_sum
+    )
+    scale_confidence = max(
+        0.0,
+        min(
+            1.0,
+            (translation_only_residual - residual) / max(translation_only_residual, 0.05),
+        ),
+    )
+    values = (
+        1.0 + slope,
+        translation,
+        residual,
+        translation_only_residual,
+        scale_confidence,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise RuntimeError("affine diagnostic fit produced a non-finite value")
+    return {
+        "scale": 1.0 + slope,
+        "translation": translation,
+        "residual": residual,
+        "translation_only_residual": translation_only_residual,
+        "scale_confidence": scale_confidence,
+    }
+
+
+def _local_affine_fit(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    *,
+    roi_fraction: float,
+    max_shift: int,
+) -> dict[str, float | int]:
+    """Estimate separable affine geometry from a bounded 3x3 patch lattice.
+
+    Each patch contributes one local translation measured by the existing phase
+    correlator. Regressing dx against physical x and dy against physical y
+    distinguishes coherent scale/expansion from a uniform translation without
+    resampling or mutating the production tensor.
+    """
+    if left.shape != right.shape or left.ndim != 4:
+        raise ValueError("affine diagnostics require matching BxCxHxW frames")
+    if not left.is_floating_point() or not right.is_floating_point():
+        raise TypeError("affine diagnostics require floating-point tensors")
+    roi_fraction = float(roi_fraction)
+    if not math.isfinite(roi_fraction) or not 0.0 < roi_fraction <= 1.0:
+        raise ValueError("affine diagnostic roi_fraction must be in (0, 1]")
+    max_shift = int(max_shift)
+    if max_shift < 1:
+        raise ValueError("affine diagnostic max_shift must be positive")
+
+    height, width = map(int, left.shape[-2:])
+    roi_height = max(8, min(height, round(height * roi_fraction)))
+    patch_height = max(8, min(roi_height, round(roi_height * 0.50)))
+    patch_width = max(8, min(width, round(width * 0.45)))
+
+    def starts(extent: int, patch: int) -> list[int]:
+        if patch >= extent:
+            return [0]
+        return sorted({0, (extent - patch) // 2, extent - patch})
+
+    y_starts = starts(roi_height, patch_height)
+    x_starts = starts(width, patch_width)
+
+    sample_x: list[float] = []
+    sample_y: list[float] = []
+    sample_dx: list[float] = []
+    sample_dy: list[float] = []
+    sample_response: list[float] = []
+    clipped_count = 0
+
+    for y0 in y_starts:
+        for x0 in x_starts:
+            shift = _phase_correlation_shift(
+                left[..., y0 : y0 + patch_height, x0 : x0 + patch_width],
+                right[..., y0 : y0 + patch_height, x0 : x0 + patch_width],
+                roi_fraction=1.0,
+                max_shift=max_shift,
+            )
+            sample_x.append(float(x0) + (patch_width - 1) / 2.0)
+            sample_y.append(float(y0) + (patch_height - 1) / 2.0)
+            sample_dx.append(float(shift["dx"]))
+            sample_dy.append(float(shift["dy"]))
+            sample_response.append(float(shift["response"]))
+            clipped_count += int(bool(shift["clipped"]))
+
+    x_fit = _weighted_axis_affine_fit(sample_x, sample_dx, sample_response)
+    y_fit = _weighted_axis_affine_fit(sample_y, sample_dy, sample_response)
+    median_response = float(torch.tensor(sample_response, dtype=torch.float32).median().item())
+    return {
+        "scale_x": float(x_fit["scale"]),
+        "scale_y": float(y_fit["scale"]),
+        "translation_x": float(x_fit["translation"]),
+        "translation_y": float(y_fit["translation"]),
+        "fit_residual_x": float(x_fit["residual"]),
+        "fit_residual_y": float(y_fit["residual"]),
+        "translation_only_residual_x": float(x_fit["translation_only_residual"]),
+        "translation_only_residual_y": float(y_fit["translation_only_residual"]),
+        "scale_confidence_x": float(x_fit["scale_confidence"]),
+        "scale_confidence_y": float(y_fit["scale_confidence"]),
+        "median_patch_response": median_response,
+        "clipped_patch_fraction": float(clipped_count) / float(len(sample_response)),
+        "patch_count": len(sample_response),
+        "roi_height": roi_height,
+    }
+
+
+def measure_affine_trajectory(
+    video: torch.Tensor,
+    boundary_t: int,
+    *,
+    forward_steps: int = 3,
+    backward_steps: int = 3,
+    roi_fraction: float = 0.45,
+    max_shift: int = 4,
+) -> dict[str, float | int | list[float]]:
+    """Measure boundary-local scale and translation without changing execution.
+
+    The bounded diagnostic measures the same pre-boundary and first post-boundary
+    transitions used for trajectory interpretation, but fits local affine scale
+    instead of assuming that all motion is translational.
+    """
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("affine trajectory diagnostics expect floating BxCxTxHxW video")
+    boundary_t = int(boundary_t)
+    temporal = int(video.shape[2])
+    if boundary_t < 1 or boundary_t >= temporal:
+        raise ValueError("affine trajectory boundary must separate a prefix from a suffix")
+    steps = min(max(1, int(forward_steps)), temporal - boundary_t)
+    pre_steps = min(max(0, int(backward_steps)), max(0, boundary_t - 1))
+
+    field_names = (
+        "scale_x",
+        "scale_y",
+        "translation_x",
+        "translation_y",
+        "fit_residual_x",
+        "fit_residual_y",
+        "translation_only_residual_x",
+        "translation_only_residual_y",
+        "scale_confidence_x",
+        "scale_confidence_y",
+        "median_patch_response",
+        "clipped_patch_fraction",
+    )
+
+    def collect(pairs: list[tuple[int, int]]) -> dict[str, list[float]]:
+        result = {name: [] for name in field_names}
+        for left_index, right_index in pairs:
+            fit = _local_affine_fit(
+                video[:, :, left_index],
+                video[:, :, right_index],
+                roi_fraction=roi_fraction,
+                max_shift=max_shift,
+            )
+            for name in field_names:
+                result[name].append(float(fit[name]))
+        return result
+
+    pre_start = boundary_t - pre_steps - 1
+    pre_pairs = [(left_index, left_index + 1) for left_index in range(pre_start, boundary_t - 1)]
+    pairwise_pairs = [(boundary_t - 1 + offset, boundary_t + offset) for offset in range(steps)]
+    pre = collect(pre_pairs)
+    pairwise = collect(pairwise_pairs)
+
+    def median_or(values: list[float], default: float) -> float:
+        if not values:
+            return default
+        return float(torch.tensor(values, dtype=torch.float32).median().item())
+
+    result: dict[str, float | int | list[float]] = {
+        "affine_diagnostic_version": 1,
+        "affine_boundary_t": boundary_t,
+        "affine_forward_steps": steps,
+        "affine_backward_steps": pre_steps,
+        "affine_roi_fraction": float(roi_fraction),
+        "affine_max_shift_cells": max_shift,
+    }
+    for prefix, values in (("pre_pairwise", pre), ("pairwise", pairwise)):
+        for name, samples in values.items():
+            result[f"{prefix}_{name}"] = samples
+
+    result.update(
+        {
+            "pre_median_scale_x": median_or(pre["scale_x"], 1.0),
+            "pre_median_scale_y": median_or(pre["scale_y"], 1.0),
+            "post_first3_median_scale_x": median_or(pairwise["scale_x"][:3], 1.0),
+            "post_first3_median_scale_y": median_or(pairwise["scale_y"][:3], 1.0),
+            "boundary_scale_x": float(pairwise["scale_x"][0]),
+            "boundary_scale_y": float(pairwise["scale_y"][0]),
+            "boundary_translation_x": float(pairwise["translation_x"][0]),
+            "boundary_translation_y": float(pairwise["translation_y"][0]),
+            "boundary_fit_residual_x": float(pairwise["fit_residual_x"][0]),
+            "boundary_fit_residual_y": float(pairwise["fit_residual_y"][0]),
+            "boundary_scale_confidence_x": float(pairwise["scale_confidence_x"][0]),
+            "boundary_scale_confidence_y": float(pairwise["scale_confidence_y"][0]),
+        }
+    )
+    return result
+
+
 def recover_conditional_clean_for_diagnostics(
     state: torch.Tensor,
     noise: torch.Tensor,
