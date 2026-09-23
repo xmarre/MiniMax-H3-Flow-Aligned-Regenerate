@@ -122,12 +122,17 @@ def test_cross_grid_direction_guidance_uses_h3_physical_patch_lattice():
         max_correction_rms_ratio=100.0,
     )
 
-    result = apply_guidance(high, run=trajectory, coordinate=0.8, config=config, state=GuidanceState())
+    state = GuidanceState()
+    result = apply_guidance(high, run=trajectory, coordinate=0.8, config=config, state=state)
     physical = resize_spatial_5d_h3_patch_lattice(source, 8, 10)
     generic = resize_video(source, 8, 10, mode="bicubic")
 
     assert torch.allclose(result, physical, atol=1e-6, rtol=1e-6)
     assert not torch.allclose(physical, generic, atol=1e-4, rtol=1e-4)
+    assert state.last_spatial_transfer_policy == "h3_physical_patch_lattice_v1"
+    assert state.last_spatial_transfer_cross_grid is True
+    assert state.last_spatial_transfer_source_hw == (4, 6)
+    assert state.last_spatial_transfer_target_hw == (8, 10)
 
 
 def test_direction_schedule_is_normalized_to_refine_start_coordinate():
