@@ -230,9 +230,7 @@ def _validate_low_probe_execution_source_configuration(
     # Overlap width is a bounded runtime control, not a structural requirement
     # of source-uniform execution. The node-level validator constrains it to 0..16.
     if mismatches:
-        raise PartitionedPreflightUnsupported(
-            f"{source} low/probe execution requires " + ", ".join(mismatches)
-        )
+        raise PartitionedPreflightUnsupported(f"{source} low/probe execution requires " + ", ".join(mismatches))
 
 
 @contextlib.contextmanager
@@ -1104,9 +1102,7 @@ def run_partitioned_progressive(
             raise PartitionedPreflightUnsupported(
                 "source_carrier_uniform_shadow guidance trajectory requires enabled Flow trajectory capture"
             )
-    exact_onepass_partitioned_calls_before = int(
-        binding.metrics.counters.get("partitioned_transformer_calls", 0)
-    )
+    exact_onepass_partitioned_calls_before = int(binding.metrics.counters.get("partitioned_transformer_calls", 0))
     exact_onepass_source_calls_before = int(
         binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
     )
@@ -2240,9 +2236,7 @@ def run_partitioned_progressive(
                 - exact_onepass_source_calls_before
             )
             if sampler_invocation_count != 3 or history_boundary_count != 2:
-                raise RuntimeError(
-                    "exact one-pass execution did not produce exactly low/probe/high sampler lifetimes"
-                )
+                raise RuntimeError("exact one-pass execution did not produce exactly low/probe/high sampler lifetimes")
             if exact_partitioned_call_delta <= 0 or source_uniform_call_delta != 0:
                 raise RuntimeError(
                     "exact one-pass execution did not isolate heterogeneous exact low/probe transformer calls"
