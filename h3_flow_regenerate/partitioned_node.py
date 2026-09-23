@@ -359,6 +359,31 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         metrics=None,
         temporal_weight=0.20,
     ):
+        candidate_mismatches = []
+        if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+            candidate_mismatches.append("low_probe_execution_source='main_then_shadow'")
+        if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
+            candidate_mismatches.append("av_handoff_source='source_carrier_uniform_shadow'")
+        if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+            candidate_mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
+        if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+            candidate_mismatches.append("audio_handoff_source='main_partitioned'")
+        if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            candidate_mismatches.append("prefix_transformer_context='exact_target_partitioned'")
+        if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+            candidate_mismatches.append("audio_position_domain='source_carrier'")
+        if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+            candidate_mismatches.append("vdn_linear_diagnostic='normal'")
+        if audio_guided_overlap_mode != PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER:
+            candidate_mismatches.append("audio_guided_overlap_mode='sampler_mask'")
+        if int(audio_guided_overlap_ticks) != 16:
+            candidate_mismatches.append("audio_guided_overlap_ticks=16")
+        if candidate_mismatches:
+            raise RuntimeError(
+                "PR #77 quality-first hardware candidate requires "
+                + ", ".join(candidate_mismatches)
+            )
+
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
