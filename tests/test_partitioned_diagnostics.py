@@ -113,11 +113,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     ]
-    assert (
-        diagnostic["audio_guided_overlap_mode"][1]["default"]
-        == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-    )
-    assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
+    assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
+    assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 16
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
@@ -127,11 +124,14 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["audio_handoff_source"][0] == list(PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS)
     assert diagnostic["audio_handoff_source"][1]["default"] == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
     assert diagnostic["av_handoff_source"][0] == list(PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS)
-    assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+    assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
-    assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    assert (
+        diagnostic["low_probe_execution_source"][1]["default"]
+        == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+    )
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
