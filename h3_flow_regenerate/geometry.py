@@ -315,7 +315,7 @@ def resize_spatial_5d_h3_patch_lattice(
     spatial phase offset when it is projected into a lower source carrier.
 
     Treat each 2x2 latent patch as one four-sample feature vector, resample those
-    vectors on H3's own physical patch coordinates, then reconstruct the latent.
+    vectors on H3's own physical patch coordinates with bilinear sampling, then reconstruct the latent.
     This changes no temporal values and adds no model evaluation.
     """
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
@@ -362,7 +362,7 @@ def resize_spatial_5d_h3_patch_lattice(
     mapped = F.grid_sample(
         patches,
         grid,
-        mode="bicubic",
+        mode="bilinear",
         padding_mode="border",
         align_corners=True,
     )
