@@ -47,11 +47,15 @@ def _validate_candidate(**overrides):
 def test_guidance_spatial_transfer_policy_matches_prefix_coordinate_domain():
     for mode in ("direction", "direction+acceleration", "direction+temporal"):
         assert (
-            _resolve_guidance_spatial_transfer_policy(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE, mode)
+            _resolve_guidance_spatial_transfer_policy(
+                PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE, mode
+            )
             == "h3_physical_patch_lattice_v1"
         )
     assert (
-        _resolve_guidance_spatial_transfer_policy(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT, "direction")
+        _resolve_guidance_spatial_transfer_policy(
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT, "direction"
+        )
         == "generic_resize_v1"
     )
     assert (
