@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
-from h3_flow_regenerate.geometry import geometry_from_video
+from h3_flow_regenerate.geometry import geometry_from_video, translate_spatial_suffix_5d
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import (
@@ -92,6 +92,41 @@ def test_prefix_rigid_alignment_recovers_same_frame_gauge_offset():
     assert fields["learned_relative_mad_dx"] < 0.05
     assert fields["learned_relative_mad_dy"] < 0.05
     assert fields["median_response"] > 1.0
+
+
+def test_prefix_rigid_alignment_correction_closes_synthetic_exact_restore_jump():
+    torch.manual_seed(813)
+    exact_prefix = torch.randn(1, 8, 4, 32, 40, dtype=torch.float32)
+    exact_last = exact_prefix[:, :, -1:]
+    exact_suffix = exact_last.expand(-1, -1, 3, -1, -1).clone()
+
+    learned_prefix = torch.roll(exact_prefix, shifts=(1, -2), dims=(-2, -1))
+    learned_suffix = torch.roll(exact_suffix, shifts=(1, -2), dims=(-2, -1))
+    learned_video = torch.cat((learned_prefix, learned_suffix), dim=2)
+
+    fields = estimate_prefix_rigid_alignment(
+        learned_prefix,
+        exact_prefix,
+        frames=4,
+        max_shift=3,
+    )
+    aligned = translate_spatial_suffix_5d(
+        learned_video,
+        start_t=4,
+        dx=float(fields["correction_dx"]),
+        dy=float(fields["correction_dy"]),
+    )
+    aligned[:, :, :4] = exact_prefix
+
+    assert fields["correction_dx"] == pytest.approx(2.0, abs=0.05)
+    assert fields["correction_dy"] == pytest.approx(-1.0, abs=0.05)
+    assert torch.equal(aligned[:, :, :4], exact_prefix)
+    assert torch.allclose(
+        aligned[:, :, 4:, 1:-1, 2:-2],
+        exact_suffix[:, :, :, 1:-1, 2:-2],
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
 
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
