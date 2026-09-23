@@ -8,8 +8,30 @@ import torch
 import torch.nn.functional as F
 
 from .contracts import TrajectoryRun, TrajectorySample
-from .geometry import resize_video
+from .geometry import resize_spatial_5d_h3_patch_lattice, resize_video
 from .sigma import interpolate_coordinate
+
+
+H3_PHYSICAL_GUIDANCE_TRANSFER_MODE = "h3_physical_patch_lattice"
+
+
+def _resize_guidance_video(
+    video: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    *,
+    mode: str,
+) -> torch.Tensor:
+    """Resize a guidance reference in the coordinate system that owns it.
+
+    Partitioned H3 continuation stores its low/probe trajectory on the source
+    H3 patch lattice.  When that trajectory guides a target-grid H3 stage, the
+    reference must use the same physical patch coordinates as the exact prefix
+    transport instead of generic image half-pixel coordinates.
+    """
+    if mode == H3_PHYSICAL_GUIDANCE_TRANSFER_MODE:
+        return resize_spatial_5d_h3_patch_lattice(video, target_h, target_w)
+    return resize_video(video, target_h, target_w, mode=mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,14 +474,14 @@ def _temporal_alignment_correction(
     previous_innovation = work_reference[:, :, 1:] - previous_reference
     previous_target = _warp_video_pairs(work_high[:, :, :-1], backward_target)
     previous_target = (
-        previous_target + resize_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
+        previous_target + _resize_guidance_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
     )
     previous_delta = previous_target - work_high[:, :, 1:]
 
     next_reference = _warp_video_pairs(work_reference[:, :, 1:], forward_source)
     next_innovation = work_reference[:, :, :-1] - next_reference
     next_target = _warp_video_pairs(work_high[:, :, 1:], forward_target)
-    next_target = next_target + resize_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
+    next_target = next_target + _resize_guidance_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
     next_delta = next_target - work_high[:, :, :-1]
 
     backward_confidence = _resize_pairwise_confidence(correspondence.backward_confidence, target_h, target_w).permute(
@@ -551,7 +573,7 @@ def apply_guidance(
 
     source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
     source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
-    ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
+    ref = _resize_guidance_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
@@ -567,7 +589,7 @@ def apply_guidance(
         down = F.interpolate(work, size=source_size, mode="area")
         down = down.reshape(high_x0.shape[0], high_x0.shape[2], high_x0.shape[1], *source_size).permute(0, 2, 1, 3, 4)
         source_error = source_ref - down.to(source_ref)
-        error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
+        error = _resize_guidance_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
         correction = correction + schedule * config.consistency_weight * error
 
     direction_correction = correction

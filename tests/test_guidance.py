@@ -2,11 +2,17 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
-from h3_flow_regenerate.geometry import geometry_from_video
+from h3_flow_regenerate.geometry import (
+    geometry_from_video,
+    resize_spatial_5d_h3_patch_lattice,
+    resize_video,
+)
 from h3_flow_regenerate.guidance import (
+    H3_PHYSICAL_GUIDANCE_TRANSFER_MODE,
     GuidanceConfig,
     GuidanceState,
     _local_correspondence,
+    _resize_guidance_video,
     apply_guidance,
     conditional_renoise_alignment,
     low_frequency_projection,
@@ -57,6 +63,25 @@ def run_video(video, coords=(0.8, 0.2)):
         1,
         True,
     )
+
+
+def test_h3_physical_guidance_transfer_uses_patch_lattice_and_keeps_generic_default():
+    torch.manual_seed(21)
+    source = torch.randn(1, 24, 2, 40, 52)
+
+    physical = _resize_guidance_video(
+        source,
+        56,
+        74,
+        mode=H3_PHYSICAL_GUIDANCE_TRANSFER_MODE,
+    )
+    expected_physical = resize_spatial_5d_h3_patch_lattice(source, 56, 74)
+    assert torch.equal(physical, expected_physical)
+
+    generic = _resize_guidance_video(source, 56, 74, mode="bicubic")
+    expected_generic = resize_video(source, 56, 74, mode="bicubic")
+    assert torch.equal(generic, expected_generic)
+    assert not torch.allclose(physical, generic)
 
 
 def test_guidance_config_rejects_nonfinite_correction_bound():
