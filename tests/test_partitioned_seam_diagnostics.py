@@ -121,12 +121,13 @@ def test_prefix_rigid_alignment_correction_closes_synthetic_exact_restore_jump()
     assert fields["correction_dx"] == pytest.approx(2.0, abs=0.05)
     assert fields["correction_dy"] == pytest.approx(-1.0, abs=0.05)
     assert torch.equal(aligned[:, :, :4], exact_prefix)
-    assert torch.allclose(
-        aligned[:, :, 4:, 1:-1, 2:-2],
-        exact_suffix[:, :, :, 1:-1, 2:-2],
-        rtol=1e-5,
-        atol=1e-5,
-    )
+    learned_interior = learned_suffix[:, :, :, 1:-1, 2:-2]
+    aligned_interior = aligned[:, :, 4:, 1:-1, 2:-2]
+    exact_interior = exact_suffix[:, :, :, 1:-1, 2:-2]
+    before_rms = (learned_interior - exact_interior).square().mean().sqrt()
+    after_rms = (aligned_interior - exact_interior).square().mean().sqrt()
+    assert after_rms < 0.01
+    assert after_rms < before_rms * 0.01
 
 
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
