@@ -364,8 +364,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             )
         if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
             raise RuntimeError(
-                "PR fast exact-heterogeneous candidate requires "
-                "prefix_transformer_context='exact_target_partitioned'"
+                "PR fast exact-heterogeneous candidate requires prefix_transformer_context='exact_target_partitioned'"
             )
         if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
             raise RuntimeError("PR fast exact-heterogeneous candidate requires audio_handoff_source='main_partitioned'")
@@ -373,8 +372,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             raise RuntimeError("PR fast exact-heterogeneous candidate requires av_handoff_source='main_partitioned'")
         if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
             raise RuntimeError(
-                "PR fast exact-heterogeneous candidate requires "
-                "guidance_trajectory_source='main_exact_partitioned'"
+                "PR fast exact-heterogeneous candidate requires guidance_trajectory_source='main_exact_partitioned'"
             )
 
         patched, metrics = super().patch(
