@@ -242,6 +242,201 @@ def validate_av(video: Any, audio: Any, *, require_patch_safe: bool = True) -> t
     return video, audio
 
 
+def _h3_patch_axis_geometry(grid_h: int, grid_w: int, axis: int) -> tuple[int, float, float]:
+    """Return MiniMax-H3's area-normalized spatial RoPE lattice for one patch axis."""
+    if axis not in (0, 1):
+        raise ValueError("H3 patch axis must be 0 or 1")
+    if grid_h <= 0 or grid_w <= 0:
+        raise ValueError("H3 patch grid must be positive")
+    sqrt_area = math.sqrt(float(grid_h * grid_w))
+    dim = grid_h if axis == 0 else grid_w
+    ratio = float(dim) / sqrt_area
+    return dim, (1.0 - ratio) * 16.0, 32.0 / sqrt_area
+
+
+def _h3_patch_resample_grid(
+    source_hw: tuple[int, int],
+    target_hw: tuple[int, int],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Map target H3 patch coordinates into a source H3 patch lattice."""
+    source_h, source_w = map(int, source_hw)
+    target_h, target_w = map(int, target_hw)
+    source_y_len, source_y_start, source_y_step = _h3_patch_axis_geometry(source_h, source_w, 0)
+    source_x_len, source_x_start, source_x_step = _h3_patch_axis_geometry(source_h, source_w, 1)
+    target_y_len, target_y_start, target_y_step = _h3_patch_axis_geometry(target_h, target_w, 0)
+    target_x_len, target_x_start, target_x_step = _h3_patch_axis_geometry(target_h, target_w, 1)
+
+    def normalized(
+        target_len: int,
+        target_start: float,
+        target_step: float,
+        source_len: int,
+        source_start: float,
+        source_step: float,
+    ) -> torch.Tensor:
+        if source_len == 1:
+            return torch.zeros(target_len, device=device, dtype=torch.float32)
+        target_index = torch.arange(target_len, device=device, dtype=torch.float32)
+        source_index = (target_start + target_index * target_step - source_start) / source_step
+        return 2.0 * source_index / float(source_len - 1) - 1.0
+
+    grid_y = normalized(
+        target_y_len,
+        target_y_start,
+        target_y_step,
+        source_y_len,
+        source_y_start,
+        source_y_step,
+    )
+    grid_x = normalized(
+        target_x_len,
+        target_x_start,
+        target_x_step,
+        source_x_len,
+        source_x_start,
+        source_x_step,
+    )
+    yy, xx = torch.meshgrid(grid_y, grid_x, indexing="ij")
+    return torch.stack((xx, yy), dim=-1).unsqueeze(0)
+
+
+def resize_spatial_5d_h3_patch_lattice(
+    tensor: torch.Tensor,
+    target_h: int,
+    target_w: int,
+) -> torch.Tensor:
+    """Resize a latent while preserving MiniMax-H3's physical 2x2 patch lattice.
+
+    H3 assigns spatial RoPE coordinates to 2x2 latent patches using an
+    area-normalized endpoint-excluded lattice. Generic image resize uses a
+    half-pixel lattice, so a protected target-grid prefix can acquire a systematic
+    spatial phase offset when it is projected into a lower source carrier.
+
+    Treat each 2x2 latent patch as one four-sample feature vector, resample those
+    vectors on H3's own physical patch coordinates with bilinear sampling, then reconstruct the latent.
+    This changes no temporal values and adds no model evaluation.
+    """
+    if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
+        raise TypeError("H3 physical resize input must be a floating-point BxCxTxHxW tensor")
+    target_h, target_w = int(target_h), int(target_w)
+    if target_h <= 0 or target_w <= 0 or target_h % H3_PATCH_H or target_w % H3_PATCH_W:
+        raise ValueError("H3 physical resize target H/W must be positive and patch-safe")
+    b, c, t, h, w = map(int, tensor.shape)
+    if h % H3_PATCH_H or w % H3_PATCH_W:
+        raise ValueError("H3 physical resize source H/W must be patch-safe")
+    if h == target_h and w == target_w:
+        return tensor
+
+    source_grid_h = h // H3_PATCH_H
+    source_grid_w = w // H3_PATCH_W
+    target_grid_h = target_h // H3_PATCH_H
+    target_grid_w = target_w // H3_PATCH_W
+
+    work = tensor.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+    patches = (
+        work.reshape(
+            b * t,
+            c,
+            source_grid_h,
+            H3_PATCH_H,
+            source_grid_w,
+            H3_PATCH_W,
+        )
+        .permute(0, 1, 3, 5, 2, 4)
+        .reshape(
+            b * t,
+            c * H3_PATCH_H * H3_PATCH_W,
+            source_grid_h,
+            source_grid_w,
+        )
+        .float()
+    )
+    grid = _h3_patch_resample_grid(
+        (source_grid_h, source_grid_w),
+        (target_grid_h, target_grid_w),
+        device=patches.device,
+    ).expand(b * t, -1, -1, -1)
+
+    mapped = F.grid_sample(
+        patches,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    out = (
+        mapped.reshape(
+            b * t,
+            c,
+            H3_PATCH_H,
+            H3_PATCH_W,
+            target_grid_h,
+            target_grid_w,
+        )
+        .permute(0, 1, 4, 2, 5, 3)
+        .reshape(b * t, c, target_h, target_w)
+    )
+    return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4).to(tensor)
+
+
+def translate_spatial_suffix_5d(
+    tensor: torch.Tensor,
+    *,
+    start_t: int,
+    dx: float,
+    dy: float,
+) -> torch.Tensor:
+    """Translate one suffix by a constant sub-cell offset without changing geometry.
+
+    dx/dy are latent-cell content translations: positive dx moves content right
+    and positive dy moves content down. Prefix frames before start_t are returned
+    bitwise unchanged. Border sampling prevents opposite-edge wraparound.
+    """
+    if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
+        raise TypeError("spatial suffix translation expects a floating BxCxTxHxW tensor")
+    start_t = int(start_t)
+    temporal = int(tensor.shape[2])
+    if start_t < 0 or start_t >= temporal:
+        raise ValueError("spatial suffix translation start_t is outside the video")
+    dx = float(dx)
+    dy = float(dy)
+    if not math.isfinite(dx) or not math.isfinite(dy):
+        raise ValueError("spatial suffix translation requires finite dx/dy")
+    if dx == 0.0 and dy == 0.0:
+        return tensor.clone()
+
+    b = int(tensor.shape[0])
+    c = int(tensor.shape[1])
+    suffix_t = temporal - start_t
+    h = int(tensor.shape[3])
+    w = int(tensor.shape[4])
+    suffix = tensor[:, :, start_t:].permute(0, 2, 1, 3, 4).reshape(b * suffix_t, c, h, w).float()
+
+    y = torch.linspace(-1.0, 1.0, h, device=suffix.device, dtype=torch.float32)
+    x = torch.linspace(-1.0, 1.0, w, device=suffix.device, dtype=torch.float32)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    shift_x = 0.0 if w <= 1 else 2.0 * dx / float(w - 1)
+    shift_y = 0.0 if h <= 1 else 2.0 * dy / float(h - 1)
+    grid = torch.stack((xx - shift_x, yy - shift_y), dim=-1).unsqueeze(0)
+    grid = grid.expand(b * suffix_t, -1, -1, -1)
+
+    shifted = F.grid_sample(
+        suffix,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    shifted = shifted.reshape(b, suffix_t, c, h, w).permute(0, 2, 1, 3, 4).to(device=tensor.device, dtype=tensor.dtype)
+
+    result = tensor.clone()
+    result[:, :, start_t:] = shifted
+    if not bool(torch.isfinite(result).all().item()):
+        raise RuntimeError("spatial suffix translation produced NaN or Inf")
+    return result
+
 def resize_spatial_5d(tensor: torch.Tensor, target_h: int, target_w: int, *, mode: str = "bicubic") -> torch.Tensor:
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("spatial resize input must be a floating-point BxCxTxHxW tensor")

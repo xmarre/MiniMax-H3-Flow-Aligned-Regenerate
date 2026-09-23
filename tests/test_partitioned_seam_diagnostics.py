@@ -5,13 +5,19 @@ import math
 import pytest
 import torch
 
+from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
+from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import (
+    _align_guidance_run_suffix_gauge,
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
 )
-from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+from h3_flow_regenerate.seam_diagnostics import (
+    estimate_prefix_rigid_alignment,
+    project_translation_trajectory_to_grid,
+)
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
@@ -63,6 +69,29 @@ def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_rest
     }
     assert required <= fields.keys()
     assert all(math.isfinite(float(fields[key])) for key in required)
+
+
+def test_prefix_rigid_alignment_recovers_same_frame_gauge_offset():
+    torch.manual_seed(812)
+    exact = torch.randn(1, 8, 5, 32, 40, dtype=torch.float32)
+    learned = torch.roll(exact, shifts=(1, -2), dims=(-2, -1))
+
+    fields = estimate_prefix_rigid_alignment(
+        learned,
+        exact,
+        frames=4,
+        max_shift=3,
+    )
+
+    assert fields["prefix_alignment_version"] == 1
+    assert fields["prefix_alignment_frames"] == 4
+    assert fields["learned_relative_median_dx"] == pytest.approx(-2.0, abs=0.05)
+    assert fields["learned_relative_median_dy"] == pytest.approx(1.0, abs=0.05)
+    assert fields["correction_dx"] == pytest.approx(2.0, abs=0.05)
+    assert fields["correction_dy"] == pytest.approx(-1.0, abs=0.05)
+    assert fields["learned_relative_mad_dx"] < 0.05
+    assert fields["learned_relative_mad_dy"] < 0.05
+    assert fields["median_response"] > 1.0
 
 
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
@@ -164,6 +193,53 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
     assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)
     assert projected["target_equivalent_anchor_final_dy"] == pytest.approx(1.5)
     assert "target_equivalent_pairwise_response" not in projected
+
+
+def test_guidance_run_suffix_gauge_alignment_scales_target_offset_to_source_grid():
+    video = torch.zeros(1, 24, 5, 20, 26, dtype=torch.float32)
+    video[:, :, :2] = torch.randn(1, 24, 2, 20, 26)
+    video[:, :, 2:, 10, 13] = 1.0
+    sample = TrajectorySample(
+        coordinate=0.5,
+        video_sigma=0.8,
+        audio_sigma=0.7,
+        outer_step=1,
+        call_index=2,
+        phase="single",
+        provenance="actual",
+        video_x0=video,
+    )
+    run = TrajectoryRun(
+        schema_version=1,
+        run_id="run",
+        session_id="session",
+        chunk_id="chunk",
+        sampler="sampler",
+        scheduler="scheduler",
+        geometry=geometry_from_video(video),
+        audio_shape=(1, 32, 2, 10),
+        layout_signature="layout",
+        conditioning_signature="conditioning",
+        storage="system_ram",
+        samples=(sample,),
+        started_ns=1,
+        completed_ns=2,
+        complete=True,
+    )
+
+    aligned, source_dx, source_dy = _align_guidance_run_suffix_gauge(
+        run,
+        prefix_t=2,
+        target_hw=(40, 52),
+        correction_dx=2.0,
+        correction_dy=-2.0,
+    )
+
+    assert source_dx == pytest.approx(1.0)
+    assert source_dy == pytest.approx(-1.0)
+    assert torch.equal(aligned.samples[0].video_x0[:, :, :2], video[:, :, :2])
+    assert aligned.samples[0].video_x0[0, 0, 2, 9, 14] == pytest.approx(1.0, abs=1e-6)
+    assert run.samples[0].video_x0[0, 0, 2, 10, 13] == pytest.approx(1.0)
 
 
 def test_partitioned_suffix_dc_bridge_preserves_learned_native_dc_relation_and_scope():

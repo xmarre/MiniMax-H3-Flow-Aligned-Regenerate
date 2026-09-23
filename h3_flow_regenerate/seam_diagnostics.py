@@ -252,6 +252,78 @@ def _phase_correlation_shift(
     }
 
 
+def estimate_prefix_rigid_alignment(
+    learned_prefix: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    frames: int = 4,
+    max_shift: int = 4,
+) -> dict[str, float | int | bool | list[float] | list[bool]]:
+    """Estimate the rigid spatial gauge offset of a learned prefix.
+
+    The authoritative exact prefix and learned-upscaler prefix describe the same
+    temporal frames on the same target latent grid. Their robust same-frame
+    phase-correlation offset therefore measures the coordinate-frame mismatch
+    introduced by the learned spatial transport, not temporal camera motion.
+    """
+    if learned_prefix.shape != exact_prefix.shape or learned_prefix.ndim != 5:
+        raise ValueError("prefix rigid alignment requires matching BxCxTxHxW tensors")
+    if not learned_prefix.is_floating_point() or not exact_prefix.is_floating_point():
+        raise TypeError("prefix rigid alignment requires floating-point tensors")
+    temporal = int(exact_prefix.shape[2])
+    frames = min(max(1, int(frames)), temporal)
+    max_shift = int(max_shift)
+    if max_shift < 1:
+        raise ValueError("prefix rigid alignment max_shift must be positive")
+
+    learned_dx: list[float] = []
+    learned_dy: list[float] = []
+    responses: list[float] = []
+    clipped: list[bool] = []
+    start = temporal - frames
+    for index in range(start, temporal):
+        shift = _phase_correlation_shift(
+            exact_prefix[:, :, index],
+            learned_prefix[:, :, index],
+            roi_fraction=1.0,
+            max_shift=max_shift,
+        )
+        learned_dx.append(float(shift["dx"]))
+        learned_dy.append(float(shift["dy"]))
+        responses.append(float(shift["response"]))
+        clipped.append(bool(shift["clipped"]))
+
+    dx_tensor = torch.tensor(learned_dx, dtype=torch.float32)
+    dy_tensor = torch.tensor(learned_dy, dtype=torch.float32)
+    response_tensor = torch.tensor(responses, dtype=torch.float32)
+    median_dx = float(dx_tensor.median().item())
+    median_dy = float(dy_tensor.median().item())
+    mad_dx = float((dx_tensor - median_dx).abs().median().item())
+    mad_dy = float((dy_tensor - median_dy).abs().median().item())
+    median_response = float(response_tensor.median().item())
+    correction_dx = -median_dx
+    correction_dy = -median_dy
+    if max(abs(correction_dx), abs(correction_dy)) > float(max_shift):
+        raise RuntimeError("prefix rigid alignment correction exceeded the bounded search radius")
+    return {
+        "prefix_alignment_version": 1,
+        "prefix_alignment_frames": frames,
+        "prefix_alignment_max_shift": max_shift,
+        "learned_relative_dx": learned_dx,
+        "learned_relative_dy": learned_dy,
+        "response": responses,
+        "clipped": clipped,
+        "learned_relative_median_dx": median_dx,
+        "learned_relative_median_dy": median_dy,
+        "learned_relative_mad_dx": mad_dx,
+        "learned_relative_mad_dy": mad_dy,
+        "median_response": median_response,
+        "correction_dx": correction_dx,
+        "correction_dy": correction_dy,
+        "clipped_any": any(clipped),
+    }
+
+
 def measure_translation_trajectory(
     video: torch.Tensor,
     boundary_t: int,

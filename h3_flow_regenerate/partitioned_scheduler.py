@@ -11,13 +11,19 @@ import contextlib
 import copy
 import math
 import time
+from dataclasses import replace
 from typing import Any
 
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
-from .contracts import H3FlowTrajectory
-from .geometry import pack_streams, resize_spatial_5d, unpack_streams
+from .contracts import H3FlowTrajectory, TrajectoryRun
+from .geometry import (
+    pack_streams,
+    resize_spatial_5d_h3_patch_lattice,
+    translate_spatial_suffix_5d,
+    unpack_streams,
+)
 from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -87,6 +93,7 @@ from .runtime import (
     _validate_progressive_sampler_state,
 )
 from .seam_diagnostics import (
+    estimate_prefix_rigid_alignment,
     measure_exact_prefix_splice,
     measure_translation_trajectory,
     measure_video_boundary,
@@ -115,6 +122,37 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
 
 class PartitionedPreflightUnsupported(RuntimeError):
     """A condition detected before sampling that must use the exact target fallback."""
+
+
+def _align_guidance_run_suffix_gauge(
+    run: TrajectoryRun,
+    *,
+    prefix_t: int,
+    target_hw: tuple[int, int],
+    correction_dx: float,
+    correction_dy: float,
+) -> tuple[TrajectoryRun, float, float]:
+    """Create a transient Flow trajectory in the same suffix gauge as target-high."""
+    target_h, target_w = map(int, target_hw)
+    if target_h <= 0 or target_w <= 0:
+        raise ValueError("guidance gauge alignment requires positive target H/W")
+    source_h = int(run.geometry.latent_h)
+    source_w = int(run.geometry.latent_w)
+    source_dx = float(correction_dx) * source_w / target_w
+    source_dy = float(correction_dy) * source_h / target_h
+    aligned_samples = tuple(
+        replace(
+            sample,
+            video_x0=translate_spatial_suffix_5d(
+                sample.video_x0,
+                start_t=prefix_t,
+                dx=source_dx,
+                dy=source_dy,
+            ),
+        )
+        for sample in run.samples
+    )
+    return replace(run, samples=aligned_samples), source_dx, source_dy
 
 
 def _validate_audio_handoff_shadow_configuration(
@@ -1255,6 +1293,38 @@ def run_partitioned_progressive(
     )
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+    low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
+    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
+        stage_plan.prefix.to(low_video),
+        source_h,
+        source_w,
+    )
+    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
+    generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
+    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
+    prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
+    low_video = low_video.clone()
+    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_latent_image = pack_streams((low_video, low_audio))[0]
+    binding.metrics.event(
+        "partitioned_prefix_source_resample",
+        policy="h3_physical_patch_lattice_v1",
+        prefix_source="authoritative_exact_target_prefix",
+        prefix_t=int(stage_plan.prefix_t),
+        target_hw=(int(target_h), int(target_w)),
+        source_hw=(int(source_h), int(source_w)),
+        generic_half_pixel_prefix_replaced=True,
+        generic_vs_physical_delta_rms=prefix_resample_delta_rms,
+        generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
+        numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    del prefix_resample_delta
+    del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
     diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
@@ -1771,11 +1841,17 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        exact_prefix_source = resize_spatial_5d(
-            stage_plan.prefix.to(clean_video),
-            source_h,
-            source_w,
-            mode="bicubic",
+        exact_prefix_source = physical_prefix_source.to(clean_video)
+        binding.metrics.event(
+            "partitioned_prefix_handoff_context",
+            low_probe_prefix_policy="h3_physical_patch_lattice_v1",
+            learned_transfer_prefix_policy="h3_physical_patch_lattice_v1",
+            exact_target_restore_policy="authoritative_target_prefix",
+            low_probe_and_handoff_prefix_decoupled=False,
+            quality_preserving_physical_context_retained=True,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
         )
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
@@ -1905,15 +1981,71 @@ def run_partitioned_progressive(
             device=learned_clean.device,
             dtype=learned_clean.dtype,
         )
-        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
+        alignment = estimate_prefix_rigid_alignment(
+            learned_clean[:, :, : stage_plan.prefix_t],
+            exact_prefix,
+            frames=min(4, stage_plan.prefix_t),
+            max_shift=4,
+        )
+        alignment_frames = int(alignment["prefix_alignment_frames"])
+        clipped_count = sum(bool(value) for value in alignment["clipped"])
+        median_response = float(alignment["median_response"])
+        mad_dx = float(alignment["learned_relative_mad_dx"])
+        mad_dy = float(alignment["learned_relative_mad_dy"])
+        if clipped_count > alignment_frames // 2:
+            raise RuntimeError("learned-prefix rigid alignment clipped on most anchor frames")
+        if median_response < 3.0:
+            raise RuntimeError("learned-prefix rigid alignment response is too weak")
+        if max(mad_dx, mad_dy) > 0.75:
+            raise RuntimeError("learned-prefix rigid alignment is not temporally coherent")
+
+        correction_dx = float(alignment["correction_dx"])
+        correction_dy = float(alignment["correction_dy"])
+        rigid_aligned_clean = translate_spatial_suffix_5d(
+            learned_clean,
+            start_t=stage_plan.prefix_t,
+            dx=correction_dx,
+            dy=correction_dy,
+        )
+        suffix_t = int(learned_clean.shape[2]) - int(stage_plan.prefix_t)
+        target_video = map_clean_bridge_to_conditional_state(
             target_video,
             learned_clean,
+            rigid_aligned_clean,
+            sigma=sigma,
+            prefix_t=stage_plan.prefix_t,
+            corrected_tokens=suffix_t,
+        )
+        rigid_delta = (
+            rigid_aligned_clean[:, :, stage_plan.prefix_t :].float()
+            - learned_clean[:, :, stage_plan.prefix_t :].float()
+        )
+        binding.metrics.event(
+            "partitioned_prefix_rigid_alignment",
+            alignment_scope="learned_3d_suffix_all_frames",
+            estimator="same_frame_exact_vs_learned_prefix_phase_correlation_median_v1",
+            authoritative_prefix_modified=False,
+            learned_h3_physical_context_retained=True,
+            suffix_tokens_corrected=suffix_t,
+            correction_delta_rms=float(rigid_delta.square().mean().sqrt().item()),
+            correction_delta_abs_max=float(rigid_delta.abs().max().item()),
+            fail_closed=True,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            **alignment,
+        )
+        del rigid_delta
+
+        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
+            target_video,
+            rigid_aligned_clean,
             exact_prefix,
             sigma=sigma,
             enabled=True,
         )
         splice_diagnostics = measure_exact_prefix_splice(
-            learned_clean,
+            rigid_aligned_clean,
             exact_prefix,
             corrected_clean_video=corrected_clean,
         )
@@ -1946,6 +2078,14 @@ def run_partitioned_progressive(
                 roi_fraction=roi_fraction,
                 max_shift=4,
             )
+            aligned_trajectory = measure_translation_trajectory(
+                rigid_aligned_clean,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
             restored_trajectory = measure_translation_trajectory(
                 corrected_clean,
                 stage_plan.prefix_t,
@@ -1962,20 +2102,30 @@ def run_partitioned_progressive(
             )
             binding.metrics.event(
                 "partitioned_multiframe_trajectory",
+                stage="prefix_rigid_aligned",
+                roi=roi_name,
+                **aligned_trajectory,
+            )
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
                 stage="exact_restored_pre_high",
                 roi=roi_name,
                 **restored_trajectory,
             )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
-        del corrected_clean, learned_clean
+        del corrected_clean, rigid_aligned_clean, learned_clean
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
             "partitioned_transfer",
             learned_transfer_performed=True,
             upscaler_prefix_context_used=True,
+            upscaler_prefix_context_policy="h3_physical_patch_lattice_v1",
             upscaler_prefix_output_discarded=True,
+            learned_suffix_rigid_alignment_applied=True,
+            learned_suffix_rigid_alignment_dx=correction_dx,
+            learned_suffix_rigid_alignment_dy=correction_dy,
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
@@ -2021,7 +2171,28 @@ def run_partitioned_progressive(
                 )
             if run.geometry.latent_t != int(target_shapes[0][2]):
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
+            run, guidance_source_dx, guidance_source_dy = _align_guidance_run_suffix_gauge(
+                run,
+                prefix_t=stage_plan.prefix_t,
+                target_hw=(target_h, target_w),
+                correction_dx=correction_dx,
+                correction_dy=correction_dy,
+            )
             binding.active_guidance_run = run
+            binding.metrics.event(
+                "partitioned_guidance_gauge_alignment",
+                source="prefix_rigid_alignment",
+                transient_copy_only=True,
+                shared_trajectory_handle_unchanged=True,
+                target_correction_dx=correction_dx,
+                target_correction_dy=correction_dy,
+                source_correction_dx=guidance_source_dx,
+                source_correction_dy=guidance_source_dy,
+                prefix_t=stage_plan.prefix_t,
+                samples_aligned=len(run.samples),
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+            )
             binding.metrics.event(
                 "partitioned_guidance_trajectory_selection",
                 source=guidance_trajectory_source,
