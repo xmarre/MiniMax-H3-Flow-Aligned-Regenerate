@@ -22,6 +22,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
+    _resolve_guidance_spatial_transfer_policy,
     _source_uniform_primary_execution_controls,
     _validate_low_probe_execution_source_configuration,
 )
@@ -41,6 +42,17 @@ def _validate_candidate(**overrides):
     }
     values.update(overrides)
     _validate_low_probe_execution_source_configuration(**values)
+
+
+def test_guidance_spatial_transfer_policy_matches_prefix_coordinate_domain():
+    assert (
+        _resolve_guidance_spatial_transfer_policy(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE)
+        == "h3_physical_patch_lattice_v1"
+    )
+    assert (
+        _resolve_guidance_spatial_transfer_policy(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT)
+        == "generic_resize_v1"
+    )
 
 
 def test_source_uniform_primary_execution_accepts_configured_sampler_owned_overlap_width():
