@@ -323,6 +323,7 @@ def estimate_prefix_rigid_alignment(
         "clipped_any": any(clipped),
     }
 
+
 def measure_translation_trajectory(
     video: torch.Tensor,
     boundary_t: int,
