@@ -11,6 +11,7 @@ from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
@@ -218,13 +219,13 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_ticks"] = (
             "INT",
             {
-                "default": 4,
+                "default": 16,
                 "min": 0,
                 "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "40-Hz sampler-owned audio overlap width. The production default is 4 ticks "
-                    "(100 ms), validated with sampler_mask_exact_timestep. Values 0..16 remain "
+                    "40-Hz sampler-owned audio overlap width. This quality-first corrective candidate "
+                    "defaults to the user-validated 16-tick sampler_mask contract. Values 0..16 remain "
                     "available for controlled compatibility and diagnostics."
                 ),
             },
@@ -234,11 +235,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_mode"] = (
             list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
                 "tooltip": (
-                    "sampler_mask_exact_timestep is the production default: the sampler owns the overlap "
-                    "while MiniMax-H3 inner timestep/modulation labels retain the authoritative exact-prefix mask. "
-                    "sampler_mask and model_timestep_only remain advanced comparison modes."
+                    "sampler_mask / 16 is the current user-validated audio contract for this quality-first "
+                    "boundary-continuity candidate. sampler_mask_exact_timestep and model_timestep_only remain "
+                    "available only for historical comparison."
                 ),
             },
         )
@@ -326,8 +327,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
     DESCRIPTION = (
         "Corrective quality-first exact-prefix Continuum handoff. The default candidate restores the "
         "main exact-partitioned trajectory plus isolated source-uniform AV handoff topology that previously "
-        "removed the physical-boundary framing shift, while retaining the four-tick sampler-owned overlap "
-        "and authoritative exact MiniMax-H3 inner timestep labels. The faster source-only path remains selectable."
+        "removed the physical-boundary framing shift, while retaining the currently accepted 16-tick "
+        "sampler-owned audio overlap. The faster source-only path remains selectable."
     )
 
     def patch(
