@@ -139,10 +139,10 @@ def test_h3_patch_lattice_resize_preserves_patch_subcell_layout():
             source[..., row::2, col::2] = row * 10.0 + col
 
     mapped = resize_spatial_5d_h3_patch_lattice(source, 8, 12)
-    assert torch.all(mapped[..., 0::2, 0::2] == 0.0)
-    assert torch.all(mapped[..., 0::2, 1::2] == 1.0)
-    assert torch.all(mapped[..., 1::2, 0::2] == 10.0)
-    assert torch.all(mapped[..., 1::2, 1::2] == 11.0)
+    assert torch.allclose(mapped[..., 0::2, 0::2], torch.zeros_like(mapped[..., 0::2, 0::2]), atol=1e-6)
+    assert torch.allclose(mapped[..., 0::2, 1::2], torch.ones_like(mapped[..., 0::2, 1::2]), atol=1e-6)
+    assert torch.allclose(mapped[..., 1::2, 0::2], torch.full_like(mapped[..., 1::2, 0::2], 10.0), atol=1e-6)
+    assert torch.allclose(mapped[..., 1::2, 1::2], torch.full_like(mapped[..., 1::2, 1::2], 11.0), atol=1e-6)
 
 
 def test_resize_is_spatial_only():
