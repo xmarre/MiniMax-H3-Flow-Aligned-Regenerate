@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from .contracts import TrajectoryRun, TrajectorySample
-from .geometry import resize_video
+from .geometry import resize_spatial_5d_h3_patch_lattice, resize_video
 from .sigma import interpolate_coordinate
 
 
@@ -426,6 +426,17 @@ def _warp_video_pairs(video: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
     return warped.reshape(batch, pairs, channels, height, width).permute(0, 2, 1, 3, 4).to(video)
 
 
+def _resize_h3_spatial_reference(
+    video: torch.Tensor,
+    target_h: int,
+    target_w: int,
+) -> torch.Tensor:
+    """Map H3 latent features between spatial grids on H3's physical patch lattice."""
+    if video.shape[-2:] == (int(target_h), int(target_w)):
+        return video
+    return resize_spatial_5d_h3_patch_lattice(video, int(target_h), int(target_w))
+
+
 def _temporal_alignment_correction(
     high: torch.Tensor,
     reference: torch.Tensor,
@@ -452,14 +463,14 @@ def _temporal_alignment_correction(
     previous_innovation = work_reference[:, :, 1:] - previous_reference
     previous_target = _warp_video_pairs(work_high[:, :, :-1], backward_target)
     previous_target = (
-        previous_target + resize_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
+        previous_target + _resize_h3_spatial_reference(previous_innovation, target_h, target_w).float()
     )
     previous_delta = previous_target - work_high[:, :, 1:]
 
     next_reference = _warp_video_pairs(work_reference[:, :, 1:], forward_source)
     next_innovation = work_reference[:, :, :-1] - next_reference
     next_target = _warp_video_pairs(work_high[:, :, 1:], forward_target)
-    next_target = next_target + resize_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
+    next_target = next_target + _resize_h3_spatial_reference(next_innovation, target_h, target_w).float()
     next_delta = next_target - work_high[:, :, :-1]
 
     backward_confidence = _resize_pairwise_confidence(correspondence.backward_confidence, target_h, target_w).permute(
@@ -551,7 +562,7 @@ def apply_guidance(
 
     source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
     source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
-    ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
+    ref = _resize_h3_spatial_reference(source_ref, high_x0.shape[-2], high_x0.shape[-1])
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
@@ -567,7 +578,7 @@ def apply_guidance(
         down = F.interpolate(work, size=source_size, mode="area")
         down = down.reshape(high_x0.shape[0], high_x0.shape[2], high_x0.shape[1], *source_size).permute(0, 2, 1, 3, 4)
         source_error = source_ref - down.to(source_ref)
-        error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
+        error = _resize_h3_spatial_reference(source_error, *high_x0.shape[-2:])
         correction = correction + schedule * config.consistency_weight * error
 
     direction_correction = correction
