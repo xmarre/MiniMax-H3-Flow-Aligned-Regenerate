@@ -193,6 +193,47 @@ def _bounded_tensor_provenance(value: Any) -> str | None:
     return _tensor_signature(value).hex()
 
 
+def _nested_tensor_provenance(
+    value: Any,
+    *,
+    path: str = "root",
+    max_depth: int = 8,
+    max_receipts: int = 64,
+) -> list[dict[str, Any]]:
+    """Collect bounded receipts for tensors nested in ordinary conditioning containers."""
+    receipts: list[dict[str, Any]] = []
+
+    def walk(current: Any, current_path: str, depth: int) -> None:
+        if len(receipts) >= int(max_receipts) or depth > int(max_depth):
+            return
+        if torch.is_tensor(current):
+            receipts.append(
+                {
+                    "path": current_path,
+                    "shape": tuple(int(value) for value in current.shape),
+                    "dtype": str(current.dtype),
+                    "device": str(current.device),
+                    "signature": _bounded_tensor_provenance(current),
+                }
+            )
+            return
+        if isinstance(current, dict):
+            for key in sorted(current, key=lambda item: str(item)):
+                walk(current[key], f"{current_path}.{key!s}", depth + 1)
+            return
+        if isinstance(current, (list, tuple)):
+            for index, item in enumerate(current):
+                walk(item, f"{current_path}[{index}]", depth + 1)
+
+    walk(value, path, 0)
+    return receipts
+
+
+def _conditioning_tensor_provenance(guider: Any) -> list[dict[str, Any]]:
+    original = getattr(guider, "original_conds", {}) or {}
+    return _nested_tensor_provenance(original, path="original_conds")
+
+
 def _trajectory_sample_provenance(run: Any) -> list[dict[str, Any]]:
     """Return bounded receipts for the captured Flow guidance anchors."""
     if run is None:
@@ -1450,11 +1491,19 @@ def _run_progressive(
         input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
         resolved_seed=provenance_seed,
         seed_was_none=seed is None,
+        deterministic_seed_mask=(1 << 63) - 1,
         source_noise_offset=(int(config.source_noise_offset) if target_input else None),
         handoff_seed_offset=int(config.seed_offset),
         source_noise_seed=(provenance_seed + int(config.source_noise_offset) if target_input else None),
+        source_noise_seed_effective=(
+            (provenance_seed + int(config.source_noise_offset)) & ((1 << 63) - 1) if target_input else None
+        ),
         handoff_noise_seed=provenance_seed + int(config.seed_offset),
+        handoff_noise_seed_effective=(provenance_seed + int(config.seed_offset)) & ((1 << 63) - 1),
+        sampler=sampler_name(sampler),
+        sigma_schedule_signature=_schedule_signature(sigmas),
         conditioning_signature=_conditioning_signature(guider),
+        conditioning_tensor_receipts=_conditioning_tensor_provenance(guider),
         caller_noise_signature=_bounded_tensor_provenance(noise),
         caller_latent_signature=_bounded_tensor_provenance(latent_image),
         caller_mask_signature=_bounded_tensor_provenance(denoise_mask),
