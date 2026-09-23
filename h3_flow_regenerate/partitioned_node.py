@@ -20,6 +20,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -311,11 +312,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["low_probe_execution_source"] = (
             list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS),
             {
-                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+                "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY,
                 "tooltip": (
-                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
-                    "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
-                    "remains available for historical diagnostics."
+                    "PR hardware candidate: exact_partitioned_only runs one heterogeneous exact low/probe "
+                    "pair followed by target-high, with no source-uniform approximation and no duplicate "
+                    "shadow lifetime. Other modes remain listed only for saved-workflow compatibility."
                 ),
             },
         )
@@ -323,8 +324,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
-        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
+        "Exact-prefix Continuum hardware candidate for the coordinated Sol-H3/VDN-H3-Plus stack. "
+        "Defaults to one heterogeneous target-prefix/source-suffix low/probe path, learned 3D transfer, "
         "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
@@ -357,6 +358,26 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         metrics=None,
         temporal_weight=0.20,
     ):
+        if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_EXACT_ONLY:
+            raise RuntimeError(
+                "PR fast exact-heterogeneous candidate requires "
+                "low_probe_execution_source='exact_partitioned_only'; reload the node schema"
+            )
+        if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            raise RuntimeError(
+                "PR fast exact-heterogeneous candidate requires "
+                "prefix_transformer_context='exact_target_partitioned'"
+            )
+        if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
+            raise RuntimeError("PR fast exact-heterogeneous candidate requires audio_handoff_source='main_partitioned'")
+        if av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN:
+            raise RuntimeError("PR fast exact-heterogeneous candidate requires av_handoff_source='main_partitioned'")
+        if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
+            raise RuntimeError(
+                "PR fast exact-heterogeneous candidate requires "
+                "guidance_trajectory_source='main_exact_partitioned'"
+            )
+
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
