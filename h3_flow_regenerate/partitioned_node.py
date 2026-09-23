@@ -362,6 +362,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "PR fast exact-heterogeneous candidate requires "
                 "low_probe_execution_source='exact_partitioned_only'; reload the node schema"
             )
+        if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+            raise RuntimeError(
+                "PR fast exact-heterogeneous candidate requires vdn_linear_diagnostic='normal'"
+            )
+        if audio_position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
+            raise RuntimeError(
+                "PR fast exact-heterogeneous candidate requires audio_position_domain='source_carrier'"
+            )
         if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
             raise RuntimeError(
                 "PR fast exact-heterogeneous candidate requires prefix_transformer_context='exact_target_partitioned'"
