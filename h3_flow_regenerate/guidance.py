@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from .contracts import TrajectoryRun, TrajectorySample
-from .geometry import resize_video
+from .geometry import resize_spatial_5d_h3_patch_lattice, resize_video
 from .sigma import interpolate_coordinate
 
 
@@ -69,6 +69,7 @@ class _TemporalCorrespondence:
 
 @dataclass(slots=True)
 class GuidanceState:
+    spatial_transfer_policy: str = "generic_resize_v1"
     start_coordinate: float | None = None
     current_coordinate: float | None = None
     current_high_velocity: torch.Tensor | None = None
@@ -98,8 +99,13 @@ class GuidanceState:
     last_temporal_cache_hit: bool = False
     last_temporal_reference_coordinate: float | None = None
     last_temporal_reference_clamped: bool = False
+    last_spatial_transfer_policy: str | None = None
+    last_spatial_transfer_cross_grid: bool = False
+    last_spatial_transfer_source_hw: tuple[int, int] | None = None
+    last_spatial_transfer_target_hw: tuple[int, int] | None = None
 
     def reset(self) -> None:
+        self.spatial_transfer_policy = "generic_resize_v1"
         self.start_coordinate = None
         self.current_coordinate = None
         self.current_high_velocity = None
@@ -129,6 +135,10 @@ class GuidanceState:
         self.last_temporal_cache_hit = False
         self.last_temporal_reference_coordinate = None
         self.last_temporal_reference_clamped = False
+        self.last_spatial_transfer_policy = None
+        self.last_spatial_transfer_cross_grid = False
+        self.last_spatial_transfer_source_hw = None
+        self.last_spatial_transfer_target_hw = None
 
 
 _PHASE_PRIORITY = {
@@ -426,12 +436,32 @@ def _warp_video_pairs(video: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
     return warped.reshape(batch, pairs, channels, height, width).permute(0, 2, 1, 3, 4).to(video)
 
 
+def _resize_guidance_reference(
+    video: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    *,
+    transfer_mode: str,
+    spatial_transfer_policy: str,
+) -> torch.Tensor:
+    """Map a guidance latent between spatial grids under an explicit policy."""
+    target_hw = (int(target_h), int(target_w))
+    if video.shape[-2:] == target_hw:
+        return video
+    if spatial_transfer_policy == "h3_physical_patch_lattice_v1":
+        return resize_spatial_5d_h3_patch_lattice(video, *target_hw)
+    if spatial_transfer_policy == "generic_resize_v1":
+        return resize_video(video, *target_hw, mode=transfer_mode)
+    raise ValueError(f"unsupported guidance spatial transfer policy {spatial_transfer_policy!r}")
+
+
 def _temporal_alignment_correction(
     high: torch.Tensor,
     reference: torch.Tensor,
     correspondence: _TemporalCorrespondence,
     *,
     transfer_mode: str,
+    spatial_transfer_policy: str,
 ) -> torch.Tensor:
     if high.ndim != 5 or reference.ndim != 5:
         raise ValueError("temporal alignment expects BxCxTxHxW tensors")
@@ -452,14 +482,30 @@ def _temporal_alignment_correction(
     previous_innovation = work_reference[:, :, 1:] - previous_reference
     previous_target = _warp_video_pairs(work_high[:, :, :-1], backward_target)
     previous_target = (
-        previous_target + resize_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
+        previous_target
+        + _resize_guidance_reference(
+            previous_innovation,
+            target_h,
+            target_w,
+            transfer_mode=transfer_mode,
+            spatial_transfer_policy=spatial_transfer_policy,
+        ).float()
     )
     previous_delta = previous_target - work_high[:, :, 1:]
 
     next_reference = _warp_video_pairs(work_reference[:, :, 1:], forward_source)
     next_innovation = work_reference[:, :, :-1] - next_reference
     next_target = _warp_video_pairs(work_high[:, :, 1:], forward_target)
-    next_target = next_target + resize_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
+    next_target = (
+        next_target
+        + _resize_guidance_reference(
+            next_innovation,
+            target_h,
+            target_w,
+            transfer_mode=transfer_mode,
+            spatial_transfer_policy=spatial_transfer_policy,
+        ).float()
+    )
     next_delta = next_target - work_high[:, :, :-1]
 
     backward_confidence = _resize_pairwise_confidence(correspondence.backward_confidence, target_h, target_w).permute(
@@ -551,7 +597,19 @@ def apply_guidance(
 
     source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
     source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
-    ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
+    source_hw = (int(source_ref.shape[-2]), int(source_ref.shape[-1]))
+    target_hw = (int(high_x0.shape[-2]), int(high_x0.shape[-1]))
+    cross_grid = source_hw != target_hw
+    ref = _resize_guidance_reference(
+        source_ref,
+        *target_hw,
+        transfer_mode=config.transfer_mode,
+        spatial_transfer_policy=state.spatial_transfer_policy,
+    )
+    state.last_spatial_transfer_policy = state.spatial_transfer_policy if cross_grid else "identity_same_grid"
+    state.last_spatial_transfer_cross_grid = cross_grid
+    state.last_spatial_transfer_source_hw = source_hw
+    state.last_spatial_transfer_target_hw = target_hw
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
@@ -567,7 +625,12 @@ def apply_guidance(
         down = F.interpolate(work, size=source_size, mode="area")
         down = down.reshape(high_x0.shape[0], high_x0.shape[2], high_x0.shape[1], *source_size).permute(0, 2, 1, 3, 4)
         source_error = source_ref - down.to(source_ref)
-        error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
+        error = _resize_guidance_reference(
+            source_error,
+            *high_x0.shape[-2:],
+            transfer_mode=config.transfer_mode,
+            spatial_transfer_policy=state.spatial_transfer_policy,
+        )
         correction = correction + schedule * config.consistency_weight * error
 
     direction_correction = correction
@@ -588,6 +651,7 @@ def apply_guidance(
                 source_ref,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
+                spatial_transfer_policy=state.spatial_transfer_policy,
             )
             temporal_correction = schedule * config.temporal_weight * temporal_delta
             guided = guided + temporal_correction
