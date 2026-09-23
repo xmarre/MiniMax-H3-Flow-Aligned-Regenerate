@@ -381,6 +381,71 @@ def resize_spatial_5d_h3_patch_lattice(
     return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4).to(tensor)
 
 
+def translate_spatial_suffix_5d(
+    tensor: torch.Tensor,
+    *,
+    start_t: int,
+    dx: float,
+    dy: float,
+) -> torch.Tensor:
+    """Translate one suffix by a constant sub-cell offset without changing geometry.
+
+    dx/dy are latent-cell content translations: positive dx moves content right
+    and positive dy moves content down. Prefix frames before start_t are returned
+    bitwise unchanged. Border sampling prevents opposite-edge wraparound.
+    """
+    if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
+        raise TypeError("spatial suffix translation expects a floating BxCxTxHxW tensor")
+    start_t = int(start_t)
+    temporal = int(tensor.shape[2])
+    if start_t < 0 or start_t >= temporal:
+        raise ValueError("spatial suffix translation start_t is outside the video")
+    dx = float(dx)
+    dy = float(dy)
+    if not math.isfinite(dx) or not math.isfinite(dy):
+        raise ValueError("spatial suffix translation requires finite dx/dy")
+    if dx == 0.0 and dy == 0.0:
+        return tensor.clone()
+
+    b = int(tensor.shape[0])
+    c = int(tensor.shape[1])
+    suffix_t = temporal - start_t
+    h = int(tensor.shape[3])
+    w = int(tensor.shape[4])
+    suffix = (
+        tensor[:, :, start_t:]
+        .permute(0, 2, 1, 3, 4)
+        .reshape(b * suffix_t, c, h, w)
+        .float()
+    )
+
+    y = torch.linspace(-1.0, 1.0, h, device=suffix.device, dtype=torch.float32)
+    x = torch.linspace(-1.0, 1.0, w, device=suffix.device, dtype=torch.float32)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    shift_x = 0.0 if w <= 1 else 2.0 * dx / float(w - 1)
+    shift_y = 0.0 if h <= 1 else 2.0 * dy / float(h - 1)
+    grid = torch.stack((xx - shift_x, yy - shift_y), dim=-1).unsqueeze(0)
+    grid = grid.expand(b * suffix_t, -1, -1, -1)
+
+    shifted = F.grid_sample(
+        suffix,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    shifted = (
+        shifted.reshape(b, suffix_t, c, h, w)
+        .permute(0, 2, 1, 3, 4)
+        .to(device=tensor.device, dtype=tensor.dtype)
+    )
+
+    result = tensor.clone()
+    result[:, :, start_t:] = shifted
+    if not bool(torch.isfinite(result).all().item()):
+        raise RuntimeError("spatial suffix translation produced NaN or Inf")
+    return result
+
 def resize_spatial_5d(tensor: torch.Tensor, target_h: int, target_w: int, *, mode: str = "bicubic") -> torch.Tensor:
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("spatial resize input must be a floating-point BxCxTxHxW tensor")
