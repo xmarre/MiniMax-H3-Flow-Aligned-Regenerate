@@ -93,6 +93,7 @@ def test_prefix_rigid_alignment_recovers_same_frame_gauge_offset():
     assert fields["learned_relative_mad_dy"] < 0.05
     assert fields["median_response"] > 1.0
 
+
 def test_multiframe_trajectory_recovers_bounded_translation_direction():
     torch.manual_seed(123)
     base = torch.randn(1, 8, 6, 32, 40, dtype=torch.float32)
@@ -239,6 +240,7 @@ def test_guidance_run_suffix_gauge_alignment_scales_target_offset_to_source_grid
     assert torch.equal(aligned.samples[0].video_x0[:, :, :2], video[:, :, :2])
     assert aligned.samples[0].video_x0[0, 0, 2, 9, 14] == pytest.approx(1.0, abs=1e-6)
     assert run.samples[0].video_x0[0, 0, 2, 10, 13] == pytest.approx(1.0)
+
 
 def test_partitioned_suffix_dc_bridge_preserves_learned_native_dc_relation_and_scope():
     learned = torch.zeros(1, 24, 5, 4, 4, dtype=torch.float32)
