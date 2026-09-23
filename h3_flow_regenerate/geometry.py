@@ -437,6 +437,7 @@ def translate_spatial_suffix_5d(
         raise RuntimeError("spatial suffix translation produced NaN or Inf")
     return result
 
+
 def resize_spatial_5d(tensor: torch.Tensor, target_h: int, target_w: int, *, mode: str = "bicubic") -> torch.Tensor:
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("spatial resize input must be a floating-point BxCxTxHxW tensor")
