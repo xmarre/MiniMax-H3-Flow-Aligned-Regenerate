@@ -1282,6 +1282,31 @@ def _frame_gauge_clean_postprocess(
         int(learned_clean.shape[2]),
         prefix_t + 4,
     )
+    selected_prefix_frames = min(prefix_t, 6)
+    registration_pair_f64_bytes = (
+        2
+        * selected_prefix_frames
+        * int(learned_clean.shape[1])
+        * int(learned_clean.shape[-2])
+        * int(learned_clean.shape[-1])
+        * 8
+    )
+    registration_pair_f32_bytes = registration_pair_f64_bytes // 2
+    translation_output_bytes = learned_clean.numel() * learned_clean.element_size()
+    translation_batch_f32_bytes = (
+        int(learned_clean.shape[0])
+        * int(learned_clean.shape[1])
+        * min(4, int(learned_clean.shape[2]))
+        * int(learned_clean.shape[-2])
+        * int(learned_clean.shape[-1])
+        * 4
+    )
+    translation_grid_bytes = (
+        int(learned_clean.shape[-2])
+        * int(learned_clean.shape[-1])
+        * 2
+        * 4
+    )
     aligned_witness = aligned_full[:, :, :diagnostic_end].detach().clone()
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         aligned_full,
@@ -1308,6 +1333,20 @@ def _frame_gauge_clean_postprocess(
         dc_policy="existing_one_token_spatial_mean_v1",
         dc_order="after_spatial_registration_before_conditional_renoise",
         dc_metrics=dc_metrics,
+        workspace_upper_bound_bytes=(
+            registration_pair_f64_bytes
+            + registration_pair_f32_bytes
+            + translation_output_bytes
+            + translation_batch_f32_bytes
+            + translation_grid_bytes
+        ),
+        workspace_components={
+            "registration_pair_f64_bytes": registration_pair_f64_bytes,
+            "registration_pair_f32_bytes": registration_pair_f32_bytes,
+            "translation_output_bytes": translation_output_bytes,
+            "translation_batch_f32_bytes": translation_batch_f32_bytes,
+            "translation_grid_bytes": translation_grid_bytes,
+        },
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
     )
     witnesses = {
@@ -2475,7 +2514,11 @@ def run_partitioned_progressive(
             mask_classification="exact_protected_video_prefix",
             exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
             authoritative_prefix_modified=False,
-            transform_domain="actual_clean_target_video",
+            transform_domain=(
+                "actual_provider_clean_target_video"
+                if frame_gauge_accepted
+                else "none"
+            ),
             transformed_states=(
                 ["learned_suffix", "derived_guidance_suffix"]
                 if frame_gauge_accepted and pending_registered_reference is not None
