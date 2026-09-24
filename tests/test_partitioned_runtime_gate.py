@@ -344,6 +344,7 @@ def test_partitioned_runtime_gate_rejects_candidate_position_or_av_receipt_drift
             expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
         )
 
+
 def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
     accepted = mode == "on" and result == "accepted"
     return _event(
@@ -476,4 +477,3 @@ def test_runtime_gate_can_pin_auto_strength_report_identity_across_pair():
             require_auto_strength_off=True,
             expected_auto_strength_digests=first.auto_strength_report_digests,
         )
-
