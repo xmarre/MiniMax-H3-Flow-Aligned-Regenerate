@@ -14,7 +14,12 @@ import torch
 
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
-from .guidance import GuidanceConfig, GuidanceState, apply_guidance
+from .guidance import (
+    GuidanceConfig,
+    GuidanceState,
+    RegisteredGuidanceReference,
+    apply_guidance,
+)
 from .handoff import (
     ProgressiveHandoffConfig,
     ProgressiveTargetInputConfig,
@@ -78,6 +83,7 @@ class FlowBinding:
     captured_run_id: str | None = None
     guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
+    registered_guidance_reference: RegisteredGuidanceReference | None = None
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
 
@@ -517,6 +523,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             state=binding.guidance_state,
             high_state=video_state,
             sigma=sigma,
+            registered_reference=binding.registered_guidance_reference,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))
@@ -546,6 +553,11 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
             temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
             temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
+            temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
+            temporal_cross_prefix_pairs_disabled=(
+                binding.guidance_state.last_temporal_cross_prefix_pairs_disabled
+            ),
+            registered_reference_used=binding.guidance_state.last_registered_reference_used,
             actual=actual,
             solver_phase=(
                 spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
@@ -588,6 +600,7 @@ def flow_outer_wrapper(
         raise RuntimeError("H3 flow wrapper requires mutable packed latent shape metadata")
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+    binding.registered_guidance_reference = None
     progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
     is_progressive = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
     if not is_progressive and binding.guidance is not None and binding.guidance.mode != "off":
@@ -645,6 +658,7 @@ def flow_outer_wrapper(
             _finish_capture(binding, error=error)
         binding.guidance_state.reset()
         binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
         binding.metrics.event(
             "sampler_wall",
             elapsed_ms=(time.perf_counter() - outer_started) * 1000.0,
