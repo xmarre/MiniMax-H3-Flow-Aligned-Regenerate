@@ -26,11 +26,7 @@ def _analytic_pair(
     for frame in range(frames):
         exact_channels = []
         learned_channels = []
-        frame_dx, frame_dy = (
-            per_frame_shift[frame]
-            if per_frame_shift is not None
-            else (dx, dy)
-        )
+        frame_dx, frame_dy = per_frame_shift[frame] if per_frame_shift is not None else (dx, dy)
         for channel in range(24):
             phase = 0.11 * frame + 0.067 * channel
 
@@ -43,9 +39,7 @@ def _analytic_pair(
                 )
 
             exact_channels.append(field(yy, xx))
-            learned_channels.append(
-                field(yy + frame_dy, xx + frame_dx)
-            )
+            learned_channels.append(field(yy + frame_dy, xx + frame_dx))
         exact_frames.append(torch.stack(exact_channels))
         learned_frames.append(torch.stack(learned_channels))
     exact = torch.stack(exact_frames, dim=1).unsqueeze(0).float()
