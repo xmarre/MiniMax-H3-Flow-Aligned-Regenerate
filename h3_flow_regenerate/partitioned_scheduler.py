@@ -17,12 +17,24 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .contracts import H3FlowTrajectory
+from .frame_gauge import (
+    FRAME_GAUGE_POLICY_VERSION,
+    estimate_paired_prefix_translation,
+    translate_video_cells,
+)
 from .geometry import (
     pack_streams,
     resize_spatial_5d_h3_patch_lattice,
+    resize_video,
     unpack_streams,
 )
-from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
+from .guidance import RegisteredGuidanceReference, time_matched_reference_info
+from .handoff import (
+    CleanVideoPostprocessResult,
+    ProgressiveTargetInputConfig,
+    build_handoff_state,
+    deterministic_video_noise,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -100,7 +112,6 @@ from .seam_diagnostics import (
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 from .tone_bridge import (
     apply_suffix_dc_bridge,
-    apply_suffix_exact_prefix_gauge_bridge,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
@@ -954,40 +965,6 @@ def _apply_partitioned_suffix_dc_bridge(
     )
     return mapped_state, corrected_clean, bridge_metrics
 
-
-def _apply_partitioned_suffix_gauge_bridge(
-    target_video: torch.Tensor,
-    learned_clean: torch.Tensor,
-    exact_prefix: torch.Tensor,
-    *,
-    sigma: float,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, float | int | bool]]:
-    """Carry the learned target-grid spatial gauge across exact-prefix replacement.
-
-    The learned 3D handoff is internally coherent before Flow discards its
-    transient prefix. Replacing that prefix with the authoritative exact prefix
-    changes the boundary field. Transporting the complete last-prefix residual
-    uniformly across the suffix preserves both the learned boundary difference
-    and every learned suffix temporal difference without a spatial warp.
-    """
-
-    prefix_t = int(exact_prefix.shape[2])
-    corrected_clean, bridge_metrics = apply_suffix_exact_prefix_gauge_bridge(
-        learned_clean,
-        exact_prefix,
-    )
-    corrected_tokens = int(bridge_metrics["suffix_gauge_bridge_corrected_tokens"])
-    if corrected_tokens != int(learned_clean.shape[2]) - prefix_t:
-        raise RuntimeError("exact-prefix gauge bridge must cover the complete learned suffix")
-    mapped_state = map_clean_bridge_to_conditional_state(
-        target_video,
-        learned_clean,
-        corrected_clean,
-        sigma=float(sigma),
-        prefix_t=prefix_t,
-        corrected_tokens=corrected_tokens,
-    )
-    return mapped_state, corrected_clean, bridge_metrics
 
 
 def _measure_partitioned_transfer_splice(
