@@ -114,7 +114,7 @@ class H3PartitionedExactPrefixHandoff:
             # its boundary correction after learned transfer, before target-high.
             suffix_dc_bridge=False,
             suffix_geometric_bridge=False,
-            frame_gauge_repair=bool(frame_gauge_repair),
+            frame_gauge_repair=frame_gauge_repair,
         )
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
