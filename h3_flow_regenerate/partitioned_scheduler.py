@@ -1163,6 +1163,7 @@ def _frame_gauge_clean_postprocess(
         "spatial_warp_applied": False,
     }
     if not video_estimate.accepted:
+        transaction["result"] = video_estimate.status
         transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
         result = CleanVideoPostprocessResult(
             clean_video=learned_clean,
@@ -1188,6 +1189,7 @@ def _frame_gauge_clean_postprocess(
         )
         transaction["guidance_registration"] = guidance_fields
         if guidance_error is not None:
+            transaction["result"] = "rejected"
             transaction["reason"] = guidance_error
             transaction["elapsed_ms"] = (
                 time.perf_counter() - started
@@ -2421,10 +2423,18 @@ def run_partitioned_progressive(
             "guidance_registration",
             {},
         )
+        postprocess_report = transfer_metrics.get("clean_video_postprocess")
+        if not isinstance(postprocess_report, dict):
+            postprocess_report = {}
         binding.metrics.event(
             "partitioned_frame_gauge",
+            mode="on" if config.frame_gauge_repair else "off",
             enabled=bool(config.frame_gauge_repair),
-            result=str(frame_gauge_transaction.get("result", "baseline")),
+            eligible=bool(
+                config.frame_gauge_repair
+                and frame_gauge_transaction.get("result") in {"accepted", "identity", "rejected"}
+            ),
+            result=str(frame_gauge_transaction.get("result", "off")),
             reason=str(frame_gauge_transaction.get("reason", "unknown")),
             policy_version=FRAME_GAUGE_POLICY_VERSION,
             split_coordinate=split_coordinate,
@@ -2448,10 +2458,26 @@ def run_partitioned_progressive(
                 else "historical_post_renoise_affine_mapping"
             ),
             deterministic_noise_seed=diagnostic_seed,
+            deterministic_noise_seed_offset=int(config.seed_offset),
+            mask_classification="exact_protected_video_prefix",
+            exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
             authoritative_prefix_modified=False,
+            transform_domain="actual_clean_target_video",
+            transformed_states=(
+                ["learned_suffix", "derived_guidance_suffix"]
+                if frame_gauge_accepted and pending_registered_reference is not None
+                else ["learned_suffix"]
+                if frame_gauge_accepted
+                else []
+            ),
             provider_output_observed_before_noise=bool(
                 config.frame_gauge_repair
             ),
+            provider_api_version=transfer_metrics.get("provider_api_version"),
+            provider_kind=transfer_metrics.get("provider_kind"),
+            provider_model_name=transfer_metrics.get("model_name"),
+            actual_clean_dtype=postprocess_report.get("clean_dtype"),
+            actual_clean_device=postprocess_report.get("clean_device"),
             guidance_mode=(
                 binding.guidance.mode
                 if binding.guidance is not None
