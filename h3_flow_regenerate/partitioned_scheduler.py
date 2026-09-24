@@ -967,8 +967,6 @@ def _apply_partitioned_suffix_dc_bridge(
     return mapped_state, corrected_clean, bridge_metrics
 
 
-
-
 def _prepare_registered_guidance_reference(
     *,
     run: Any,
@@ -998,9 +996,7 @@ def _prepare_registered_guidance_reference(
                 "status": "rejected",
                 "reason": "unsupported_sampler_contract",
                 "sampler": sampler,
-                "supported_samplers": tuple(
-                    sorted(FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS)
-                ),
+                "supported_samplers": tuple(sorted(FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS)),
             },
             "unsupported_sampler_contract",
         )
@@ -2286,6 +2282,7 @@ def run_partitioned_progressive(
 
         clean_video_postprocess = None
         if config.frame_gauge_repair:
+
             def clean_video_postprocess(learned_clean):
                 nonlocal pending_registered_reference
                 nonlocal frame_gauge_witnesses
@@ -2359,9 +2356,7 @@ def run_partitioned_progressive(
             device=target_video.device,
             dtype=target_video.dtype,
         )
-        frame_gauge_accepted = (
-            frame_gauge_transaction.get("result") == "accepted"
-        )
+        frame_gauge_accepted = frame_gauge_transaction.get("result") == "accepted"
         splice_started = time.perf_counter()
         aligned_witness = None
         if frame_gauge_accepted:
@@ -2405,9 +2400,7 @@ def run_partitioned_progressive(
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery=splice_recovery,
-            splice_clean_source=(
-                "actual_provider" if frame_gauge_accepted else "inverse_recovered"
-            ),
+            splice_clean_source=("actual_provider" if frame_gauge_accepted else "inverse_recovered"),
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
 
