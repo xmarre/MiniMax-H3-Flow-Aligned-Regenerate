@@ -213,9 +213,7 @@ def partitioned_outer_wrapper(
 
     outer_started = time.perf_counter()
     if binding.registered_guidance_reference is not None:
-        raise RuntimeError(
-            "stale or nested partitioned frame-gauge guidance context is unsupported"
-        )
+        raise RuntimeError("stale or nested partitioned frame-gauge guidance context is unsupported")
     binding.guidance_state.reset()
     binding.active_guidance_run = None
     binding.registered_guidance_reference = None
