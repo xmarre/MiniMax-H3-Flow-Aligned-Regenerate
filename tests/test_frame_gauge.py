@@ -254,6 +254,7 @@ def test_translation_preserves_supported_dtype_and_bounded_batch_equivalence(dty
     assert torch.allclose(one.video.float(), four.video.float(), atol=tolerance, rtol=tolerance)
     assert torch.isfinite(one.video).all()
 
+
 def test_registration_rejects_repeated_stripes_with_multiple_equal_solutions():
     x = torch.arange(26, dtype=torch.float32)
     stripe = torch.cos(torch.pi * x).view(1, 1, 1, 1, 26)
