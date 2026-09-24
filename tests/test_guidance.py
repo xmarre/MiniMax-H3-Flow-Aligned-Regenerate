@@ -6,6 +6,8 @@ from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import (
     GuidanceConfig,
     GuidanceState,
+    RegisteredGuidanceReference,
+    _build_temporal_correspondence,
     _local_correspondence,
     apply_guidance,
     conditional_renoise_alignment,
@@ -519,7 +521,6 @@ def test_temporal_min_margin_is_a_hard_rejection_threshold():
     assert state.last_temporal_confidence_mean == pytest.approx(0.0)
     assert state.last_temporal_rms_ratio == pytest.approx(0.0)
 
-
 def test_temporal_cache_keys_resolved_clamped_reference_coordinate():
     torch.manual_seed(16)
     reference = torch.randn(1, 24, 3, 8, 8)
@@ -572,3 +573,211 @@ def test_temporal_correspondence_handles_single_spatial_candidate():
     assert torch.isfinite(similarity).all()
     assert torch.isinf(margin).all()
     assert torch.all(confidence > 0)
+
+
+def test_registered_direction_guidance_uses_target_reference_and_preserves_prefix():
+    video = torch.ones(1, 24, 4, 8, 8)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    registered_video = torch.ones_like(video)
+    registered_video[:, :, 2:] = 2.0
+    reference = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=torch.ones(8, 8, dtype=torch.bool),
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.5,
+        dy=-0.25,
+        cache_key="registered-direction",
+        temporal_search_radius=3,
+    )
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction",
+        direction_weight=1.0,
+        cutoff=1.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.1,
+        config=config,
+        state=state,
+        registered_reference=reference,
+    )
+
+    assert torch.equal(result[:, :, :2], video[:, :, :2])
+    assert torch.allclose(result[:, :, 2:], torch.full_like(result[:, :, 2:], 2.0))
+    assert state.last_registered_reference_used is True
+    assert state.last_temporal_reference_clamped is False
+
+
+def test_registered_temporal_correspondence_excludes_prefix_and_crossing_pairs():
+    torch.manual_seed(120)
+    frame = torch.randn(1, 24, 1, 8, 8)
+    reference = frame.repeat(1, 1, 4, 1, 1)
+    validity = torch.ones(8, 8, dtype=torch.bool)
+    validity[0] = False
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=1,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.001,
+        temporal_cycle_tolerance=0.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    correspondence = _build_temporal_correspondence(
+        reference,
+        coordinate=0.2,
+        config=config,
+        prefix_t=2,
+        validity=validity,
+        search_radius=1,
+        cache_key="registered-temporal",
+    )
+
+    assert correspondence is not None
+    assert torch.count_nonzero(correspondence.backward_confidence[:, :2]) == 0
+    assert torch.count_nonzero(correspondence.forward_confidence[:, :2]) == 0
+    assert torch.count_nonzero(correspondence.backward_confidence[:, 2:]) > 0
+    assert torch.count_nonzero(correspondence.forward_confidence[:, 2:]) > 0
+    assert torch.count_nonzero(correspondence.backward_confidence[..., 0, :]) == 0
+    assert correspondence.cache_key == "registered-temporal"
+
+
+def test_registered_temporal_reference_cache_is_target_grid_and_endpoint_scoped():
+    torch.manual_seed(121)
+    frame = torch.randn(1, 24, 1, 8, 8)
+    video = frame.repeat(1, 1, 4, 1, 1)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    reference = RegisteredGuidanceReference(
+        video=video.clone(),
+        validity=torch.ones(8, 8, dtype=torch.bool),
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.0,
+        dy=0.0,
+        cache_key="stable-target-cache",
+        temporal_search_radius=1,
+    )
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0,
+        temporal_weight=0.2,
+        temporal_search_radius=4,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.001,
+        temporal_cycle_tolerance=0.0,
+        max_correction_rms_ratio=10.0,
+    )
+
+    apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.15,
+        config=config,
+        state=state,
+        registered_reference=reference,
+    )
+    cached = state.temporal_cache
+    assert cached is not None
+    assert state.last_temporal_cache_hit is False
+    assert state.last_temporal_search_radius == 1
+    assert state.last_temporal_cross_prefix_pairs_disabled == 2
+
+    apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.1,
+        config=config,
+        state=state,
+        registered_reference=reference,
+    )
+    assert state.temporal_cache is cached
+    assert state.last_temporal_cache_hit is True
+
+
+def test_registered_reference_rejects_out_of_support_and_unsupported_operator():
+    video = torch.ones(1, 24, 4, 8, 8)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    reference = RegisteredGuidanceReference(
+        video=video.clone(),
+        validity=torch.ones(8, 8, dtype=torch.bool),
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.0,
+        dy=0.0,
+        cache_key="registered",
+        temporal_search_radius=1,
+    )
+
+    with pytest.raises(RuntimeError, match="above the registered"):
+        apply_guidance(
+            video,
+            run=trajectory,
+            coordinate=0.3,
+            config=GuidanceConfig(mode="direction"),
+            state=GuidanceState(),
+            registered_reference=reference,
+        )
+
+    with pytest.raises(RuntimeError, match="downsample_consistency"):
+        apply_guidance(
+            video,
+            run=trajectory,
+            coordinate=0.1,
+            config=GuidanceConfig(mode="downsample_consistency"),
+            state=GuidanceState(),
+            registered_reference=reference,
+        )
+
+
+def test_registered_temporal_guidance_with_one_suffix_frame_uses_direction_only():
+    torch.manual_seed(122)
+    video = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    registered_video = video.clone()
+    registered_video[:, :, 2] += 0.25
+    reference = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=torch.ones(8, 8, dtype=torch.bool),
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.0,
+        dy=0.0,
+        cache_key="one-suffix",
+        temporal_search_radius=1,
+    )
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.2,
+        temporal_weight=0.5,
+        temporal_search_radius=1,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.1,
+        config=config,
+        state=state,
+        registered_reference=reference,
+    )
+
+    assert torch.equal(result[:, :, :2], video[:, :, :2])
+    assert not torch.equal(result[:, :, 2:], video[:, :, 2:])
+    assert state.temporal_cache is not None
+    assert state.last_temporal_valid_fraction == pytest.approx(0.0)
+    assert state.last_temporal_rms_ratio == pytest.approx(0.0)
+

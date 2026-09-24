@@ -1,8 +1,11 @@
 import pytest
 import torch
 
+from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import (
+    CleanVideoPostprocessResult,
     ProgressiveHandoffConfig,
     ProgressiveTargetInputConfig,
     build_handoff_state,
@@ -144,6 +147,131 @@ def test_learned_handoff_uses_exact_probe_video_once_and_preserves_audio():
         torch.zeros(1, 24, 2, 7, 6),
     ],
 )
+def test_learned_clean_postprocess_runs_before_renoise_without_extra_rng_or_audio_work():
+    source_video = torch.full((1, 24, 2, 4, 4), -3.0)
+    exact_x0_video = torch.full_like(source_video, 2.0)
+    audio = torch.randn(1, 32, 2, 7)
+    state, shapes = pack_streams((source_video, audio))
+    x0, _ = pack_streams((exact_x0_video, torch.zeros_like(audio)))
+    provider = FakeLearnedProvider()
+    hook_calls = []
+    report = {}
+
+    def postprocess(clean):
+        hook_calls.append(clean.clone())
+        corrected = clean.clone()
+        corrected[:, :, 1:] += 1.25
+        return CleanVideoPostprocessResult(
+            clean_video=corrected,
+            protected_prefix_t=1,
+            metadata={"decision": "accepted"},
+        )
+
+    rng_before = torch.random.get_rng_state().clone()
+    target, target_shapes = build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=123,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        transfer_metrics=report,
+        clean_video_postprocess=postprocess,
+    )
+    rng_after = torch.random.get_rng_state()
+
+    target_video, target_audio = unpack_streams(target, target_shapes)
+    expected_clean = torch.full_like(target_video, 5.0)
+    expected_clean[:, :, 1:] += 1.25
+    expected_noise = deterministic_video_noise(
+        tuple(target_video.shape),
+        seed=123,
+        device=target_video.device,
+        dtype=target_video.dtype,
+    )
+    expected = 0.6 * expected_clean + 0.4 * expected_noise
+
+    assert len(provider.calls) == 1
+    assert len(hook_calls) == 1
+    assert torch.equal(hook_calls[0], torch.full_like(hook_calls[0], 5.0))
+    assert torch.allclose(target_video, expected)
+    assert torch.equal(target_audio, audio)
+    assert torch.equal(rng_before, rng_after)
+    assert report["clean_video_postprocess"]["enabled"] is True
+    assert report["clean_video_postprocess"]["decision"] == "accepted"
+
+
+def test_unchanged_clean_postprocess_is_byte_exact_with_hook_off_baseline():
+    state, x0, shapes, _, _ = packed()
+    provider = FakeLearnedProvider()
+
+    baseline, baseline_shapes = build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=321,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+    )
+
+    def unchanged(clean):
+        return CleanVideoPostprocessResult(
+            clean_video=clean,
+            protected_prefix_t=1,
+            metadata={"decision": "identity"},
+        )
+
+    candidate, candidate_shapes = build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=321,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        clean_video_postprocess=unchanged,
+    )
+
+    assert candidate_shapes == baseline_shapes
+    assert torch.equal(candidate, baseline)
+    assert len(provider.calls) == 2
+
+
+def test_clean_postprocess_cannot_claim_or_mutate_learned_prefix():
+    state, x0, shapes, _, _ = packed()
+    provider = FakeLearnedProvider()
+
+    def bad(clean):
+        corrected = clean.clone()
+        corrected[:, :, 0] += 1.0
+        return CleanVideoPostprocessResult(
+            clean_video=corrected,
+            protected_prefix_t=1,
+        )
+
+    with pytest.raises(RuntimeError, match="prefix ownership"):
+        build_handoff_state(
+            source_packed_state=state,
+            source_x0_packed=x0,
+            source_shapes=shapes,
+            sigma=0.4,
+            target_h=8,
+            target_w=6,
+            seed=123,
+            transfer_mode="learned_3d",
+            learned_upscaler=provider,
+            clean_video_postprocess=bad,
+        )
+
+
 def test_learned_handoff_rejects_wrong_provider_geometry(output):
     state, x0, shapes, _, _ = packed()
     with pytest.raises(RuntimeError, match="returned shape"):
@@ -263,6 +391,28 @@ def test_default_scale_maps_motivating_grid_without_odd_padding():
     assert config.resolve_target(40, 54) == (48, 64)
 
 
+def test_frame_gauge_repair_config_is_explicit_boolean_default_off():
+    config = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+    )
+    assert config.frame_gauge_repair is False
+
+    enabled = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=4,
+        frame_gauge_repair=True,
+    )
+    assert enabled.frame_gauge_repair is True
+
+    with pytest.raises(TypeError, match="frame_gauge_repair must be boolean"):
+        ProgressiveTargetInputConfig(
+            source_latent_h=4,
+            source_latent_w=4,
+            frame_gauge_repair=1,
+        )
+
+
 def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
     provider = FakeLearnedProvider()
     with pytest.raises(ValueError, match="requires mixed-grid Continuum"):
@@ -290,3 +440,62 @@ def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
             exact_prefix_mode="mixed_grid_low_suffix",
             suffix_geometric_bridge=1,
         )
+
+
+@pytest.mark.parametrize("sigma", [1e-6, 0.45, 0.999])
+def test_clean_translation_maps_through_conditional_renoise_without_warping_noise(sigma):
+    torch.manual_seed(404)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+        batch_frames=2,
+    ).video
+    baseline_state = conditional_renoise_target(
+        learned,
+        sigma=sigma,
+        noise=noise,
+    )
+    mapped = baseline_state.clone()
+    mapped[:, :, 2:] += (1.0 - sigma) * (
+        aligned[:, :, 2:] - learned[:, :, 2:]
+    )
+    direct = conditional_renoise_target(
+        aligned,
+        sigma=sigma,
+        noise=noise,
+    )
+
+    assert torch.allclose(mapped, direct, rtol=1e-12, atol=1e-12)
+    assert torch.equal(mapped[:, :, :2], baseline_state[:, :, :2])
+
+
+def test_warping_conditional_state_changes_the_handoff_noise_realization():
+    torch.manual_seed(405)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    sigma = 0.45
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+    correct = conditional_renoise_target(aligned, sigma=sigma, noise=noise)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    warped_state = translate_video_cells(
+        state,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+
+    assert not torch.allclose(
+        warped_state[:, :, 2:],
+        correct[:, :, 2:],
+        rtol=1e-10,
+        atol=1e-10,
+    )
