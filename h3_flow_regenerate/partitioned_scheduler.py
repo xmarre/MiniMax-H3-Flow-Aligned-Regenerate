@@ -63,6 +63,7 @@ from .partitioned_diagnostics import (
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
+from .provenance import effective_seed, tensor_provenance
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStageRuntime,
@@ -1259,6 +1260,21 @@ def run_partitioned_progressive(
     )
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+    root_seed = int(seed or 0)
+    source_noise_seed = root_seed + int(config.source_noise_offset)
+    handoff_noise_seed = root_seed + int(config.seed_offset)
+    binding.metrics.event(
+        "flow_provenance_seed",
+        phase="partitioned_continuation",
+        seed=root_seed,
+        source_noise_seed_raw=source_noise_seed,
+        source_noise_seed_effective=effective_seed(source_noise_seed),
+        handoff_noise_seed_raw=handoff_noise_seed,
+        handoff_noise_seed_effective=effective_seed(handoff_noise_seed),
+        target_video_noise=tensor_provenance(target_video_noise),
+        source_video_noise=tensor_provenance(source_video_noise),
+        low_latent_image_before_prefix=tensor_provenance(low_latent_image),
+    )
     low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
     physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
         stage_plan.prefix.to(low_video),
@@ -1274,6 +1290,12 @@ def run_partitioned_progressive(
     low_video = low_video.clone()
     low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
     low_latent_image = pack_streams((low_video, low_audio))[0]
+    binding.metrics.event(
+        "flow_provenance_partitioned_prefix",
+        exact_target_prefix=tensor_provenance(stage_plan.prefix),
+        physical_source_prefix=tensor_provenance(physical_prefix_source),
+        low_latent_image_after_prefix=tensor_provenance(low_latent_image),
+    )
     binding.metrics.event(
         "partitioned_prefix_source_resample",
         policy="h3_physical_patch_lattice_v1",
@@ -2002,6 +2024,19 @@ def run_partitioned_progressive(
         del corrected_clean, learned_clean
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
+        binding.metrics.event(
+            "flow_provenance_handoff",
+            phase="partitioned_continuation",
+            seed=int(seed or 0),
+            handoff_noise_seed_effective=effective_seed(int(seed or 0) + int(config.seed_offset)),
+            source_raw=tensor_provenance(source_raw),
+            source_x0=tensor_provenance(source_x0),
+            learned_input=transfer_metrics.get("learned_input_provenance"),
+            learned_output=transfer_metrics.get("learned_output_provenance"),
+            handoff_noise=transfer_metrics.get("handoff_noise_provenance"),
+            renoised_video=transfer_metrics.get("renoised_video_provenance"),
+            target_raw=tensor_provenance(target_raw),
+        )
         binding.metrics.event(
             "partitioned_transfer",
             learned_transfer_performed=True,
