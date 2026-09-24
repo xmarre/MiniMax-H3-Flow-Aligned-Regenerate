@@ -349,8 +349,44 @@ def test_partitioned_runtime_gate_rejects_candidate_position_or_av_receipt_drift
         )
 
 
+def _accepted_registration(dx=0.5, dy=-0.25):
+    return {
+        "status": "accepted",
+        "reason": "accepted",
+        "dx": dx,
+        "dy": dy,
+        "units": "target_latent_cells",
+        "invalid_fraction": 0.04,
+        "validation_ncc": 0.91,
+        "rms_improvement": 0.31,
+        "runner_margin_ratio": 0.12,
+        "last_holdout_ncc": 0.90,
+        "last_holdout_improvement": 0.29,
+        "frame_checks": [
+            {"informative": True, "supports_global": True},
+            {"informative": True, "supports_global": True},
+        ],
+        "region_checks": [
+            {"name": "upper", "informative": True, "supports_global": True, "strong_conflict": False},
+            {"name": "lower", "informative": False, "supports_global": False, "strong_conflict": False},
+            {"name": "left", "informative": True, "supports_global": True, "strong_conflict": False},
+            {"name": "right", "informative": False, "supports_global": False, "strong_conflict": False},
+        ],
+        "parity_checks": [
+            {"informative": True, "supports_global": True},
+            {"informative": False, "supports_global": False},
+        ],
+    }
+
+
 def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
     accepted = mode == "on" and result == "accepted"
+    video_registration = _accepted_registration() if accepted else {"status": result, "reason": result}
+    guidance_registration = (
+        _accepted_registration(0.375, -0.125)
+        if accepted and guidance_mode != "off"
+        else {"status": "off", "reason": "guidance_off"}
+    )
     return _event(
         "partitioned_frame_gauge",
         mode=mode,
@@ -358,6 +394,11 @@ def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
         result=result,
         spatial_warp_applied=accepted,
         authoritative_prefix_modified=False,
+        exact_prefix_sha256="9" * 64,
+        registration_domain="actual_clean_target_video" if mode == "on" else "off",
+        transform_domain="actual_clean_target_video" if accepted else "none",
+        video_registration=video_registration,
+        guidance_registration=guidance_registration,
         registered_guidance_reference=accepted and guidance_mode != "off",
         guidance_mode=guidance_mode,
         video_dx=0.5 if accepted else 0.0,
@@ -371,6 +412,22 @@ def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
         extra_vae_calls=0,
         auto_strength_validation_required=True,
     )
+
+
+def _install_frame_gauge_transfer(metrics, *, mode="off", result="off"):
+    accepted = mode == "on" and result == "accepted"
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"].update(
+        frame_gauge_repair_enabled=mode == "on",
+        frame_gauge_result=result,
+        suffix_dc_bridge_state_mapping=(
+            "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
+        ),
+        suffix_dc_bridge_policy="one_token_spatial_mean_v1",
+        suffix_dc_bridge_corrected_tokens=1,
+        splice_clean_source="actual_provider" if accepted else "inverse_recovered",
+    )
+    return metrics
 
 
 def _dora_off_report():
@@ -396,7 +453,7 @@ def _dora_off_report():
 
 
 def test_runtime_gate_verifies_frame_gauge_off_and_resolved_auto_strength_off():
-    metrics = _metrics()
+    metrics = _install_frame_gauge_transfer(_metrics())
     metrics["events"].insert(-2, _frame_gauge_event())
     report = validate_partitioned_runtime_evidence(
         metrics,
@@ -414,7 +471,7 @@ def test_runtime_gate_verifies_frame_gauge_off_and_resolved_auto_strength_off():
 
 
 def test_runtime_gate_verifies_accepted_frame_gauge_transaction_with_guidance():
-    metrics = _metrics()
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     metrics["events"].insert(
         -2,
         _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal"),
@@ -480,4 +537,45 @@ def test_runtime_gate_can_pin_auto_strength_report_identity_across_pair():
             auto_strength_reports=[changed],
             require_auto_strength_off=True,
             expected_auto_strength_digests=first.auto_strength_report_digests,
+        )
+
+
+
+def test_runtime_gate_rejects_accepted_registration_below_heldout_threshold():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted")
+    receipt["fields"]["video_registration"]["validation_ncc"] = 0.74
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="held-out NCC"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
+def test_runtime_gate_rejects_wrong_clean_domain_and_retired_residual_routing():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="accepted"))
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["splice_clean_source"] = "inverse_recovered"
+
+    with pytest.raises(RuntimeGateError, match="wrong clean-state source"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="accepted"))
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["suffix_gauge_bridge_policy"] = "retired"
+
+    with pytest.raises(RuntimeGateError, match="retired full-field"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
         )
