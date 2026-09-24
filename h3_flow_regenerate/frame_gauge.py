@@ -238,7 +238,7 @@ def _coords(
 
 def _gather_exact(value: torch.Tensor, yy: torch.Tensor, xx: torch.Tensor) -> torch.Tensor:
     flat = value.reshape(value.shape[0], value.shape[1], -1)
-    index = (yy.to(torch.int64) * value.shape[-1] + xx.to(torch.int64))
+    index = yy.to(torch.int64) * value.shape[-1] + xx.to(torch.int64)
     index = index.view(1, 1, -1).expand(value.shape[0], value.shape[1], -1)
     return torch.gather(flat, 2, index)
 
@@ -290,17 +290,10 @@ def _metrics(
 
     shifted_centered = shifted - shifted.mean(dim=-1, keepdim=True)
     target_centered = target - target.mean(dim=-1, keepdim=True)
-    denominator = (
-        shifted_centered.square().sum(dim=-1).sqrt()
-        * target_centered.square().sum(dim=-1).sqrt()
-    )
+    denominator = shifted_centered.square().sum(dim=-1).sqrt() * target_centered.square().sum(dim=-1).sqrt()
     numerator = (shifted_centered * target_centered).sum(dim=-1)
     valid = denominator > 1e-12
-    ncc = (
-        float((numerator[valid] / denominator[valid]).mean().item())
-        if bool(valid.any().item())
-        else -1.0
-    )
+    ncc = float((numerator[valid] / denominator[valid]).mean().item()) if bool(valid.any().item()) else -1.0
     return float(huber.mean().item()), rms, ncc
 
 
@@ -330,15 +323,10 @@ def _search(
         for dx in range(-policy.integer_radius, policy.integer_radius + 1)
     ]
     integer_best = min(integers, key=_candidate_key)
-    saturated = (
-        abs(integer_best[0]) == policy.integer_radius
-        or abs(integer_best[1]) == policy.integer_radius
-    )
+    saturated = abs(integer_best[0]) == policy.integer_radius or abs(integer_best[1]) == policy.integer_radius
 
     coarse = [
-        evaluate(integer_best[0] + 0.25 * ix, integer_best[1] + 0.25 * iy)
-        for iy in range(-4, 5)
-        for ix in range(-4, 5)
+        evaluate(integer_best[0] + 0.25 * ix, integer_best[1] + 0.25 * iy) for iy in range(-4, 5) for ix in range(-4, 5)
     ]
     coarse_best = min(coarse, key=_candidate_key)
     fine = [
@@ -370,12 +358,7 @@ def _check(
     best, runner, zero_loss, saturated = _search(prepared, frames, coords, policy)
     runner_loss = math.inf if runner is None else runner[2]
     margin = (runner_loss - best[2]) / max(zero_loss, 1e-8)
-    informative = (
-        not saturated
-        and zero_loss > 1e-8
-        and math.isfinite(best[2])
-        and margin >= policy.min_runner_margin
-    )
+    informative = not saturated and zero_loss > 1e-8 and math.isfinite(best[2]) and margin >= policy.min_runner_margin
     delta_x = abs(best[0] - dx)
     delta_y = abs(best[1] - dy)
     return {
@@ -385,13 +368,10 @@ def _check(
         "dy": best[1],
         "runner_margin_ratio": margin,
         "supports_global": bool(
-            informative
-            and delta_x <= policy.consistency_tolerance
-            and delta_y <= policy.consistency_tolerance
+            informative and delta_x <= policy.consistency_tolerance and delta_y <= policy.consistency_tolerance
         ),
         "strong_conflict": bool(
-            informative
-            and (delta_x > policy.conflict_tolerance or delta_y > policy.conflict_tolerance)
+            informative and (delta_x > policy.conflict_tolerance or delta_y > policy.conflict_tolerance)
         ),
     }
 
@@ -545,11 +525,7 @@ def estimate_paired_prefix_translation(
         if check.get("informative"):
             frame_estimates.append((float(check["dx"]), float(check["dy"])))
             if not check.get("supports_global"):
-                reason = (
-                    "heldout_frame_conflict"
-                    if check.get("strong_conflict")
-                    else "heldout_frame_disagreement"
-                )
+                reason = "heldout_frame_conflict" if check.get("strong_conflict") else "heldout_frame_disagreement"
                 return reject(reason, frame_checks=tuple(frame_checks))
     if len(frame_estimates) < 2:
         return reject(
@@ -565,8 +541,7 @@ def estimate_paired_prefix_translation(
         "frame_dx_range": max(dx_values) - min(dx_values),
         "frame_dy_range": max(dy_values) - min(dy_values),
         "max_frame_disagreement": max(
-            max(abs(frame_dx - dx), abs(frame_dy - dy))
-            for frame_dx, frame_dy in frame_estimates
+            max(abs(frame_dx - dx), abs(frame_dy - dy)) for frame_dx, frame_dy in frame_estimates
         ),
     }
 
@@ -599,13 +574,11 @@ def estimate_paired_prefix_translation(
 
     region_by_name = {check["name"]: check for check in region_checks}
     vertical_support = any(
-        bool(region_by_name[name].get("informative"))
-        and bool(region_by_name[name].get("supports_global"))
+        bool(region_by_name[name].get("informative")) and bool(region_by_name[name].get("supports_global"))
         for name in ("upper", "lower")
     )
     horizontal_support = any(
-        bool(region_by_name[name].get("informative"))
-        and bool(region_by_name[name].get("supports_global"))
+        bool(region_by_name[name].get("informative")) and bool(region_by_name[name].get("supports_global"))
         for name in ("left", "right")
     )
     if not vertical_support or not horizontal_support:
@@ -723,12 +696,7 @@ def translate_video_cells(
     batch, channels, _, _, _ = video.shape
     for first in range(start_frame, int(video.shape[2]), batch_frames):
         last = min(int(video.shape[2]), first + batch_frames)
-        work = (
-            video[:, :, first:last]
-            .permute(0, 2, 1, 3, 4)
-            .reshape(-1, channels, height, width)
-            .float()
-        )
+        work = video[:, :, first:last].permute(0, 2, 1, 3, 4).reshape(-1, channels, height, width).float()
         shifted = F.grid_sample(
             work,
             grid.expand(work.shape[0], -1, -1, -1),
@@ -737,9 +705,7 @@ def translate_video_cells(
             align_corners=False,
         )
         output[:, :, first:last] = (
-            shifted.reshape(batch, last - first, channels, height, width)
-            .permute(0, 2, 1, 3, 4)
-            .to(video)
+            shifted.reshape(batch, last - first, channels, height, width).permute(0, 2, 1, 3, 4).to(video)
         )
     if not bool(torch.isfinite(output).all().item()):
         raise RuntimeError("frame-gauge translation produced non-finite output")
