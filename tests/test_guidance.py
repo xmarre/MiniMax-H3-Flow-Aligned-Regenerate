@@ -521,6 +521,7 @@ def test_temporal_min_margin_is_a_hard_rejection_threshold():
     assert state.last_temporal_confidence_mean == pytest.approx(0.0)
     assert state.last_temporal_rms_ratio == pytest.approx(0.0)
 
+
 def test_temporal_cache_keys_resolved_clamped_reference_coordinate():
     torch.manual_seed(16)
     reference = torch.randn(1, 24, 3, 8, 8)
@@ -780,4 +781,3 @@ def test_registered_temporal_guidance_with_one_suffix_frame_uses_direction_only(
     assert state.temporal_cache is not None
     assert state.last_temporal_valid_fraction == pytest.approx(0.0)
     assert state.last_temporal_rms_ratio == pytest.approx(0.0)
-
