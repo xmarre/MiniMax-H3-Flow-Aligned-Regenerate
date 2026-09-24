@@ -978,6 +978,7 @@ def _prepare_registered_guidance_reference(
     prefix_t: int,
     split_coordinate: float,
     high_sigmas: torch.Tensor,
+    video_shift: float,
 ) -> tuple[RegisteredGuidanceReference | None, dict[str, Any], str | None]:
     """Register the active target-grid Flow reference without mutating its trajectory."""
 
@@ -1017,7 +1018,7 @@ def _prepare_registered_guidance_reference(
         }, "missing_exact_probe_endpoint"
 
     high_coordinates = [
-        float(normalized_coordinate(float(value), video_shift=H3_VIDEO_SHIFT))
+        float(normalized_coordinate(float(value), video_shift=video_shift))
         for value in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist()
     ]
     if any(value > float(reference_coordinate) + 1e-8 for value in high_coordinates):
@@ -1134,6 +1135,7 @@ def _frame_gauge_clean_postprocess(
     prefix_t: int,
     split_coordinate: float,
     high_sigmas: torch.Tensor,
+    video_shift: float,
 ) -> tuple[
     CleanVideoPostprocessResult,
     RegisteredGuidanceReference | None,
@@ -1181,6 +1183,7 @@ def _frame_gauge_clean_postprocess(
                 prefix_t=prefix_t,
                 split_coordinate=split_coordinate,
                 high_sigmas=high_sigmas,
+                video_shift=video_shift,
             )
         )
         transaction["guidance_registration"] = guidance_fields
