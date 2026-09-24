@@ -52,7 +52,7 @@ def _run(reference: torch.Tensor, coordinate: float) -> TrajectoryRun:
         "frame-gauge-run",
         "session",
         "chunk",
-        "res",
+        "sample_res_multistep",
         "schedule",
         geometry_from_video(reference),
         (1, 32, 2, 8),
