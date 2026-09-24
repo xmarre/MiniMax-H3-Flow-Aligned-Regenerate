@@ -989,6 +989,7 @@ def _apply_partitioned_suffix_gauge_bridge(
     )
     return mapped_state, corrected_clean, bridge_metrics
 
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
