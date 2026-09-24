@@ -551,9 +551,9 @@ def estimate_paired_prefix_translation(
             name,
         )
         region_checks.append(check)
-        if check.get("strong_conflict"):
+        if check.get("informative") and not check.get("supports_global"):
             return reject(
-                "regional_conflict",
+                "regional_conflict" if check.get("strong_conflict") else "regional_disagreement",
                 frame_checks=tuple(frame_checks),
                 region_checks=tuple(region_checks),
                 **frame_summary,
