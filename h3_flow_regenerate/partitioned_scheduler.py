@@ -1221,11 +1221,21 @@ def _frame_gauge_clean_postprocess(
         )
         return result, None, {}, transaction
 
-    aligned_witness = aligned_application.video
+    aligned_full = aligned_application.video
+    diagnostic_end = min(
+        int(learned_clean.shape[2]),
+        prefix_t + 4,
+    )
+    aligned_witness = (
+        aligned_full[:, :, :diagnostic_end]
+        .detach()
+        .clone()
+    )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
-        aligned_witness,
+        aligned_full,
         exact_prefix,
         weights=(1.0,),
+        clone_output=False,
     )
     # The shifted prefix exists only as a disposable registration/DC witness.
     # Restore the provider's original learned prefix before the clean state is
@@ -1249,9 +1259,17 @@ def _frame_gauge_clean_postprocess(
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
     )
     witnesses = {
-        "learned_native": learned_clean.detach(),
-        "paired_prefix_aligned_witness": aligned_witness.detach(),
-        "corrected_clean": corrected_clean.detach(),
+        "learned_native": (
+            learned_clean[:, :, :diagnostic_end]
+            .detach()
+            .clone()
+        ),
+        "paired_prefix_aligned_witness": aligned_witness,
+        "corrected_clean": (
+            corrected_clean[:, :, :diagnostic_end]
+            .detach()
+            .clone()
+        ),
     }
     result = CleanVideoPostprocessResult(
         clean_video=corrected_clean,
