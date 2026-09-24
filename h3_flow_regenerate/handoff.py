@@ -8,6 +8,7 @@ from typing import Any
 import torch
 
 from .geometry import normalize_target_geometry, pack_streams, unpack_streams, validate_av
+from .provenance import tensor_provenance
 from .guidance import conditional_renoise_alignment, conditional_renoise_target
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
@@ -323,6 +324,10 @@ def build_handoff_state(
             noise=noise,
         )
         report = {
+            "handoff_noise_provenance": tensor_provenance(noise),
+            "learned_input_provenance": tensor_provenance(x0_video),
+            "learned_output_provenance": tensor_provenance(learned_x0),
+            "renoised_video_provenance": tensor_provenance(target_video),
             "transfer_mode": "learned_3d",
             "provider_api_version": provider["api_version"],
             "provider_kind": provider["kind"],
