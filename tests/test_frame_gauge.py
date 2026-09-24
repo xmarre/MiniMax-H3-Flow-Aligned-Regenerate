@@ -301,3 +301,7 @@ def test_registration_rejects_when_fewer_than_eight_channels_are_informative():
 def test_sub_identity_bound_estimate_is_an_exact_noop():
     learned, exact = _analytic_pair(dx=0.03125, dy=-0.03125)
     estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.identity, estimate.telemetry()
+    assert estimate.dx == 0.0
+    assert estimate.dy == 0.0
