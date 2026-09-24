@@ -1301,12 +1301,7 @@ def _frame_gauge_clean_postprocess(
         * int(learned_clean.shape[-1])
         * 4
     )
-    translation_grid_bytes = (
-        int(learned_clean.shape[-2])
-        * int(learned_clean.shape[-1])
-        * 2
-        * 4
-    )
+    translation_grid_bytes = int(learned_clean.shape[-2]) * int(learned_clean.shape[-1]) * 2 * 4
     aligned_witness = aligned_full[:, :, :diagnostic_end].detach().clone()
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         aligned_full,
@@ -2514,11 +2509,7 @@ def run_partitioned_progressive(
             mask_classification="exact_protected_video_prefix",
             exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
             authoritative_prefix_modified=False,
-            transform_domain=(
-                "actual_provider_clean_target_video"
-                if frame_gauge_accepted
-                else "none"
-            ),
+            transform_domain=("actual_provider_clean_target_video" if frame_gauge_accepted else "none"),
             transformed_states=(
                 ["learned_suffix", "derived_guidance_suffix"]
                 if frame_gauge_accepted and pending_registered_reference is not None
@@ -2544,9 +2535,7 @@ def run_partitioned_progressive(
             auto_strength_receipt_status="unknown",
             auto_strength_resolved_off=None,
             auto_strength_validation_required=True,
-            workspace_upper_bound_bytes=frame_gauge_transaction.get(
-                "workspace_upper_bound_bytes"
-            ),
+            workspace_upper_bound_bytes=frame_gauge_transaction.get("workspace_upper_bound_bytes"),
             workspace_components=frame_gauge_transaction.get(
                 "workspace_components",
                 {},
@@ -2670,9 +2659,7 @@ def run_partitioned_progressive(
             original_video_noise[:, :, : stage_plan.prefix_t].to(merged_video_noise),
         )
         if not protected_video_noise_exact:
-            raise RuntimeError(
-                "partitioned handoff changed caller-owned protected video noise"
-            )
+            raise RuntimeError("partitioned handoff changed caller-owned protected video noise")
         binding.metrics.event(
             "handoff_transfer_wall",
             elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0,
@@ -2836,12 +2823,9 @@ def run_partitioned_progressive(
             protected_audio = audio_mask == 0
             if not bool(protected_audio.any().item()):
                 raise RuntimeError("source-carrier audio-position candidate found no protected carried-audio prefix")
-            audio_exact = (
-                final_audio.dtype == original_audio.dtype
-                and torch.equal(
-                    final_audio[protected_audio],
-                    original_audio.to(device=final_audio.device)[protected_audio],
-                )
+            audio_exact = final_audio.dtype == original_audio.dtype and torch.equal(
+                final_audio[protected_audio],
+                original_audio.to(device=final_audio.device)[protected_audio],
             )
             if not audio_exact:
                 raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
