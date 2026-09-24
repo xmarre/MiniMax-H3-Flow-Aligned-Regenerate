@@ -189,8 +189,30 @@ def _coords(
     parity: tuple[int, int] | None = None,
     min_axis: int = 8,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    ys = prepared.ys
-    xs = prepared.xs
+    if parity is None:
+        ys = prepared.ys
+        xs = prepared.xs
+    else:
+        # The primary bounded support may use an even stride on large grids.
+        # Construct each parity support independently so all four H3 latent
+        # phases remain testable rather than inheriting one sampled parity.
+        py, px = parity
+        margin = int(prepared.ys[0].item())
+        parity_stride = max(2, 2 * int(prepared.stride))
+        y_start = margin + ((int(py) - margin) % 2)
+        x_start = margin + ((int(px) - margin) % 2)
+        ys = torch.arange(
+            y_start,
+            prepared.height - margin,
+            parity_stride,
+            dtype=torch.int64,
+        )
+        xs = torch.arange(
+            x_start,
+            prepared.width - margin,
+            parity_stride,
+            dtype=torch.int64,
+        )
     if region is not None:
         y0, y1, x0, x1 = region
         ys = ys[(ys >= y0) & (ys < y1)]
@@ -198,16 +220,7 @@ def _coords(
     if ys.numel() < min_axis or xs.numel() < min_axis:
         return None
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    yy = yy.reshape(-1)
-    xx = xx.reshape(-1)
-    if parity is not None:
-        py, px = parity
-        keep = (yy.remainder(2) == py) & (xx.remainder(2) == px)
-        yy = yy[keep]
-        xx = xx[keep]
-        if yy.numel() < 64:
-            return None
-    return yy.to(torch.float64), xx.to(torch.float64)
+    return yy.reshape(-1).to(torch.float64), xx.reshape(-1).to(torch.float64)
 
 
 def _gather_exact(value: torch.Tensor, yy: torch.Tensor, xx: torch.Tensor) -> torch.Tensor:
@@ -557,18 +570,27 @@ def estimate_paired_prefix_translation(
                 region_checks=tuple(region_checks),
                 **frame_summary,
             )
-        if not check.get("supports_global"):
-            reason = (
-                "regional_disagreement"
-                if check.get("informative")
-                else "insufficient_regional_support"
-            )
-            return reject(
-                reason,
-                frame_checks=tuple(frame_checks),
-                region_checks=tuple(region_checks),
-                **frame_summary,
-            )
+
+    region_by_name = {check["name"]: check for check in region_checks}
+    vertical_support = any(
+        bool(region_by_name[name].get("informative"))
+        and bool(region_by_name[name].get("supports_global"))
+        for name in ("upper", "lower")
+    )
+    horizontal_support = any(
+        bool(region_by_name[name].get("informative"))
+        and bool(region_by_name[name].get("supports_global"))
+        for name in ("left", "right")
+    )
+    if not vertical_support or not horizontal_support:
+        return reject(
+            "insufficient_regional_support",
+            frame_checks=tuple(frame_checks),
+            region_checks=tuple(region_checks),
+            vertical_support=vertical_support,
+            horizontal_support=horizontal_support,
+            **frame_summary,
+        )
 
     parity_checks = []
     for parity_y in (0, 1):
