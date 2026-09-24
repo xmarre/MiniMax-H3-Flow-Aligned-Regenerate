@@ -291,6 +291,16 @@ def _validate_frame_gauge(
         receipt.get("authoritative_prefix_modified") is False,
         "frame-gauge transaction altered exact-prefix ownership",
     )
+    handoff_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "handoff_transfer_wall"
+    ]
+    _require(
+        bool(handoff_receipts)
+        and handoff_receipts[-1].get("protected_video_noise_exact") is True,
+        "frame-gauge evidence does not prove protected video-noise ownership",
+    )
     _require(receipt.get("extra_h3_nfe") == 0, "frame-gauge transaction added H3 NFE")
     _require(receipt.get("extra_sampler_lifetimes") == 0, "frame-gauge transaction added a sampler lifetime")
     _require(receipt.get("extra_history_boundaries") == 0, "frame-gauge transaction added a history boundary")
