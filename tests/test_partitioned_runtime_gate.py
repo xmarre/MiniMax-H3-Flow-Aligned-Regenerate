@@ -420,9 +420,7 @@ def _install_frame_gauge_transfer(metrics, *, mode="off", result="off"):
     transfer["fields"].update(
         frame_gauge_repair_enabled=mode == "on",
         frame_gauge_result=result,
-        suffix_dc_bridge_state_mapping=(
-            "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
-        ),
+        suffix_dc_bridge_state_mapping=("pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"),
         suffix_dc_bridge_policy="one_token_spatial_mean_v1",
         suffix_dc_bridge_corrected_tokens=1,
         splice_clean_source="actual_provider" if accepted else "inverse_recovered",
