@@ -1001,13 +1001,14 @@ def _prepare_registered_guidance_reference(
             "unsupported_sampler_contract",
         )
 
+    coordinate_tolerance = 1e-7
     exact_probe = any(
         sample.phase == "handoff_probe"
         and math.isclose(
             float(sample.coordinate),
             float(split_coordinate),
             rel_tol=0.0,
-            abs_tol=1e-8,
+            abs_tol=coordinate_tolerance,
         )
         for sample in run.exact_samples()
     )
@@ -1040,7 +1041,7 @@ def _prepare_registered_guidance_reference(
         float(normalized_coordinate(float(value), video_shift=video_shift))
         for value in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist()
     ]
-    if any(value > float(reference_coordinate) + 1e-8 for value in high_coordinates):
+    if any(value > float(reference_coordinate) + coordinate_tolerance for value in high_coordinates):
         return (
             None,
             {
@@ -1060,7 +1061,7 @@ def _prepare_registered_guidance_reference(
             value,
             float(reference_coordinate),
             rel_tol=0.0,
-            abs_tol=1e-8,
+            abs_tol=coordinate_tolerance,
         )
         for value in resolved_high_coordinates
     ):
