@@ -234,11 +234,27 @@ def _conditioning_tensor_provenance(guider: Any) -> list[dict[str, Any]]:
     return _nested_tensor_provenance(original, path="original_conds")
 
 
-def _trajectory_sample_provenance(run: Any) -> list[dict[str, Any]]:
-    """Return bounded receipts for the captured Flow guidance anchors."""
+def _trajectory_sample_provenance(
+    run: Any,
+    *,
+    max_samples: int = 8,
+) -> list[dict[str, Any]]:
+    """Return a bounded representative set of captured Flow guidance anchors."""
     if run is None:
         return []
     samples = getattr(run, "samples", ()) or ()
+    sample_count = len(samples)
+    max_samples = int(max_samples)
+    if max_samples < 1:
+        raise ValueError("trajectory provenance max_samples must be positive")
+    if sample_count <= max_samples:
+        selected = samples
+    elif max_samples == 1:
+        selected = (samples[0],)
+    else:
+        last = sample_count - 1
+        indices = tuple((index * last) // (max_samples - 1) for index in range(max_samples))
+        selected = tuple(samples[index] for index in indices)
     return [
         {
             "coordinate": float(sample.coordinate),
@@ -250,7 +266,7 @@ def _trajectory_sample_provenance(run: Any) -> list[dict[str, Any]]:
             "provenance": str(sample.provenance),
             "video_x0_signature": _bounded_tensor_provenance(sample.video_x0),
         }
-        for sample in samples
+        for sample in selected
     ]
 
 
@@ -1479,6 +1495,13 @@ def _run_progressive(
         low_noise = noise
         low_latent_image = latent_image
         low_mask = denoise_mask
+    original_conditioning_signature = _conditioning_signature(guider)
+    original_conditioning_tensor_receipts = _conditioning_tensor_provenance(guider)
+    conditioning_template_signature = _conditioning_signature_from_original(conditioning_template)
+    conditioning_template_tensor_receipts = _nested_tensor_provenance(
+        conditioning_template,
+        path="conditioning_template",
+    )
     provenance_seed = int(seed or 0)
     provenance_session_id, provenance_chunk_id = _interop_identity(model_options)
     binding.metrics.event(
@@ -1502,8 +1525,12 @@ def _run_progressive(
         handoff_noise_seed_effective=(provenance_seed + int(config.seed_offset)) & ((1 << 63) - 1),
         sampler=sampler_name(sampler),
         sigma_schedule_signature=_schedule_signature(sigmas),
-        conditioning_signature=_conditioning_signature(guider),
-        conditioning_tensor_receipts=_conditioning_tensor_provenance(guider),
+        conditioning_signature=original_conditioning_signature,
+        conditioning_tensor_receipts=original_conditioning_tensor_receipts,
+        original_conditioning_signature=original_conditioning_signature,
+        original_conditioning_tensor_receipts=original_conditioning_tensor_receipts,
+        conditioning_template_signature=conditioning_template_signature,
+        conditioning_template_tensor_receipts=conditioning_template_tensor_receipts,
         caller_noise_signature=_bounded_tensor_provenance(noise),
         caller_latent_signature=_bounded_tensor_provenance(latent_image),
         caller_mask_signature=_bounded_tensor_provenance(denoise_mask),
@@ -1569,6 +1596,11 @@ def _run_progressive(
             template=conditioning_template,
             target_video_hw=(source_h, source_w) if target_input and not mixed else None,
         )
+        low_conditioning_signature = _conditioning_signature_from_original(guider.conds)
+        low_conditioning_tensor_receipts = _nested_tensor_provenance(
+            guider.conds,
+            path="effective_low_conds",
+        )
         low_started = time.perf_counter()
         try:
             sampler_invocation_count += 1
@@ -1602,6 +1634,11 @@ def _run_progressive(
                 guider,
                 template=conditioning_template,
                 target_video_hw=(source_h, source_w) if target_input and not mixed else None,
+            )
+            probe_conditioning_signature = _conditioning_signature_from_original(guider.conds)
+            probe_conditioning_tensor_receipts = _nested_tensor_provenance(
+                guider.conds,
+                path="effective_probe_conds",
             )
             # The probe is a one-call sampler lifetime, but model-level patches such
             # as DiffAid must still see the full H3 sigma reference. The explicit
@@ -1659,6 +1696,10 @@ def _run_progressive(
             ),
             captured_sample_count=(len(committed_low_run.samples) if committed_low_run is not None else 0),
             captured_samples=_trajectory_sample_provenance(committed_low_run),
+            low_conditioning_signature=low_conditioning_signature,
+            low_conditioning_tensor_receipts=low_conditioning_tensor_receipts,
+            probe_conditioning_signature=probe_conditioning_signature,
+            probe_conditioning_tensor_receipts=probe_conditioning_tensor_receipts,
             extra_h3_nfe=0,
             extra_sampler_lifetimes=0,
             extra_upscaler_calls=0,
@@ -1865,6 +1906,17 @@ def _run_progressive(
             binding.active_guidance_run = run
             guidance_run = run
 
+        _reset_guider_conds(
+            guider,
+            template=conditioning_template,
+            target_video_hw=None if target_input else (target_h, target_w),
+        )
+        high_conditioning_signature = _conditioning_signature_from_original(guider.conds)
+        high_conditioning_tensor_receipts = _nested_tensor_provenance(
+            guider.conds,
+            path="effective_high_conds",
+        )
+
         binding.metrics.event(
             "progressive_state_provenance",
             schema=1,
@@ -1881,6 +1933,8 @@ def _run_progressive(
             guidance_conditioning_signature=(guidance_run.conditioning_signature if guidance_run is not None else None),
             guidance_sample_count=(len(guidance_run.samples) if guidance_run is not None else 0),
             guidance_samples=_trajectory_sample_provenance(guidance_run),
+            high_conditioning_signature=high_conditioning_signature,
+            high_conditioning_tensor_receipts=high_conditioning_tensor_receipts,
             transfer_mode=str(config.transfer_mode),
             target_video_shape=tuple(int(value) for value in target_shapes[0]),
             extra_h3_nfe=0,
@@ -1897,11 +1951,6 @@ def _run_progressive(
 
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
-        _reset_guider_conds(
-            guider,
-            template=conditioning_template,
-            target_video_hw=None if target_input else (target_h, target_w),
-        )
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
