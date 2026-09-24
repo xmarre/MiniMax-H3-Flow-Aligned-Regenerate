@@ -5,6 +5,7 @@ import torch
 
 from h3_flow_regenerate.geometry import (
     geometry_from_video,
+    _h3_patch_resample_grid,
     h3_refine_scale_target_canvas,
     normalize_target_geometry,
     pack_streams,
@@ -149,3 +150,48 @@ def test_resize_is_spatial_only():
     source = video(40, 54, t=5)
     resized = resize_video(source, 48, 64)
     assert resized.shape == (1, 24, 5, 48, 64)
+
+def test_h3_patch_resample_grid_matches_area_normalized_coordinate_formula():
+    source_grid = (20, 26)
+    target_grid = (28, 37)
+    grid = _h3_patch_resample_grid(
+        source_grid,
+        target_grid,
+        device=torch.device("cpu"),
+    )[0]
+
+    source_y = _h3_patch_axis(*source_grid, 0)
+    source_x = _h3_patch_axis(*source_grid, 1)
+    target_y = _h3_patch_axis(*target_grid, 0)
+    target_x = _h3_patch_axis(*target_grid, 1)
+    expected_y = 2.0 * (
+        (target_y - source_y[0]) / (source_y[1] - source_y[0])
+    ) / (source_grid[0] - 1) - 1.0
+    expected_x = 2.0 * (
+        (target_x - source_x[0]) / (source_x[1] - source_x[0])
+    ) / (source_grid[1] - 1) - 1.0
+
+    assert torch.allclose(grid[:, 0, 1], expected_y, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(grid[0, :, 0], expected_x, atol=1e-6, rtol=1e-6)
+
+    physical_scale = math.sqrt(
+        (target_grid[0] * target_grid[1])
+        / (source_grid[0] * source_grid[1])
+    )
+    assert physical_scale != pytest.approx(56 / 40)
+    assert physical_scale != pytest.approx(74 / 52)
+
+
+def test_h3_patch_lattice_resize_handles_singleton_source_patch_axis():
+    source = torch.randn(1, 2, 2, 2, 12)
+    mapped = resize_spatial_5d_h3_patch_lattice(source, 4, 16)
+    assert mapped.shape == (1, 2, 2, 4, 16)
+    assert torch.isfinite(mapped).all()
+
+
+@pytest.mark.parametrize(("height", "width"), [(41, 52), (40, 53)])
+def test_h3_patch_lattice_resize_rejects_odd_geometry(height, width):
+    source = torch.randn(1, 2, 2, 40, 52)
+    with pytest.raises(ValueError, match="patch-safe"):
+        resize_spatial_5d_h3_patch_lattice(source, height, width)
+
