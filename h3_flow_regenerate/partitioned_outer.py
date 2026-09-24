@@ -212,8 +212,13 @@ def partitioned_outer_wrapper(
         context_installed = True
 
     outer_started = time.perf_counter()
+    if binding.registered_guidance_reference is not None:
+        raise RuntimeError(
+            "stale or nested partitioned frame-gauge guidance context is unsupported"
+        )
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+    binding.registered_guidance_reference = None
     error = None
     fallback_reason = None
     result = None
@@ -248,6 +253,7 @@ def partitioned_outer_wrapper(
             transformer_options.pop(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY, None)
         binding.guidance_state.reset()
         binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
         if fallback_reason is None:
             binding.metrics.event(
                 "sampler_wall",
