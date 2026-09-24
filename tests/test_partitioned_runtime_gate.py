@@ -343,3 +343,137 @@ def test_partitioned_runtime_gate_rejects_candidate_position_or_av_receipt_drift
             _log(),
             expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
         )
+
+def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
+    accepted = mode == "on" and result == "accepted"
+    return _event(
+        "partitioned_frame_gauge",
+        mode=mode,
+        enabled=mode == "on",
+        result=result,
+        spatial_warp_applied=accepted,
+        authoritative_prefix_modified=False,
+        registered_guidance_reference=accepted and guidance_mode != "off",
+        guidance_mode=guidance_mode,
+        video_dx=0.5 if accepted else 0.0,
+        video_dy=-0.25 if accepted else 0.0,
+        guidance_dx=0.375 if accepted and guidance_mode != "off" else 0.0,
+        guidance_dy=-0.125 if accepted and guidance_mode != "off" else 0.0,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+        auto_strength_validation_required=True,
+    )
+
+
+def _dora_off_report():
+    return {
+        "schema": 1,
+        "kind": "dora_power_lora_auto_strength_stack_report",
+        "auto_strength_enabled": False,
+        "auto_strength_device": "gpu",
+        "ratio_floor": 0.3,
+        "ratio_ceiling": 1.5,
+        "rows": [
+            {
+                "row_index": 0,
+                "enabled": True,
+                "lora_name": "example.safetensors",
+                "strength_model": 1.0,
+                "strength_clip": 1.0,
+                "status": "applied_without_auto_strength",
+                "report": None,
+            }
+        ],
+    }
+
+
+def test_runtime_gate_verifies_frame_gauge_off_and_resolved_auto_strength_off():
+    metrics = _metrics()
+    metrics["events"].insert(-2, _frame_gauge_event())
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="off",
+        auto_strength_reports=[_dora_off_report()],
+        require_auto_strength_off=True,
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_mode == "off"
+    assert report.frame_gauge_result == "off"
+    assert report.auto_strength_verified_off is True
+    assert len(report.auto_strength_report_digests) == 1
+
+
+def test_runtime_gate_verifies_accepted_frame_gauge_transaction_with_guidance():
+    metrics = _metrics()
+    metrics["events"].insert(
+        -2,
+        _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal"),
+    )
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-accepted",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "accepted"
+    assert report.frame_gauge_video_dx == pytest.approx(0.5)
+    assert report.frame_gauge_guidance_dx == pytest.approx(0.375)
+
+
+def test_runtime_gate_rejects_missing_or_enabled_auto_strength_evidence():
+    metrics = _metrics()
+    metrics["events"].insert(-2, _frame_gauge_event())
+
+    with pytest.raises(RuntimeGateError, match="at least one resolved"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="off",
+            require_auto_strength_off=True,
+        )
+
+    enabled = _dora_off_report()
+    enabled["auto_strength_enabled"] = True
+    with pytest.raises(RuntimeGateError, match="resolved OFF"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            auto_strength_reports=[enabled],
+            require_auto_strength_off=True,
+        )
+
+
+def test_runtime_gate_can_pin_auto_strength_report_identity_across_pair():
+    metrics = _metrics()
+    metrics["events"].insert(-2, _frame_gauge_event())
+    first = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        auto_strength_reports=[_dora_off_report()],
+        require_auto_strength_off=True,
+    )
+    validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        auto_strength_reports=[_dora_off_report()],
+        require_auto_strength_off=True,
+        expected_auto_strength_digests=first.auto_strength_report_digests,
+    )
+
+    changed = _dora_off_report()
+    changed["rows"][0]["strength_model"] = 0.9
+    with pytest.raises(RuntimeGateError, match="identity differs"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            auto_strength_reports=[changed],
+            require_auto_strength_off=True,
+            expected_auto_strength_digests=first.auto_strength_report_digests,
+        )
+
