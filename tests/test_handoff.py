@@ -245,6 +245,32 @@ def test_unchanged_clean_postprocess_is_byte_exact_with_hook_off_baseline():
     assert len(provider.calls) == 2
 
 
+def test_clean_postprocess_rejects_in_place_input_mutation():
+    state, x0, shapes, _, _ = packed()
+    provider = FakeLearnedProvider()
+
+    def bad(clean):
+        clean[:, :, 0].add_(1.0)
+        return CleanVideoPostprocessResult(
+            clean_video=clean,
+            protected_prefix_t=1,
+        )
+
+    with pytest.raises(RuntimeError, match="mutated its input tensor"):
+        build_handoff_state(
+            source_packed_state=state,
+            source_x0_packed=x0,
+            source_shapes=shapes,
+            sigma=0.4,
+            target_h=8,
+            target_w=6,
+            seed=123,
+            transfer_mode="learned_3d",
+            learned_upscaler=provider,
+            clean_video_postprocess=bad,
+        )
+
+
 def test_clean_postprocess_cannot_claim_or_mutate_learned_prefix():
     state, x0, shapes, _, _ = packed()
     provider = FakeLearnedProvider()
