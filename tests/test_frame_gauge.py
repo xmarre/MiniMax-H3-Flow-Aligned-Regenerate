@@ -170,6 +170,7 @@ def test_nonfinite_registration_is_a_hard_error():
     with pytest.raises(ValueError, match="finite"):
         estimate_paired_prefix_translation(learned, exact)
 
+
 def test_exact_equality_still_requires_minimum_temporal_support():
     exact = torch.randn(1, 24, 3, 26, 26)
     estimate = estimate_paired_prefix_translation(exact, exact)
@@ -274,4 +275,3 @@ def test_registration_rejects_when_fewer_than_eight_channels_are_informative():
 
     assert estimate.rejected
     assert estimate.reason == "insufficient_valid_channels"
-
