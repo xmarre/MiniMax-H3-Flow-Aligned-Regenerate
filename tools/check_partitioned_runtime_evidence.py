@@ -102,7 +102,10 @@ def main() -> None:
             args.expected_frame_gauge_mode != "off"
             and not args.expected_auto_strength_digest
         ):
-            parser.error("frame-gauge ON validation requires --expected-auto-strength-digest from the matched OFF control")
+            parser.error(
+                "frame-gauge ON validation requires --expected-auto-strength-digest "
+                "from the matched OFF control"
+            )
 
     metrics = _read_json(args.metrics)
     log_text = _read_text(args.log)
