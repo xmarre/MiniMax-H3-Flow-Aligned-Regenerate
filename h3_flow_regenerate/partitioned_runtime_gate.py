@@ -254,11 +254,7 @@ def _validate_frame_gauge(
         return None, None, False, None, None, None, None
     allowed = {"off", "on-accepted", "on-rejected", "on-identity"}
     _require(expected_mode in allowed, f"unsupported expected frame-gauge mode {expected_mode!r}")
-    receipts = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_frame_gauge"
-    ]
+    receipts = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
     _require(len(receipts) == 1, "partitioned run must emit exactly one frame-gauge receipt")
     receipt = receipts[0]
     mode = str(receipt.get("mode", ""))
