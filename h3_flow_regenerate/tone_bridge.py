@@ -112,7 +112,6 @@ def apply_suffix_dc_bridge(
     }
 
 
-
 def map_clean_bridge_to_conditional_state(
     state: torch.Tensor,
     clean_before: torch.Tensor,
