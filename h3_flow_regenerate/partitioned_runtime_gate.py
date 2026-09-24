@@ -438,8 +438,16 @@ def _validate_frame_gauge(
         _sha256(receipt.get("exact_prefix_sha256")),
         "frame-gauge transaction is missing the exact-prefix identity receipt",
     )
+    expected_registration_domain = "actual_clean_target_video" if mode == "on" else "off"
+    expected_transform_domain = (
+        "actual_clean_target_video" if mode == "on" and result == "accepted" else "none"
+    )
     _require(
-        receipt.get("transform_domain") == "actual_clean_target_video",
+        receipt.get("registration_domain") == expected_registration_domain,
+        "frame-gauge transaction used the wrong registration domain",
+    )
+    _require(
+        receipt.get("transform_domain") == expected_transform_domain,
         "frame-gauge transaction used the wrong correction domain",
     )
     if mode == "on" and result == "accepted":
