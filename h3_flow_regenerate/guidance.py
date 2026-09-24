@@ -316,12 +316,25 @@ def _build_temporal_correspondence(
     *,
     coordinate: float,
     config: GuidanceConfig,
+    prefix_t: int = 0,
+    validity: torch.Tensor | None = None,
+    search_radius: int | None = None,
+    cache_key: str | None = None,
 ) -> _TemporalCorrespondence | None:
     if reference.ndim != 5:
         raise ValueError("temporal correspondence expects BxCxTxHxW")
     batch, channels, frames, height, width = reference.shape
     if frames < 2:
         return None
+    if type(prefix_t) is not int or not 0 <= prefix_t <= frames:
+        raise ValueError("temporal correspondence prefix length is invalid")
+    radius = config.temporal_search_radius if search_radius is None else int(search_radius)
+    if radius < 1:
+        raise ValueError("temporal correspondence search radius must be positive")
+    if validity is not None:
+        if validity.shape != (height, width) or validity.dtype != torch.bool:
+            raise ValueError("registered temporal validity must be an HxW boolean tensor")
+        validity = validity.to(device=reference.device)
 
     # Match a lightly smoothed clean-state latent. This keeps the matcher H3-native
     # and dependency-free while avoiding pixel/detail noise as the correspondence key.
@@ -332,53 +345,158 @@ def _build_temporal_correspondence(
     backward, backward_base, backward_similarity, backward_margin = _local_correspondence(
         right,
         left,
-        radius=config.temporal_search_radius,
+        radius=radius,
         min_similarity=config.temporal_min_similarity,
         min_margin=config.temporal_min_margin,
     )
     forward, forward_base, forward_similarity, forward_margin = _local_correspondence(
         left,
         right,
-        radius=config.temporal_search_radius,
+        radius=radius,
         min_similarity=config.temporal_min_similarity,
         min_margin=config.temporal_min_margin,
     )
 
     reverse_forward = _gather_at_integer_flow(forward, backward)
-    reverse_forward_confidence = _gather_at_integer_flow(forward_base.unsqueeze(1), backward).squeeze(1)
-    backward_cycle = (backward + reverse_forward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
-    backward_confidence = (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt() * backward_cycle.float()
+    reverse_forward_confidence = _gather_at_integer_flow(
+        forward_base.unsqueeze(1),
+        backward,
+    ).squeeze(1)
+    backward_cycle = (
+        (backward + reverse_forward).abs().amax(dim=1)
+        <= config.temporal_cycle_tolerance
+    )
+    backward_confidence = (
+        (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt()
+        * backward_cycle.float()
+    )
 
     reverse_backward = _gather_at_integer_flow(backward, forward)
-    reverse_backward_confidence = _gather_at_integer_flow(backward_base.unsqueeze(1), forward).squeeze(1)
-    forward_cycle = (forward + reverse_backward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
-    forward_confidence = (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt() * forward_cycle.float()
+    reverse_backward_confidence = _gather_at_integer_flow(
+        backward_base.unsqueeze(1),
+        forward,
+    ).squeeze(1)
+    forward_cycle = (
+        (forward + reverse_backward).abs().amax(dim=1)
+        <= config.temporal_cycle_tolerance
+    )
+    forward_confidence = (
+        (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt()
+        * forward_cycle.float()
+    )
 
-    all_confidence = torch.cat((backward_confidence.reshape(-1), forward_confidence.reshape(-1)))
+    pair_count = frames - 1
+    if prefix_t:
+        # Pair index k connects frame k to frame k+1. Generated-to-generated
+        # correspondence therefore starts at k == prefix_t; k == prefix_t-1 is
+        # the exact-prefix/suffix crossing and is intentionally disabled.
+        generated_pair = (
+            torch.arange(pair_count, device=reference.device) >= prefix_t
+        )
+        generated_pair = (
+            generated_pair.view(1, pair_count, 1, 1)
+            .expand(batch, pair_count, height, width)
+            .reshape(-1, height, width)
+        )
+        backward_confidence = backward_confidence * generated_pair
+        forward_confidence = forward_confidence * generated_pair
+
+    if validity is not None:
+        expanded_validity = (
+            validity.view(1, 1, height, width)
+            .expand(backward.shape[0], 1, height, width)
+            .float()
+        )
+        backward_sample_valid = _gather_at_integer_flow(
+            expanded_validity,
+            backward,
+        ).squeeze(1)
+        forward_sample_valid = _gather_at_integer_flow(
+            expanded_validity,
+            forward,
+        ).squeeze(1)
+        query_valid = expanded_validity.squeeze(1)
+        backward_confidence = (
+            backward_confidence
+            * query_valid
+            * (backward_sample_valid > 0.5)
+        )
+        forward_confidence = (
+            forward_confidence
+            * query_valid
+            * (forward_sample_valid > 0.5)
+        )
+
+    all_confidence = torch.cat(
+        (backward_confidence.reshape(-1), forward_confidence.reshape(-1))
+    )
     valid = all_confidence > 0.0
-    all_similarity = torch.cat((backward_similarity.reshape(-1), forward_similarity.reshape(-1)))
-    all_margin = torch.cat((backward_margin.reshape(-1), forward_margin.reshape(-1)))
+    all_similarity = torch.cat(
+        (backward_similarity.reshape(-1), forward_similarity.reshape(-1))
+    )
+    all_margin = torch.cat(
+        (backward_margin.reshape(-1), forward_margin.reshape(-1))
+    )
     all_flow = torch.cat(
         (
             backward.square().sum(dim=1).sqrt().reshape(-1),
             forward.square().sum(dim=1).sqrt().reshape(-1),
         )
     )
-    confidence_mean = float(all_confidence.float().mean().detach().to(device="cpu", dtype=torch.float64).item())
-    valid_fraction = float(valid.float().mean().detach().to(device="cpu", dtype=torch.float64).item())
+    confidence_mean = float(
+        all_confidence.float().mean().detach().to(
+            device="cpu",
+            dtype=torch.float64,
+        ).item()
+    )
+    valid_fraction = float(
+        valid.float().mean().detach().to(
+            device="cpu",
+            dtype=torch.float64,
+        ).item()
+    )
     flow_magnitude_max = (
-        float(all_flow[valid].max().detach().to(device="cpu", dtype=torch.float64).item())
+        float(
+            all_flow[valid].max().detach().to(
+                device="cpu",
+                dtype=torch.float64,
+            ).item()
+        )
         if bool(valid.any().item())
         else 0.0
     )
 
-    pair_count = frames - 1
     return _TemporalCorrespondence(
         coordinate=float(coordinate),
-        backward_flow=backward.reshape(batch, pair_count, 2, height, width).detach(),
-        forward_flow=forward.reshape(batch, pair_count, 2, height, width).detach(),
-        backward_confidence=backward_confidence.reshape(batch, pair_count, 1, height, width).detach(),
-        forward_confidence=forward_confidence.reshape(batch, pair_count, 1, height, width).detach(),
+        cache_key=cache_key,
+        backward_flow=backward.reshape(
+            batch,
+            pair_count,
+            2,
+            height,
+            width,
+        ).detach(),
+        forward_flow=forward.reshape(
+            batch,
+            pair_count,
+            2,
+            height,
+            width,
+        ).detach(),
+        backward_confidence=backward_confidence.reshape(
+            batch,
+            pair_count,
+            1,
+            height,
+            width,
+        ).detach(),
+        forward_confidence=forward_confidence.reshape(
+            batch,
+            pair_count,
+            1,
+            height,
+            width,
+        ).detach(),
         confidence_mean=confidence_mean,
         valid_fraction=valid_fraction,
         similarity_mean=_masked_mean(all_similarity, valid),
@@ -394,18 +512,42 @@ def _temporal_correspondence(
     coordinate: float,
     config: GuidanceConfig,
     state: GuidanceState,
+    prefix_t: int = 0,
+    validity: torch.Tensor | None = None,
+    search_radius: int | None = None,
+    cache_key: str | None = None,
 ) -> tuple[_TemporalCorrespondence | None, bool]:
     cached = state.temporal_cache
     expected_pairs = max(reference.shape[2] - 1, 0)
     if (
         cached is not None
-        and math.isclose(cached.coordinate, coordinate, rel_tol=0.0, abs_tol=1e-8)
+        and cached.cache_key == cache_key
+        and math.isclose(
+            cached.coordinate,
+            coordinate,
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
         and cached.backward_flow.shape
-        == (reference.shape[0], expected_pairs, 2, reference.shape[-2], reference.shape[-1])
+        == (
+            reference.shape[0],
+            expected_pairs,
+            2,
+            reference.shape[-2],
+            reference.shape[-1],
+        )
         and cached.backward_flow.device == reference.device
     ):
         return cached, True
-    built = _build_temporal_correspondence(reference, coordinate=coordinate, config=config)
+    built = _build_temporal_correspondence(
+        reference,
+        coordinate=coordinate,
+        config=config,
+        prefix_t=prefix_t,
+        validity=validity,
+        search_radius=search_radius,
+        cache_key=cache_key,
+    )
     state.temporal_cache = built
     return built, False
 
