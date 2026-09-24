@@ -34,7 +34,7 @@ def _analytic_pair(
         for channel in range(24):
             phase = 0.11 * frame + 0.067 * channel
 
-            def field(y, x):
+            def field(y, x, phase=phase):
                 return (
                     torch.sin(0.31 * x + phase)
                     + 0.73 * torch.cos(0.27 * y - 0.5 * phase)
