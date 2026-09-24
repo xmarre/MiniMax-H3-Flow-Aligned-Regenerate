@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -244,6 +245,148 @@ def _validate_audio_position_policy(
     return AUDIO_POSITION_DOMAIN_SOURCE, True, block0_calls, model_timestep_calls
 
 
+def _finite_number(value: Any) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeGateError(f"frame-gauge receipt contains non-numeric value {value!r}") from exc
+    _require(math.isfinite(result), "frame-gauge receipt contains a non-finite numeric value")
+    return result
+
+
+def _validate_registration_receipt(fields: Any, *, label: str) -> str:
+    _require(isinstance(fields, dict), f"{label} registration receipt is missing")
+    status = str(fields.get("status", ""))
+    _require(status in {"accepted", "identity"}, f"{label} registration was not accepted/identity")
+    _require(fields.get("units") == "target_latent_cells", f"{label} registration units drifted")
+    dx = _finite_number(fields.get("dx"))
+    dy = _finite_number(fields.get("dy"))
+    _require(abs(dx) <= 2.0 and abs(dy) <= 2.0, f"{label} registration exceeds the v1 displacement bound")
+    invalid_fraction = _finite_number(fields.get("invalid_fraction", 0.0))
+    _require(0.0 <= invalid_fraction <= 0.08, f"{label} registration invalid-area bound failed")
+    if status == "identity":
+        _require(dx == 0.0 and dy == 0.0, f"{label} identity registration is not an exact no-op")
+        return status
+
+    _require(
+        _finite_number(fields.get("validation_ncc")) >= 0.75,
+        f"{label} registration held-out NCC gate failed",
+    )
+    _require(
+        _finite_number(fields.get("rms_improvement")) >= 0.15,
+        f"{label} registration held-out RMS-improvement gate failed",
+    )
+    _require(
+        _finite_number(fields.get("runner_margin_ratio")) >= 0.05,
+        f"{label} registration runner-up margin gate failed",
+    )
+    _require(
+        _finite_number(fields.get("last_holdout_ncc")) >= 0.75,
+        f"{label} registration last-frame NCC gate failed",
+    )
+    _require(
+        _finite_number(fields.get("last_holdout_improvement")) >= 0.15,
+        f"{label} registration last-frame improvement gate failed",
+    )
+
+    frame_checks = fields.get("frame_checks")
+    _require(isinstance(frame_checks, list), f"{label} registration held-out frame receipts are missing")
+    informative_frames = [item for item in frame_checks if isinstance(item, dict) and item.get("informative")]
+    _require(len(informative_frames) >= 2, f"{label} registration has insufficient held-out frame support")
+    _require(
+        all(item.get("supports_global") is True for item in informative_frames),
+        f"{label} registration held-out frame agreement failed",
+    )
+
+    region_checks = fields.get("region_checks")
+    _require(isinstance(region_checks, list), f"{label} registration regional receipts are missing")
+    by_name = {
+        str(item.get("name")): item
+        for item in region_checks
+        if isinstance(item, dict)
+    }
+    _require(
+        not any(item.get("strong_conflict") is True for item in by_name.values()),
+        f"{label} registration has a strong regional conflict",
+    )
+    vertical = any(
+        by_name.get(name, {}).get("informative") is True
+        and by_name.get(name, {}).get("supports_global") is True
+        for name in ("upper", "lower")
+    )
+    horizontal = any(
+        by_name.get(name, {}).get("informative") is True
+        and by_name.get(name, {}).get("supports_global") is True
+        for name in ("left", "right")
+    )
+    _require(vertical and horizontal, f"{label} registration lacks independent regional support")
+
+    parity_checks = fields.get("parity_checks")
+    _require(isinstance(parity_checks, list), f"{label} registration patch-phase receipts are missing")
+    _require(
+        all(
+            not item.get("informative") or item.get("supports_global") is True
+            for item in parity_checks
+            if isinstance(item, dict)
+        ),
+        f"{label} registration patch-phase agreement failed",
+    )
+    return status
+
+
+def _validate_frame_gauge_transfer(
+    window: list[dict[str, Any]],
+    *,
+    mode: str,
+    result: str,
+) -> None:
+    transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
+    _require(len(transfers) == 1, "partitioned run must emit exactly one transfer receipt")
+    transfer = transfers[0]
+    enabled = mode == "on"
+    accepted = enabled and result == "accepted"
+    _require(
+        transfer.get("frame_gauge_repair_enabled") is enabled,
+        "frame-gauge transfer toggle differs from the transaction receipt",
+    )
+    _require(
+        str(transfer.get("frame_gauge_result", "")) == result,
+        "frame-gauge transfer result differs from the transaction receipt",
+    )
+    _require(
+        transfer.get("authoritative_target_prefix_restored") is True,
+        "frame-gauge transfer did not restore the caller-owned exact prefix",
+    )
+    _require(
+        transfer.get("deprecated_mixed_grid_repairs_applied") is False,
+        "frame-gauge transfer activated deprecated mixed-grid repairs",
+    )
+    _require(
+        transfer.get("suffix_dc_bridge_policy") == "one_token_spatial_mean_v1",
+        "frame-gauge transfer changed the existing one-token DC policy",
+    )
+    _require(
+        int(transfer.get("suffix_dc_bridge_corrected_tokens", 0)) == 1,
+        "frame-gauge transfer did not apply exactly one DC-corrected suffix token",
+    )
+    expected_mapping = "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
+    expected_clean_source = "actual_provider" if accepted else "inverse_recovered"
+    _require(
+        transfer.get("suffix_dc_bridge_state_mapping") == expected_mapping,
+        "frame-gauge transfer changed DC routing for the selected arm",
+    )
+    _require(
+        transfer.get("splice_clean_source") == expected_clean_source,
+        "frame-gauge transfer used the wrong clean-state source",
+    )
+    _require(
+        "suffix_gauge_bridge_policy" not in transfer
+        and "suffix_exact_prefix_gauge_bridge_policy" not in transfer,
+        "retired full-field residual/gauge bridge became active",
+    )
+
+
+
 def _validate_frame_gauge(
     window: list[dict[str, Any]],
     *,
@@ -291,11 +434,39 @@ def _validate_frame_gauge(
         receipt.get("authoritative_prefix_modified") is False,
         "frame-gauge transaction altered exact-prefix ownership",
     )
-    handoff_receipts = [_event_fields(event) for event in window if _event_kind(event) == "handoff_transfer_wall"]
+    handoff_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "handoff_transfer_wall"
+    ]
     _require(
-        bool(handoff_receipts) and handoff_receipts[-1].get("protected_video_noise_exact") is True,
+        bool(handoff_receipts)
+        and handoff_receipts[-1].get("protected_video_noise_exact") is True,
         "frame-gauge evidence does not prove protected video-noise ownership",
     )
+    _require(
+        _sha256(receipt.get("exact_prefix_sha256")),
+        "frame-gauge transaction is missing the exact-prefix identity receipt",
+    )
+    expected_registration_domain = "actual_clean_target_video" if mode == "on" else "off"
+    expected_transform_domain = (
+        "actual_clean_target_video" if mode == "on" and result == "accepted" else "none"
+    )
+    _require(
+        receipt.get("registration_domain") == expected_registration_domain,
+        "frame-gauge transaction used the wrong registration domain",
+    )
+    _require(
+        receipt.get("transform_domain") == expected_transform_domain,
+        "frame-gauge transaction used the wrong correction domain",
+    )
+    if mode == "on" and result == "accepted":
+        _require(
+            _validate_registration_receipt(receipt.get("video_registration"), label="video") == "accepted",
+            "accepted transaction lacks an accepted video registration",
+        )
+        if str(receipt.get("guidance_mode", "off")) != "off":
+            _validate_registration_receipt(receipt.get("guidance_registration"), label="guidance")
     _require(receipt.get("extra_h3_nfe") == 0, "frame-gauge transaction added H3 NFE")
     _require(receipt.get("extra_sampler_lifetimes") == 0, "frame-gauge transaction added a sampler lifetime")
     _require(receipt.get("extra_history_boundaries") == 0, "frame-gauge transaction added a history boundary")
@@ -305,6 +476,7 @@ def _validate_frame_gauge(
         receipt.get("auto_strength_validation_required") is True,
         "frame-gauge receipt did not mark auto-strength provenance as an acceptance prerequisite",
     )
+    _validate_frame_gauge_transfer(window, mode=mode, result=result)
     return (
         mode,
         result,
