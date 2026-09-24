@@ -437,7 +437,8 @@ def _build_temporal_correspondence(
         .to(
             device="cpu",
             dtype=torch.float64,
-        ).item()
+        )
+        .item()
     )
     valid_fraction = float(
         valid.float()
@@ -559,6 +560,7 @@ def _build_temporal_correspondence(
         flow_magnitude_max=flow_magnitude_max,
     )
 
+
 def _temporal_correspondence(
     reference: torch.Tensor,
     *,
@@ -661,10 +663,7 @@ def _temporal_alignment_correction(
         raise TypeError("reference_is_target_grid must be boolean")
     backward_source = correspondence.backward_flow
     forward_source = correspondence.forward_flow
-    same_grid = (
-        reference_is_target_grid
-        and backward_source.shape[-2:] == (target_h, target_w)
-    )
+    same_grid = reference_is_target_grid and backward_source.shape[-2:] == (target_h, target_w)
     if same_grid:
         backward_target = backward_source
         forward_target = forward_source
@@ -892,9 +891,7 @@ def apply_guidance(
             device=high_x0.device,
             dtype=high_x0.dtype,
         )
-        reference_coordinate = float(
-            registered_reference.reference_coordinate
-        )
+        reference_coordinate = float(registered_reference.reference_coordinate)
         reference_clamped = not math.isclose(
             coordinate,
             reference_coordinate,
@@ -958,25 +955,19 @@ def apply_guidance(
             size=source_size,
             mode="area",
         )
-        down = (
-            down.reshape(
-                high_x0.shape[0],
-                high_x0.shape[2],
-                high_x0.shape[1],
-                *source_size,
-            )
-            .permute(0, 2, 1, 3, 4)
-        )
+        down = down.reshape(
+            high_x0.shape[0],
+            high_x0.shape[2],
+            high_x0.shape[1],
+            *source_size,
+        ).permute(0, 2, 1, 3, 4)
         source_error = source_ref - down.to(source_ref)
         error = resize_video(
             source_error,
             *high_x0.shape[-2:],
             mode=config.transfer_mode,
         )
-        correction = (
-            correction
-            + schedule * config.consistency_weight * error
-        )
+        correction = correction + schedule * config.consistency_weight * error
 
     direction_correction = correction
     temporal_correction = torch.zeros_like(high_x0)
