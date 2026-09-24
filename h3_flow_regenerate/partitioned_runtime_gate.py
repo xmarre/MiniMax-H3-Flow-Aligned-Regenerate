@@ -386,7 +386,6 @@ def _validate_frame_gauge_transfer(
     )
 
 
-
 def _validate_frame_gauge(
     window: list[dict[str, Any]],
     *,
