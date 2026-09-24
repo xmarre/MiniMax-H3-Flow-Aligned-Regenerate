@@ -272,7 +272,10 @@ def _validate_frame_gauge(
         _require(mode == "on" and receipt.get("enabled") is True, "frame-gauge ON arm was not actually enabled")
         _require(result == expected_result, f"frame-gauge ON arm result {result!r} != expected {expected_result!r}")
         if expected_result == "accepted":
-            _require(receipt.get("spatial_warp_applied") is True, "accepted frame-gauge transaction applied no spatial warp")
+            _require(
+                receipt.get("spatial_warp_applied") is True,
+                "accepted frame-gauge transaction applied no spatial warp",
+            )
             guidance_mode = str(receipt.get("guidance_mode", "off"))
             if guidance_mode != "off":
                 _require(
@@ -280,13 +283,19 @@ def _validate_frame_gauge(
                     "accepted frame-gauge transaction did not publish its independently registered Flow reference",
                 )
         else:
-            _require(receipt.get("spatial_warp_applied") is False, "non-accepted frame-gauge transaction applied a spatial warp")
+            _require(
+                receipt.get("spatial_warp_applied") is False,
+                "non-accepted frame-gauge transaction applied a spatial warp",
+            )
             _require(
                 receipt.get("registered_guidance_reference") is False,
                 "non-accepted frame-gauge transaction published a registered Flow reference",
             )
 
-    _require(receipt.get("authoritative_prefix_modified") is False, "frame-gauge transaction altered exact-prefix ownership")
+    _require(
+        receipt.get("authoritative_prefix_modified") is False,
+        "frame-gauge transaction altered exact-prefix ownership",
+    )
     _require(receipt.get("extra_h3_nfe") == 0, "frame-gauge transaction added H3 NFE")
     _require(receipt.get("extra_sampler_lifetimes") == 0, "frame-gauge transaction added a sampler lifetime")
     _require(receipt.get("extra_history_boundaries") == 0, "frame-gauge transaction added a history boundary")
