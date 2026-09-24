@@ -300,23 +300,17 @@ def _validate_registration_receipt(fields: Any, *, label: str) -> str:
 
     region_checks = fields.get("region_checks")
     _require(isinstance(region_checks, list), f"{label} registration regional receipts are missing")
-    by_name = {
-        str(item.get("name")): item
-        for item in region_checks
-        if isinstance(item, dict)
-    }
+    by_name = {str(item.get("name")): item for item in region_checks if isinstance(item, dict)}
     _require(
         not any(item.get("strong_conflict") is True for item in by_name.values()),
         f"{label} registration has a strong regional conflict",
     )
     vertical = any(
-        by_name.get(name, {}).get("informative") is True
-        and by_name.get(name, {}).get("supports_global") is True
+        by_name.get(name, {}).get("informative") is True and by_name.get(name, {}).get("supports_global") is True
         for name in ("upper", "lower")
     )
     horizontal = any(
-        by_name.get(name, {}).get("informative") is True
-        and by_name.get(name, {}).get("supports_global") is True
+        by_name.get(name, {}).get("informative") is True and by_name.get(name, {}).get("supports_global") is True
         for name in ("left", "right")
     )
     _require(vertical and horizontal, f"{label} registration lacks independent regional support")
@@ -380,8 +374,7 @@ def _validate_frame_gauge_transfer(
         "frame-gauge transfer used the wrong clean-state source",
     )
     _require(
-        "suffix_gauge_bridge_policy" not in transfer
-        and "suffix_exact_prefix_gauge_bridge_policy" not in transfer,
+        "suffix_gauge_bridge_policy" not in transfer and "suffix_exact_prefix_gauge_bridge_policy" not in transfer,
         "retired full-field residual/gauge bridge became active",
     )
 
@@ -433,14 +426,9 @@ def _validate_frame_gauge(
         receipt.get("authoritative_prefix_modified") is False,
         "frame-gauge transaction altered exact-prefix ownership",
     )
-    handoff_receipts = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "handoff_transfer_wall"
-    ]
+    handoff_receipts = [_event_fields(event) for event in window if _event_kind(event) == "handoff_transfer_wall"]
     _require(
-        bool(handoff_receipts)
-        and handoff_receipts[-1].get("protected_video_noise_exact") is True,
+        bool(handoff_receipts) and handoff_receipts[-1].get("protected_video_noise_exact") is True,
         "frame-gauge evidence does not prove protected video-noise ownership",
     )
     _require(
@@ -448,9 +436,7 @@ def _validate_frame_gauge(
         "frame-gauge transaction is missing the exact-prefix identity receipt",
     )
     expected_registration_domain = "actual_clean_target_video" if mode == "on" else "off"
-    expected_transform_domain = (
-        "actual_clean_target_video" if mode == "on" and result == "accepted" else "none"
-    )
+    expected_transform_domain = "actual_clean_target_video" if mode == "on" and result == "accepted" else "none"
     _require(
         receipt.get("registration_domain") == expected_registration_domain,
         "frame-gauge transaction used the wrong registration domain",
