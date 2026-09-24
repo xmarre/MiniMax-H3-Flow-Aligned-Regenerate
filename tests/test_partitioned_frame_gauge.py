@@ -166,6 +166,7 @@ def test_identity_guidance_calibration_never_resamples_suffix():
     assert registered.dy == 0.0
     assert torch.equal(registered.video, exact_full)
 
+
 def test_guidance_registration_rejects_high_schedule_that_changes_reference_identity():
     exact_full = _field_video(dx=0.0, dy=0.0)
     high_sigmas, split_coordinate = _schedule()
