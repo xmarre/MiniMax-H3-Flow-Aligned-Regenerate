@@ -1056,6 +1056,12 @@ def _prepare_registered_guidance_reference(
     if estimate.rejected:
         return None, estimate_fields, f"guidance_{estimate.reason}"
 
+    # Identity is an exact no-resample path. The estimator may return a
+    # sub-grid optimum inside the identity tolerance; that value remains
+    # diagnostic only and must not become a spatial interpolation.
+    applied_dx = 0.0 if estimate.identity else float(estimate.dx)
+    applied_dy = 0.0 if estimate.identity else float(estimate.dy)
+
     temporal_radius = int(guidance.temporal_search_radius)
     if guidance.mode == "direction+temporal":
         spatial_scale = max(
@@ -1076,8 +1082,8 @@ def _prepare_registered_guidance_reference(
 
     application = translate_video_cells(
         target_ref,
-        dx=float(estimate.dx),
-        dy=float(estimate.dy),
+        dx=applied_dx,
+        dy=applied_dy,
         start_frame=prefix_t,
         batch_frames=4,
     )
@@ -1097,7 +1103,7 @@ def _prepare_registered_guidance_reference(
     registered_video[:, :, :prefix_t] = exact_prefix.to(registered_video)
     cache_key = (
         f"{run.run_id}:{prefix_t}:{target_h}x{target_w}:"
-        f"{estimate.dx:.8f}:{estimate.dy:.8f}:"
+        f"{applied_dx:.8f}:{applied_dy:.8f}:"
         f"{float(reference_coordinate):.12f}:"
         f"{FRAME_GAUGE_POLICY_VERSION}"
     )
@@ -1107,13 +1113,18 @@ def _prepare_registered_guidance_reference(
         prefix_t=prefix_t,
         run_id=str(run.run_id),
         reference_coordinate=float(reference_coordinate),
-        dx=float(estimate.dx),
-        dy=float(estimate.dy),
+        dx=applied_dx,
+        dy=applied_dy,
         cache_key=cache_key,
         temporal_search_radius=temporal_radius,
     )
     fields = dict(estimate_fields)
     fields.update(
+        estimated_dx=float(estimate.dx),
+        estimated_dy=float(estimate.dy),
+        dx=applied_dx,
+        dy=applied_dy,
+        identity_no_resample=bool(estimate.identity),
         reference_coordinate=float(reference_coordinate),
         reference_clamped=False,
         target_temporal_radius=temporal_radius,
@@ -2512,7 +2523,7 @@ def run_partitioned_progressive(
             extra_history_boundaries=0,
             extra_provider_calls=0,
             extra_vae_calls=0,
-            auto_strength_owner="external_vdn_runtime",
+            auto_strength_owner="dora_dynamic_lora_loader",
             auto_strength_resolved_off=None,
             auto_strength_validation_required=True,
             transaction_elapsed_ms=float(
