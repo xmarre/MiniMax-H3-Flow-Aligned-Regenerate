@@ -57,18 +57,25 @@ from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixHandoff,
 )
 from h3_flow_regenerate.partitioned_outer import (
+    _claim_frame_gauge_invocation,
+    _release_frame_gauge_invocation,
     _source_has_audio_velocity_mask_contract,
     partitioned_outer_wrapper,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
+    _prepare_registered_guidance_reference,
     PartitionedPreflightUnsupported,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
     _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
-from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
+from h3_flow_regenerate.runtime import (
+    FLOW_BINDING_KEY,
+    FlowBinding,
+    flow_model_clone_callback,
+)
 
 
 class _Metrics:
@@ -941,3 +948,46 @@ def test_low_probe_execution_source_is_bounded_and_model_local():
         candidate_metrics.events[-1][1]["low_probe_execution_source"]
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     )
+
+
+def test_frame_gauge_invocation_guard_rejects_nesting_and_is_clone_local():
+    binding = FlowBinding()
+    assert _claim_frame_gauge_invocation(binding, enabled=False) is False
+    assert binding.frame_gauge_invocation_active is False
+
+    claimed = _claim_frame_gauge_invocation(binding, enabled=True)
+    assert claimed is True
+    assert binding.frame_gauge_invocation_active is True
+    with pytest.raises(RuntimeError, match="nested partitioned frame-gauge"):
+        _claim_frame_gauge_invocation(binding, enabled=True)
+
+    source = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
+    clone = SimpleNamespace(model_options={})
+    flow_model_clone_callback(source, clone)
+    cloned_binding = clone.model_options[FLOW_BINDING_KEY]
+    assert cloned_binding is not binding
+    assert cloned_binding.frame_gauge_invocation_active is False
+    assert cloned_binding.registered_guidance_reference is None
+
+    _release_frame_gauge_invocation(binding, claimed=claimed)
+    assert binding.frame_gauge_invocation_active is False
+
+
+def test_frame_gauge_guidance_rejects_unaudited_sampler_before_registration():
+    registered, fields, reason = _prepare_registered_guidance_reference(
+        run=SimpleNamespace(sampler="sample_euler"),
+        guidance=SimpleNamespace(mode="direction"),
+        exact_prefix=torch.zeros(1, 24, 4, 26, 26),
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=0.25,
+        high_sigmas=torch.tensor([0.5, 0.0]),
+        video_shift=12.0,
+    )
+
+    assert registered is None
+    assert reason == "unsupported_sampler_contract"
+    assert fields["status"] == "rejected"
+    assert fields["sampler"] == "sample_euler"
+    assert fields["supported_samplers"] == ("sample_res_multistep",)

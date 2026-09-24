@@ -84,6 +84,7 @@ class FlowBinding:
     guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     registered_guidance_reference: RegisteredGuidanceReference | None = None
+    frame_gauge_invocation_active: bool = False
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
 

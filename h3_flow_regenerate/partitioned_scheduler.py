@@ -118,6 +118,7 @@ from .tone_bridge import (
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
+FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
 PARTITIONED_SOL_REQUIRED_METADATA = {
     "api": 1,
     "owner": "comfyui_sol_h3",
@@ -989,6 +990,21 @@ def _prepare_registered_guidance_reference(
             ("unsupported_guidance_operator"),
         )
 
+    sampler = str(getattr(run, "sampler", ""))
+    if sampler not in FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS:
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "unsupported_sampler_contract",
+                "sampler": sampler,
+                "supported_samplers": tuple(
+                    sorted(FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS)
+                ),
+            },
+            "unsupported_sampler_contract",
+        )
+
     exact_probe = any(
         sample.phase == "handoff_probe"
         and math.isclose(
@@ -1317,6 +1333,7 @@ def _measure_partitioned_transfer_splice(
     fields.update(
         splice_diagnostic_elapsed_ms=(time.perf_counter() - diagnostic_started) * 1000.0,
         splice_recovery="inverse_conditional_renoise",
+        splice_clean_source="inverse_recovered",
         splice_scope="learned_clean_before_exact_prefix_restore",
     )
     return fields
@@ -2388,6 +2405,9 @@ def run_partitioned_progressive(
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery=splice_recovery,
+            splice_clean_source=(
+                "actual_provider" if frame_gauge_accepted else "inverse_recovered"
+            ),
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
 
