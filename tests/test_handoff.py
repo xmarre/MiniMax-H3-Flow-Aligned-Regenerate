@@ -1,7 +1,9 @@
 import pytest
 import torch
 
+from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import (
     CleanVideoPostprocessResult,
     ProgressiveHandoffConfig,
@@ -438,3 +440,32 @@ def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
             exact_prefix_mode="mixed_grid_low_suffix",
             suffix_geometric_bridge=1,
         )
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+def test_clean_delta_mapping_preserves_noise_realization_without_warping_noise(dtype):
+    torch.manual_seed(701)
+    clean = torch.randn(1, 24, 4, 12, 14, dtype=dtype)
+    noise = torch.randn_like(clean)
+    sigma = 0.8780487775802612
+    shifted = translate_video_cells(
+        clean,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=0,
+        batch_frames=2,
+    ).video
+    state = conditional_renoise_target(clean, sigma=sigma, noise=noise)
+    direct = conditional_renoise_target(shifted, sigma=sigma, noise=noise)
+    affine = state + (1.0 - sigma) * (shifted - clean)
+    warped_state = translate_video_cells(
+        state,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=0,
+        batch_frames=2,
+    ).video
+
+    tolerance = 1e-12 if dtype == torch.float64 else 5e-3 if dtype in {torch.float16, torch.bfloat16} else 1e-6
+    assert torch.allclose(affine.float(), direct.float(), atol=tolerance, rtol=tolerance)
+    assert not torch.allclose(warped_state.float(), direct.float(), atol=1e-5, rtol=1e-5)
+
