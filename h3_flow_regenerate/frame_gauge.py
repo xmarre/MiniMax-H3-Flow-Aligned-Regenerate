@@ -145,11 +145,24 @@ def _prepare(
 
     learned_feature, learned_rms = feature(learned_work)
     exact_feature, exact_rms = feature(exact_work)
-    positive = torch.cat((learned_rms[learned_rms > 0], exact_rms[exact_rms > 0]))
-    if positive.numel() == 0:
+    learned_channel_rms = learned_rms.mean(dim=0)
+    exact_channel_rms = exact_rms.mean(dim=0)
+    learned_positive = learned_channel_rms[learned_channel_rms > 0]
+    exact_positive = exact_channel_rms[exact_channel_rms > 0]
+    if learned_positive.numel() == 0 or exact_positive.numel() == 0:
         return "ambiguous_low_energy"
-    threshold = max(1e-6, 0.01 * float(torch.median(positive).item()))
-    valid_channels = ((learned_rms > threshold) & (exact_rms > threshold)).all(dim=0)
+    learned_threshold = max(
+        1e-6,
+        0.01 * float(torch.median(learned_positive).item()),
+    )
+    exact_threshold = max(
+        1e-6,
+        0.01 * float(torch.median(exact_positive).item()),
+    )
+    valid_channels = (
+        (learned_channel_rms > learned_threshold)
+        & (exact_channel_rms > exact_threshold)
+    )
     if int(valid_channels.sum().item()) < policy.min_valid_channels:
         return "insufficient_valid_channels"
 
@@ -495,8 +508,19 @@ def estimate_paired_prefix_translation(
     if invalid_fraction > policy.max_invalid_fraction:
         return reject("excessive_invalid_area")
     if max(abs(dx), abs(dy)) <= policy.identity_bound + 1e-12:
-        if validation_ncc >= policy.min_ncc and runner_margin >= policy.min_runner_margin:
-            return FrameGaugeEstimate("identity", "already_aligned", dx, dy, base_metrics)
+        if zero_ncc >= policy.min_ncc and runner_margin >= policy.min_runner_margin:
+            identity_metrics = dict(base_metrics)
+            identity_metrics.update(
+                identity_candidate_dx=float(dx),
+                identity_candidate_dy=float(dy),
+            )
+            return FrameGaugeEstimate(
+                "identity",
+                "already_aligned",
+                0.0,
+                0.0,
+                identity_metrics,
+            )
         return reject("ambiguous")
     if validation_ncc < policy.min_ncc:
         return reject("validation_ncc")
