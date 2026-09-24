@@ -2451,7 +2451,12 @@ def run_partitioned_progressive(
             mask_classification="exact_protected_video_prefix",
             exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
             authoritative_prefix_modified=False,
-            transform_domain="actual_clean_target_video",
+            registration_domain=(
+                "actual_clean_target_video" if config.frame_gauge_repair else "off"
+            ),
+            transform_domain=(
+                "actual_clean_target_video" if frame_gauge_accepted else "none"
+            ),
             transformed_states=(
                 ["learned_suffix", "derived_guidance_suffix"]
                 if frame_gauge_accepted and pending_registered_reference is not None
