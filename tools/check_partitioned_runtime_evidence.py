@@ -98,13 +98,9 @@ def main() -> None:
             parser.error("frame-gauge hardware validation requires --require-auto-strength-off")
         if not args.auto_strength_report:
             parser.error("frame-gauge hardware validation requires at least one --auto-strength-report")
-        if (
-            args.expected_frame_gauge_mode != "off"
-            and not args.expected_auto_strength_digest
-        ):
+        if args.expected_frame_gauge_mode != "off" and not args.expected_auto_strength_digest:
             parser.error(
-                "frame-gauge ON validation requires --expected-auto-strength-digest "
-                "from the matched OFF control"
+                "frame-gauge ON validation requires --expected-auto-strength-digest from the matched OFF control"
             )
 
     metrics = _read_json(args.metrics)
