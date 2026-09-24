@@ -164,20 +164,13 @@ def test_h3_patch_resample_grid_matches_area_normalized_coordinate_formula():
     source_x = _h3_patch_axis(*source_grid, 1)
     target_y = _h3_patch_axis(*target_grid, 0)
     target_x = _h3_patch_axis(*target_grid, 1)
-    expected_y = 2.0 * (
-        (target_y - source_y[0]) / (source_y[1] - source_y[0])
-    ) / (source_grid[0] - 1) - 1.0
-    expected_x = 2.0 * (
-        (target_x - source_x[0]) / (source_x[1] - source_x[0])
-    ) / (source_grid[1] - 1) - 1.0
+    expected_y = 2.0 * ((target_y - source_y[0]) / (source_y[1] - source_y[0])) / (source_grid[0] - 1) - 1.0
+    expected_x = 2.0 * ((target_x - source_x[0]) / (source_x[1] - source_x[0])) / (source_grid[1] - 1) - 1.0
 
     assert torch.allclose(grid[:, 0, 1], expected_y, atol=1e-6, rtol=1e-6)
     assert torch.allclose(grid[0, :, 0], expected_x, atol=1e-6, rtol=1e-6)
 
-    physical_scale = math.sqrt(
-        (target_grid[0] * target_grid[1])
-        / (source_grid[0] * source_grid[1])
-    )
+    physical_scale = math.sqrt((target_grid[0] * target_grid[1]) / (source_grid[0] * source_grid[1]))
     assert physical_scale != pytest.approx(56 / 40)
     assert physical_scale != pytest.approx(74 / 52)
 
