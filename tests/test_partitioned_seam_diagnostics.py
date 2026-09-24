@@ -9,6 +9,7 @@ from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_suffix_dc_bridge,
+    _apply_partitioned_suffix_gauge_bridge,
     _measure_partitioned_transfer_splice,
 )
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
@@ -228,3 +229,35 @@ def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
     assert corrected.data_ptr() != learned.data_ptr()
     assert metrics["suffix_dc_bridge_enabled"] is False
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
+
+
+def test_partitioned_suffix_gauge_bridge_maps_complete_suffix_without_touching_prefix():
+    generator = torch.Generator(device="cpu").manual_seed(903)
+    learned = torch.randn((1, 24, 6, 4, 5), generator=generator, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    exact[:, :, -1] += torch.randn((1, 24, 4, 5), generator=generator, dtype=torch.float32) * 0.3
+    sigma = 0.4
+    seed = 904
+    noise = deterministic_video_noise(
+        tuple(learned.shape),
+        seed=seed,
+        device=learned.device,
+        dtype=learned.dtype,
+    )
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+
+    mapped, corrected, metrics = _apply_partitioned_suffix_gauge_bridge(
+        state,
+        learned,
+        exact,
+        sigma=sigma,
+    )
+
+    assert metrics["suffix_gauge_bridge_corrected_tokens"] == learned.shape[2] - exact.shape[2]
+    assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
+    assert torch.equal(mapped[:, :, :2], state[:, :, :2])
+    native_boundary = learned[:, :, 2] - learned[:, :, 1]
+    restored_boundary = corrected[:, :, 2] - exact[:, :, -1]
+    assert torch.allclose(restored_boundary, native_boundary, rtol=1e-6, atol=1e-6)
+    direct = (1.0 - sigma) * corrected + sigma * noise
+    assert torch.allclose(mapped, direct, rtol=1e-6, atol=1e-6)

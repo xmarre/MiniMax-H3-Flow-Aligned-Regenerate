@@ -109,6 +109,70 @@ def apply_suffix_dc_bridge(
     }
 
 
+def apply_suffix_exact_prefix_gauge_bridge(
+    upscaled_clean_video: torch.Tensor,
+    exact_prefix: torch.Tensor,
+) -> tuple[torch.Tensor, dict[str, float | int | bool]]:
+    """Transport the learned upscaler's full spatial gauge into the exact-prefix suffix.
+
+    Replacing the learned upscaler's transient target-grid prefix with the
+    caller-owned exact prefix changes more than the per-channel DC level: it
+    replaces the complete spatial field at the boundary. A DC-only bridge
+    therefore cannot preserve spatial phase.
+
+    Let L be the learned prefix's last frame, E the authoritative exact
+    prefix's last frame, and S_t the learned suffix. This bridge applies the
+    same residual field E - L to every suffix frame: S'_t = S_t + (E - L).
+    Consequently, after the exact prefix is restored, S'_0 - E == S_0 - L
+    and every suffix temporal difference is unchanged. The operation is a
+    constant change of representation across the suffix, not a crop, pan,
+    warp, or motion estimate. The authoritative prefix itself is never modified.
+    """
+
+    prefix_t = _validate_video_pair(upscaled_clean_video, exact_prefix)
+    suffix_t = int(upscaled_clean_video.shape[2]) - prefix_t
+    exact_last = exact_prefix[:, :, -1].to(
+        device=upscaled_clean_video.device,
+        dtype=torch.float32,
+    )
+    learned_last = upscaled_clean_video[:, :, prefix_t - 1].float()
+    delta = exact_last - learned_last
+    if not bool(torch.isfinite(delta).all().item()):
+        raise RuntimeError("suffix exact-prefix gauge bridge produced a non-finite residual field")
+
+    corrected = upscaled_clean_video.clone()
+    corrected_suffix = corrected[:, :, prefix_t:].float()
+    corrected[:, :, prefix_t:] = (corrected_suffix + delta.unsqueeze(2)).to(dtype=corrected.dtype)
+    if not bool(torch.isfinite(corrected).all().item()):
+        raise RuntimeError("suffix exact-prefix gauge bridge produced NaN or Inf values")
+    if not torch.equal(corrected[:, :, :prefix_t], upscaled_clean_video[:, :, :prefix_t]):
+        raise RuntimeError("suffix exact-prefix gauge bridge altered the learned prefix")
+
+    summary = (
+        torch.stack(
+            (
+                delta.square().mean().sqrt(),
+                delta.abs().mean(),
+                delta.abs().max(),
+            )
+        )
+        .detach()
+        .to(device="cpu", dtype=torch.float64)
+    )
+    delta_rms, delta_abs_mean, delta_abs_max = map(float, summary.tolist())
+    return corrected, {
+        "suffix_gauge_bridge_version": 1,
+        "suffix_gauge_bridge_enabled": True,
+        "suffix_gauge_bridge_prefix_t": prefix_t,
+        "suffix_gauge_bridge_corrected_tokens": suffix_t,
+        "suffix_gauge_bridge_delta_rms": delta_rms,
+        "suffix_gauge_bridge_delta_abs_mean": delta_abs_mean,
+        "suffix_gauge_bridge_delta_abs_max": delta_abs_max,
+        "suffix_gauge_bridge_boundary_difference_preserved": True,
+        "suffix_gauge_bridge_suffix_differences_preserved": True,
+    }
+
+
 def map_clean_bridge_to_conditional_state(
     state: torch.Tensor,
     clean_before: torch.Tensor,
