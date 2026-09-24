@@ -2607,9 +2607,26 @@ def run_partitioned_progressive(
             noise,
             denoise_mask,
         )
+        merged_video_noise, _merged_audio_noise = unpack_streams(
+            target_noise,
+            target_shapes,
+        )
+        original_video_noise, _original_audio_noise = unpack_streams(
+            noise,
+            target_shapes,
+        )
+        protected_video_noise_exact = torch.equal(
+            merged_video_noise[:, :, : stage_plan.prefix_t],
+            original_video_noise[:, :, : stage_plan.prefix_t].to(merged_video_noise),
+        )
+        if not protected_video_noise_exact:
+            raise RuntimeError(
+                "partitioned handoff changed caller-owned protected video noise"
+            )
         binding.metrics.event(
             "handoff_transfer_wall",
             elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0,
+            protected_video_noise_exact=protected_video_noise_exact,
             partitioned_exact_prefix=True,
         )
 
