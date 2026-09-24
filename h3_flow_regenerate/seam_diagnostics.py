@@ -421,9 +421,7 @@ def measure_exact_prefix_splice(
     if prefix_t < 1 or prefix_t >= temporal:
         raise ValueError("exact-prefix splice requires a non-empty prefix shorter than the video")
     if corrected_clean_video is not None and corrected_clean_video.shape[2] <= prefix_t:
-        raise ValueError(
-            "corrected exact-prefix splice tensor must retain the first suffix frame"
-        )
+        raise ValueError("corrected exact-prefix splice tensor must retain the first suffix frame")
 
     lowpass_kernel = _effective_lowpass_kernel(upscaled_clean_video, requested_lowpass_kernel)
     upscaled_prefix = upscaled_clean_video[:, :, :prefix_t]
