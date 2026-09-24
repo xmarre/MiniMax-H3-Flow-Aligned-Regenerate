@@ -79,6 +79,26 @@ def test_registration_recovers_independent_fractional_translation(dx, dy):
     assert estimate.metrics["runner_margin_ratio"] >= 0.05
 
 
+@pytest.mark.parametrize(
+    ("dx", "dy"),
+    [
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+    ],
+)
+def test_registration_recovers_integer_axis_and_combined_shifts(dx, dy):
+    learned, exact = _analytic_pair(dx=dx, dy=dy)
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.accepted, estimate.telemetry()
+    assert estimate.dx == pytest.approx(dx, abs=0.125)
+    assert estimate.dy == pytest.approx(dy, abs=0.125)
+
+
+
 def test_registration_rejects_constant_and_overbound_fields():
     constant = torch.ones(1, 24, 4, 26, 26)
     ambiguous = estimate_paired_prefix_translation(
@@ -276,3 +296,8 @@ def test_registration_rejects_when_fewer_than_eight_channels_are_informative():
 
     assert estimate.rejected
     assert estimate.reason == "insufficient_valid_channels"
+
+
+def test_sub_identity_bound_estimate_is_an_exact_noop():
+    learned, exact = _analytic_pair(dx=0.03125, dy=-0.03125)
+    estimate = estimate_paired_prefix_translation(learned, exact)
