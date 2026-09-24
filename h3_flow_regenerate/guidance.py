@@ -372,16 +372,8 @@ def _build_temporal_correspondence(
     # Match a lightly smoothed clean-state latent. This keeps the matcher H3-native
     # and dependency-free while avoiding pixel/detail noise as the correspondence key.
     features = low_frequency_projection(reference, 0.5)
-    left = (
-        features[:, :, pair_start : frames - 1]
-        .permute(0, 2, 1, 3, 4)
-        .reshape(-1, channels, height, width)
-    )
-    right = (
-        features[:, :, pair_start + 1 : frames]
-        .permute(0, 2, 1, 3, 4)
-        .reshape(-1, channels, height, width)
-    )
+    left = features[:, :, pair_start : frames - 1].permute(0, 2, 1, 3, 4).reshape(-1, channels, height, width)
+    right = features[:, :, pair_start + 1 : frames].permute(0, 2, 1, 3, 4).reshape(-1, channels, height, width)
 
     backward, backward_base, backward_similarity, backward_margin = _local_correspondence(
         right,
@@ -403,35 +395,19 @@ def _build_temporal_correspondence(
         forward_base.unsqueeze(1),
         backward,
     ).squeeze(1)
-    backward_cycle = (
-        (backward + reverse_forward).abs().amax(dim=1)
-        <= config.temporal_cycle_tolerance
-    )
-    backward_confidence = (
-        (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt()
-        * backward_cycle.float()
-    )
+    backward_cycle = (backward + reverse_forward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
+    backward_confidence = (backward_base * reverse_forward_confidence).clamp_min(0.0).sqrt() * backward_cycle.float()
 
     reverse_backward = _gather_at_integer_flow(backward, forward)
     reverse_backward_confidence = _gather_at_integer_flow(
         backward_base.unsqueeze(1),
         forward,
     ).squeeze(1)
-    forward_cycle = (
-        (forward + reverse_backward).abs().amax(dim=1)
-        <= config.temporal_cycle_tolerance
-    )
-    forward_confidence = (
-        (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt()
-        * forward_cycle.float()
-    )
+    forward_cycle = (forward + reverse_backward).abs().amax(dim=1) <= config.temporal_cycle_tolerance
+    forward_confidence = (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt() * forward_cycle.float()
 
     if validity is not None:
-        expanded_validity = (
-            validity.view(1, 1, height, width)
-            .expand(backward.shape[0], 1, height, width)
-            .float()
-        )
+        expanded_validity = validity.view(1, 1, height, width).expand(backward.shape[0], 1, height, width).float()
         backward_sample_valid = _gather_at_integer_flow(
             expanded_validity,
             backward,
@@ -441,27 +417,13 @@ def _build_temporal_correspondence(
             forward,
         ).squeeze(1)
         query_valid = expanded_validity.squeeze(1)
-        backward_confidence = (
-            backward_confidence
-            * query_valid
-            * (backward_sample_valid > 0.5)
-        )
-        forward_confidence = (
-            forward_confidence
-            * query_valid
-            * (forward_sample_valid > 0.5)
-        )
+        backward_confidence = backward_confidence * query_valid * (backward_sample_valid > 0.5)
+        forward_confidence = forward_confidence * query_valid * (forward_sample_valid > 0.5)
 
-    all_confidence = torch.cat(
-        (backward_confidence.reshape(-1), forward_confidence.reshape(-1))
-    )
+    all_confidence = torch.cat((backward_confidence.reshape(-1), forward_confidence.reshape(-1)))
     valid = all_confidence > 0.0
-    all_similarity = torch.cat(
-        (backward_similarity.reshape(-1), forward_similarity.reshape(-1))
-    )
-    all_margin = torch.cat(
-        (backward_margin.reshape(-1), forward_margin.reshape(-1))
-    )
+    all_similarity = torch.cat((backward_similarity.reshape(-1), forward_similarity.reshape(-1)))
+    all_margin = torch.cat((backward_margin.reshape(-1), forward_margin.reshape(-1)))
     all_flow = torch.cat(
         (
             backward.square().sum(dim=1).sqrt().reshape(-1),
@@ -469,23 +431,33 @@ def _build_temporal_correspondence(
         )
     )
     confidence_mean = float(
-        all_confidence.float().mean().detach().to(
+        all_confidence.float()
+        .mean()
+        .detach()
+        .to(
             device="cpu",
             dtype=torch.float64,
         ).item()
     )
     valid_fraction = float(
-        valid.float().mean().detach().to(
+        valid.float()
+        .mean()
+        .detach()
+        .to(
             device="cpu",
             dtype=torch.float64,
         ).item()
     )
     flow_magnitude_max = (
         float(
-            all_flow[valid].max().detach().to(
+            all_flow[valid]
+            .max()
+            .detach()
+            .to(
                 device="cpu",
                 dtype=torch.float64,
-            ).item()
+            )
+            .item()
         )
         if bool(valid.any().item())
         else 0.0
@@ -807,19 +779,8 @@ def _bounded(
     correction_work = correction[:, :, prefix_t:]
     reference_work = reference[:, :, prefix_t:]
     dims = tuple(range(1, correction_work.ndim))
-    corr_rms = (
-        correction_work.float()
-        .square()
-        .mean(dim=dims, keepdim=True)
-        .sqrt()
-    )
-    ref_rms = (
-        reference_work.float()
-        .square()
-        .mean(dim=dims, keepdim=True)
-        .sqrt()
-        .clamp_min(1e-8)
-    )
+    corr_rms = correction_work.float().square().mean(dim=dims, keepdim=True).sqrt()
+    ref_rms = reference_work.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
     scale = torch.clamp(
         ref_rms * ratio / corr_rms.clamp_min(1e-8),
         max=1.0,
@@ -867,38 +828,20 @@ def apply_guidance(
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
-    acceleration_active = (
-        config.mode == "direction+acceleration"
-        and config.acceleration_weight > 0
-    )
-    temporal_active = (
-        config.mode == "direction+temporal"
-        and config.temporal_weight > 0
-    )
+    acceleration_active = config.mode == "direction+acceleration" and config.acceleration_weight > 0
+    temporal_active = config.mode == "direction+temporal" and config.temporal_weight > 0
     if acceleration_active and len(trustworthy_samples(run)) < 3:
-        raise RuntimeError(
-            "acceleration guidance requires at least three exact trajectory anchors"
-        )
+        raise RuntimeError("acceleration guidance requires at least three exact trajectory anchors")
     coordinate = float(coordinate)
     if not math.isfinite(coordinate) or not 0.0 <= coordinate <= 1.0:
         raise ValueError("guidance coordinate must be finite and inside [0, 1]")
     if acceleration_active:
         if high_state is None:
-            raise ValueError(
-                "acceleration guidance requires the current high-grid sampler state"
-            )
+            raise ValueError("acceleration guidance requires the current high-grid sampler state")
         if high_state.shape != high_x0.shape:
-            raise ValueError(
-                "acceleration sampler state and predicted-clean video shapes differ"
-            )
-        if (
-            sigma is None
-            or not math.isfinite(float(sigma))
-            or float(sigma) <= 0.0
-        ):
-            raise ValueError(
-                "acceleration guidance requires a finite positive sampler sigma"
-            )
+            raise ValueError("acceleration sampler state and predicted-clean video shapes differ")
+        if sigma is None or not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
+            raise ValueError("acceleration guidance requires a finite positive sampler sigma")
         high_state = high_state.to(
             device=high_x0.device,
             dtype=high_x0.dtype,
@@ -915,45 +858,25 @@ def apply_guidance(
     source_ref = None
     if registered_reference is not None:
         if config.mode == "downsample_consistency":
-            raise RuntimeError(
-                "registered frame-gauge guidance does not support "
-                "downsample_consistency"
-            )
+            raise RuntimeError("registered frame-gauge guidance does not support downsample_consistency")
         if str(registered_reference.run_id) != str(run.run_id):
-            raise RuntimeError(
-                "registered guidance reference trajectory identity drifted"
-            )
+            raise RuntimeError("registered guidance reference trajectory identity drifted")
         if registered_reference.video.shape != high_x0.shape:
-            raise RuntimeError(
-                "registered guidance reference target geometry drifted"
-            )
-        if (
-            registered_reference.video.device.type == "meta"
-            or not bool(torch.isfinite(registered_reference.video).all().item())
+            raise RuntimeError("registered guidance reference target geometry drifted")
+        if registered_reference.video.device.type == "meta" or not bool(
+            torch.isfinite(registered_reference.video).all().item()
         ):
-            raise RuntimeError(
-                "registered guidance reference is not a finite materialized tensor"
-            )
+            raise RuntimeError("registered guidance reference is not a finite materialized tensor")
         prefix_t = registered_reference.prefix_t
         if type(prefix_t) is not int or not 0 <= prefix_t < high_x0.shape[2]:
-            raise RuntimeError(
-                "registered guidance reference prefix ownership is invalid"
-            )
+            raise RuntimeError("registered guidance reference prefix ownership is invalid")
         if (
             registered_reference.validity.shape != high_x0.shape[-2:]
             or registered_reference.validity.dtype != torch.bool
         ):
-            raise RuntimeError(
-                "registered guidance reference validity geometry drifted"
-            )
-        if (
-            coordinate
-            > float(registered_reference.reference_coordinate) + 1e-8
-        ):
-            raise RuntimeError(
-                "high-stage sampler evaluated above the registered "
-                "guidance endpoint"
-            )
+            raise RuntimeError("registered guidance reference validity geometry drifted")
+        if coordinate > float(registered_reference.reference_coordinate) + 1e-8:
+            raise RuntimeError("high-stage sampler evaluated above the registered guidance endpoint")
         _, resolved_coordinate, _ = time_matched_reference_info(
             run,
             coordinate,
@@ -964,9 +887,7 @@ def apply_guidance(
             rel_tol=0.0,
             abs_tol=1e-8,
         ):
-            raise RuntimeError(
-                "registered guidance reference coordinate identity drifted"
-            )
+            raise RuntimeError("registered guidance reference coordinate identity drifted")
         ref = registered_reference.video.to(
             device=high_x0.device,
             dtype=high_x0.dtype,
@@ -981,17 +902,11 @@ def apply_guidance(
             abs_tol=1e-12,
         )
         temporal_reference = ref
-        temporal_validity = registered_reference.validity.to(
-            device=high_x0.device
-        )
-        temporal_radius = int(
-            registered_reference.temporal_search_radius
-        )
+        temporal_validity = registered_reference.validity.to(device=high_x0.device)
+        temporal_radius = int(registered_reference.temporal_search_radius)
         temporal_cache_key = registered_reference.cache_key
     else:
-        source_ref, reference_coordinate, reference_clamped = (
-            time_matched_reference_info(run, coordinate)
-        )
+        source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
         source_ref = source_ref.to(
             device=high_x0.device,
             dtype=high_x0.dtype,
@@ -1007,10 +922,7 @@ def apply_guidance(
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
-    schedule = (
-        min(1.0, max(0.0, coordinate / start))
-        ** config.schedule_power
-    )
+    schedule = min(1.0, max(0.0, coordinate / start)) ** config.schedule_power
 
     correction = torch.zeros_like(high_x0)
     if config.mode in {
@@ -1025,10 +937,7 @@ def apply_guidance(
         if registered and prefix_t:
             residual = residual.clone()
             residual[:, :, :prefix_t] = 0
-        correction = (
-            correction
-            + schedule * config.direction_weight * residual
-        )
+        correction = correction + schedule * config.direction_weight * residual
     if config.mode == "downsample_consistency":
         assert source_ref is not None
         source_size = (
@@ -1093,11 +1002,7 @@ def apply_guidance(
                 transfer_mode=config.transfer_mode,
                 reference_is_target_grid=registered,
             )
-            temporal_correction = (
-                schedule
-                * config.temporal_weight
-                * temporal_delta
-            )
+            temporal_correction = schedule * config.temporal_weight * temporal_delta
             if registered and prefix_t:
                 temporal_correction = temporal_correction.clone()
                 temporal_correction[:, :, :prefix_t] = 0
@@ -1125,12 +1030,8 @@ def apply_guidance(
             )
             if not same_coordinate_refinement:
                 state.previous_coordinate = state.current_coordinate
-                state.previous_high_velocity = (
-                    state.current_high_velocity
-                )
-                state.previous_reference_velocity = (
-                    state.current_reference_velocity
-                )
+                state.previous_high_velocity = state.current_high_velocity
+                state.previous_reference_velocity = state.current_reference_velocity
 
         if (
             state.previous_coordinate is not None
@@ -1138,22 +1039,7 @@ def apply_guidance(
             and state.previous_reference_velocity is not None
         ):
             acceleration_delta = (
-                reference_velocity
-                - state.previous_reference_velocity
-                - high_velocity
-                + state.previous_high_velocity
-            )
-            high_velocity = (
-                high_velocity
-                + schedule
-                * config.acceleration_weight
-                * acceleration_delta
-            )
-            acceleration_guided = (
-                high_state - sigma_value * high_velocity
-            )
-            acceleration_correction = (
-                acceleration_guided - guided
+                reference_velocity - state.previous_reference_velocity - high_velocity + state.previous_high_velocity
             )
             guided = acceleration_guided
             acceleration_applied = True
@@ -1172,33 +1058,17 @@ def apply_guidance(
     )
     result = high_x0 + correction
 
-    metric_reference = (
-        high_x0[:, :, prefix_t:]
-        if registered and prefix_t
-        else high_x0
-    )
-    direction_metric = (
-        direction_correction[:, :, prefix_t:]
-        if registered and prefix_t
-        else direction_correction
-    )
-    temporal_metric = (
-        temporal_correction[:, :, prefix_t:]
-        if registered and prefix_t
-        else temporal_correction
-    )
+    metric_reference = high_x0[:, :, prefix_t:] if registered and prefix_t else high_x0
+    direction_metric = direction_correction[:, :, prefix_t:] if registered and prefix_t else direction_correction
+    temporal_metric = temporal_correction[:, :, prefix_t:] if registered and prefix_t else temporal_correction
     acceleration_metric = (
-        acceleration_correction[:, :, prefix_t:]
-        if registered and prefix_t
-        else acceleration_correction
+        acceleration_correction[:, :, prefix_t:] if registered and prefix_t else acceleration_correction
     )
 
     state.last_schedule = float(schedule)
     state.last_correction_rms = correction_stats["correction_rms"]
     state.last_baseline_rms = correction_stats["baseline_rms"]
-    state.last_correction_rms_ratio = (
-        correction_stats["correction_rms_ratio"]
-    )
+    state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
     state.last_clamp_scale = correction_stats["clamp_scale"]
     state.last_direction_rms_ratio = _rms_ratio(
         direction_metric,
@@ -1213,81 +1083,41 @@ def apply_guidance(
         metric_reference,
     )
     state.last_acceleration_applied = acceleration_applied
-    state.last_same_coordinate_refinement = (
-        same_coordinate_refinement
-    )
-    state.last_acceleration_anchor_coordinate = (
-        state.previous_coordinate
-        if acceleration_applied
-        else None
-    )
+    state.last_same_coordinate_refinement = same_coordinate_refinement
+    state.last_acceleration_anchor_coordinate = state.previous_coordinate if acceleration_applied else None
     state.last_temporal_cache_hit = temporal_cache_hit
-    state.last_temporal_reference_coordinate = (
-        reference_coordinate
-        if temporal_active
-        else None
-    )
-    state.last_temporal_reference_clamped = (
-        reference_clamped
-        if temporal_active
-        else False
-    )
-    state.last_temporal_search_radius = (
-        temporal_radius
-        if temporal_active
-        else None
-    )
+    state.last_temporal_reference_coordinate = reference_coordinate if temporal_active else None
+    state.last_temporal_reference_clamped = reference_clamped if temporal_active else False
+    state.last_temporal_search_radius = temporal_radius if temporal_active else None
     state.last_temporal_cross_prefix_pairs_disabled = (
-        min(prefix_t, max(0, high_x0.shape[2] - 1))
-        if temporal_active and registered
-        else 0
+        min(prefix_t, max(0, high_x0.shape[2] - 1)) if temporal_active and registered else 0
     )
     state.last_registered_reference_used = registered
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0
         state.last_temporal_valid_fraction = 0.0
-        state.last_temporal_disocclusion_fraction = (
-            1.0
-            if temporal_active
-            else 0.0
-        )
+        state.last_temporal_disocclusion_fraction = 1.0 if temporal_active else 0.0
         state.last_temporal_similarity_mean = 0.0
         state.last_temporal_margin_mean = 0.0
         state.last_temporal_flow_magnitude_mean = 0.0
         state.last_temporal_flow_magnitude_max = 0.0
     else:
-        state.last_temporal_confidence_mean = (
-            temporal_match.confidence_mean
-        )
-        state.last_temporal_valid_fraction = (
-            temporal_match.valid_fraction
-        )
-        state.last_temporal_disocclusion_fraction = (
-            1.0 - temporal_match.valid_fraction
-        )
-        state.last_temporal_similarity_mean = (
-            temporal_match.similarity_mean
-        )
+        state.last_temporal_confidence_mean = temporal_match.confidence_mean
+        state.last_temporal_valid_fraction = temporal_match.valid_fraction
+        state.last_temporal_disocclusion_fraction = 1.0 - temporal_match.valid_fraction
+        state.last_temporal_similarity_mean = temporal_match.similarity_mean
         state.last_temporal_margin_mean = temporal_match.margin_mean
-        state.last_temporal_flow_magnitude_mean = (
-            temporal_match.flow_magnitude_mean
-        )
-        state.last_temporal_flow_magnitude_max = (
-            temporal_match.flow_magnitude_max
-        )
+        state.last_temporal_flow_magnitude_mean = temporal_match.flow_magnitude_mean
+        state.last_temporal_flow_magnitude_max = temporal_match.flow_magnitude_max
 
     if acceleration_active:
         assert high_state is not None
         assert sigma_value is not None
         assert reference_velocity is not None
         state.current_coordinate = float(coordinate)
-        state.current_high_velocity = (
-            (high_state - result) / sigma_value
-        ).detach()
-        state.current_reference_velocity = (
-            reference_velocity.detach()
-        )
+        state.current_high_velocity = ((high_state - result) / sigma_value).detach()
+        state.current_reference_velocity = reference_velocity.detach()
     else:
         state.current_coordinate = None
         state.current_high_velocity = None
