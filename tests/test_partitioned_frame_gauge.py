@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -163,3 +165,41 @@ def test_identity_guidance_calibration_never_resamples_suffix():
     assert registered.dx == 0.0
     assert registered.dy == 0.0
     assert torch.equal(registered.video, exact_full)
+
+def test_guidance_registration_rejects_high_schedule_that_changes_reference_identity():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(exact_full, split_coordinate)
+    lower = TrajectorySample(
+        0.02,
+        0.2,
+        0.2,
+        1,
+        1,
+        "corrected",
+        "actual",
+        exact_full.clone(),
+    )
+    run = replace(run, samples=(run.samples[0], lower))
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert error == "high_schedule_changes_reference_identity"
+    assert fields["status"] == "rejected"
+    assert fields["reference_coordinate"] == pytest.approx(split_coordinate)
+    assert any(
+        value != pytest.approx(split_coordinate)
+        for value in fields["resolved_high_coordinates"]
+    )
+
