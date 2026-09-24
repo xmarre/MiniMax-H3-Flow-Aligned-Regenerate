@@ -341,10 +341,7 @@ def build_handoff_state(
             clean_operand = learned_x0.to(noise)
             input_version = getattr(clean_operand, "_version", None)
             postprocess_result = clean_video_postprocess(clean_operand)
-            if (
-                input_version is not None
-                and getattr(clean_operand, "_version", input_version) != input_version
-            ):
+            if input_version is not None and getattr(clean_operand, "_version", input_version) != input_version:
                 raise RuntimeError("clean-video postprocess hook mutated its input tensor")
             if not isinstance(postprocess_result, CleanVideoPostprocessResult):
                 raise TypeError("clean-video postprocess hook returned an unsupported result")
