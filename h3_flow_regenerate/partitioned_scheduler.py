@@ -983,8 +983,10 @@ def _prepare_registered_guidance_reference(
     """Register the active target-grid Flow reference without mutating its trajectory."""
 
     if guidance.mode == "downsample_consistency":
-        return None, {"status": "rejected", "reason": "unsupported_guidance_operator"}, (
-            "unsupported_guidance_operator"
+        return (
+            None,
+            {"status": "rejected", "reason": "unsupported_guidance_operator"},
+            ("unsupported_guidance_operator"),
         )
 
     exact_probe = any(
@@ -1011,24 +1013,32 @@ def _prepare_registered_guidance_reference(
             abs_tol=1e-8,
         )
     ):
-        return None, {
-            "status": "rejected",
-            "reason": "missing_exact_probe_endpoint",
-            "reference_coordinate": float(reference_coordinate),
-            "split_coordinate": float(split_coordinate),
-        }, "missing_exact_probe_endpoint"
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "missing_exact_probe_endpoint",
+                "reference_coordinate": float(reference_coordinate),
+                "split_coordinate": float(split_coordinate),
+            },
+            "missing_exact_probe_endpoint",
+        )
 
     high_coordinates = [
         float(normalized_coordinate(float(value), video_shift=video_shift))
         for value in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist()
     ]
     if any(value > float(reference_coordinate) + 1e-8 for value in high_coordinates):
-        return None, {
-            "status": "rejected",
-            "reason": "high_schedule_exceeds_probe_endpoint",
-            "reference_coordinate": float(reference_coordinate),
-            "high_coordinate_max": max(high_coordinates),
-        }, "high_schedule_exceeds_probe_endpoint"
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "high_schedule_exceeds_probe_endpoint",
+                "reference_coordinate": float(reference_coordinate),
+                "high_coordinate_max": max(high_coordinates),
+            },
+            "high_schedule_exceeds_probe_endpoint",
+        )
 
     source_ref = source_ref.to(device=exact_prefix.device, dtype=exact_prefix.dtype)
     target_ref = resize_video(
@@ -1044,10 +1054,14 @@ def _prepare_registered_guidance_reference(
         int(target_h),
         int(target_w),
     ):
-        return None, {
-            "status": "rejected",
-            "reason": "guidance_target_geometry_mismatch",
-        }, "guidance_target_geometry_mismatch"
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "guidance_target_geometry_mismatch",
+            },
+            "guidance_target_geometry_mismatch",
+        )
 
     estimate = estimate_paired_prefix_translation(
         target_ref[:, :, :prefix_t],
@@ -1069,9 +1083,7 @@ def _prepare_registered_guidance_reference(
             target_h / int(run.geometry.latent_h),
             target_w / int(run.geometry.latent_w),
         )
-        temporal_radius = math.ceil(
-            int(guidance.temporal_search_radius) * spatial_scale
-        )
+        temporal_radius = math.ceil(int(guidance.temporal_search_radius) * spatial_scale)
         if temporal_radius > 8:
             fields = dict(estimate_fields)
             fields.update(
@@ -1186,26 +1198,22 @@ def _frame_gauge_clean_postprocess(
 
     registered_reference = None
     if guidance is not None and guidance.mode != "off":
-        registered_reference, guidance_fields, guidance_error = (
-            _prepare_registered_guidance_reference(
-                run=guidance_run,
-                guidance=guidance,
-                exact_prefix=exact_prefix,
-                target_h=target_h,
-                target_w=target_w,
-                prefix_t=prefix_t,
-                split_coordinate=split_coordinate,
-                high_sigmas=high_sigmas,
-                video_shift=video_shift,
-            )
+        registered_reference, guidance_fields, guidance_error = _prepare_registered_guidance_reference(
+            run=guidance_run,
+            guidance=guidance,
+            exact_prefix=exact_prefix,
+            target_h=target_h,
+            target_w=target_w,
+            prefix_t=prefix_t,
+            split_coordinate=split_coordinate,
+            high_sigmas=high_sigmas,
+            video_shift=video_shift,
         )
         transaction["guidance_registration"] = guidance_fields
         if guidance_error is not None:
             transaction["result"] = "rejected"
             transaction["reason"] = guidance_error
-            transaction["elapsed_ms"] = (
-                time.perf_counter() - started
-            ) * 1000.0
+            transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
             result = CleanVideoPostprocessResult(
                 clean_video=learned_clean,
                 protected_prefix_t=prefix_t,
@@ -1238,11 +1246,7 @@ def _frame_gauge_clean_postprocess(
         int(learned_clean.shape[2]),
         prefix_t + 4,
     )
-    aligned_witness = (
-        aligned_full[:, :, :diagnostic_end]
-        .detach()
-        .clone()
-    )
+    aligned_witness = aligned_full[:, :, :diagnostic_end].detach().clone()
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         aligned_full,
         exact_prefix,
@@ -1271,17 +1275,9 @@ def _frame_gauge_clean_postprocess(
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
     )
     witnesses = {
-        "learned_native": (
-            learned_clean[:, :, :diagnostic_end]
-            .detach()
-            .clone()
-        ),
+        "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
         "paired_prefix_aligned_witness": aligned_witness,
-        "corrected_clean": (
-            corrected_clean[:, :, :diagnostic_end]
-            .detach()
-            .clone()
-        ),
+        "corrected_clean": (corrected_clean[:, :, :diagnostic_end].detach().clone()),
     }
     result = CleanVideoPostprocessResult(
         clean_video=corrected_clean,
@@ -2230,36 +2226,17 @@ def run_partitioned_progressive(
         guidance_run = None
         if binding.guidance is not None and binding.guidance.mode != "off":
             if binding.trajectory is None:
-                raise RuntimeError(
-                    "partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY"
-                )
-            session_id, chunk_id = _interop_identity(
-                getattr(guider, "model_options", None)
-            )
-            expected_signature = (
-                binding.guidance_conditioning_signature
-                or _conditioning_signature(guider)
-            )
-            if (
-                guidance_trajectory_source
-                == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
-            ):
+                raise RuntimeError("partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY")
+            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
                 guidance_run = shadow_guidance_run
                 if guidance_run is None:
-                    raise RuntimeError(
-                        "source-uniform shadow guidance trajectory is unavailable"
-                    )
-                if (
-                    guidance_run.chunk_id != str(chunk_id)
-                    or guidance_run.session_id != str(session_id)
-                ):
-                    raise RuntimeError(
-                        "source-uniform shadow guidance trajectory identity drifted"
-                    )
+                    raise RuntimeError("source-uniform shadow guidance trajectory is unavailable")
+                if guidance_run.chunk_id != str(chunk_id) or guidance_run.session_id != str(session_id):
+                    raise RuntimeError("source-uniform shadow guidance trajectory identity drifted")
                 if guidance_run.conditioning_signature != expected_signature:
-                    raise RuntimeError(
-                        "source-uniform shadow guidance trajectory conditioning drifted"
-                    )
+                    raise RuntimeError("source-uniform shadow guidance trajectory conditioning drifted")
             else:
                 guidance_run = binding.trajectory.select(
                     chunk_id=chunk_id,
@@ -2267,13 +2244,9 @@ def run_partitioned_progressive(
                     conditioning_signature=expected_signature,
                 )
             if guidance_run.geometry.latent_t != int(target_shapes[0][2]):
-                raise RuntimeError(
-                    "partitioned low trajectory and target video temporal geometry differ"
-                )
+                raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
 
-        split_coordinate = float(
-            normalized_coordinate(sigma, video_shift=video_shift)
-        )
+        split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
         pending_registered_reference = None
         frame_gauge_witnesses: dict[str, torch.Tensor] = {}
         frame_gauge_transaction: dict[str, Any] = {
@@ -2287,10 +2260,7 @@ def run_partitioned_progressive(
             "guidance_registration": {
                 "status": "off",
                 "reason": (
-                    "guidance_off"
-                    if binding.guidance is None
-                    or binding.guidance.mode == "off"
-                    else "repair_disabled"
+                    "guidance_off" if binding.guidance is None or binding.guidance.mode == "off" else "repair_disabled"
                 ),
             },
             "dc_applied_in_clean_hook": False,
@@ -2304,19 +2274,17 @@ def run_partitioned_progressive(
                 nonlocal frame_gauge_witnesses
                 nonlocal frame_gauge_transaction
 
-                result, registered, witnesses, transaction = (
-                    _frame_gauge_clean_postprocess(
-                        learned_clean,
-                        exact_prefix=stage_plan.prefix,
-                        guidance_run=guidance_run,
-                        guidance=binding.guidance,
-                        target_h=target_h,
-                        target_w=target_w,
-                        prefix_t=stage_plan.prefix_t,
-                        split_coordinate=split_coordinate,
-                        high_sigmas=high_sigmas,
-                        video_shift=video_shift,
-                    )
+                result, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
+                    learned_clean,
+                    exact_prefix=stage_plan.prefix,
+                    guidance_run=guidance_run,
+                    guidance=binding.guidance,
+                    target_h=target_h,
+                    target_w=target_w,
+                    prefix_t=stage_plan.prefix_t,
+                    split_coordinate=split_coordinate,
+                    high_sigmas=high_sigmas,
+                    video_shift=video_shift,
                 )
                 pending_registered_reference = registered
                 frame_gauge_witnesses = witnesses
@@ -2339,9 +2307,7 @@ def run_partitioned_progressive(
             clean_video_postprocess=clean_video_postprocess,
         )
         if rebuilt_shapes != target_shapes:
-            raise RuntimeError(
-                "partitioned exact-prefix handoff changed caller-visible AV geometry"
-            )
+            raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
         target_video, target_audio = unpack_streams(
             target_raw,
             target_shapes,
@@ -2355,28 +2321,21 @@ def run_partitioned_progressive(
                 source_state_audio,
                 target_audio,
             )
-            audio_copy_delta = (
-                target_audio.to(torch.float32)
-                - source_state_audio.to(
-                    device=target_audio.device,
-                    dtype=torch.float32,
-                )
+            audio_copy_delta = target_audio.to(torch.float32) - source_state_audio.to(
+                device=target_audio.device,
+                dtype=torch.float32,
             )
             binding.metrics.event(
                 "partitioned_audio_handoff_copy",
                 exact=audio_copy_exact,
                 max_abs_delta=float(audio_copy_delta.abs().max().item()),
-                rms_delta=float(
-                    audio_copy_delta.square().mean().sqrt().item()
-                ),
+                rms_delta=float(audio_copy_delta.square().mean().sqrt().item()),
                 source_ticks=int(source_state_audio.shape[-1]),
                 target_ticks=int(target_audio.shape[-1]),
                 learned_video_transfer_audio_mutation=False,
             )
             if not audio_copy_exact:
-                raise RuntimeError(
-                    "learned video handoff mutated the carried H3 audio sampler state"
-                )
+                raise RuntimeError("learned video handoff mutated the carried H3 audio sampler state")
 
         diagnostic_seed = int(seed or 0) + config.seed_offset
         exact_prefix = stage_plan.prefix.to(
@@ -2395,39 +2354,29 @@ def run_partitioned_progressive(
                 "corrected_clean",
             }
             if set(frame_gauge_witnesses) != required_witnesses:
-                raise RuntimeError(
-                    "accepted frame-gauge transaction lost required clean-domain witnesses"
-                )
+                raise RuntimeError("accepted frame-gauge transaction lost required clean-domain witnesses")
             learned_clean = frame_gauge_witnesses["learned_native"]
-            aligned_witness = frame_gauge_witnesses[
-                "paired_prefix_aligned_witness"
-            ]
+            aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
             corrected_clean = frame_gauge_witnesses["corrected_clean"]
             dc_metrics = frame_gauge_transaction.get("dc_metrics")
             if not isinstance(dc_metrics, dict):
-                raise RuntimeError(
-                    "accepted frame-gauge transaction lost the existing DC bridge receipt"
-                )
+                raise RuntimeError("accepted frame-gauge transaction lost the existing DC bridge receipt")
             dc_metrics = dict(dc_metrics)
             splice_recovery = "actual_provider_clean_postprocess"
         else:
             if pending_registered_reference is not None:
-                raise RuntimeError(
-                    "rejected frame-gauge transaction published a guidance reference"
-                )
+                raise RuntimeError("rejected frame-gauge transaction published a guidance reference")
             learned_clean = _recover_partitioned_transfer_clean(
                 target_video,
                 sigma=sigma,
                 seed=diagnostic_seed,
             )
-            target_video, corrected_clean, dc_metrics = (
-                _apply_partitioned_suffix_dc_bridge(
-                    target_video,
-                    learned_clean,
-                    exact_prefix,
-                    sigma=sigma,
-                    enabled=True,
-                )
+            target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
+                target_video,
+                learned_clean,
+                exact_prefix,
+                sigma=sigma,
+                enabled=True,
             )
             splice_recovery = "inverse_conditional_renoise"
 
@@ -2437,10 +2386,7 @@ def run_partitioned_progressive(
             corrected_clean_video=corrected_clean,
         )
         splice_diagnostics.update(
-            splice_diagnostic_elapsed_ms=(
-                time.perf_counter() - splice_started
-            )
-            * 1000.0,
+            splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery=splice_recovery,
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
@@ -2500,25 +2446,15 @@ def run_partitioned_progressive(
                 if frame_gauge_accepted
                 else []
             ),
-            provider_output_observed_before_noise=bool(
-                config.frame_gauge_repair
-            ),
+            provider_output_observed_before_noise=bool(config.frame_gauge_repair),
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             provider_model_name=transfer_metrics.get("model_name"),
             actual_clean_dtype=postprocess_report.get("clean_dtype"),
             actual_clean_device=postprocess_report.get("clean_device"),
-            guidance_mode=(
-                binding.guidance.mode
-                if binding.guidance is not None
-                else "off"
-            ),
-            registered_guidance_reference=bool(
-                pending_registered_reference is not None
-            ),
-            target_temporal_search_radius=guidance_registration.get(
-                "target_temporal_radius"
-            ),
+            guidance_mode=(binding.guidance.mode if binding.guidance is not None else "off"),
+            registered_guidance_reference=bool(pending_registered_reference is not None),
+            target_temporal_search_radius=guidance_registration.get("target_temporal_radius"),
             extra_h3_nfe=0,
             extra_sampler_lifetimes=0,
             extra_history_boundaries=0,
@@ -2528,15 +2464,11 @@ def run_partitioned_progressive(
             auto_strength_receipt_status="unknown",
             auto_strength_resolved_off=None,
             auto_strength_validation_required=True,
-            transaction_elapsed_ms=float(
-                frame_gauge_transaction.get("elapsed_ms", 0.0)
-            ),
+            transaction_elapsed_ms=float(frame_gauge_transaction.get("elapsed_ms", 0.0)),
         )
 
         restored_clean = corrected_clean.clone()
-        restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(
-            restored_clean
-        )
+        restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
         for roi_name, roi_fraction in (
             ("upper45", 0.45),
             ("full", 1.0),
@@ -2593,9 +2525,7 @@ def run_partitioned_progressive(
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
 
-        target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(
-            target_video
-        )
+        target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
             "partitioned_transfer",
@@ -2606,33 +2536,21 @@ def run_partitioned_progressive(
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
             frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
-            frame_gauge_result=str(
-                frame_gauge_transaction.get("result", "baseline")
-            ),
-            frame_gauge_reason=str(
-                frame_gauge_transaction.get("reason", "unknown")
-            ),
+            frame_gauge_result=str(frame_gauge_transaction.get("result", "baseline")),
+            frame_gauge_reason=str(frame_gauge_transaction.get("reason", "unknown")),
             suffix_dc_bridge_state_mapping=(
-                "pre_renoise_clean_operand"
-                if frame_gauge_accepted
-                else "conditional_renoise_affine"
+                "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
             ),
             suffix_dc_bridge_policy="one_token_spatial_mean_v1",
             **dc_metrics,
-            provider_api_version=transfer_metrics.get(
-                "provider_api_version"
-            ),
+            provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             model_name=transfer_metrics.get("model_name"),
             source_hw=transfer_metrics.get("source_hw"),
             target_hw=transfer_metrics.get("target_hw"),
             temporal_length=transfer_metrics.get("temporal_length"),
-            learned_upscale_elapsed_ms=transfer_metrics.get(
-                "learned_upscale_elapsed_ms"
-            ),
-            clean_video_postprocess=transfer_metrics.get(
-                "clean_video_postprocess"
-            ),
+            learned_upscale_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
+            clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
             **splice_diagnostics,
         )
 
@@ -2654,22 +2572,15 @@ def run_partitioned_progressive(
         )
         binding.metrics.event(
             "handoff_transfer_wall",
-            elapsed_ms=(
-                time.perf_counter() - transfer_started
-            )
-            * 1000.0,
+            elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0,
             partitioned_exact_prefix=True,
         )
 
         if guidance_run is not None:
             if frame_gauge_accepted:
                 if pending_registered_reference is None:
-                    raise RuntimeError(
-                        "accepted frame-gauge transaction lost registered Flow guidance"
-                    )
-                binding.registered_guidance_reference = (
-                    pending_registered_reference
-                )
+                    raise RuntimeError("accepted frame-gauge transaction lost registered Flow guidance")
+                binding.registered_guidance_reference = pending_registered_reference
             else:
                 binding.registered_guidance_reference = None
             binding.active_guidance_run = guidance_run
@@ -2684,27 +2595,16 @@ def run_partitioned_progressive(
                     guidance_run.geometry.latent_w,
                 ),
                 target_hw=(target_h, target_w),
-                main_captured_run_id=(
-                    committed_low_run.run_id
-                    if committed_low_run is not None
-                    else None
-                ),
+                main_captured_run_id=(committed_low_run.run_id if committed_low_run is not None else None),
                 shared_trajectory_handle_preserved=True,
                 audio_latent_trajectory_present=False,
-                frame_gauge_registered=bool(
-                    binding.registered_guidance_reference is not None
-                ),
+                frame_gauge_registered=bool(binding.registered_guidance_reference is not None),
                 guidance_state_reset_before_high=True,
-                diagnostic_only=(
-                    guidance_trajectory_source
-                    == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW
-                ),
+                diagnostic_only=(guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW),
             )
         else:
             if pending_registered_reference is not None:
-                raise RuntimeError(
-                    "frame-gauge transaction published guidance while guidance is off"
-                )
+                raise RuntimeError("frame-gauge transaction published guidance while guidance is off")
             binding.registered_guidance_reference = None
             binding.guidance_state.reset()
 
