@@ -515,9 +515,7 @@ def test_clean_translation_maps_through_conditional_renoise_without_warping_nois
         noise=noise,
     )
     mapped = baseline_state.clone()
-    mapped[:, :, 2:] += (1.0 - sigma) * (
-        aligned[:, :, 2:] - learned[:, :, 2:]
-    )
+    mapped[:, :, 2:] += (1.0 - sigma) * (aligned[:, :, 2:] - learned[:, :, 2:])
     direct = conditional_renoise_target(
         aligned,
         sigma=sigma,
