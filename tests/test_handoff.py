@@ -1,7 +1,9 @@
 import pytest
 import torch
 
+from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import (
     CleanVideoPostprocessResult,
     ProgressiveHandoffConfig,
@@ -438,3 +440,62 @@ def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
             exact_prefix_mode="mixed_grid_low_suffix",
             suffix_geometric_bridge=1,
         )
+
+
+@pytest.mark.parametrize("sigma", [1e-6, 0.45, 0.999])
+def test_clean_translation_maps_through_conditional_renoise_without_warping_noise(sigma):
+    torch.manual_seed(404)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+        batch_frames=2,
+    ).video
+    baseline_state = conditional_renoise_target(
+        learned,
+        sigma=sigma,
+        noise=noise,
+    )
+    mapped = baseline_state.clone()
+    mapped[:, :, 2:] += (1.0 - sigma) * (
+        aligned[:, :, 2:] - learned[:, :, 2:]
+    )
+    direct = conditional_renoise_target(
+        aligned,
+        sigma=sigma,
+        noise=noise,
+    )
+
+    assert torch.allclose(mapped, direct, rtol=1e-12, atol=1e-12)
+    assert torch.equal(mapped[:, :, :2], baseline_state[:, :, :2])
+
+
+def test_warping_conditional_state_changes_the_handoff_noise_realization():
+    torch.manual_seed(405)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    sigma = 0.45
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+    correct = conditional_renoise_target(aligned, sigma=sigma, noise=noise)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    warped_state = translate_video_cells(
+        state,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+
+    assert not torch.allclose(
+        warped_state[:, :, 2:],
+        correct[:, :, 2:],
+        rtol=1e-10,
+        atol=1e-10,
+    )

@@ -252,3 +252,58 @@ def test_translation_preserves_supported_dtype_and_bounded_batch_equivalence(dty
     tolerance = 1e-6 if dtype == torch.float32 else 1e-3
     assert torch.allclose(one.video.float(), four.video.float(), atol=tolerance, rtol=tolerance)
     assert torch.isfinite(one.video).all()
+
+
+@pytest.mark.parametrize(
+    ("dx", "dy"),
+    [
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+    ],
+)
+def test_registration_recovers_integer_axis_and_combined_shifts(dx, dy):
+    learned, exact = _analytic_pair(dx=dx, dy=dy)
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.accepted, estimate.telemetry()
+    assert estimate.dx == pytest.approx(dx, abs=0.125)
+    assert estimate.dy == pytest.approx(dy, abs=0.125)
+
+
+def test_registration_rejects_periodic_multi_peak_texture():
+    yy, xx = torch.meshgrid(
+        torch.arange(26, dtype=torch.float64),
+        torch.arange(26, dtype=torch.float64),
+        indexing="ij",
+    )
+    stripe = torch.cos(torch.pi * xx) + 0.2 * torch.cos(torch.pi * yy)
+    exact = stripe.view(1, 1, 1, 26, 26).repeat(1, 24, 4, 1, 1).float()
+    learned = torch.roll(exact, shifts=(0, 1), dims=(-2, -1))
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason != "accepted"
+
+
+def test_registration_requires_at_least_eight_informative_channels():
+    learned, exact = _analytic_pair(dx=0.5, dy=0.0)
+    learned[:, 7:] = 1.0
+    exact[:, 7:] = -2.0
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason == "insufficient_valid_channels"
+
+
+def test_sub_identity_bound_estimate_is_an_exact_noop():
+    learned, exact = _analytic_pair(dx=0.03125, dy=-0.03125)
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.identity, estimate.telemetry()
+    assert estimate.dx == 0.0
+    assert estimate.dy == 0.0

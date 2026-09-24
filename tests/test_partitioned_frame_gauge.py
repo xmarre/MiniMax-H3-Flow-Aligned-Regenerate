@@ -163,3 +163,87 @@ def test_identity_guidance_calibration_never_resamples_suffix():
     assert registered.dx == 0.0
     assert registered.dy == 0.0
     assert torch.equal(registered.video, exact_full)
+
+
+def test_guidance_registration_prefers_exact_handoff_probe_at_duplicate_coordinate():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    wrong = _field_video(dx=1.0, dy=0.0)
+    _, split_coordinate = _schedule()
+    samples = (
+        TrajectorySample(
+            split_coordinate,
+            0.8,
+            0.8,
+            0,
+            0,
+            "corrected",
+            "actual",
+            wrong,
+        ),
+        TrajectorySample(
+            split_coordinate,
+            0.8,
+            0.8,
+            0,
+            1,
+            "handoff_probe",
+            "actual",
+            exact_full.clone(),
+        ),
+    )
+    run = TrajectoryRun(
+        1,
+        "frame-gauge-duplicate",
+        "session",
+        "chunk",
+        "sample_res_multistep",
+        "schedule",
+        geometry_from_video(exact_full),
+        (1, 32, 2, 8),
+        "layout",
+        "conditioning",
+        "system_ram",
+        samples,
+        0,
+        1,
+        True,
+    )
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=torch.tensor([0.8, 0.5, 0.0]),
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert error is None
+    assert registered is not None
+    assert fields["status"] == "identity"
+    assert torch.equal(registered.video, exact_full)
+
+
+def test_guidance_registration_rejects_high_schedule_above_probe_endpoint():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    _, split_coordinate = _schedule()
+    run = _run(exact_full, split_coordinate)
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=torch.tensor([0.9, 0.5, 0.0]),
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert error == "high_schedule_exceeds_probe_endpoint"
+    assert fields["status"] == "rejected"

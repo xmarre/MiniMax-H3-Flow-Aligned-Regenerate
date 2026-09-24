@@ -92,6 +92,20 @@ def main() -> None:
         help="Do not require the VDN variable-grid linear-complement active marker.",
     )
     args = parser.parse_args()
+    if args.expected_frame_gauge_mode is not None and not args.require_auto_strength_off:
+        parser.error(
+            "--expected-frame-gauge-mode requires --require-auto-strength-off "
+            "and at least one resolved --auto-strength-report"
+        )
+    if (
+        args.expected_frame_gauge_mode is not None
+        and args.expected_frame_gauge_mode != "off"
+        and not args.expected_auto_strength_digest
+    ):
+        parser.error(
+            "frame-gauge ON validation requires --expected-auto-strength-digest "
+            "from the matched OFF control"
+        )
 
     metrics = _read_json(args.metrics)
     log_text = _read_text(args.log)
