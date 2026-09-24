@@ -776,48 +776,211 @@ def apply_guidance(
     state: GuidanceState,
     high_state: torch.Tensor | None = None,
     sigma: float | None = None,
+    registered_reference: RegisteredGuidanceReference | None = None,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
-    acceleration_active = config.mode == "direction+acceleration" and config.acceleration_weight > 0
-    temporal_active = config.mode == "direction+temporal" and config.temporal_weight > 0
+    acceleration_active = (
+        config.mode == "direction+acceleration"
+        and config.acceleration_weight > 0
+    )
+    temporal_active = (
+        config.mode == "direction+temporal"
+        and config.temporal_weight > 0
+    )
     if acceleration_active and len(trustworthy_samples(run)) < 3:
-        raise RuntimeError("acceleration guidance requires at least three exact trajectory anchors")
+        raise RuntimeError(
+            "acceleration guidance requires at least three exact trajectory anchors"
+        )
     coordinate = float(coordinate)
     if not math.isfinite(coordinate) or not 0.0 <= coordinate <= 1.0:
         raise ValueError("guidance coordinate must be finite and inside [0, 1]")
     if acceleration_active:
         if high_state is None:
-            raise ValueError("acceleration guidance requires the current high-grid sampler state")
+            raise ValueError(
+                "acceleration guidance requires the current high-grid sampler state"
+            )
         if high_state.shape != high_x0.shape:
-            raise ValueError("acceleration sampler state and predicted-clean video shapes differ")
-        if sigma is None or not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
-            raise ValueError("acceleration guidance requires a finite positive sampler sigma")
-        high_state = high_state.to(device=high_x0.device, dtype=high_x0.dtype)
+            raise ValueError(
+                "acceleration sampler state and predicted-clean video shapes differ"
+            )
+        if (
+            sigma is None
+            or not math.isfinite(float(sigma))
+            or float(sigma) <= 0.0
+        ):
+            raise ValueError(
+                "acceleration guidance requires a finite positive sampler sigma"
+            )
+        high_state = high_state.to(
+            device=high_x0.device,
+            dtype=high_x0.dtype,
+        )
         sigma_value = float(sigma)
     else:
         sigma_value = None
 
-    source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
-    source_ref = source_ref.to(device=high_x0.device, dtype=high_x0.dtype)
-    ref = resize_video(source_ref, high_x0.shape[-2], high_x0.shape[-1], mode=config.transfer_mode)
+    registered = registered_reference is not None
+    prefix_t = 0
+    temporal_validity = None
+    temporal_radius = config.temporal_search_radius
+    temporal_cache_key = None
+    source_ref = None
+    if registered_reference is not None:
+        if config.mode == "downsample_consistency":
+            raise RuntimeError(
+                "registered frame-gauge guidance does not support "
+                "downsample_consistency"
+            )
+        if registered_reference.run_id != run.run_id:
+            raise RuntimeError(
+                "registered guidance reference trajectory identity drifted"
+            )
+        if registered_reference.video.shape != high_x0.shape:
+            raise RuntimeError(
+                "registered guidance reference target geometry drifted"
+            )
+        if (
+            registered_reference.video.device.type == "meta"
+            or not bool(torch.isfinite(registered_reference.video).all().item())
+        ):
+            raise RuntimeError(
+                "registered guidance reference is not a finite materialized tensor"
+            )
+        prefix_t = registered_reference.prefix_t
+        if type(prefix_t) is not int or not 0 <= prefix_t < high_x0.shape[2]:
+            raise RuntimeError(
+                "registered guidance reference prefix ownership is invalid"
+            )
+        if (
+            registered_reference.validity.shape != high_x0.shape[-2:]
+            or registered_reference.validity.dtype != torch.bool
+        ):
+            raise RuntimeError(
+                "registered guidance reference validity geometry drifted"
+            )
+        if (
+            coordinate
+            > float(registered_reference.reference_coordinate) + 1e-8
+        ):
+            raise RuntimeError(
+                "high-stage sampler evaluated above the registered "
+                "guidance endpoint"
+            )
+        _, resolved_coordinate, _ = time_matched_reference_info(
+            run,
+            coordinate,
+        )
+        if not math.isclose(
+            float(resolved_coordinate),
+            float(registered_reference.reference_coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        ):
+            raise RuntimeError(
+                "registered guidance reference coordinate identity drifted"
+            )
+        ref = registered_reference.video.to(
+            device=high_x0.device,
+            dtype=high_x0.dtype,
+        )
+        reference_coordinate = float(
+            registered_reference.reference_coordinate
+        )
+        reference_clamped = not math.isclose(
+            coordinate,
+            reference_coordinate,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        temporal_reference = ref
+        temporal_validity = registered_reference.validity.to(
+            device=high_x0.device
+        )
+        temporal_radius = int(
+            registered_reference.temporal_search_radius
+        )
+        temporal_cache_key = registered_reference.cache_key
+    else:
+        source_ref, reference_coordinate, reference_clamped = (
+            time_matched_reference_info(run, coordinate)
+        )
+        source_ref = source_ref.to(
+            device=high_x0.device,
+            dtype=high_x0.dtype,
+        )
+        ref = resize_video(
+            source_ref,
+            high_x0.shape[-2],
+            high_x0.shape[-1],
+            mode=config.transfer_mode,
+        )
+        temporal_reference = source_ref
+
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
-    schedule = min(1.0, max(0.0, coordinate / start)) ** config.schedule_power
+    schedule = (
+        min(1.0, max(0.0, coordinate / start))
+        ** config.schedule_power
+    )
 
     correction = torch.zeros_like(high_x0)
-    if config.mode in {"direction", "direction+acceleration", "direction+temporal"}:
-        residual = low_frequency_projection(ref - high_x0, config.cutoff)
-        correction = correction + schedule * config.direction_weight * residual
+    if config.mode in {
+        "direction",
+        "direction+acceleration",
+        "direction+temporal",
+    }:
+        residual = low_frequency_projection(
+            ref - high_x0,
+            config.cutoff,
+        )
+        if registered and prefix_t:
+            residual = residual.clone()
+            residual[:, :, :prefix_t] = 0
+        correction = (
+            correction
+            + schedule * config.direction_weight * residual
+        )
     if config.mode == "downsample_consistency":
-        source_size = (run.geometry.latent_h, run.geometry.latent_w)
-        work = high_x0.permute(0, 2, 1, 3, 4).reshape(-1, high_x0.shape[1], *high_x0.shape[-2:]).float()
-        down = F.interpolate(work, size=source_size, mode="area")
-        down = down.reshape(high_x0.shape[0], high_x0.shape[2], high_x0.shape[1], *source_size).permute(0, 2, 1, 3, 4)
+        assert source_ref is not None
+        source_size = (
+            run.geometry.latent_h,
+            run.geometry.latent_w,
+        )
+        work = (
+            high_x0.permute(0, 2, 1, 3, 4)
+            .reshape(
+                -1,
+                high_x0.shape[1],
+                *high_x0.shape[-2:],
+            )
+            .float()
+        )
+        down = F.interpolate(
+            work,
+            size=source_size,
+            mode="area",
+        )
+        down = (
+            down.reshape(
+                high_x0.shape[0],
+                high_x0.shape[2],
+                high_x0.shape[1],
+                *source_size,
+            )
+            .permute(0, 2, 1, 3, 4)
+        )
         source_error = source_ref - down.to(source_ref)
-        error = resize_video(source_error, *high_x0.shape[-2:], mode=config.transfer_mode)
-        correction = correction + schedule * config.consistency_weight * error
+        error = resize_video(
+            source_error,
+            *high_x0.shape[-2:],
+            mode=config.transfer_mode,
+        )
+        correction = (
+            correction
+            + schedule * config.consistency_weight * error
+        )
 
     direction_correction = correction
     temporal_correction = torch.zeros_like(high_x0)
@@ -826,19 +989,30 @@ def apply_guidance(
     guided = high_x0 + direction_correction
     if temporal_active:
         temporal_match, temporal_cache_hit = _temporal_correspondence(
-            source_ref,
+            temporal_reference,
             coordinate=reference_coordinate,
             config=config,
             state=state,
+            prefix_t=prefix_t if registered else 0,
+            validity=temporal_validity,
+            search_radius=temporal_radius,
+            cache_key=temporal_cache_key,
         )
         if temporal_match is not None:
             temporal_delta = _temporal_alignment_correction(
                 guided,
-                source_ref,
+                temporal_reference,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
             )
-            temporal_correction = schedule * config.temporal_weight * temporal_delta
+            temporal_correction = (
+                schedule
+                * config.temporal_weight
+                * temporal_delta
+            )
+            if registered and prefix_t:
+                temporal_correction = temporal_correction.clone()
+                temporal_correction[:, :, :prefix_t] = 0
             guided = guided + temporal_correction
         correction = guided - high_x0
     else:
@@ -863,8 +1037,12 @@ def apply_guidance(
             )
             if not same_coordinate_refinement:
                 state.previous_coordinate = state.current_coordinate
-                state.previous_high_velocity = state.current_high_velocity
-                state.previous_reference_velocity = state.current_reference_velocity
+                state.previous_high_velocity = (
+                    state.current_high_velocity
+                )
+                state.previous_reference_velocity = (
+                    state.current_reference_velocity
+                )
 
         if (
             state.previous_coordinate is not None
@@ -872,55 +1050,156 @@ def apply_guidance(
             and state.previous_reference_velocity is not None
         ):
             acceleration_delta = (
-                reference_velocity - state.previous_reference_velocity - high_velocity + state.previous_high_velocity
+                reference_velocity
+                - state.previous_reference_velocity
+                - high_velocity
+                + state.previous_high_velocity
             )
-            high_velocity = high_velocity + schedule * config.acceleration_weight * acceleration_delta
-            acceleration_guided = high_state - sigma_value * high_velocity
-            acceleration_correction = acceleration_guided - guided
+            high_velocity = (
+                high_velocity
+                + schedule
+                * config.acceleration_weight
+                * acceleration_delta
+            )
+            acceleration_guided = (
+                high_state - sigma_value * high_velocity
+            )
+            acceleration_correction = (
+                acceleration_guided - guided
+            )
             guided = acceleration_guided
             acceleration_applied = True
         correction = guided - high_x0
 
-    correction, correction_stats = _bounded(correction, high_x0, config.max_correction_rms_ratio)
+    if registered and prefix_t:
+        correction = correction.clone()
+        correction[:, :, :prefix_t] = 0
+        acceleration_correction = acceleration_correction.clone()
+        acceleration_correction[:, :, :prefix_t] = 0
+    correction, correction_stats = _bounded(
+        correction,
+        high_x0,
+        config.max_correction_rms_ratio,
+        prefix_t=prefix_t if registered else 0,
+    )
     result = high_x0 + correction
+
+    metric_reference = (
+        high_x0[:, :, prefix_t:]
+        if registered and prefix_t
+        else high_x0
+    )
+    direction_metric = (
+        direction_correction[:, :, prefix_t:]
+        if registered and prefix_t
+        else direction_correction
+    )
+    temporal_metric = (
+        temporal_correction[:, :, prefix_t:]
+        if registered and prefix_t
+        else temporal_correction
+    )
+    acceleration_metric = (
+        acceleration_correction[:, :, prefix_t:]
+        if registered and prefix_t
+        else acceleration_correction
+    )
+
     state.last_schedule = float(schedule)
     state.last_correction_rms = correction_stats["correction_rms"]
     state.last_baseline_rms = correction_stats["baseline_rms"]
-    state.last_correction_rms_ratio = correction_stats["correction_rms_ratio"]
+    state.last_correction_rms_ratio = (
+        correction_stats["correction_rms_ratio"]
+    )
     state.last_clamp_scale = correction_stats["clamp_scale"]
-    state.last_direction_rms_ratio = _rms_ratio(direction_correction, high_x0)
-    state.last_temporal_rms_ratio = _rms_ratio(temporal_correction, high_x0)
-    state.last_acceleration_rms_ratio = _rms_ratio(acceleration_correction, high_x0)
+    state.last_direction_rms_ratio = _rms_ratio(
+        direction_metric,
+        metric_reference,
+    )
+    state.last_temporal_rms_ratio = _rms_ratio(
+        temporal_metric,
+        metric_reference,
+    )
+    state.last_acceleration_rms_ratio = _rms_ratio(
+        acceleration_metric,
+        metric_reference,
+    )
     state.last_acceleration_applied = acceleration_applied
-    state.last_same_coordinate_refinement = same_coordinate_refinement
-    state.last_acceleration_anchor_coordinate = state.previous_coordinate if acceleration_applied else None
+    state.last_same_coordinate_refinement = (
+        same_coordinate_refinement
+    )
+    state.last_acceleration_anchor_coordinate = (
+        state.previous_coordinate
+        if acceleration_applied
+        else None
+    )
     state.last_temporal_cache_hit = temporal_cache_hit
-    state.last_temporal_reference_coordinate = reference_coordinate if temporal_active else None
-    state.last_temporal_reference_clamped = reference_clamped if temporal_active else False
+    state.last_temporal_reference_coordinate = (
+        reference_coordinate
+        if temporal_active
+        else None
+    )
+    state.last_temporal_reference_clamped = (
+        reference_clamped
+        if temporal_active
+        else False
+    )
+    state.last_temporal_search_radius = (
+        temporal_radius
+        if temporal_active
+        else None
+    )
+    state.last_temporal_cross_prefix_pairs_disabled = (
+        min(prefix_t, max(0, high_x0.shape[2] - 1))
+        if temporal_active and registered
+        else 0
+    )
+    state.last_registered_reference_used = registered
+
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0
         state.last_temporal_valid_fraction = 0.0
-        state.last_temporal_disocclusion_fraction = 1.0 if temporal_active else 0.0
+        state.last_temporal_disocclusion_fraction = (
+            1.0
+            if temporal_active
+            else 0.0
+        )
         state.last_temporal_similarity_mean = 0.0
         state.last_temporal_margin_mean = 0.0
         state.last_temporal_flow_magnitude_mean = 0.0
         state.last_temporal_flow_magnitude_max = 0.0
     else:
-        state.last_temporal_confidence_mean = temporal_match.confidence_mean
-        state.last_temporal_valid_fraction = temporal_match.valid_fraction
-        state.last_temporal_disocclusion_fraction = 1.0 - temporal_match.valid_fraction
-        state.last_temporal_similarity_mean = temporal_match.similarity_mean
+        state.last_temporal_confidence_mean = (
+            temporal_match.confidence_mean
+        )
+        state.last_temporal_valid_fraction = (
+            temporal_match.valid_fraction
+        )
+        state.last_temporal_disocclusion_fraction = (
+            1.0 - temporal_match.valid_fraction
+        )
+        state.last_temporal_similarity_mean = (
+            temporal_match.similarity_mean
+        )
         state.last_temporal_margin_mean = temporal_match.margin_mean
-        state.last_temporal_flow_magnitude_mean = temporal_match.flow_magnitude_mean
-        state.last_temporal_flow_magnitude_max = temporal_match.flow_magnitude_max
+        state.last_temporal_flow_magnitude_mean = (
+            temporal_match.flow_magnitude_mean
+        )
+        state.last_temporal_flow_magnitude_max = (
+            temporal_match.flow_magnitude_max
+        )
 
     if acceleration_active:
         assert high_state is not None
         assert sigma_value is not None
         assert reference_velocity is not None
         state.current_coordinate = float(coordinate)
-        state.current_high_velocity = ((high_state - result) / sigma_value).detach()
-        state.current_reference_velocity = reference_velocity.detach()
+        state.current_high_velocity = (
+            (high_state - result) / sigma_value
+        ).detach()
+        state.current_reference_velocity = (
+            reference_velocity.detach()
+        )
     else:
         state.current_coordinate = None
         state.current_high_velocity = None
