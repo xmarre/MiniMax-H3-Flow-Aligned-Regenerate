@@ -100,6 +100,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "av_handoff_source" not in ordinary
     assert "guidance_trajectory_source" not in ordinary
     assert "low_probe_execution_source" not in ordinary
+    assert "frame_gauge_repair" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -132,6 +133,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
@@ -159,6 +162,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("audio_handoff_source") < keys.index("av_handoff_source")
     assert keys.index("av_handoff_source") < keys.index("guidance_trajectory_source")
     assert keys.index("guidance_trajectory_source") < keys.index("low_probe_execution_source")
+    assert keys.index("low_probe_execution_source") < keys.index("frame_gauge_repair")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
