@@ -4,6 +4,7 @@ import torch
 
 from h3_flow_regenerate.runtime import (
     _bounded_tensor_provenance,
+    _conditioning_signature_from_original,
     _nested_tensor_provenance,
     _trajectory_sample_provenance,
 )
@@ -101,3 +102,37 @@ def test_nested_tensor_provenance_reports_paths_without_rng_use():
     assert receipts[1]["dtype"] == "torch.int64"
     assert all(len(receipt["signature"]) == 64 for receipt in receipts)
     assert torch.equal(torch.random.get_rng_state(), rng_before)
+
+
+
+def test_supported_conditioning_wrapper_payload_affects_receipt_and_signature():
+    CondRegular = type("CONDRegular", (), {})
+    CondRegular.__module__ = "comfy.conds"
+
+    first = CondRegular()
+    first.cond = torch.arange(12, dtype=torch.float32).reshape(1, 3, 4)
+    second = CondRegular()
+    second.cond = first.cond.clone()
+    second.cond[0, 0, 0] += 1.0
+
+    first_payload = {"positive": [{"model_conds": {"context": first}}]}
+    second_payload = {"positive": [{"model_conds": {"context": second}}]}
+
+    first_receipts = _nested_tensor_provenance(first_payload, path="conditioning")
+    second_receipts = _nested_tensor_provenance(second_payload, path="conditioning")
+
+    assert [receipt["path"] for receipt in first_receipts] == [
+        "conditioning.positive[0].model_conds.context.cond"
+    ]
+    assert first_receipts[0]["signature"] != second_receipts[0]["signature"]
+    assert _conditioning_signature_from_original(first_payload) != _conditioning_signature_from_original(second_payload)
+
+
+def test_arbitrary_cond_attribute_is_not_traversed():
+    class Arbitrary:
+        pass
+
+    value = Arbitrary()
+    value.cond = torch.ones(1, 2, 3)
+
+    assert _nested_tensor_provenance({"value": value}, path="conditioning") == []
