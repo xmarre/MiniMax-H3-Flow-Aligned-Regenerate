@@ -2544,6 +2544,13 @@ def run_partitioned_progressive(
             auto_strength_receipt_status="unknown",
             auto_strength_resolved_off=None,
             auto_strength_validation_required=True,
+            workspace_upper_bound_bytes=frame_gauge_transaction.get(
+                "workspace_upper_bound_bytes"
+            ),
+            workspace_components=frame_gauge_transaction.get(
+                "workspace_components",
+                {},
+            ),
             transaction_elapsed_ms=float(frame_gauge_transaction.get("elapsed_ms", 0.0)),
         )
 
