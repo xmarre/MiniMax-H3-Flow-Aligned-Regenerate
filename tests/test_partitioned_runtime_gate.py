@@ -45,6 +45,10 @@ def _metrics() -> dict:
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
         ),
+        _event(
+            "handoff_transfer_wall",
+            protected_video_noise_exact=True,
+        ),
         _event("model_call", stage="high", actual=True),
         _event("model_call", stage="high", actual=False),
         _event(
