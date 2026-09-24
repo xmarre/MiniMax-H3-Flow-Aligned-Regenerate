@@ -336,11 +336,52 @@ def _build_temporal_correspondence(
             raise ValueError("registered temporal validity must be an HxW boolean tensor")
         validity = validity.to(device=reference.device)
 
+    pair_count = frames - 1
+    # Pair k connects frame k to k+1. With an authoritative exact prefix,
+    # prefix-internal pairs and the exact-prefix/suffix crossing are outside the
+    # learned registered temporal contract. Build correspondence only for
+    # generated-to-generated pairs rather than computing and masking them later.
+    pair_start = prefix_t if prefix_t else 0
+    active_pairs = pair_count - pair_start
+    if active_pairs <= 0:
+        zero_flow = torch.zeros(
+            (batch, pair_count, 2, height, width),
+            device=reference.device,
+            dtype=torch.float32,
+        )
+        zero_confidence = torch.zeros(
+            (batch, pair_count, 1, height, width),
+            device=reference.device,
+            dtype=torch.float32,
+        )
+        return _TemporalCorrespondence(
+            coordinate=float(coordinate),
+            cache_key=cache_key,
+            backward_flow=zero_flow,
+            forward_flow=zero_flow.clone(),
+            backward_confidence=zero_confidence,
+            forward_confidence=zero_confidence.clone(),
+            confidence_mean=0.0,
+            valid_fraction=0.0,
+            similarity_mean=0.0,
+            margin_mean=0.0,
+            flow_magnitude_mean=0.0,
+            flow_magnitude_max=0.0,
+        )
+
     # Match a lightly smoothed clean-state latent. This keeps the matcher H3-native
     # and dependency-free while avoiding pixel/detail noise as the correspondence key.
     features = low_frequency_projection(reference, 0.5)
-    left = features[:, :, :-1].permute(0, 2, 1, 3, 4).reshape(-1, channels, height, width)
-    right = features[:, :, 1:].permute(0, 2, 1, 3, 4).reshape(-1, channels, height, width)
+    left = (
+        features[:, :, pair_start : frames - 1]
+        .permute(0, 2, 1, 3, 4)
+        .reshape(-1, channels, height, width)
+    )
+    right = (
+        features[:, :, pair_start + 1 : frames]
+        .permute(0, 2, 1, 3, 4)
+        .reshape(-1, channels, height, width)
+    )
 
     backward, backward_base, backward_similarity, backward_margin = _local_correspondence(
         right,
@@ -384,22 +425,6 @@ def _build_temporal_correspondence(
         (forward_base * reverse_backward_confidence).clamp_min(0.0).sqrt()
         * forward_cycle.float()
     )
-
-    pair_count = frames - 1
-    if prefix_t:
-        # Pair index k connects frame k to frame k+1. Generated-to-generated
-        # correspondence therefore starts at k == prefix_t; k == prefix_t-1 is
-        # the exact-prefix/suffix crossing and is intentionally disabled.
-        generated_pair = (
-            torch.arange(pair_count, device=reference.device) >= prefix_t
-        )
-        generated_pair = (
-            generated_pair.view(1, pair_count, 1, 1)
-            .expand(batch, pair_count, height, width)
-            .reshape(-1, height, width)
-        )
-        backward_confidence = backward_confidence * generated_pair
-        forward_confidence = forward_confidence * generated_pair
 
     if validity is not None:
         expanded_validity = (
@@ -466,37 +491,54 @@ def _build_temporal_correspondence(
         else 0.0
     )
 
+    backward_full = torch.zeros(
+        (batch, pair_count, 2, height, width),
+        device=reference.device,
+        dtype=backward.dtype,
+    )
+    forward_full = torch.zeros_like(backward_full)
+    backward_confidence_full = torch.zeros(
+        (batch, pair_count, 1, height, width),
+        device=reference.device,
+        dtype=backward_confidence.dtype,
+    )
+    forward_confidence_full = torch.zeros_like(backward_confidence_full)
+    backward_full[:, pair_start:] = backward.reshape(
+        batch,
+        active_pairs,
+        2,
+        height,
+        width,
+    )
+    forward_full[:, pair_start:] = forward.reshape(
+        batch,
+        active_pairs,
+        2,
+        height,
+        width,
+    )
+    backward_confidence_full[:, pair_start:] = backward_confidence.reshape(
+        batch,
+        active_pairs,
+        1,
+        height,
+        width,
+    )
+    forward_confidence_full[:, pair_start:] = forward_confidence.reshape(
+        batch,
+        active_pairs,
+        1,
+        height,
+        width,
+    )
+
     return _TemporalCorrespondence(
         coordinate=float(coordinate),
         cache_key=cache_key,
-        backward_flow=backward.reshape(
-            batch,
-            pair_count,
-            2,
-            height,
-            width,
-        ).detach(),
-        forward_flow=forward.reshape(
-            batch,
-            pair_count,
-            2,
-            height,
-            width,
-        ).detach(),
-        backward_confidence=backward_confidence.reshape(
-            batch,
-            pair_count,
-            1,
-            height,
-            width,
-        ).detach(),
-        forward_confidence=forward_confidence.reshape(
-            batch,
-            pair_count,
-            1,
-            height,
-            width,
-        ).detach(),
+        backward_flow=backward_full.detach(),
+        forward_flow=forward_full.detach(),
+        backward_confidence=backward_confidence_full.detach(),
+        forward_confidence=forward_confidence_full.detach(),
         confidence_mean=confidence_mean,
         valid_fraction=valid_fraction,
         similarity_mean=_masked_mean(all_similarity, valid),
@@ -504,7 +546,6 @@ def _build_temporal_correspondence(
         flow_magnitude_mean=_masked_mean(all_flow, valid),
         flow_magnitude_max=flow_magnitude_max,
     )
-
 
 def _temporal_correspondence(
     reference: torch.Tensor,
