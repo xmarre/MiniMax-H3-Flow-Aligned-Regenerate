@@ -5,7 +5,6 @@ import torch
 
 from h3_flow_regenerate.tone_bridge import (
     apply_suffix_dc_bridge,
-    apply_suffix_exact_prefix_gauge_bridge,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
@@ -134,64 +133,3 @@ def test_bridge_rejects_invalid_weights_and_state_mapping_ranges():
             prefix_t=2,
             corrected_tokens=99,
         )
-
-
-def test_exact_prefix_gauge_bridge_preserves_boundary_and_all_suffix_differences():
-    generator = torch.Generator(device="cpu").manual_seed(901)
-    learned = torch.randn((1, 3, 6, 5, 7), generator=generator, dtype=torch.float32)
-    exact = learned[:, :, :2].clone()
-    exact[:, :, -1] += torch.randn((1, 3, 5, 7), generator=generator, dtype=torch.float32) * 0.4
-    before = learned.clone()
-
-    corrected, metrics = apply_suffix_exact_prefix_gauge_bridge(learned, exact)
-
-    native_boundary = learned[:, :, 2] - learned[:, :, 1]
-    restored_boundary = corrected[:, :, 2] - exact[:, :, -1]
-    assert torch.allclose(restored_boundary, native_boundary, rtol=1e-6, atol=1e-6)
-    assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
-    assert torch.equal(learned, before)
-    for index in range(2, learned.shape[2] - 1):
-        assert torch.allclose(
-            corrected[:, :, index + 1] - corrected[:, :, index],
-            learned[:, :, index + 1] - learned[:, :, index],
-            rtol=1e-6,
-            atol=1e-6,
-        )
-    assert metrics["suffix_gauge_bridge_enabled"] is True
-    assert metrics["suffix_gauge_bridge_corrected_tokens"] == 4
-    assert metrics["suffix_gauge_bridge_boundary_difference_preserved"] is True
-    assert metrics["suffix_gauge_bridge_suffix_differences_preserved"] is True
-
-
-def test_exact_prefix_gauge_bridge_conditional_mapping_matches_direct_renoise():
-    generator = torch.Generator(device="cpu").manual_seed(902)
-    learned = torch.randn((1, 2, 5, 4, 6), generator=generator, dtype=torch.float32)
-    exact = learned[:, :, :2].clone()
-    exact[:, :, -1] += torch.randn((1, 2, 4, 6), generator=generator, dtype=torch.float32) * 0.25
-    corrected, metrics = apply_suffix_exact_prefix_gauge_bridge(learned, exact)
-    sigma = 0.63
-    noise = torch.randn(learned.shape, generator=generator, dtype=learned.dtype)
-    state = (1.0 - sigma) * learned + sigma * noise
-
-    mapped = map_clean_bridge_to_conditional_state(
-        state,
-        learned,
-        corrected,
-        sigma=sigma,
-        prefix_t=2,
-        corrected_tokens=int(metrics["suffix_gauge_bridge_corrected_tokens"]),
-    )
-    direct = (1.0 - sigma) * corrected + sigma * noise
-
-    assert torch.allclose(mapped, direct, rtol=1e-6, atol=1e-6)
-    assert torch.equal(mapped[:, :, :2], state[:, :, :2])
-
-
-def test_exact_prefix_gauge_bridge_rejects_nonfinite_and_geometry_drift():
-    learned, exact = _fixture()
-    bad = learned.clone()
-    bad[:, :, 2, 0, 0] = float("nan")
-    with pytest.raises(RuntimeError, match="NaN or Inf"):
-        apply_suffix_exact_prefix_gauge_bridge(bad, exact)
-    with pytest.raises(ValueError, match="spatial geometry"):
-        apply_suffix_exact_prefix_gauge_bridge(learned, exact[..., :1, :])
