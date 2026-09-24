@@ -2766,11 +2766,19 @@ def run_partitioned_progressive(
                 )
             del final_internal
         original_video, original_audio = unpack_streams(latent_image, target_shapes)
-        if not torch.equal(
-            final_video[:, :, : stage_plan.prefix_t],
-            original_video[:, :, : stage_plan.prefix_t].to(final_video),
+        final_prefix = final_video[:, :, : stage_plan.prefix_t]
+        original_prefix = original_video[:, :, : stage_plan.prefix_t]
+        if (
+            final_prefix.shape != original_prefix.shape
+            or final_prefix.dtype != original_prefix.dtype
+            or not torch.equal(
+                final_prefix,
+                original_prefix.to(device=final_prefix.device),
+            )
         ):
-            raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
+            raise RuntimeError(
+                "partitioned exact-prefix high stage violated byte-exact original-prefix preservation"
+            )
         if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
             if tensor_sha256(denoise_mask) != candidate_high_mask_digest:
                 raise RuntimeError("source-carrier audio-position candidate mutated the high-stage sampler mask")
@@ -2778,9 +2786,12 @@ def run_partitioned_progressive(
             protected_audio = audio_mask == 0
             if not bool(protected_audio.any().item()):
                 raise RuntimeError("source-carrier audio-position candidate found no protected carried-audio prefix")
-            audio_exact = torch.equal(
-                final_audio[protected_audio],
-                original_audio.to(final_audio)[protected_audio],
+            audio_exact = (
+                final_audio.dtype == original_audio.dtype
+                and torch.equal(
+                    final_audio[protected_audio],
+                    original_audio.to(device=final_audio.device)[protected_audio],
+                )
             )
             if not audio_exact:
                 raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
