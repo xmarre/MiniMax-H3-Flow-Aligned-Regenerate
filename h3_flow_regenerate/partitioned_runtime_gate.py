@@ -561,6 +561,11 @@ def validate_partitioned_runtime_evidence(
         "partitioned run fell back to target-grid execution",
     )
 
+    auto_strength_verified_off, auto_strength_report_digests = _validate_auto_strength_off(
+        auto_strength_reports,
+        required=require_auto_strength_off,
+        expected_digests=expected_auto_strength_digests,
+    )
     (
         frame_gauge_mode,
         frame_gauge_result,
@@ -572,11 +577,6 @@ def validate_partitioned_runtime_evidence(
     ) = _validate_frame_gauge(
         window,
         expected_mode=expected_frame_gauge_mode,
-    )
-    auto_strength_verified_off, auto_strength_report_digests = _validate_auto_strength_off(
-        auto_strength_reports,
-        required=require_auto_strength_off,
-        expected_digests=expected_auto_strength_digests,
     )
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
