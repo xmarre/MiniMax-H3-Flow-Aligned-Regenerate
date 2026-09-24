@@ -494,4 +494,3 @@ def test_clean_delta_mapping_preserves_noise_realization_without_warping_noise(d
     tolerance = 1e-12 if dtype == torch.float64 else 5e-3 if dtype in {torch.float16, torch.bfloat16} else 1e-6
     assert torch.allclose(affine.float(), direct.float(), atol=tolerance, rtol=tolerance)
     assert not torch.allclose(warped_state.float(), direct.float(), atol=1e-5, rtol=1e-5)
-
