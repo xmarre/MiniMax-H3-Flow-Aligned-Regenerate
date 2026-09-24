@@ -832,7 +832,7 @@ def apply_guidance(
                 "registered frame-gauge guidance does not support "
                 "downsample_consistency"
             )
-        if registered_reference.run_id != run.run_id:
+        if str(registered_reference.run_id) != str(run.run_id):
             raise RuntimeError(
                 "registered guidance reference trajectory identity drifted"
             )
