@@ -410,8 +410,10 @@ def estimate_paired_prefix_translation(
     *,
     policy: FrameGaugePolicy = DEFAULT_POLICY,
 ) -> FrameGaugeEstimate:
+    _, channels, prefix_t, height, width = _validate_pair(learned, exact)
+    if prefix_t < policy.min_prefix_frames:
+        return FrameGaugeEstimate("rejected", "insufficient_prefix_support")
     if torch.equal(learned, exact):
-        _, channels, prefix_t, height, width = _validate_pair(learned, exact)
         return FrameGaugeEstimate(
             "identity",
             "already_aligned",
