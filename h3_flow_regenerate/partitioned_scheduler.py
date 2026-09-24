@@ -2813,9 +2813,7 @@ def run_partitioned_progressive(
                 original_prefix.to(device=final_prefix.device),
             )
         ):
-            raise RuntimeError(
-                "partitioned exact-prefix high stage violated byte-exact original-prefix preservation"
-            )
+            raise RuntimeError("partitioned exact-prefix high stage violated byte-exact original-prefix preservation")
         if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
             if tensor_sha256(denoise_mask) != candidate_high_mask_digest:
                 raise RuntimeError("source-carrier audio-position candidate mutated the high-stage sampler mask")
