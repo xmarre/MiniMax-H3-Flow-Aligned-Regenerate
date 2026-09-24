@@ -1,5 +1,7 @@
 # Exact-prefix / suffix frame-gauge repair design
 
+Audit date: 2026-09-24.
+
 Status: implementation specification for a gated candidate; **not a verified media repair**. This change is documentation only. Production implementation belongs on existing draft PR #89, subject to the live-state checks below. A rigid translation is a testable model of the defect, not an established property of H3 latents or the learned provider.
 
 ## 1. Decision and scope
@@ -39,7 +41,7 @@ Relevant preserved Flow checkpoints:
 - `checkpoint/pr89-exact-prefix-gauge-green-20260924` preserves current #89; its earlier unsquashed history remains evidence.
 - Initial documentation checkpoint: `9462bcfe666a5c198f249f997cbd984ed5ac3168`.
 
-Live #89 CI runs `36055243399` and `36055237117` completed successfully. Its reviews and inline-review lists were empty; the conversation includes a skipped automated review and a hardware-gate note. Green checks do not validate output quality. #81/#84 historical reviews raised retained-prefix memory lifetime and inconsistent flow/confidence/innovation coordinate mapping, respectively. #87 reviews concern diagnostic receipts and conditioning wrappers; they do not establish a spatial repair. #88 had no submitted reviews in the inspected list. Re-fetch current checks and review threads before implementation; never treat comments describing a superseded head as current source authority.
+Live #89 CI runs `36055523365`, `36055243399` and `36055237117` completed successfully. Latest inspected #87 run `36053571994` and #88 run `35998607874` also succeeded; their audited heads remained unchanged on final re-fetch. Its reviews and inline-review lists were empty; the conversation includes a skipped automated review and a hardware-gate note. Green checks do not validate output quality. #81/#84 historical reviews raised retained-prefix memory lifetime and inconsistent flow/confidence/innovation coordinate mapping, respectively. #87 reviews concern diagnostic receipts and conditioning wrappers; they do not establish a spatial repair. #88 had no submitted reviews in the inspected list. Re-fetch current checks and review threads before implementation; never treat comments describing a superseded head as current source authority.
 
 ## 3. Verified runtime dataflow
 
@@ -157,7 +159,7 @@ Create `frame_gauge.py` with pure estimation and application helpers. The follow
 5. Estimate each held-out frame and informative spatial region independently as a *consistency check*, not a second correction. Use full interior, upper/lower halves and left/right halves; record all results. At least one informative region in both each vertical and each horizontal split must support the global displacement within 0.25 cell per axis. Any informative region that strongly prefers a conflicting displacement (>0.5 cell with the same margin test) vetoes the rigid model. Sparse/untextured regions cannot count as agreement.
 6. All informative held-out frames must agree within 0.25 cell per axis. Compare ordinary midpoint median, maximum deviation and full range; lower-MAD alone is forbidden. Evaluate scores separately on the four target lattice parity subsets; a confident phase-dependent conflict vetoes a rigid latent-image translation.
 7. Re-evaluate `W_d L` against E on the last held-out prefix frame. This residual check is mandatory. Exclude border pixels and do not use seam RMS or adjacent-frame motion as the fit objective.
-8. An estimate with `max(abs(d))<=0.0625` is identity. Return exact no-op with `already_aligned` only if zero-displacement validation NCC passes and the solution is unique; otherwise `ambiguous`. Do not resample at zero. Exact tensor equality is an early identity path.
+8. Evaluate this identity case before the nonzero-improvement gate in step 4. An estimate with `max(abs(d))<=0.0625` is identity. Return exact no-op with `already_aligned` only if zero-displacement validation NCC passes and the solution is unique; otherwise `ambiguous`. Do not resample at zero. Exact tensor equality is an early identity path.
 
 Return a structured result: accepted/identity/rejected, reason, signed correction, units, frame indices, support/stride, bounds, policy version, per-frame/per-region statistics, fit/validation/zero losses, NCC, peak separation, parity checks and maximum disagreement. Do not condense confidence to an unexplained scalar. These checks can reject the hypothesis; they cannot prove visual equivalence of a nonlinear VAE decoder.
 
@@ -175,7 +177,7 @@ The selected production placement is **before deterministic re-noise**, using ac
 
 `clean_video_postprocess: Callable[[Tensor], CleanVideoPostprocessResult] | None`
 
-Result contains corrected clean video and bounded diagnostic/decision metadata, not arbitrary persistent model state. The hook input is exactly the clean operand `learned_x0.to(noise)`; the provider object and API version remain unchanged. Run after provider validation, before `conditional_renoise_target`. Validate returned geometry/device/dtype/finiteness and prefix ownership. No callback may call a sampler, model, provider or RNG. Nonpartitioned callers and hook=None retain the historical path.
+Result contains corrected clean video and bounded diagnostic/decision metadata, not arbitrary persistent model state. The hook input is exactly the clean operand `learned_x0.to(noise)`; the provider object and API version remain unchanged. Run after provider validation, before `conditional_renoise_target`. Validate returned geometry/device/dtype/finiteness and prefix ownership. The hook must leave its input prefix numerically unchanged; E is restored by the existing scheduler afterward. The aligned learned-prefix witness is disposable and never becomes protected state. No callback may call a sampler, model, provider or RNG. Nonpartitioned callers and hook=None retain the historical path.
 
 Prepare registration and the optional guidance reference within this hook using already captured data. Do not publish binding state until every gate succeeds. Low-confidence estimation returns unchanged input and a reason, not an exception or a fallback sampler. Malformed/non-finite tensors and ownership violations are hard errors, following the existing post-start error policy.
 
@@ -199,7 +201,7 @@ After the hook returns, restore E into actual target prefix, preserve audio, rec
 
 ## 8. Guidance: one derived reference with independent calibration
 
-Let R be the selected exact low/probe reference. Existing guidance uses `G=B(R)`, where B is its bicubic content lift. Calibration of L against E yields dL; it says nothing exact about G. Determine dG independently by registering G's same-index prefix against E with the same estimator. If guidance is off, no G calibration is needed. If dG is identity, leave its suffix unshifted. If either required estimate rejects, reject the entire repair transaction; do not enable half a repair or silently disable guidance.
+Let R be the selected exact low/probe reference. Existing guidance uses `G=B(R)`, where B is its bicubic content lift. Calibration of L against E yields dL; it says nothing exact about G. Determine dG independently by registering G's same-index prefix against E with the same estimator. If dL is identity, the whole transaction remains on the baseline, even if G might admit a separate correction; this candidate does not independently repair guidance. If guidance is off, no G calibration is needed. If dG is identity, leave its suffix unshifted. If either required estimate rejects, reject the entire repair transaction; do not enable half a repair or silently disable guidance.
 
 Create one ephemeral `RegisteredGuidanceReference` containing target-grid `G*`, prefix length, validity, source run/probe identity, reference coordinate and registration metadata. `G*` contains authoritative E on prefix and `W_dG G` on suffix. It is a derived reference, not a captured or sampled trajectory. Do not append it to `H3FlowTrajectory`, rewrite `TrajectorySample`, or shift every sample. Shared trajectory bytes and run identifiers remain unchanged.
 
