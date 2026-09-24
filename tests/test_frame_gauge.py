@@ -72,9 +72,12 @@ def test_exact_equality_is_bitwise_identity():
 )
 def test_registration_recovers_independent_fractional_translation(dx, dy):
     learned, exact = _analytic_pair(dx=dx, dy=dy)
+    rng_before = torch.random.get_rng_state().clone()
     estimate = estimate_paired_prefix_translation(learned, exact)
+    rng_after = torch.random.get_rng_state()
 
     assert estimate.accepted, estimate.telemetry()
+    assert torch.equal(rng_before, rng_after)
     assert estimate.dx == pytest.approx(dx, abs=0.125)
     assert estimate.dy == pytest.approx(dy, abs=0.125)
     assert estimate.metrics["validation_ncc"] >= 0.75
@@ -172,3 +175,87 @@ def test_nonfinite_registration_is_a_hard_error():
     learned[:, :, 0, 0, 0] = float("nan")
     with pytest.raises(ValueError, match="finite"):
         estimate_paired_prefix_translation(learned, exact)
+
+def test_exact_equality_still_requires_minimum_temporal_support():
+    exact = torch.randn(1, 24, 3, 26, 26)
+    estimate = estimate_paired_prefix_translation(exact, exact)
+    assert estimate.rejected
+    assert estimate.reason == "insufficient_prefix_support"
+
+
+def test_registration_is_invariant_to_per_channel_positive_gain_and_dc():
+    learned, exact = _analytic_pair(dx=0.5, dy=-0.375)
+    channel = torch.arange(24, dtype=learned.dtype).view(1, 24, 1, 1, 1)
+    learned = learned * (0.8 + 0.015 * channel) + (-0.6 + 0.05 * channel)
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.accepted, estimate.telemetry()
+    assert estimate.dx == pytest.approx(0.5, abs=0.125)
+    assert estimate.dy == pytest.approx(-0.375, abs=0.125)
+
+
+def test_registration_rejects_local_nonrigid_spatial_conflict():
+    learned_right, exact = _analytic_pair(dx=0.5, dy=0.0)
+    learned_left, _ = _analytic_pair(dx=-0.5, dy=0.0)
+    learned = learned_right.clone()
+    learned[..., : learned.shape[-1] // 2] = learned_left[..., : learned.shape[-1] // 2]
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason in {
+        "regional_conflict",
+        "insufficient_regional_support",
+        "ambiguous_runner_up",
+        "insufficient_validation_improvement",
+    }
+
+
+def test_last_holdout_disagreement_cannot_be_averaged_away():
+    shifts = (
+        (0.5, 0.0),
+        (0.5, 0.0),
+        (0.5, 0.0),
+        (-0.5, 0.0),
+    )
+    learned, exact = _analytic_pair(
+        dx=0.0,
+        dy=0.0,
+        per_frame_shift=shifts,
+    )
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason != "accepted"
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_translation_preserves_supported_dtype_and_bounded_batch_equivalence(dtype):
+    video = torch.randn(1, 24, 5, 12, 14, dtype=dtype)
+    before = video.clone()
+
+    one = translate_video_cells(
+        video,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+        batch_frames=1,
+    )
+    four = translate_video_cells(
+        video,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+        batch_frames=4,
+    )
+
+    assert one.video.dtype == dtype
+    assert four.video.dtype == dtype
+    assert torch.equal(video, before)
+    assert torch.equal(one.video[:, :, :2], before[:, :, :2])
+    tolerance = 1e-6 if dtype == torch.float32 else 1e-3
+    assert torch.allclose(one.video.float(), four.video.float(), atol=tolerance, rtol=tolerance)
+    assert torch.isfinite(one.video).all()
+
