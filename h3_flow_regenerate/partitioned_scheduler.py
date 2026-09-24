@@ -1180,6 +1180,7 @@ def _prepare_registered_guidance_reference(
         cache_key=cache_key,
         trajectory_mutated=False,
         exact_prefix_restored=True,
+        invalid_fraction=float(application.invalid_fraction),
     )
     return registered, fields, None
 
@@ -1319,6 +1320,9 @@ def _frame_gauge_clean_postprocess(
     ):
         raise RuntimeError("frame-gauge clean transaction altered learned prefix ownership")
 
+    video_registration = dict(transaction["video_registration"])
+    video_registration["invalid_fraction"] = float(aligned_application.invalid_fraction)
+    transaction["video_registration"] = video_registration
     transaction.update(
         result="accepted",
         reason="accepted",
@@ -2509,7 +2513,8 @@ def run_partitioned_progressive(
             mask_classification="exact_protected_video_prefix",
             exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
             authoritative_prefix_modified=False,
-            transform_domain=("actual_provider_clean_target_video" if frame_gauge_accepted else "none"),
+            registration_domain=("actual_clean_target_video" if config.frame_gauge_repair else "off"),
+            transform_domain=("actual_clean_target_video" if frame_gauge_accepted else "none"),
             transformed_states=(
                 ["learned_suffix", "derived_guidance_suffix"]
                 if frame_gauge_accepted and pending_registered_reference is not None
