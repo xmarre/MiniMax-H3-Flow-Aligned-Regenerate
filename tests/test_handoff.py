@@ -467,6 +467,7 @@ def test_suffix_geometric_bridge_legacy_flag_is_boolean_and_mixed_grid_only():
             suffix_geometric_bridge=1,
         )
 
+
 @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
 def test_clean_delta_mapping_preserves_noise_realization_without_warping_noise(dtype):
     torch.manual_seed(701)
