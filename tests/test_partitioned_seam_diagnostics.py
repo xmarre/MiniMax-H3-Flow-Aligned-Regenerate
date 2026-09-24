@@ -235,9 +235,7 @@ def test_partitioned_suffix_gauge_bridge_maps_complete_suffix_without_touching_p
     generator = torch.Generator(device="cpu").manual_seed(903)
     learned = torch.randn((1, 24, 6, 4, 5), generator=generator, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
-    exact[:, :, -1] += torch.randn(
-        (1, 24, 4, 5), generator=generator, dtype=torch.float32
-    ) * 0.3
+    exact[:, :, -1] += torch.randn((1, 24, 4, 5), generator=generator, dtype=torch.float32) * 0.3
     sigma = 0.4
     seed = 904
     noise = deterministic_video_noise(
