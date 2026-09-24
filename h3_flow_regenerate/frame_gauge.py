@@ -484,27 +484,17 @@ def estimate_paired_prefix_translation(
         return reject("over_bound_shift")
     if invalid_fraction > policy.max_invalid_fraction:
         return reject("excessive_invalid_area")
-    if max(abs(dx), abs(dy)) <= policy.identity_bound + 1e-12:
-        if zero_ncc >= policy.min_ncc and runner_margin >= policy.min_runner_margin:
-            identity_metrics = dict(base_metrics)
-            identity_metrics.update(
-                identity_candidate_dx=float(dx),
-                identity_candidate_dy=float(dy),
-            )
-            return FrameGaugeEstimate(
-                "identity",
-                "already_aligned",
-                0.0,
-                0.0,
-                identity_metrics,
-            )
-        return reject("ambiguous")
-    if validation_ncc < policy.min_ncc:
-        return reject("validation_ncc")
-    if improvement < policy.min_rms_improvement:
-        return reject("insufficient_validation_improvement")
-    if runner_margin < policy.min_runner_margin:
-        return reject("ambiguous_runner_up")
+    identity_candidate = max(abs(dx), abs(dy)) <= policy.identity_bound + 1e-12
+    if identity_candidate:
+        if zero_ncc < policy.min_ncc or runner_margin < policy.min_runner_margin:
+            return reject("ambiguous")
+    else:
+        if validation_ncc < policy.min_ncc:
+            return reject("validation_ncc")
+        if improvement < policy.min_rms_improvement:
+            return reject("insufficient_validation_improvement")
+        if runner_margin < policy.min_runner_margin:
+            return reject("ambiguous_runner_up")
 
     frame_checks = []
     frame_estimates = []
@@ -616,9 +606,22 @@ def estimate_paired_prefix_translation(
 
     last = prepared.validation[-1]
     _, last_rms, last_ncc = _metrics(prepared, (last,), coords, dx, dy)
-    _, last_zero_rms, _ = _metrics(prepared, (last,), coords, 0.0, 0.0)
+    _, last_zero_rms, last_zero_ncc = _metrics(prepared, (last,), coords, 0.0, 0.0)
     last_improvement = (last_zero_rms - last_rms) / max(last_zero_rms, 1e-8)
-    if last_ncc < policy.min_ncc or last_improvement < policy.min_rms_improvement:
+    if identity_candidate:
+        if last_zero_ncc < policy.min_ncc:
+            return reject(
+                "last_holdout_residual",
+                frame_checks=tuple(frame_checks),
+                region_checks=tuple(region_checks),
+                parity_checks=tuple(parity_checks),
+                last_holdout_rms=last_zero_rms,
+                last_holdout_zero_rms=last_zero_rms,
+                last_holdout_ncc=last_zero_ncc,
+                last_holdout_improvement=0.0,
+                **frame_summary,
+            )
+    elif last_ncc < policy.min_ncc or last_improvement < policy.min_rms_improvement:
         return reject(
             "last_holdout_residual",
             frame_checks=tuple(frame_checks),
@@ -639,9 +642,27 @@ def estimate_paired_prefix_translation(
         last_holdout_rms=last_rms,
         last_holdout_zero_rms=last_zero_rms,
         last_holdout_ncc=last_ncc,
+        last_holdout_zero_ncc=last_zero_ncc,
         last_holdout_improvement=last_improvement,
         **frame_summary,
     )
+    if identity_candidate:
+        accepted_metrics.update(
+            identity_candidate_dx=float(dx),
+            identity_candidate_dy=float(dy),
+            estimated_invalid_fraction=float(invalid_fraction),
+            invalid_fraction=0.0,
+            last_holdout_rms=last_zero_rms,
+            last_holdout_ncc=last_zero_ncc,
+            last_holdout_improvement=0.0,
+        )
+        return FrameGaugeEstimate(
+            "identity",
+            "already_aligned",
+            0.0,
+            0.0,
+            accepted_metrics,
+        )
     return FrameGaugeEstimate("accepted", "accepted", dx, dy, accepted_metrics)
 
 
