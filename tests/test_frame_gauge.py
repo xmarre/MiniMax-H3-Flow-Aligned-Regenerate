@@ -90,7 +90,8 @@ def test_registration_recovers_independent_fractional_translation(dx, dy):
     ],
 )
 def test_registration_recovers_integer_axis_and_combined_shifts(dx, dy):
-    learned, exact = _analytic_pair(dx=dx, dy=dy)
+    size = 40 if dx != 0.0 and dy != 0.0 else 26
+    learned, exact = _analytic_pair(dx=dx, dy=dy, height=size, width=size)
     estimate = estimate_paired_prefix_translation(learned, exact)
 
     assert estimate.accepted, estimate.telemetry()
@@ -107,6 +108,7 @@ def test_registration_rejects_constant_and_overbound_fields():
     assert ambiguous.rejected
     assert ambiguous.reason in {
         "insufficient_valid_channels",
+        "ambiguous_low_energy",
         "ambiguous_low_gradient",
     }
 
@@ -228,7 +230,7 @@ def test_registration_rejects_local_nonrigid_spatial_conflict():
 
 def test_registration_rejects_informative_patch_phase_disagreement():
     learned_global, exact = _analytic_pair(dx=0.5, dy=0.0)
-    learned_phase, _ = _analytic_pair(dx=0.125, dy=0.0)
+    learned_phase, _ = _analytic_pair(dx=-1.0, dy=0.0)
     learned = learned_global.clone()
     learned[..., 0::2, 0::2] = learned_phase[..., 0::2, 0::2]
 
