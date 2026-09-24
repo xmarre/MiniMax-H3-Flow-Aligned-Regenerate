@@ -151,6 +151,7 @@ def test_resize_is_spatial_only():
     resized = resize_video(source, 48, 64)
     assert resized.shape == (1, 24, 5, 48, 64)
 
+
 def test_h3_patch_resample_grid_matches_area_normalized_coordinate_formula():
     source_grid = (20, 26)
     target_grid = (28, 37)
@@ -187,4 +188,3 @@ def test_h3_patch_lattice_resize_rejects_odd_geometry(height, width):
     source = torch.randn(1, 2, 2, 40, 52)
     with pytest.raises(ValueError, match="patch-safe"):
         resize_spatial_5d_h3_patch_lattice(source, height, width)
-
