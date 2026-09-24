@@ -159,10 +159,7 @@ def _prepare(
         1e-6,
         0.01 * float(torch.median(exact_positive).item()),
     )
-    valid_channels = (
-        (learned_channel_rms > learned_threshold)
-        & (exact_channel_rms > exact_threshold)
-    )
+    valid_channels = (learned_channel_rms > learned_threshold) & (exact_channel_rms > exact_threshold)
     if int(valid_channels.sum().item()) < policy.min_valid_channels:
         return "insufficient_valid_channels"
 
