@@ -447,7 +447,8 @@ def _build_temporal_correspondence(
         .to(
             device="cpu",
             dtype=torch.float64,
-        ).item()
+        )
+        .item()
     )
     flow_magnitude_max = (
         float(
