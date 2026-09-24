@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from h3_flow_regenerate.geometry import (
-    geometry_from_video,
     _h3_patch_resample_grid,
+    geometry_from_video,
     h3_refine_scale_target_canvas,
     normalize_target_geometry,
     pack_streams,
