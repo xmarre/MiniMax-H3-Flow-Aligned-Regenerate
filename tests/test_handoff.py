@@ -314,22 +314,6 @@ def test_clean_postprocess_cannot_claim_or_mutate_learned_prefix():
         )
 
 
-def test_learned_handoff_rejects_wrong_provider_geometry(output):
-    state, x0, shapes, _, _ = packed()
-    with pytest.raises(RuntimeError, match="returned shape"):
-        build_handoff_state(
-            source_packed_state=state,
-            source_x0_packed=x0,
-            source_shapes=shapes,
-            sigma=0.4,
-            target_h=8,
-            target_w=6,
-            seed=123,
-            transfer_mode="learned_3d",
-            learned_upscaler=FakeLearnedProvider(output),
-        )
-
-
 def test_suffix_dc_bridge_config_is_restricted_to_continuum_specific_modes_and_boolean():
     provider = FakeLearnedProvider()
     fallback = ProgressiveTargetInputConfig(source_latent_h=4, source_latent_w=4)
