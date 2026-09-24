@@ -167,6 +167,52 @@ def test_identity_guidance_calibration_never_resamples_suffix():
     assert torch.equal(registered.video, exact_full)
 
 
+def test_guidance_registration_rejects_unsupported_sampler_contract():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    high_sigmas, split_coordinate = _schedule()
+    run = replace(_run(exact_full, split_coordinate), sampler="sample_euler")
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert error == "unsupported_sampler_contract"
+    assert fields["status"] == "rejected"
+    assert fields["sampler"] == "sample_euler"
+    assert fields["supported_samplers"] == ("sample_res_multistep",)
+
+
+def test_guidance_registration_rejects_downsample_consistency_operator():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(exact_full, split_coordinate)
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="downsample_consistency"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert error == "unsupported_guidance_operator"
+    assert fields == {"status": "rejected", "reason": "unsupported_guidance_operator"}
+
+
 def test_guidance_registration_rejects_high_schedule_that_changes_reference_identity():
     exact_full = _field_video(dx=0.0, dy=0.0)
     high_sigmas, split_coordinate = _schedule()
