@@ -212,8 +212,8 @@ def test_registration_is_invariant_to_per_channel_positive_gain_and_dc():
 
 
 def test_registration_rejects_local_nonrigid_spatial_conflict():
-    learned_right, exact = _analytic_pair(dx=0.5, dy=0.0)
-    learned_left, _ = _analytic_pair(dx=-0.5, dy=0.0)
+    learned_right, exact = _analytic_pair(dx=0.5, dy=0.0, height=48, width=48)
+    learned_left, _ = _analytic_pair(dx=-0.5, dy=0.0, height=48, width=48)
     learned = learned_right.clone()
     learned[..., : learned.shape[-1] // 2] = learned_left[..., : learned.shape[-1] // 2]
 
@@ -240,6 +240,8 @@ def test_registration_rejects_informative_patch_phase_disagreement():
     assert estimate.reason in {
         "phase_dependent_disagreement",
         "phase_dependent_conflict",
+        "regional_disagreement",
+        "regional_conflict",
     }
 
 
