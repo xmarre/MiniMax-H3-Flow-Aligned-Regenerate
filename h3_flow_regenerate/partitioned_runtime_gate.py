@@ -244,7 +244,6 @@ def _validate_audio_position_policy(
     return AUDIO_POSITION_DOMAIN_SOURCE, True, block0_calls, model_timestep_calls
 
 
-
 def _validate_frame_gauge(
     window: list[dict[str, Any]],
     *,
@@ -367,6 +366,7 @@ def _validate_auto_strength_off(
             "DoRA auto-strength report identity differs from the matched control arm",
         )
     return bool(normalized) and all(report.get("auto_strength_enabled") is False for report in normalized), observed
+
 
 def validate_partitioned_runtime_evidence(
     metrics: dict[str, Any],
