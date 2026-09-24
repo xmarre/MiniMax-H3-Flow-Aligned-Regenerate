@@ -988,7 +988,8 @@ def _prepare_registered_guidance_reference(
         )
 
     exact_probe = any(
-        math.isclose(
+        sample.phase == "handoff_probe"
+        and math.isclose(
             float(sample.coordinate),
             float(split_coordinate),
             rel_tol=0.0,
@@ -2524,6 +2525,7 @@ def run_partitioned_progressive(
             extra_provider_calls=0,
             extra_vae_calls=0,
             auto_strength_owner="dora_dynamic_lora_loader",
+            auto_strength_receipt_status="unknown",
             auto_strength_resolved_off=None,
             auto_strength_validation_required=True,
             transaction_elapsed_ms=float(
