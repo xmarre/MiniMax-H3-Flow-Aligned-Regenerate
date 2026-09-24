@@ -52,9 +52,23 @@ class GuidanceConfig:
             raise ValueError("max_correction_rms_ratio must be finite and positive")
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredGuidanceReference:
+    video: torch.Tensor
+    validity: torch.Tensor
+    prefix_t: int
+    run_id: str
+    reference_coordinate: float
+    dx: float
+    dy: float
+    cache_key: str
+    temporal_search_radius: int
+
+
 @dataclass(slots=True)
 class _TemporalCorrespondence:
     coordinate: float
+    cache_key: str | None
     backward_flow: torch.Tensor
     forward_flow: torch.Tensor
     backward_confidence: torch.Tensor
@@ -98,6 +112,9 @@ class GuidanceState:
     last_temporal_cache_hit: bool = False
     last_temporal_reference_coordinate: float | None = None
     last_temporal_reference_clamped: bool = False
+    last_temporal_search_radius: int | None = None
+    last_temporal_cross_prefix_pairs_disabled: int = 0
+    last_registered_reference_used: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -129,6 +146,9 @@ class GuidanceState:
         self.last_temporal_cache_hit = False
         self.last_temporal_reference_coordinate = None
         self.last_temporal_reference_clamped = False
+        self.last_temporal_search_radius = None
+        self.last_temporal_cross_prefix_pairs_disabled = 0
+        self.last_registered_reference_used = False
 
 
 _PHASE_PRIORITY = {
