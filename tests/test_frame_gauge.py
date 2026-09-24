@@ -252,3 +252,26 @@ def test_translation_preserves_supported_dtype_and_bounded_batch_equivalence(dty
     tolerance = 1e-6 if dtype == torch.float32 else 1e-3
     assert torch.allclose(one.video.float(), four.video.float(), atol=tolerance, rtol=tolerance)
     assert torch.isfinite(one.video).all()
+
+def test_registration_rejects_repeated_stripes_with_multiple_equal_solutions():
+    x = torch.arange(26, dtype=torch.float32)
+    stripe = torch.cos(torch.pi * x).view(1, 1, 1, 1, 26)
+    exact = stripe.expand(1, 24, 4, 26, 26).clone()
+    learned = -exact
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason == "ambiguous_runner_up"
+
+
+def test_registration_rejects_when_fewer_than_eight_channels_are_informative():
+    learned, exact = _analytic_pair(dx=0.5, dy=0.0)
+    learned[:, 7:] = 0.0
+    exact[:, 7:] = 0.0
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.rejected
+    assert estimate.reason == "insufficient_valid_channels"
+
