@@ -1041,6 +1041,9 @@ def apply_guidance(
             acceleration_delta = (
                 reference_velocity - state.previous_reference_velocity - high_velocity + state.previous_high_velocity
             )
+            high_velocity = high_velocity + schedule * config.acceleration_weight * acceleration_delta
+            acceleration_guided = high_state - sigma_value * high_velocity
+            acceleration_correction = acceleration_guided - guided
             guided = acceleration_guided
             acceleration_applied = True
         correction = guided - high_x0
