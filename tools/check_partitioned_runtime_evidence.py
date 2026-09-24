@@ -112,9 +112,7 @@ def main() -> None:
             auto_strength_reports=auto_strength_reports,
             require_auto_strength_off=args.require_auto_strength_off,
             expected_auto_strength_digests=(
-                args.expected_auto_strength_digest
-                if args.expected_auto_strength_digest
-                else None
+                args.expected_auto_strength_digest if args.expected_auto_strength_digest else None
             ),
         )
     except RuntimeGateError as exc:
