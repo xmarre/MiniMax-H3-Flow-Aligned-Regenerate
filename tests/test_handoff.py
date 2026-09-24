@@ -511,3 +511,62 @@ def test_clean_delta_mapping_preserves_noise_realization_without_warping_noise(d
     tolerance = 1e-12 if dtype == torch.float64 else 5e-3 if dtype in {torch.float16, torch.bfloat16} else 1e-6
     assert torch.allclose(affine.float(), direct.float(), atol=tolerance, rtol=tolerance)
     assert not torch.allclose(warped_state.float(), direct.float(), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("sigma", [1e-6, 0.45, 0.999])
+def test_clean_translation_maps_through_conditional_renoise_without_warping_noise(sigma):
+    torch.manual_seed(404)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+        batch_frames=2,
+    ).video
+    baseline_state = conditional_renoise_target(
+        learned,
+        sigma=sigma,
+        noise=noise,
+    )
+    mapped = baseline_state.clone()
+    mapped[:, :, 2:] += (1.0 - sigma) * (
+        aligned[:, :, 2:] - learned[:, :, 2:]
+    )
+    direct = conditional_renoise_target(
+        aligned,
+        sigma=sigma,
+        noise=noise,
+    )
+
+    assert torch.allclose(mapped, direct, rtol=1e-12, atol=1e-12)
+    assert torch.equal(mapped[:, :, :2], baseline_state[:, :, :2])
+
+
+def test_warping_conditional_state_changes_the_handoff_noise_realization():
+    torch.manual_seed(405)
+    learned = torch.randn(1, 24, 5, 10, 12, dtype=torch.float64)
+    noise = torch.randn_like(learned)
+    sigma = 0.45
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+    correct = conditional_renoise_target(aligned, sigma=sigma, noise=noise)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    warped_state = translate_video_cells(
+        state,
+        dx=0.5,
+        dy=-0.25,
+        start_frame=2,
+    ).video
+
+    assert not torch.allclose(
+        warped_state[:, :, 2:],
+        correct[:, :, 2:],
+        rtol=1e-10,
+        atol=1e-10,
+    )
