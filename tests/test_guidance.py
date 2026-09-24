@@ -739,3 +739,45 @@ def test_registered_reference_rejects_out_of_support_and_unsupported_operator():
             state=GuidanceState(),
             registered_reference=reference,
         )
+
+def test_registered_temporal_guidance_with_one_suffix_frame_uses_direction_only():
+    torch.manual_seed(122)
+    video = torch.randn(1, 24, 3, 8, 8)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    registered_video = video.clone()
+    registered_video[:, :, 2] += 0.25
+    reference = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=torch.ones(8, 8, dtype=torch.bool),
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.0,
+        dy=0.0,
+        cache_key="one-suffix",
+        temporal_search_radius=1,
+    )
+    state = GuidanceState()
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.2,
+        temporal_weight=0.5,
+        temporal_search_radius=1,
+        max_correction_rms_ratio=10.0,
+    )
+
+    result = apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.1,
+        config=config,
+        state=state,
+        registered_reference=reference,
+    )
+
+    assert torch.equal(result[:, :, :2], video[:, :, :2])
+    assert not torch.equal(result[:, :, 2:], video[:, :, 2:])
+    assert state.temporal_cache is not None
+    assert state.last_temporal_valid_fraction == pytest.approx(0.0)
+    assert state.last_temporal_rms_ratio == pytest.approx(0.0)
+
