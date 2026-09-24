@@ -23,6 +23,7 @@ from .handoff import (
     select_handoff_index,
 )
 from .metrics import H3FlowMetrics
+from .provenance import effective_seed, tensor_provenance
 from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
 from .representation_bridge import (
     apply_suffix_representation_bridge,
@@ -1401,6 +1402,21 @@ def _run_progressive(
         low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
         low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
         low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+        root_seed = int(seed or 0)
+        source_noise_seed = root_seed + int(config.source_noise_offset)
+        handoff_noise_seed = root_seed + int(config.seed_offset)
+        binding.metrics.event(
+            "flow_provenance_seed",
+            phase="regular_progressive_target_input",
+            seed=root_seed,
+            source_noise_seed_raw=source_noise_seed,
+            source_noise_seed_effective=effective_seed(source_noise_seed),
+            handoff_noise_seed_raw=handoff_noise_seed,
+            handoff_noise_seed_effective=effective_seed(handoff_noise_seed),
+            target_video_noise=tensor_provenance(target_video_noise),
+            source_video_noise=tensor_provenance(source_video_noise),
+            low_latent_image=tensor_provenance(low_latent_image),
+        )
     else:
         source_shapes = input_shapes
         source_h, source_w = source_shapes[0][-2:]
@@ -1481,6 +1497,12 @@ def _run_progressive(
             binding.metrics.event("low_stage_wall", elapsed_ms=(time.perf_counter() - low_started) * 1000.0)
         base_model = guider.model_patcher.model
         source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
+        binding.metrics.event(
+            "flow_provenance_low_complete",
+            phase="regular_progressive_target_input",
+            low_result=tensor_provenance(low_result),
+            source_raw=tensor_provenance(source_raw),
+        )
         source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
         active = binding.active_capture
         if active is not None:
@@ -1532,6 +1554,11 @@ def _run_progressive(
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        binding.metrics.event(
+            "flow_provenance_probe_complete",
+            phase="regular_progressive_target_input",
+            source_x0=tensor_provenance(source_x0),
+        )
         if mixed_plan is not None:
             # Use all prefix frames as transient upscaler context. Its 3D attention
             # has no proven finite temporal receptive field permitting truncation.
@@ -1682,6 +1709,17 @@ def _run_progressive(
             )
             del diagnostic_noise, learned_clean, corrected_clean
         if config.transfer_mode == "learned_3d":
+            binding.metrics.event(
+                "flow_provenance_handoff",
+                phase="regular_progressive_target_input",
+                seed=int(seed or 0),
+                handoff_noise_seed_effective=effective_seed(int(seed or 0) + int(config.seed_offset)),
+                learned_input=transfer_metrics.get("learned_input_provenance"),
+                learned_output=transfer_metrics.get("learned_output_provenance"),
+                handoff_noise=transfer_metrics.get("handoff_noise_provenance"),
+                renoised_video=transfer_metrics.get("renoised_video_provenance"),
+                target_raw=tensor_provenance(target_raw),
+            )
             binding.metrics.event(
                 "handoff_learned_upscale_wall",
                 elapsed_ms=transfer_metrics["learned_upscale_elapsed_ms"],
