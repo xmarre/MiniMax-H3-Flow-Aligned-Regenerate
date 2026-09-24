@@ -78,7 +78,7 @@ def apply_suffix_dc_bridge(
     if not bool(torch.isfinite(delta).all().item()):
         raise RuntimeError("suffix DC bridge produced a non-finite channel offset")
 
-    corrected = upscaled_clean_video.clone()
+    corrected = upscaled_clean_video.clone() if clone_output else upscaled_clean_video
     for offset in range(corrected_tokens):
         weight = normalized_weights[offset]
         if weight == 0.0:
