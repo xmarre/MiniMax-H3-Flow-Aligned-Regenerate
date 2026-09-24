@@ -605,31 +605,84 @@ def _temporal_alignment_correction(
 
     backward_source = correspondence.backward_flow
     forward_source = correspondence.forward_flow
-    backward_target = _resize_pairwise_flow(backward_source, target_h, target_w)
-    forward_target = _resize_pairwise_flow(forward_source, target_h, target_w)
+    same_grid = backward_source.shape[-2:] == (target_h, target_w)
+    if same_grid:
+        backward_target = backward_source
+        forward_target = forward_source
+    else:
+        backward_target = _resize_pairwise_flow(
+            backward_source,
+            target_h,
+            target_w,
+        )
+        forward_target = _resize_pairwise_flow(
+            forward_source,
+            target_h,
+            target_w,
+        )
 
     work_high = high.float()
     work_reference = reference.float()
-    previous_reference = _warp_video_pairs(work_reference[:, :, :-1], backward_source)
-    previous_innovation = work_reference[:, :, 1:] - previous_reference
-    previous_target = _warp_video_pairs(work_high[:, :, :-1], backward_target)
-    previous_target = (
-        previous_target + resize_video(previous_innovation, target_h, target_w, mode=transfer_mode).float()
+    previous_reference = _warp_video_pairs(
+        work_reference[:, :, :-1],
+        backward_source,
     )
+    previous_innovation = work_reference[:, :, 1:] - previous_reference
+    previous_target = _warp_video_pairs(
+        work_high[:, :, :-1],
+        backward_target,
+    )
+    if same_grid:
+        previous_target = previous_target + previous_innovation
+    else:
+        previous_target = (
+            previous_target
+            + resize_video(
+                previous_innovation,
+                target_h,
+                target_w,
+                mode=transfer_mode,
+            ).float()
+        )
     previous_delta = previous_target - work_high[:, :, 1:]
 
-    next_reference = _warp_video_pairs(work_reference[:, :, 1:], forward_source)
+    next_reference = _warp_video_pairs(
+        work_reference[:, :, 1:],
+        forward_source,
+    )
     next_innovation = work_reference[:, :, :-1] - next_reference
-    next_target = _warp_video_pairs(work_high[:, :, 1:], forward_target)
-    next_target = next_target + resize_video(next_innovation, target_h, target_w, mode=transfer_mode).float()
+    next_target = _warp_video_pairs(
+        work_high[:, :, 1:],
+        forward_target,
+    )
+    if same_grid:
+        next_target = next_target + next_innovation
+        backward_confidence = correspondence.backward_confidence
+        forward_confidence = correspondence.forward_confidence
+    else:
+        next_target = (
+            next_target
+            + resize_video(
+                next_innovation,
+                target_h,
+                target_w,
+                mode=transfer_mode,
+            ).float()
+        )
+        backward_confidence = _resize_pairwise_confidence(
+            correspondence.backward_confidence,
+            target_h,
+            target_w,
+        )
+        forward_confidence = _resize_pairwise_confidence(
+            correspondence.forward_confidence,
+            target_h,
+            target_w,
+        )
     next_delta = next_target - work_high[:, :, :-1]
 
-    backward_confidence = _resize_pairwise_confidence(correspondence.backward_confidence, target_h, target_w).permute(
-        0, 2, 1, 3, 4
-    )
-    forward_confidence = _resize_pairwise_confidence(correspondence.forward_confidence, target_h, target_w).permute(
-        0, 2, 1, 3, 4
-    )
+    backward_confidence = backward_confidence.permute(0, 2, 1, 3, 4)
+    forward_confidence = forward_confidence.permute(0, 2, 1, 3, 4)
 
     weighted = torch.zeros_like(work_high)
     weight = torch.zeros(
@@ -652,11 +705,38 @@ def _bounded(
     correction: torch.Tensor,
     reference: torch.Tensor,
     ratio: float,
+    *,
+    prefix_t: int = 0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    dims = tuple(range(1, correction.ndim))
-    corr_rms = correction.float().square().mean(dim=dims, keepdim=True).sqrt()
-    ref_rms = reference.float().square().mean(dim=dims, keepdim=True).sqrt().clamp_min(1e-8)
-    scale = torch.clamp(ref_rms * ratio / corr_rms.clamp_min(1e-8), max=1.0)
+    if type(prefix_t) is not int or not 0 <= prefix_t < correction.shape[2]:
+        if prefix_t == correction.shape[2]:
+            return torch.zeros_like(correction), {
+                "correction_rms": 0.0,
+                "baseline_rms": 0.0,
+                "correction_rms_ratio": 0.0,
+                "clamp_scale": 1.0,
+            }
+        raise ValueError("guidance correction prefix length is invalid")
+    correction_work = correction[:, :, prefix_t:]
+    reference_work = reference[:, :, prefix_t:]
+    dims = tuple(range(1, correction_work.ndim))
+    corr_rms = (
+        correction_work.float()
+        .square()
+        .mean(dim=dims, keepdim=True)
+        .sqrt()
+    )
+    ref_rms = (
+        reference_work.float()
+        .square()
+        .mean(dim=dims, keepdim=True)
+        .sqrt()
+        .clamp_min(1e-8)
+    )
+    scale = torch.clamp(
+        ref_rms * ratio / corr_rms.clamp_min(1e-8),
+        max=1.0,
+    )
     bounded_rms = corr_rms * scale
     summary = (
         torch.stack(
@@ -670,14 +750,21 @@ def _bounded(
         .detach()
         .to(device="cpu", dtype=torch.float64)
     )
-    correction_rms, baseline_rms, correction_rms_ratio, clamp_scale = map(float, summary.tolist())
+    correction_rms, baseline_rms, correction_rms_ratio, clamp_scale = map(
+        float,
+        summary.tolist(),
+    )
+    bounded = correction * scale.to(correction)
+    if prefix_t:
+        bounded = bounded.clone()
+        bounded[:, :, :prefix_t] = 0
     stats = {
         "correction_rms": correction_rms,
         "baseline_rms": baseline_rms,
         "correction_rms_ratio": correction_rms_ratio,
         "clamp_scale": clamp_scale,
     }
-    return correction * scale.to(correction), stats
+    return bounded, stats
 
 
 def apply_guidance(
