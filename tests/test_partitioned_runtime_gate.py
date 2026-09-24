@@ -552,6 +552,20 @@ def test_runtime_gate_rejects_accepted_registration_below_heldout_threshold():
         )
 
 
+def test_runtime_gate_requires_protected_video_noise_ownership_receipt():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="accepted"))
+    handoff = next(event for event in metrics["events"] if event["kind"] == "handoff_transfer_wall")
+    handoff["fields"]["protected_video_noise_exact"] = False
+
+    with pytest.raises(RuntimeGateError, match="protected video-noise ownership"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
 def test_runtime_gate_rejects_wrong_clean_domain_and_retired_residual_routing():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="accepted"))
