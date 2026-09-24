@@ -967,6 +967,295 @@ def _apply_partitioned_suffix_dc_bridge(
 
 
 
+
+def _prepare_registered_guidance_reference(
+    *,
+    run: Any,
+    guidance: Any,
+    exact_prefix: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    prefix_t: int,
+    split_coordinate: float,
+    high_sigmas: torch.Tensor,
+) -> tuple[RegisteredGuidanceReference | None, dict[str, Any], str | None]:
+    """Register the active target-grid Flow reference without mutating its trajectory."""
+
+    if guidance.mode == "downsample_consistency":
+        return None, {"status": "rejected", "reason": "unsupported_guidance_operator"}, (
+            "unsupported_guidance_operator"
+        )
+
+    exact_probe = any(
+        math.isclose(
+            float(sample.coordinate),
+            float(split_coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+        for sample in run.exact_samples()
+    )
+    source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(
+        run,
+        split_coordinate,
+    )
+    if (
+        not exact_probe
+        or reference_clamped
+        or not math.isclose(
+            float(reference_coordinate),
+            float(split_coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+    ):
+        return None, {
+            "status": "rejected",
+            "reason": "missing_exact_probe_endpoint",
+            "reference_coordinate": float(reference_coordinate),
+            "split_coordinate": float(split_coordinate),
+        }, "missing_exact_probe_endpoint"
+
+    high_coordinates = [
+        float(normalized_coordinate(float(value), video_shift=H3_VIDEO_SHIFT))
+        for value in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist()
+    ]
+    if any(value > float(reference_coordinate) + 1e-8 for value in high_coordinates):
+        return None, {
+            "status": "rejected",
+            "reason": "high_schedule_exceeds_probe_endpoint",
+            "reference_coordinate": float(reference_coordinate),
+            "high_coordinate_max": max(high_coordinates),
+        }, "high_schedule_exceeds_probe_endpoint"
+
+    source_ref = source_ref.to(device=exact_prefix.device, dtype=exact_prefix.dtype)
+    target_ref = resize_video(
+        source_ref,
+        target_h,
+        target_w,
+        mode=guidance.transfer_mode,
+    )
+    if tuple(target_ref.shape) != (
+        int(exact_prefix.shape[0]),
+        int(exact_prefix.shape[1]),
+        int(run.geometry.latent_t),
+        int(target_h),
+        int(target_w),
+    ):
+        return None, {
+            "status": "rejected",
+            "reason": "guidance_target_geometry_mismatch",
+        }, "guidance_target_geometry_mismatch"
+
+    estimate = estimate_paired_prefix_translation(
+        target_ref[:, :, :prefix_t],
+        exact_prefix,
+    )
+    estimate_fields = estimate.telemetry()
+    if estimate.rejected:
+        return None, estimate_fields, f"guidance_{estimate.reason}"
+
+    temporal_radius = int(guidance.temporal_search_radius)
+    if guidance.mode == "direction+temporal":
+        spatial_scale = max(
+            target_h / int(run.geometry.latent_h),
+            target_w / int(run.geometry.latent_w),
+        )
+        temporal_radius = math.ceil(
+            int(guidance.temporal_search_radius) * spatial_scale
+        )
+        if temporal_radius > 8:
+            fields = dict(estimate_fields)
+            fields.update(
+                status="rejected",
+                reason="target_temporal_radius_over_bound",
+                target_temporal_radius=temporal_radius,
+            )
+            return None, fields, "target_temporal_radius_over_bound"
+
+    application = translate_video_cells(
+        target_ref,
+        dx=float(estimate.dx),
+        dy=float(estimate.dy),
+        start_frame=prefix_t,
+        batch_frames=4,
+    )
+    if application.invalid_fraction > 0.08:
+        fields = dict(estimate_fields)
+        fields.update(
+            status="rejected",
+            reason="guidance_invalid_area_over_bound",
+            invalid_fraction=application.invalid_fraction,
+        )
+        return None, fields, "guidance_invalid_area_over_bound"
+
+    # application.video can alias target_ref for an identity registration.
+    # Always clone before restoring the caller-owned prefix so the captured
+    # trajectory and its time-matched tensor remain read-only.
+    registered_video = application.video.clone()
+    registered_video[:, :, :prefix_t] = exact_prefix.to(registered_video)
+    cache_key = (
+        f"{run.run_id}:{prefix_t}:{target_h}x{target_w}:"
+        f"{estimate.dx:.8f}:{estimate.dy:.8f}:"
+        f"{float(reference_coordinate):.12f}:"
+        f"{FRAME_GAUGE_POLICY_VERSION}"
+    )
+    registered = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=application.valid_mask.detach(),
+        prefix_t=prefix_t,
+        run_id=str(run.run_id),
+        reference_coordinate=float(reference_coordinate),
+        dx=float(estimate.dx),
+        dy=float(estimate.dy),
+        cache_key=cache_key,
+        temporal_search_radius=temporal_radius,
+    )
+    fields = dict(estimate_fields)
+    fields.update(
+        reference_coordinate=float(reference_coordinate),
+        reference_clamped=False,
+        target_temporal_radius=temporal_radius,
+        cache_key=cache_key,
+        trajectory_mutated=False,
+        exact_prefix_restored=True,
+    )
+    return registered, fields, None
+
+
+def _frame_gauge_clean_postprocess(
+    learned_clean: torch.Tensor,
+    *,
+    exact_prefix: torch.Tensor,
+    guidance_run: Any,
+    guidance: Any,
+    target_h: int,
+    target_w: int,
+    prefix_t: int,
+    split_coordinate: float,
+    high_sigmas: torch.Tensor,
+) -> tuple[
+    CleanVideoPostprocessResult,
+    RegisteredGuidanceReference | None,
+    dict[str, torch.Tensor],
+    dict[str, Any],
+]:
+    """Run the all-or-nothing clean-domain frame-gauge registration transaction."""
+
+    started = time.perf_counter()
+    exact_prefix = exact_prefix.to(
+        device=learned_clean.device,
+        dtype=learned_clean.dtype,
+    )
+    video_estimate = estimate_paired_prefix_translation(
+        learned_clean[:, :, :prefix_t],
+        exact_prefix,
+    )
+    transaction: dict[str, Any] = {
+        "policy_version": FRAME_GAUGE_POLICY_VERSION,
+        "video_registration": video_estimate.telemetry(),
+        "guidance_registration": {"status": "off", "reason": "guidance_off"},
+        "result": "baseline",
+        "reason": video_estimate.reason,
+        "dc_applied_in_clean_hook": False,
+        "spatial_warp_applied": False,
+    }
+    if not video_estimate.accepted:
+        transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
+    registered_reference = None
+    if guidance is not None and guidance.mode != "off":
+        registered_reference, guidance_fields, guidance_error = (
+            _prepare_registered_guidance_reference(
+                run=guidance_run,
+                guidance=guidance,
+                exact_prefix=exact_prefix,
+                target_h=target_h,
+                target_w=target_w,
+                prefix_t=prefix_t,
+                split_coordinate=split_coordinate,
+                high_sigmas=high_sigmas,
+            )
+        )
+        transaction["guidance_registration"] = guidance_fields
+        if guidance_error is not None:
+            transaction["reason"] = guidance_error
+            transaction["elapsed_ms"] = (
+                time.perf_counter() - started
+            ) * 1000.0
+            result = CleanVideoPostprocessResult(
+                clean_video=learned_clean,
+                protected_prefix_t=prefix_t,
+                metadata=transaction,
+            )
+            return result, None, {}, transaction
+
+    aligned_application = translate_video_cells(
+        learned_clean,
+        dx=float(video_estimate.dx),
+        dy=float(video_estimate.dy),
+        start_frame=0,
+        batch_frames=4,
+    )
+    if aligned_application.invalid_fraction > 0.08:
+        transaction.update(
+            result="baseline",
+            reason="video_invalid_area_over_bound",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
+    aligned_witness = aligned_application.video
+    corrected_clean, dc_metrics = apply_suffix_dc_bridge(
+        aligned_witness,
+        exact_prefix,
+        weights=(1.0,),
+    )
+    # The shifted prefix exists only as a disposable registration/DC witness.
+    # Restore the provider's original learned prefix before the clean state is
+    # re-noised; scheduler ownership will replace it with authoritative E later.
+    corrected_clean[:, :, :prefix_t] = learned_clean[:, :, :prefix_t]
+    if not torch.equal(
+        corrected_clean[:, :, :prefix_t],
+        learned_clean[:, :, :prefix_t],
+    ):
+        raise RuntimeError("frame-gauge clean transaction altered learned prefix ownership")
+
+    transaction.update(
+        result="accepted",
+        reason="accepted",
+        dc_applied_in_clean_hook=True,
+        spatial_warp_applied=True,
+        invalid_fraction=aligned_application.invalid_fraction,
+        dc_policy="existing_one_token_spatial_mean_v1",
+        dc_order="after_spatial_registration_before_conditional_renoise",
+        dc_metrics=dc_metrics,
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+    )
+    witnesses = {
+        "learned_native": learned_clean.detach(),
+        "paired_prefix_aligned_witness": aligned_witness.detach(),
+        "corrected_clean": corrected_clean.detach(),
+    }
+    result = CleanVideoPostprocessResult(
+        clean_video=corrected_clean,
+        protected_prefix_t=prefix_t,
+        metadata=transaction,
+    )
+    return result, registered_reference, witnesses, transaction
+
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
