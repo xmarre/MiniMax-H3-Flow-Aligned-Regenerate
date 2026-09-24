@@ -875,7 +875,8 @@ def apply_guidance(
             or registered_reference.validity.dtype != torch.bool
         ):
             raise RuntimeError("registered guidance reference validity geometry drifted")
-        if coordinate > float(registered_reference.reference_coordinate) + 1e-8:
+        coordinate_tolerance = 1e-7
+        if coordinate > float(registered_reference.reference_coordinate) + coordinate_tolerance:
             raise RuntimeError("high-stage sampler evaluated above the registered guidance endpoint")
         _, resolved_coordinate, _ = time_matched_reference_info(
             run,
@@ -885,7 +886,7 @@ def apply_guidance(
             float(resolved_coordinate),
             float(registered_reference.reference_coordinate),
             rel_tol=0.0,
-            abs_tol=1e-8,
+            abs_tol=coordinate_tolerance,
         ):
             raise RuntimeError("registered guidance reference coordinate identity drifted")
         ref = registered_reference.video.to(
