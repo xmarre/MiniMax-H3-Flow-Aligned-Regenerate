@@ -64,8 +64,8 @@ from h3_flow_regenerate.partitioned_outer import (
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
-    _prepare_registered_guidance_reference,
     PartitionedPreflightUnsupported,
+    _prepare_registered_guidance_reference,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
     _verify_prefix_transformer_context_diagnostic,
