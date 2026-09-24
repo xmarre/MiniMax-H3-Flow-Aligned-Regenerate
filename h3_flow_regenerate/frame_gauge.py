@@ -605,7 +605,7 @@ def estimate_paired_prefix_translation(
                 f"parity_{parity_y}{parity_x}",
             )
             parity_checks.append(check)
-            if check.get("informative") and not check.get("supports_global"):
+            if check.get("strong_conflict"):
                 return reject(
                     "phase_dependent_conflict",
                     frame_checks=tuple(frame_checks),
