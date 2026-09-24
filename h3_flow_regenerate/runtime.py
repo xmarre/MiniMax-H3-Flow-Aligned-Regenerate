@@ -193,6 +193,25 @@ def _bounded_tensor_provenance(value: Any) -> str | None:
     return _tensor_signature(value).hex()
 
 
+_SUPPORTED_CONDITIONING_WRAPPERS = frozenset(
+    {
+        ("comfy.conds", "CONDRegular"),
+        ("comfy.conds", "CONDNoiseShape"),
+        ("comfy.conds", "CONDCrossAttn"),
+        ("comfy.conds", "CONDConstant"),
+        ("comfy.conds", "CONDList"),
+    }
+)
+
+
+def _supported_conditioning_wrapper_payload(value: Any) -> Any | None:
+    """Expose only explicitly supported Comfy conditioning wrapper payloads."""
+    cls = type(value)
+    if (cls.__module__, cls.__name__) not in _SUPPORTED_CONDITIONING_WRAPPERS:
+        return None
+    return getattr(value, "cond", None)
+
+
 def _nested_tensor_provenance(
     value: Any,
     *,
@@ -216,6 +235,10 @@ def _nested_tensor_provenance(
                     "signature": _bounded_tensor_provenance(current),
                 }
             )
+            return
+        wrapped = _supported_conditioning_wrapper_payload(current)
+        if wrapped is not None:
+            walk(wrapped, f"{current_path}.cond", depth + 1)
             return
         if isinstance(current, dict):
             for key in sorted(current, key=lambda item: str(item)):
@@ -277,6 +300,12 @@ def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     if torch.is_tensor(value):
         digest.update(b"tensor:")
         digest.update(_tensor_signature(value))
+        return
+    wrapped = _supported_conditioning_wrapper_payload(value)
+    if wrapped is not None:
+        cls = type(value)
+        digest.update(f"cond-wrapper:{cls.__module__}.{cls.__qualname__}:".encode())
+        _update_conditioning_digest(digest, wrapped, depth=depth + 1)
         return
     if isinstance(value, dict):
         # ComfyUI's convert_cond creates a fresh UUID on each conversion. It is
