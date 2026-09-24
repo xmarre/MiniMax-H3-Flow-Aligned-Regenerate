@@ -198,8 +198,4 @@ def test_guidance_registration_rejects_high_schedule_that_changes_reference_iden
     assert error == "high_schedule_changes_reference_identity"
     assert fields["status"] == "rejected"
     assert fields["reference_coordinate"] == pytest.approx(split_coordinate)
-    assert any(
-        value != pytest.approx(split_coordinate)
-        for value in fields["resolved_high_coordinates"]
-    )
-
+    assert any(value != pytest.approx(split_coordinate) for value in fields["resolved_high_coordinates"])
