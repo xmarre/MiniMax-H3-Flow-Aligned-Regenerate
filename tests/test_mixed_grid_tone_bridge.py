@@ -140,9 +140,7 @@ def test_exact_prefix_gauge_bridge_preserves_boundary_and_all_suffix_differences
     generator = torch.Generator(device="cpu").manual_seed(901)
     learned = torch.randn((1, 3, 6, 5, 7), generator=generator, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
-    exact[:, :, -1] += torch.randn(
-        (1, 3, 5, 7), generator=generator, dtype=torch.float32
-    ) * 0.4
+    exact[:, :, -1] += torch.randn((1, 3, 5, 7), generator=generator, dtype=torch.float32) * 0.4
     before = learned.clone()
 
     corrected, metrics = apply_suffix_exact_prefix_gauge_bridge(learned, exact)
@@ -169,9 +167,7 @@ def test_exact_prefix_gauge_bridge_conditional_mapping_matches_direct_renoise():
     generator = torch.Generator(device="cpu").manual_seed(902)
     learned = torch.randn((1, 2, 5, 4, 6), generator=generator, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
-    exact[:, :, -1] += torch.randn(
-        (1, 2, 4, 6), generator=generator, dtype=torch.float32
-    ) * 0.25
+    exact[:, :, -1] += torch.randn((1, 2, 4, 6), generator=generator, dtype=torch.float32) * 0.25
     corrected, metrics = apply_suffix_exact_prefix_gauge_bridge(learned, exact)
     sigma = 0.63
     noise = torch.randn(learned.shape, generator=generator, dtype=learned.dtype)
