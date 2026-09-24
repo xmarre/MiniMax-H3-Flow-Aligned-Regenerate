@@ -650,6 +650,7 @@ def _temporal_alignment_correction(
     correspondence: _TemporalCorrespondence,
     *,
     transfer_mode: str,
+    reference_is_target_grid: bool = False,
 ) -> torch.Tensor:
     if high.ndim != 5 or reference.ndim != 5:
         raise ValueError("temporal alignment expects BxCxTxHxW tensors")
@@ -659,9 +660,11 @@ def _temporal_alignment_correction(
     if frames < 2:
         return torch.zeros_like(high)
 
+    if not isinstance(reference_is_target_grid, bool):
+        raise TypeError("reference_is_target_grid must be boolean")
     backward_source = correspondence.backward_flow
     forward_source = correspondence.forward_flow
-    same_grid = backward_source.shape[-2:] == (target_h, target_w)
+    same_grid = reference_is_target_grid and backward_source.shape[-2:] == (target_h, target_w)
     if same_grid:
         backward_target = backward_source
         forward_target = forward_source
@@ -989,6 +992,7 @@ def apply_guidance(
                 temporal_reference,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
+                reference_is_target_grid=registered,
             )
             temporal_correction = schedule * config.temporal_weight * temporal_delta
             if registered and prefix_t:
