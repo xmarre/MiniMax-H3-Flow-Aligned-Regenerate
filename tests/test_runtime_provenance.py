@@ -63,6 +63,27 @@ def test_trajectory_sample_provenance_records_bounded_anchor_receipts():
     assert _trajectory_sample_provenance(None) == []
 
 
+def test_trajectory_sample_provenance_bounds_large_runs_with_endpoint_anchors():
+    samples = tuple(
+        SimpleNamespace(
+            coordinate=float(index) / 16.0,
+            video_sigma=1.0 - float(index) / 32.0,
+            audio_sigma=1.0 - float(index) / 64.0,
+            outer_step=index,
+            call_index=index,
+            phase="model",
+            provenance="actual",
+            video_x0=torch.full((1, 24, 1, 2, 2), float(index)),
+        )
+        for index in range(17)
+    )
+
+    receipts = _trajectory_sample_provenance(SimpleNamespace(samples=samples), max_samples=5)
+
+    assert [receipt["call_index"] for receipt in receipts] == [0, 4, 8, 12, 16]
+    assert len(receipts) == 5
+
+
 def test_nested_tensor_provenance_reports_paths_without_rng_use():
     first = torch.arange(16, dtype=torch.float32).reshape(1, 4, 4)
     second = torch.arange(8, dtype=torch.int64)
