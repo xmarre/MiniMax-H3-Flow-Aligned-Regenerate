@@ -133,3 +133,20 @@ def test_bridge_rejects_invalid_weights_and_state_mapping_ranges():
             prefix_t=2,
             corrected_tokens=99,
         )
+
+def test_bridge_can_update_disposable_aligned_witness_without_second_full_clone():
+    learned, exact = _fixture()
+    expected_prefix = learned[:, :, :2].clone()
+    expected_later = learned[:, :, 3:].clone()
+
+    corrected, metrics = apply_suffix_dc_bridge(
+        learned,
+        exact,
+        clone_output=False,
+    )
+
+    assert corrected is learned
+    assert torch.equal(corrected[:, :, :2], expected_prefix)
+    assert torch.equal(corrected[:, :, 3:], expected_later)
+    assert metrics["suffix_dc_bridge_corrected_tokens"] == 1
+
