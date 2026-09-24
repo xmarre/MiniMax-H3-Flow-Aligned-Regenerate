@@ -540,7 +540,6 @@ def test_runtime_gate_can_pin_auto_strength_report_identity_across_pair():
         )
 
 
-
 def test_runtime_gate_rejects_accepted_registration_below_heldout_threshold():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     receipt = _frame_gauge_event(mode="on", result="accepted")
