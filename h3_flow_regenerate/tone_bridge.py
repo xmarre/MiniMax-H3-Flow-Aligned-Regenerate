@@ -142,9 +142,7 @@ def apply_suffix_exact_prefix_gauge_bridge(
 
     corrected = upscaled_clean_video.clone()
     corrected_suffix = corrected[:, :, prefix_t:].float()
-    corrected[:, :, prefix_t:] = (corrected_suffix + delta.unsqueeze(2)).to(
-        dtype=corrected.dtype
-    )
+    corrected[:, :, prefix_t:] = (corrected_suffix + delta.unsqueeze(2)).to(dtype=corrected.dtype)
     if not bool(torch.isfinite(corrected).all().item()):
         raise RuntimeError("suffix exact-prefix gauge bridge produced NaN or Inf values")
     if not torch.equal(corrected[:, :, :prefix_t], upscaled_clean_video[:, :, :prefix_t]):
@@ -173,6 +171,7 @@ def apply_suffix_exact_prefix_gauge_bridge(
         "suffix_gauge_bridge_boundary_difference_preserved": True,
         "suffix_gauge_bridge_suffix_differences_preserved": True,
     }
+
 
 def map_clean_bridge_to_conditional_state(
     state: torch.Tensor,
