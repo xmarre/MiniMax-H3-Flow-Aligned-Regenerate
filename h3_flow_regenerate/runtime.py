@@ -554,9 +554,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
             temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
             temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
-            temporal_cross_prefix_pairs_disabled=(
-                binding.guidance_state.last_temporal_cross_prefix_pairs_disabled
-            ),
+            temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
             registered_reference_used=binding.guidance_state.last_registered_reference_used,
             actual=actual,
             solver_phase=(
