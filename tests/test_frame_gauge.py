@@ -252,4 +252,3 @@ def test_translation_preserves_supported_dtype_and_bounded_batch_equivalence(dty
     tolerance = 1e-6 if dtype == torch.float32 else 1e-3
     assert torch.allclose(one.video.float(), four.video.float(), atol=tolerance, rtol=tolerance)
     assert torch.isfinite(one.video).all()
-
