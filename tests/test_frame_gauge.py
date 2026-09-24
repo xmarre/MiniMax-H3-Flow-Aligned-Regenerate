@@ -98,7 +98,6 @@ def test_registration_recovers_integer_axis_and_combined_shifts(dx, dy):
     assert estimate.dy == pytest.approx(dy, abs=0.125)
 
 
-
 def test_registration_rejects_constant_and_overbound_fields():
     constant = torch.ones(1, 24, 4, 26, 26)
     ambiguous = estimate_paired_prefix_translation(
