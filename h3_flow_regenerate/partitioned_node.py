@@ -82,6 +82,7 @@ class H3PartitionedExactPrefixHandoff:
         learned_upscaler,
         metrics=None,
         temporal_weight=0.20,
+        frame_gauge_repair=False,
     ):
         # Companion capabilities are imported lazily so ordinary Flow users do
         # not acquire cross-custom-node requirements at Comfy startup.
@@ -113,6 +114,7 @@ class H3PartitionedExactPrefixHandoff:
             # its boundary correction after learned transfer, before target-high.
             suffix_dc_bridge=False,
             suffix_geometric_bridge=False,
+            frame_gauge_repair=bool(frame_gauge_repair),
         )
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -185,6 +187,8 @@ class H3PartitionedExactPrefixHandoff:
             vdn_variable_grid_linear_enabled=True,
             guided_audio_overlap=True,
             partitioned_suffix_dc_bridge=True,
+            frame_gauge_repair=bool(frame_gauge_repair),
+            frame_gauge_repair_default=False,
             preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
@@ -319,6 +323,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after every historical selector so existing serialized widget
+        # positions remain stable. OFF is the baseline/promotion control.
+        spec["required"]["frame_gauge_repair"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Opt-in exact-prefix/suffix frame-gauge registration. OFF preserves the "
+                    "physical 00625 handoff and one-token DC bridge exactly. ON applies a "
+                    "confidence-gated rigid sub-cell suffix translation only when all paired-prefix "
+                    "and active-guidance registrations pass."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -354,6 +372,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        frame_gauge_repair=False,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -374,6 +393,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             learned_upscaler=learned_upscaler,
             metrics=metrics,
             temporal_weight=temporal_weight,
+            frame_gauge_repair=frame_gauge_repair,
         )
         return apply_partitioned_diagnostic_controls(
             patched,
