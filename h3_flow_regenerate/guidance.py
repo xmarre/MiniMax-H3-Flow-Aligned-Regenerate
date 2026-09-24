@@ -491,6 +491,46 @@ def _build_temporal_correspondence(
         else 0.0
     )
 
+    if pair_start == 0:
+        return _TemporalCorrespondence(
+            coordinate=float(coordinate),
+            cache_key=cache_key,
+            backward_flow=backward.reshape(
+                batch,
+                pair_count,
+                2,
+                height,
+                width,
+            ).detach(),
+            forward_flow=forward.reshape(
+                batch,
+                pair_count,
+                2,
+                height,
+                width,
+            ).detach(),
+            backward_confidence=backward_confidence.reshape(
+                batch,
+                pair_count,
+                1,
+                height,
+                width,
+            ).detach(),
+            forward_confidence=forward_confidence.reshape(
+                batch,
+                pair_count,
+                1,
+                height,
+                width,
+            ).detach(),
+            confidence_mean=confidence_mean,
+            valid_fraction=valid_fraction,
+            similarity_mean=_masked_mean(all_similarity, valid),
+            margin_mean=_masked_mean(all_margin, valid),
+            flow_magnitude_mean=_masked_mean(all_flow, valid),
+            flow_magnitude_max=flow_magnitude_max,
+        )
+
     backward_full = torch.zeros(
         (batch, pair_count, 2, height, width),
         device=reference.device,
@@ -635,6 +675,7 @@ def _temporal_alignment_correction(
     correspondence: _TemporalCorrespondence,
     *,
     transfer_mode: str,
+    reference_is_target_grid: bool = False,
 ) -> torch.Tensor:
     if high.ndim != 5 or reference.ndim != 5:
         raise ValueError("temporal alignment expects BxCxTxHxW tensors")
@@ -644,9 +685,14 @@ def _temporal_alignment_correction(
     if frames < 2:
         return torch.zeros_like(high)
 
+    if not isinstance(reference_is_target_grid, bool):
+        raise TypeError("reference_is_target_grid must be boolean")
     backward_source = correspondence.backward_flow
     forward_source = correspondence.forward_flow
-    same_grid = backward_source.shape[-2:] == (target_h, target_w)
+    same_grid = (
+        reference_is_target_grid
+        and backward_source.shape[-2:] == (target_h, target_w)
+    )
     if same_grid:
         backward_target = backward_source
         forward_target = forward_source
@@ -1045,6 +1091,7 @@ def apply_guidance(
                 temporal_reference,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
+                reference_is_target_grid=registered,
             )
             temporal_correction = (
                 schedule
