@@ -100,6 +100,7 @@ from .seam_diagnostics import (
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 from .tone_bridge import (
     apply_suffix_dc_bridge,
+    apply_suffix_exact_prefix_gauge_bridge,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
@@ -953,6 +954,40 @@ def _apply_partitioned_suffix_dc_bridge(
     )
     return mapped_state, corrected_clean, bridge_metrics
 
+
+def _apply_partitioned_suffix_gauge_bridge(
+    target_video: torch.Tensor,
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    sigma: float,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float | int | bool]]:
+    """Carry the learned target-grid spatial gauge across exact-prefix replacement.
+
+    The learned 3D handoff is internally coherent before Flow discards its
+    transient prefix. Replacing that prefix with the authoritative exact prefix
+    changes the boundary field. Transporting the complete last-prefix residual
+    uniformly across the suffix preserves both the learned boundary difference
+    and every learned suffix temporal difference without a spatial warp.
+    """
+
+    prefix_t = int(exact_prefix.shape[2])
+    corrected_clean, bridge_metrics = apply_suffix_exact_prefix_gauge_bridge(
+        learned_clean,
+        exact_prefix,
+    )
+    corrected_tokens = int(bridge_metrics["suffix_gauge_bridge_corrected_tokens"])
+    if corrected_tokens != int(learned_clean.shape[2]) - prefix_t:
+        raise RuntimeError("exact-prefix gauge bridge must cover the complete learned suffix")
+    mapped_state = map_clean_bridge_to_conditional_state(
+        target_video,
+        learned_clean,
+        corrected_clean,
+        sigma=float(sigma),
+        prefix_t=prefix_t,
+        corrected_tokens=corrected_tokens,
+    )
+    return mapped_state, corrected_clean, bridge_metrics
 
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
@@ -1936,12 +1971,11 @@ def run_partitioned_progressive(
             device=learned_clean.device,
             dtype=learned_clean.dtype,
         )
-        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
+        target_video, corrected_clean, gauge_bridge_metrics = _apply_partitioned_suffix_gauge_bridge(
             target_video,
             learned_clean,
             exact_prefix,
             sigma=sigma,
-            enabled=True,
         )
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
@@ -1954,19 +1988,22 @@ def run_partitioned_progressive(
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
         binding.metrics.event(
-            "partitioned_suffix_dc_bridge",
+            "partitioned_suffix_exact_prefix_gauge_bridge",
             source="learned_3d_exact_prefix_handoff",
+            policy="full_spatial_residual_all_suffix_v1",
             state_mapping="conditional_renoise_affine",
             authoritative_prefix_modified=False,
-            later_suffix_modified=False,
-            **dc_bridge_metrics,
+            suffix_temporal_differences_preserved=True,
+            spatial_warp_applied=False,
+            **gauge_bridge_metrics,
         )
-        if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
-            binding.metrics.increment("partitioned_suffix_dc_bridge_runs")
+        if bool(gauge_bridge_metrics["suffix_gauge_bridge_enabled"]):
+            binding.metrics.increment("partitioned_suffix_exact_prefix_gauge_bridge_runs")
 
-        # Splice diagnostics above require the learned prefix.  From here on the
-        # clean diagnostic tensor mirrors the actual high-stage state: corrected
-        # first suffix token plus the authoritative exact target-grid prefix.
+        # Splice diagnostics above require the learned prefix. From here on the
+        # clean diagnostic tensor mirrors the actual high-stage state: the
+        # full learned suffix gauge transported onto the authoritative exact
+        # target-grid prefix.
         corrected_clean[:, :, : stage_plan.prefix_t] = exact_prefix
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             native_trajectory = measure_translation_trajectory(
@@ -2010,8 +2047,9 @@ def run_partitioned_progressive(
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
-            suffix_dc_bridge_state_mapping="conditional_renoise_affine",
-            **dc_bridge_metrics,
+            suffix_exact_prefix_gauge_bridge_state_mapping="conditional_renoise_affine",
+            suffix_exact_prefix_gauge_bridge_policy="full_spatial_residual_all_suffix_v1",
+            **gauge_bridge_metrics,
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             model_name=transfer_metrics.get("model_name"),
