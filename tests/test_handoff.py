@@ -139,14 +139,6 @@ def test_learned_handoff_uses_exact_probe_video_once_and_preserves_audio():
     assert report["temporal_length"] == 2
 
 
-@pytest.mark.parametrize(
-    "output",
-    [
-        torch.zeros(1, 23, 2, 8, 6),
-        torch.zeros(1, 24, 3, 8, 6),
-        torch.zeros(1, 24, 2, 7, 6),
-    ],
-)
 def test_learned_clean_postprocess_runs_before_renoise_without_extra_rng_or_audio_work():
     source_video = torch.full((1, 24, 2, 4, 4), -3.0)
     exact_x0_video = torch.full_like(source_video, 2.0)
@@ -202,6 +194,30 @@ def test_learned_clean_postprocess_runs_before_renoise_without_extra_rng_or_audi
     assert torch.equal(rng_before, rng_after)
     assert report["clean_video_postprocess"]["enabled"] is True
     assert report["clean_video_postprocess"]["decision"] == "accepted"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        torch.zeros(1, 23, 2, 8, 6),
+        torch.zeros(1, 24, 3, 8, 6),
+        torch.zeros(1, 24, 2, 7, 6),
+    ],
+)
+def test_learned_handoff_rejects_wrong_provider_geometry(output):
+    state, x0, shapes, _, _ = packed()
+    with pytest.raises(RuntimeError, match="returned shape"):
+        build_handoff_state(
+            source_packed_state=state,
+            source_x0_packed=x0,
+            source_shapes=shapes,
+            sigma=0.4,
+            target_h=8,
+            target_w=6,
+            seed=123,
+            transfer_mode="learned_3d",
+            learned_upscaler=FakeLearnedProvider(output),
+        )
 
 
 def test_unchanged_clean_postprocess_is_byte_exact_with_hook_off_baseline():
