@@ -186,6 +186,133 @@ def _tensor_signature(tensor: torch.Tensor, *, max_values: int = 128) -> bytes:
     return digest.digest()
 
 
+def _bounded_tensor_provenance(value: Any) -> str | None:
+    """Return a bounded deterministic content receipt without consuming RNG state."""
+    if not torch.is_tensor(value):
+        return None
+    return _tensor_signature(value).hex()
+
+
+def _packed_av_tensor_provenance(
+    packed: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+) -> dict[str, Any]:
+    """Fingerprint one packed H3 AV state without changing RNG or model state."""
+    if not torch.is_tensor(packed):
+        raise TypeError("packed H3 provenance input must be a torch.Tensor")
+    if len(shapes) != 2:
+        raise ValueError("packed H3 provenance requires exactly video and audio shapes")
+    video, audio = unpack_streams(packed, shapes)
+    return {
+        "packed_signature": _bounded_tensor_provenance(packed),
+        "video_signature": _bounded_tensor_provenance(video),
+        "audio_signature": _bounded_tensor_provenance(audio),
+        "packed_shape": tuple(int(value) for value in packed.shape),
+        "video_shape": tuple(int(value) for value in video.shape),
+        "audio_shape": tuple(int(value) for value in audio.shape),
+    }
+
+
+_SUPPORTED_CONDITIONING_WRAPPERS = frozenset(
+    {
+        ("comfy.conds", "CONDRegular"),
+        ("comfy.conds", "CONDNoiseShape"),
+        ("comfy.conds", "CONDCrossAttn"),
+        ("comfy.conds", "CONDConstant"),
+        ("comfy.conds", "CONDList"),
+    }
+)
+
+
+def _supported_conditioning_wrapper_payload(value: Any) -> Any | None:
+    """Expose only explicitly supported Comfy conditioning wrapper payloads."""
+    cls = type(value)
+    if (cls.__module__, cls.__name__) not in _SUPPORTED_CONDITIONING_WRAPPERS:
+        return None
+    return getattr(value, "cond", None)
+
+
+def _nested_tensor_provenance(
+    value: Any,
+    *,
+    path: str = "root",
+    max_depth: int = 8,
+    max_receipts: int = 64,
+) -> list[dict[str, Any]]:
+    """Collect bounded receipts for tensors nested in ordinary conditioning containers."""
+    receipts: list[dict[str, Any]] = []
+
+    def walk(current: Any, current_path: str, depth: int) -> None:
+        if len(receipts) >= int(max_receipts) or depth > int(max_depth):
+            return
+        if torch.is_tensor(current):
+            receipts.append(
+                {
+                    "path": current_path,
+                    "shape": tuple(int(value) for value in current.shape),
+                    "dtype": str(current.dtype),
+                    "device": str(current.device),
+                    "signature": _bounded_tensor_provenance(current),
+                }
+            )
+            return
+        wrapped = _supported_conditioning_wrapper_payload(current)
+        if wrapped is not None:
+            walk(wrapped, f"{current_path}.cond", depth + 1)
+            return
+        if isinstance(current, dict):
+            for key in sorted(current, key=lambda item: str(item)):
+                walk(current[key], f"{current_path}.{key!s}", depth + 1)
+            return
+        if isinstance(current, (list, tuple)):
+            for index, item in enumerate(current):
+                walk(item, f"{current_path}[{index}]", depth + 1)
+
+    walk(value, path, 0)
+    return receipts
+
+
+def _conditioning_tensor_provenance(guider: Any) -> list[dict[str, Any]]:
+    original = getattr(guider, "original_conds", {}) or {}
+    return _nested_tensor_provenance(original, path="original_conds")
+
+
+def _trajectory_sample_provenance(
+    run: Any,
+    *,
+    max_samples: int = 8,
+) -> list[dict[str, Any]]:
+    """Return a bounded representative set of captured Flow guidance anchors."""
+    if run is None:
+        return []
+    samples = getattr(run, "samples", ()) or ()
+    sample_count = len(samples)
+    max_samples = int(max_samples)
+    if max_samples < 1:
+        raise ValueError("trajectory provenance max_samples must be positive")
+    if sample_count <= max_samples:
+        selected = samples
+    elif max_samples == 1:
+        selected = (samples[0],)
+    else:
+        last = sample_count - 1
+        indices = tuple((index * last) // (max_samples - 1) for index in range(max_samples))
+        selected = tuple(samples[index] for index in indices)
+    return [
+        {
+            "coordinate": float(sample.coordinate),
+            "video_sigma": float(sample.video_sigma),
+            "audio_sigma": float(sample.audio_sigma),
+            "outer_step": int(sample.outer_step),
+            "call_index": int(sample.call_index),
+            "phase": str(sample.phase),
+            "provenance": str(sample.provenance),
+            "video_x0_signature": _bounded_tensor_provenance(sample.video_x0),
+        }
+        for sample in selected
+    ]
+
+
 def _update_conditioning_digest(digest, value: Any, *, depth: int = 0) -> None:
     if depth > 8:
         digest.update(f"<depth:{type(value).__module__}.{type(value).__qualname__}>".encode())
@@ -386,6 +513,17 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
+    pre_transformer = (model_options or {}).get("transformer_options") or {}
+    pre_stage = str(pre_transformer.get(FLOW_STAGE_KEY, "single"))
+    pre_active = binding.active_capture if binding is not None else None
+    first_low_input_provenance = None
+    if pre_stage == "low" and pre_active is not None and pre_active.call_index == 0:
+        first_low_input_provenance = {
+            **_packed_av_tensor_provenance(x, pre_active.shapes),
+            "timestep_signature": _bounded_tensor_provenance(timestep),
+            "resolved_seed": int(seed or 0),
+            "seed_was_none": seed is None,
+        }
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
     if binding is None:
@@ -439,6 +577,33 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     )
 
     active = binding.active_capture
+    if first_low_input_provenance is not None:
+        session_id, chunk_id = _interop_identity(model_options)
+        output_provenance = _packed_av_tensor_provenance(result, pre_active.shapes)
+        binding.metrics.event(
+            "first_low_model_provenance",
+            schema=1,
+            session_id=str(session_id),
+            chunk_id=str(chunk_id),
+            call_index=int(pre_active.call_index),
+            stage=stage,
+            actual=bool(actual),
+            sigma=sigma,
+            coordinate=coordinate,
+            resolved_seed=first_low_input_provenance["resolved_seed"],
+            seed_was_none=first_low_input_provenance["seed_was_none"],
+            timestep_signature=first_low_input_provenance["timestep_signature"],
+            packed_input_signature=first_low_input_provenance["packed_signature"],
+            video_input_signature=first_low_input_provenance["video_signature"],
+            audio_input_signature=first_low_input_provenance["audio_signature"],
+            packed_output_signature=output_provenance["packed_signature"],
+            video_output_signature=output_provenance["video_signature"],
+            audio_output_signature=output_provenance["audio_signature"],
+            packed_shape=first_low_input_provenance["packed_shape"],
+            video_shape=first_low_input_provenance["video_shape"],
+            audio_shape=first_low_input_provenance["audio_shape"],
+            rng_state_consumed=False,
+        )
     if active is not None:
         if active.call_index < len(active.phases):
             fallback_outer, fallback_phase = active.phases[active.call_index]
@@ -1411,6 +1576,57 @@ def _run_progressive(
         low_noise = noise
         low_latent_image = latent_image
         low_mask = denoise_mask
+    original_conditioning_signature = _conditioning_signature(guider)
+    original_conditioning_tensor_receipts = _conditioning_tensor_provenance(guider)
+    conditioning_template_signature = _conditioning_signature_from_original(conditioning_template)
+    conditioning_template_tensor_receipts = _nested_tensor_provenance(
+        conditioning_template,
+        path="conditioning_template",
+    )
+    provenance_seed = int(seed or 0)
+    provenance_session_id, provenance_chunk_id = _interop_identity(model_options)
+    binding.metrics.event(
+        "progressive_state_provenance",
+        schema=1,
+        checkpoint="entry",
+        session_id=str(provenance_session_id),
+        chunk_id=str(provenance_chunk_id),
+        target_input=bool(target_input),
+        input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
+        resolved_seed=provenance_seed,
+        seed_was_none=seed is None,
+        deterministic_seed_mask=(1 << 63) - 1,
+        source_noise_offset=(int(config.source_noise_offset) if target_input else None),
+        handoff_seed_offset=int(config.seed_offset),
+        source_noise_seed=(provenance_seed + int(config.source_noise_offset) if target_input else None),
+        source_noise_seed_effective=(
+            (provenance_seed + int(config.source_noise_offset)) & ((1 << 63) - 1) if target_input else None
+        ),
+        handoff_noise_seed=provenance_seed + int(config.seed_offset),
+        handoff_noise_seed_effective=(provenance_seed + int(config.seed_offset)) & ((1 << 63) - 1),
+        sampler=sampler_name(sampler),
+        sigma_schedule_signature=_schedule_signature(sigmas),
+        conditioning_signature=conditioning_template_signature,
+        conditioning_tensor_receipts=conditioning_template_tensor_receipts,
+        original_conditioning_signature=original_conditioning_signature,
+        original_conditioning_tensor_receipts=original_conditioning_tensor_receipts,
+        conditioning_template_signature=conditioning_template_signature,
+        conditioning_template_tensor_receipts=conditioning_template_tensor_receipts,
+        caller_noise_signature=_bounded_tensor_provenance(noise),
+        caller_latent_signature=_bounded_tensor_provenance(latent_image),
+        caller_mask_signature=_bounded_tensor_provenance(denoise_mask),
+        low_noise_signature=_bounded_tensor_provenance(low_noise),
+        low_latent_signature=_bounded_tensor_provenance(low_latent_image),
+        low_mask_signature=_bounded_tensor_provenance(low_mask),
+        input_video_shape=tuple(int(value) for value in input_shapes[0]),
+        source_video_shape=tuple(int(value) for value in source_shapes[0]),
+        target_hw=(int(target_h), int(target_w)),
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_upscaler_calls=0,
+        extra_vae_calls=0,
+        rng_state_consumed=False,
+    )
     selected_coordinate = config.resolve_coordinate(
         source_shapes[0][-2],
         source_shapes[0][-1],
@@ -1461,6 +1677,11 @@ def _run_progressive(
             template=conditioning_template,
             target_video_hw=(source_h, source_w) if target_input and not mixed else None,
         )
+        low_conditioning_signature = _conditioning_signature_from_original(guider.conds)
+        low_conditioning_tensor_receipts = _nested_tensor_provenance(
+            guider.conds,
+            path="effective_low_conds",
+        )
         low_started = time.perf_counter()
         try:
             sampler_invocation_count += 1
@@ -1494,6 +1715,11 @@ def _run_progressive(
                 guider,
                 template=conditioning_template,
                 target_video_hw=(source_h, source_w) if target_input and not mixed else None,
+            )
+            probe_conditioning_signature = _conditioning_signature_from_original(guider.conds)
+            probe_conditioning_tensor_receipts = _nested_tensor_provenance(
+                guider.conds,
+                path="effective_probe_conds",
             )
             # The probe is a one-call sampler lifetime, but model-level patches such
             # as DiffAid must still see the full H3 sigma reference. The explicit
@@ -1531,7 +1757,36 @@ def _run_progressive(
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
+        source_x0_sampler_signature = _bounded_tensor_provenance(source_x0)
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        binding.metrics.event(
+            "progressive_state_provenance",
+            schema=1,
+            checkpoint="post_probe",
+            session_id=str(provenance_session_id),
+            chunk_id=str(provenance_chunk_id),
+            resolved_seed=provenance_seed,
+            low_result_signature=_bounded_tensor_provenance(low_result),
+            source_raw_signature=_bounded_tensor_provenance(source_raw),
+            probe_noise_signature=_bounded_tensor_provenance(probe_noise),
+            source_x0_sampler_signature=source_x0_sampler_signature,
+            source_x0_internal_signature=_bounded_tensor_provenance(source_x0),
+            captured_run_id=(committed_low_run.run_id if committed_low_run is not None else None),
+            captured_conditioning_signature=(
+                committed_low_run.conditioning_signature if committed_low_run is not None else None
+            ),
+            captured_sample_count=(len(committed_low_run.samples) if committed_low_run is not None else 0),
+            captured_samples=_trajectory_sample_provenance(committed_low_run),
+            low_conditioning_signature=low_conditioning_signature,
+            low_conditioning_tensor_receipts=low_conditioning_tensor_receipts,
+            probe_conditioning_signature=probe_conditioning_signature,
+            probe_conditioning_tensor_receipts=probe_conditioning_tensor_receipts,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_upscaler_calls=0,
+            extra_vae_calls=0,
+            rng_state_consumed=False,
+        )
         if mixed_plan is not None:
             # Use all prefix frames as transient upscaler context. Its 3D attention
             # has no proven finite temporal receptive field permitting truncation.
@@ -1715,6 +1970,26 @@ def _run_progressive(
         if target_input:
             target_noise = _merge_preserved_noise(target_noise, noise, target_mask)
         binding.metrics.event("handoff_transfer_wall", elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0)
+        binding.metrics.event(
+            "progressive_state_provenance",
+            schema=1,
+            checkpoint="pre_high",
+            session_id=str(provenance_session_id),
+            chunk_id=str(provenance_chunk_id),
+            resolved_seed=provenance_seed,
+            source_raw_signature=_bounded_tensor_provenance(source_raw),
+            source_x0_internal_signature=_bounded_tensor_provenance(source_x0),
+            target_raw_signature=_bounded_tensor_provenance(target_raw),
+            target_latent_internal_signature=_bounded_tensor_provenance(target_latent_internal),
+            target_noise_signature=_bounded_tensor_provenance(target_noise),
+            transfer_mode=str(config.transfer_mode),
+            target_video_shape=tuple(int(value) for value in target_shapes[0]),
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_upscaler_calls=0,
+            extra_vae_calls=0,
+            rng_state_consumed=False,
+        )
 
         if binding.guidance is not None and binding.guidance.mode != "off":
             if binding.trajectory is None:
