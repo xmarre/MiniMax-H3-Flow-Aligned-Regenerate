@@ -1051,6 +1051,29 @@ def _prepare_registered_guidance_reference(
             },
             "high_schedule_exceeds_probe_endpoint",
         )
+    resolved_high_coordinates = []
+    for value in high_coordinates:
+        _, resolved, _ = time_matched_reference_info(run, value)
+        resolved_high_coordinates.append(float(resolved))
+    if any(
+        not math.isclose(
+            value,
+            float(reference_coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+        for value in resolved_high_coordinates
+    ):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "high_schedule_changes_reference_identity",
+                "reference_coordinate": float(reference_coordinate),
+                "resolved_high_coordinates": tuple(resolved_high_coordinates),
+            },
+            "high_schedule_changes_reference_identity",
+        )
 
     source_ref = source_ref.to(device=exact_prefix.device, dtype=exact_prefix.dtype)
     target_ref = resize_video(
@@ -1127,10 +1150,11 @@ def _prepare_registered_guidance_reference(
     registered_video = application.video.clone()
     registered_video[:, :, :prefix_t] = exact_prefix.to(registered_video)
     cache_key = (
-        f"{run.run_id}:{prefix_t}:{target_h}x{target_w}:"
+        f"{run.run_id}:{run.session_id}:{run.chunk_id}:handoff_probe:"
+        f"{prefix_t}:{target_h}x{target_w}:"
         f"{applied_dx:.8f}:{applied_dy:.8f}:"
         f"{float(reference_coordinate):.12f}:"
-        f"{FRAME_GAUGE_POLICY_VERSION}"
+        f"translation_validity_v1:{FRAME_GAUGE_POLICY_VERSION}"
     )
     registered = RegisteredGuidanceReference(
         video=registered_video,
