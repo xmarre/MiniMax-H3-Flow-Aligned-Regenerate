@@ -2641,11 +2641,11 @@ def run_partitioned_progressive(
                 binding.metrics,
             )
 
+        session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
         guidance_run = None
         if binding.guidance is not None and binding.guidance.mode != "off":
             if binding.trajectory is None:
                 raise RuntimeError("partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY")
-            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
             expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
             if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
                 guidance_run = shadow_guidance_run
@@ -2665,6 +2665,7 @@ def run_partitioned_progressive(
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
 
         split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+        residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         pending_registered_reference = None
         frame_gauge_witnesses: dict[str, torch.Tensor] = {}
         frame_gauge_transaction: dict[str, Any] = {
@@ -2683,6 +2684,29 @@ def run_partitioned_progressive(
             },
             "dc_applied_in_clean_hook": False,
             "spatial_warp_applied": False,
+            "residual_geometry": {
+                "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                "requested_mode": residual_mode,
+                "measured": False,
+                "measurement_status": "off" if residual_mode == "off" else "not_evaluated",
+                "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                "selected_model": "none",
+                "decision": "not_evaluated",
+                "applied": False,
+                "final_path": "baseline",
+                "video": {
+                    "status": "off" if residual_mode == "off" else "not_evaluated",
+                    "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                },
+                "guidance": (
+                    {"status": "off", "reason": "guidance_off"}
+                    if binding.guidance is None or binding.guidance.mode == "off"
+                    else {
+                        "status": "off" if residual_mode == "off" else "not_evaluated",
+                        "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                    }
+                ),
+            },
         }
 
         clean_video_postprocess = None
@@ -2771,7 +2795,7 @@ def run_partitioned_progressive(
                 "paired_prefix_aligned_witness",
                 "corrected_clean",
             }
-            if set(frame_gauge_witnesses) != required_witnesses:
+            if not required_witnesses.issubset(frame_gauge_witnesses):
                 raise RuntimeError("accepted frame-gauge transaction lost required clean-domain witnesses")
             learned_clean = frame_gauge_witnesses["learned_native"]
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
