@@ -1325,9 +1325,9 @@ def _frame_gauge_boundary_motion_check(
         # under-report an otherwise well-conditioned rigid shift. It remains a
         # non-degradation veto, while a clearly measurable boundary error must
         # improve by the stronger minimum ratio.
-        if check["after_error_cells"] >= check["before_error_cells"]:
+        if check["after_error_cells"] > check["before_error_cells"]:
             fields["status"] = "rejected"
-            fields["reason"] = f"boundary_{name}_not_improved"
+            fields["reason"] = f"boundary_{name}_degraded"
             return False, fields, str(fields["reason"])
         if check["informative"] and check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
             fields["status"] = "rejected"
