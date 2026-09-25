@@ -148,6 +148,26 @@ def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_tran
         assert check["error_improvement_ratio"] >= 0.25
 
 
+def test_boundary_motion_gate_accepts_equal_zero_error_as_nondegrading():
+    exact_full = _rigid_textured_video()
+    learned = exact_full.clone()
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact_full[:, :, :4],
+        learned.clone(),
+        prefix_t=4,
+    )
+
+    assert accepted, fields
+    assert reason == "accepted"
+    for name in ("upper45", "full"):
+        check = fields["checks"][name]
+        assert check["informative"] is False
+        assert check["after_error_cells"] == pytest.approx(check["before_error_cells"])
+        assert check["after_error_cells"] == pytest.approx(0.0)
+
+
 def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():
     exact_full = _rigid_textured_video()
     learned = _rigid_textured_video(shift_x=-1)
