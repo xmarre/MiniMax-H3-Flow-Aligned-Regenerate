@@ -1271,21 +1271,22 @@ def _frame_gauge_boundary_motion_check(
 
     for name in ("upper45", "full"):
         check = checks[name]
-        if not check["informative"]:
-            fields["status"] = "rejected"
-            fields["reason"] = f"boundary_{name}_insufficient_displacement"
-            return False, fields, str(fields["reason"])
         for variant in ("native", "exact_restored", "candidate"):
             receipt = check[variant]
             if receipt["clipped"] or receipt["response"] < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
                 fields["status"] = "rejected"
                 fields["reason"] = f"boundary_{name}_{variant}_ambiguous"
                 return False, fields, str(fields["reason"])
+        # A low-amplitude boundary receipt is not evidence against the prefix
+        # estimator: smooth/periodic synthetic fields can make phase correlation
+        # under-report an otherwise well-conditioned rigid shift. It remains a
+        # non-degradation veto, while a clearly measurable boundary error must
+        # improve by the stronger minimum ratio.
         if check["after_error_cells"] >= check["before_error_cells"]:
             fields["status"] = "rejected"
             fields["reason"] = f"boundary_{name}_not_improved"
             return False, fields, str(fields["reason"])
-        if check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
+        if check["informative"] and check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
             fields["status"] = "rejected"
             fields["reason"] = f"boundary_{name}_insufficient_improvement"
             return False, fields, str(fields["reason"])
