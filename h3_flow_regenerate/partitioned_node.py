@@ -83,6 +83,7 @@ class H3PartitionedExactPrefixHandoff:
         metrics=None,
         temporal_weight=0.20,
         frame_gauge_repair=False,
+        frame_gauge_residual_mode="off",
     ):
         # Companion capabilities are imported lazily so ordinary Flow users do
         # not acquire cross-custom-node requirements at Comfy startup.
@@ -115,6 +116,7 @@ class H3PartitionedExactPrefixHandoff:
             suffix_dc_bridge=False,
             suffix_geometric_bridge=False,
             frame_gauge_repair=frame_gauge_repair,
+            frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -189,6 +191,8 @@ class H3PartitionedExactPrefixHandoff:
             partitioned_suffix_dc_bridge=True,
             frame_gauge_repair=bool(frame_gauge_repair),
             frame_gauge_repair_default=False,
+            frame_gauge_residual_mode=str(frame_gauge_residual_mode),
+            frame_gauge_residual_mode_default="off",
             preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
@@ -337,6 +341,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Measurement milestone only: horizontal application remains unavailable
+        # until the documented hardware/media gate is satisfied.
+        spec["required"]["frame_gauge_residual_mode"] = (
+            ["off", "measure"],
+            {
+                "default": "off",
+                "tooltip": (
+                    "off preserves rigid v2 exactly. measure records bounded regional residual "
+                    "geometry after an accepted rigid v2 transaction without changing any tensor, "
+                    "guidance reference, DC bridge, sampler work, or final output."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -373,6 +390,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
         frame_gauge_repair=False,
+        frame_gauge_residual_mode="off",
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -394,6 +412,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             metrics=metrics,
             temporal_weight=temporal_weight,
             frame_gauge_repair=frame_gauge_repair,
+            frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
         return apply_partitioned_diagnostic_controls(
             patched,
