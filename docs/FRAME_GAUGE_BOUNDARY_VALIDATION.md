@@ -31,6 +31,36 @@ estimates with response at least 3, non-increasing replacement error, and at lea
 cells. The transformed-native estimate must also pass the ambiguity checks.
 Video registration and independent guidance registration remain mandatory.
 
+When frame-gauge repair is enabled and rigid-v2 rejects solely because an
+otherwise unambiguous candidate fails one of the native-boundary improvement
+requirements, partitioned exact-prefix continuation has a separate bounded
+fallback. It does **not** convert the rigid transaction into an acceptance:
+`spatial_warp_applied` remains false and no registered Flow guidance reference
+is published.
+
+The fallback uses the exact same-time overlap already available from the learned
+3D transfer. For the learned provider's last prefix token `P`, authoritative
+token `E`, and first learned suffix token `S`, define `D = E - P`. The
+structural bridge adds only `D - mean_spatial(D)` to `S`; the existing
+one-token DC bridge supplies `mean_spatial(D)`. Together they preserve the
+provider's immediate native clean-domain transition algebraically:
+
+`(S + D) - E = S - P`.
+
+Eligibility is fail-closed. The video registration must have accepted, the
+rigid-v2 receipt must contain both `upper45` and `full` checks, and
+`native`, `transformed_native`, `exact_restored`, and `candidate` must
+all be finite, unclipped, and have response at least 3. Ambiguous registration,
+invalid-area, guidance, or other rejection classes keep the existing baseline
+fallback. The structural correction touches only the first suffix token; the
+authoritative prefix and all later suffix tokens remain unchanged. It adds no
+model evaluation, provider call, VAE decode, random draw, or sampler lifetime.
+
+Receipts report this path separately as
+`partitioned_exact_overlap_structural_plus_dc_v1`. The offline runtime gate
+replays the rigid-v2 boundary arithmetic and requires the recorded fallback
+trigger to be exactly the rejection that the receipt reproduces.
+
 The gate reuses the already-transformed two-frame witness and adds two bounded
 motion estimates. It adds no model evaluation, provider call, VAE decode, random
 draw, or sampler lifetime. Repair disabled preserves the existing path.
