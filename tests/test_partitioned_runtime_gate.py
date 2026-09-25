@@ -580,14 +580,44 @@ def test_runtime_gate_accepts_v2_video_below_legacy_rms_threshold():
     assert report.frame_gauge_result == "accepted"
 
 
-def test_runtime_gate_keeps_guidance_on_strict_rms_policy():
+def test_runtime_gate_allows_guidance_below_legacy_rms_threshold_after_strong_checks():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
-    receipt["fields"]["guidance_registration"]["rms_improvement"] = 0.069
+    receipt["fields"]["guidance_registration"]["rms_improvement"] = 0.14931248733225388
     receipt["fields"]["guidance_registration"]["last_holdout_improvement"] = 0.05
     metrics["events"].insert(-2, receipt)
 
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-accepted",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "accepted"
+
+
+def test_runtime_gate_rejects_guidance_that_degrades_aggregate_rms():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
+    receipt["fields"]["guidance_registration"]["rms_improvement"] = -0.01
+    metrics["events"].insert(-2, receipt)
+
     with pytest.raises(RuntimeGateError, match="guidance registration held-out RMS-improvement"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
+def test_runtime_gate_rejects_guidance_that_degrades_last_holdout():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
+    receipt["fields"]["guidance_registration"]["last_holdout_improvement"] = -0.01
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="guidance registration last-frame improvement"):
         validate_partitioned_runtime_evidence(
             metrics,
             _log(),
