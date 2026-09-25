@@ -281,6 +281,53 @@ def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_tr
     assert reason != "accepted"
 
 
+def test_boundary_rejection_retains_only_actual_provider_boundary_pair(monkeypatch):
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
+    prefix_t = 4
+    high_sigmas, split_coordinate = _schedule()
+
+    def reject_boundary(*args, **kwargs):
+        return (
+            False,
+            {
+                "policy": "native_boundary_motion_preservation_v2",
+                "status": "rejected",
+                "reason": "boundary_upper45_insufficient_improvement",
+            },
+            "boundary_upper45_insufficient_improvement",
+        )
+
+    monkeypatch.setattr(
+        partitioned_scheduler,
+        "_frame_gauge_boundary_motion_check",
+        reject_boundary,
+    )
+    postprocess, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
+        learned,
+        exact_prefix=exact_full[:, :, :prefix_t],
+        guidance_run=None,
+        guidance=None,
+        target_h=26,
+        target_w=26,
+        prefix_t=prefix_t,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert transaction["result"] == "rejected"
+    assert transaction["reason"] == "boundary_upper45_insufficient_improvement"
+    assert registered is None
+    assert set(witnesses) == {"learned_boundary_pair"}
+    assert torch.equal(
+        witnesses["learned_boundary_pair"],
+        learned[:, :, prefix_t - 1 : prefix_t + 1],
+    )
+    assert witnesses["learned_boundary_pair"].data_ptr() != learned.data_ptr()
+    assert postprocess.clean_video is learned
+
+
 def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
     exact_full = _rigid_textured_video()
     learned = _rigid_textured_video(shift_x=-1)
