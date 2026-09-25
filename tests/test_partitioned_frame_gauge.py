@@ -6,9 +6,10 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
-from h3_flow_regenerate.frame_gauge import translate_video_cells
+from h3_flow_regenerate.frame_gauge import GUIDANCE_REFERENCE_POLICY, translate_video_cells
 from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
+import h3_flow_regenerate.partitioned_scheduler as partitioned_scheduler
 from h3_flow_regenerate.partitioned_scheduler import (
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
@@ -120,6 +121,45 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
         "paired_prefix_aligned_witness",
         "corrected_clean",
     }
+
+
+def test_boundary_motion_gate_compact_witness_matches_full_translation():
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
+    full = translate_video_cells(
+        learned,
+        dx=1.0,
+        dy=0.0,
+        start_frame=0,
+    ).video
+    compact = translate_video_cells(
+        learned[:, :, 3:5],
+        dx=1.0,
+        dy=0.0,
+        start_frame=0,
+        batch_frames=2,
+    ).video
+
+    full_result = _frame_gauge_boundary_motion_check(
+        learned,
+        exact_full[:, :, :4],
+        full,
+        prefix_t=4,
+    )
+    compact_result = _frame_gauge_boundary_motion_check(
+        learned,
+        exact_full[:, :, :4],
+        compact,
+        prefix_t=4,
+    )
+
+    assert compact_result[0] == full_result[0]
+    assert compact_result[2] == full_result[2]
+    for name in ("upper45", "full"):
+        for key in ("before_error_cells", "after_error_cells", "error_improvement_ratio"):
+            assert compact_result[1]["checks"][name][key] == pytest.approx(
+                full_result[1]["checks"][name][key]
+            )
 
 
 def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_transition():
@@ -245,6 +285,109 @@ def test_identity_guidance_calibration_never_resamples_suffix():
     assert registered.dx == 0.0
     assert registered.dy == 0.0
     assert torch.equal(registered.video, exact_full)
+
+
+def test_guidance_registration_uses_evidence_based_guidance_policy(monkeypatch):
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(exact_full, split_coordinate)
+    observed_policies = []
+    original = partitioned_scheduler.estimate_paired_prefix_translation
+
+    def capture_policy(learned, exact, *, policy):
+        observed_policies.append(policy)
+        return original(learned, exact, policy=policy)
+
+    monkeypatch.setattr(
+        partitioned_scheduler,
+        "estimate_paired_prefix_translation",
+        capture_policy,
+    )
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert error is None
+    assert registered is not None
+    assert fields["status"] == "identity"
+    assert observed_policies == [GUIDANCE_REFERENCE_POLICY]
+    assert GUIDANCE_REFERENCE_POLICY.min_rms_improvement == 0.0
+    assert GUIDANCE_REFERENCE_POLICY.require_global_runner_margin is True
+
+
+def test_guidance_registration_rejection_resizes_only_prefix(monkeypatch):
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    ambiguous_guidance = torch.ones_like(exact_full)
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(ambiguous_guidance, split_coordinate)
+    resize_temporal = []
+    original = partitioned_scheduler.resize_video
+
+    def capture_resize(video, target_h, target_w, *, mode):
+        resize_temporal.append(int(video.shape[2]))
+        return original(video, target_h, target_w, mode=mode)
+
+    monkeypatch.setattr(partitioned_scheduler, "resize_video", capture_resize)
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert error is not None
+    assert fields["status"] == "rejected"
+    assert resize_temporal == [4]
+
+
+def test_guidance_registration_acceptance_resizes_prefix_and_suffix_once(monkeypatch):
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(exact_full, split_coordinate)
+    resize_temporal = []
+    original = partitioned_scheduler.resize_video
+
+    def capture_resize(video, target_h, target_w, *, mode):
+        resize_temporal.append(int(video.shape[2]))
+        return original(video, target_h, target_w, mode=mode)
+
+    monkeypatch.setattr(partitioned_scheduler, "resize_video", capture_resize)
+
+    registered, fields, error = _prepare_registered_guidance_reference(
+        run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        exact_prefix=exact_full[:, :, :4],
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert error is None
+    assert registered is not None
+    assert fields["status"] == "identity"
+    assert resize_temporal == [4, 2]
+    assert fields["prefix_resize_elapsed_ms"] >= 0.0
+    assert fields["suffix_resize_elapsed_ms"] >= 0.0
+    assert fields["translation_elapsed_ms"] >= 0.0
 
 
 def test_guidance_registration_rejects_unsupported_sampler_contract():
