@@ -781,10 +781,24 @@ def _model_receipts(
     holdout_obs = [obs for obs in accepted if int(obs["frame_index"]) in holdout_frames]
     horizontal = _fit_horizontal(fit_obs, prepared.width)
     constant = _fit_constant(fit_obs)
+    diagnostics = diagnostic_model_fits(
+        observations,
+        width=prepared.width,
+        height=prepared.height,
+        fit_indices=tuple(fit_frames),
+        holdout_indices=tuple(holdout_frames),
+        policy=policy,
+    )
     result: dict[str, Any] = {
-        "selected_model": "horizontal" if horizontal.get("status") == "accepted" else "residual_constant",
+        "selected_model": (
+            "horizontal" if horizontal.get("status") == "accepted" else "residual_constant"
+        ),
         "horizontal": horizontal,
         "residual_constant": constant,
+        "diagnostic_fits": diagnostics["fits"],
+        "model_selection_policy": (
+            "horizontal_is_the_only_conditional_candidate; more expressive fits are diagnostic only"
+        ),
         "fit_observations": len(fit_obs),
         "holdout_observations": len(holdout_obs),
         "eligible": False,
