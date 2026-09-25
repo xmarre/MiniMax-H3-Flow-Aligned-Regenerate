@@ -2652,6 +2652,10 @@ def run_partitioned_progressive(
             guidance_dy=float(guidance_registration.get("dy", 0.0)),
             video_registration=video_registration,
             guidance_registration=guidance_registration,
+            boundary_motion=frame_gauge_transaction.get(
+                "boundary_motion",
+                {"status": "off", "reason": "disabled"},
+            ),
             spatial_warp_applied=bool(
                 frame_gauge_transaction.get(
                     "spatial_warp_applied",
