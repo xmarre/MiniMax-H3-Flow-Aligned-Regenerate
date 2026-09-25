@@ -37,8 +37,8 @@ DEFAULT_POLICY = FrameGaugePolicy()
 # RMS as a non-degradation check and does not let the aggregate fit's runner
 # margin short-circuit the stronger held-out frame/region/parity checks plus
 # the downstream native-boundary-motion preservation gate. The per-check
-# runner margin itself remains strict. Guidance remains on the stricter generic
-# registration policy.
+# runner margin itself remains strict. Guidance keeps its strict aggregate
+# runner-margin ambiguity gate under the dedicated guidance policy below.
 LEARNED_VIDEO_POLICY = FrameGaugePolicy(
     min_rms_improvement=0.0,
     require_global_runner_margin=False,
@@ -802,6 +802,7 @@ def translate_video_cells(
 __all__ = [
     "DEFAULT_POLICY",
     "FRAME_GAUGE_POLICY_VERSION",
+    "GUIDANCE_REFERENCE_POLICY",
     "LEARNED_VIDEO_POLICY",
     "FrameGaugeEstimate",
     "FrameGaugePolicy",
