@@ -1092,12 +1092,14 @@ def _install_exact_overlap_fallback_receipt(metrics):
     metrics = _install_frame_gauge_transfer(metrics, mode="on", result="rejected")
     transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
     transfer["fields"]["frame_gauge_reason"] = reason
+    transfer["fields"]["splice_clean_source"] = "actual_provider_boundary_pair_plus_inverse_recovered"
     transfer["fields"]["partitioned_exact_overlap_bridge"] = {
         "policy": "partitioned_exact_overlap_structural_plus_dc_v1",
         "requested": True,
         "trigger": reason,
         "applied": True,
         "state_mapping": "conditional_renoise_affine",
+        "source": "actual_provider_boundary_pair",
         "authoritative_prefix_modified": False,
         "later_suffix_extrapolated": False,
         "suffix_representation_bridge_enabled": True,
@@ -1113,6 +1115,7 @@ def _install_exact_overlap_fallback_receipt(metrics):
         exact_overlap_fallback_requested=True,
         exact_overlap_fallback_trigger=reason,
         exact_overlap_fallback_applied=True,
+        exact_overlap_fallback_source="actual_provider_boundary_pair",
     )
     metrics["events"].insert(-2, frame)
     return metrics
