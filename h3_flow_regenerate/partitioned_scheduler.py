@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import json
 import math
 import time
 from typing import Any
@@ -2849,6 +2850,29 @@ def run_partitioned_progressive(
         postprocess_report = transfer_metrics.get("clean_video_postprocess")
         if not isinstance(postprocess_report, dict):
             postprocess_report = {}
+        residual_geometry_receipt = frame_gauge_transaction.get(
+            "residual_geometry",
+            {
+                "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                "requested_mode": residual_mode,
+                "measured": False,
+                "measurement_status": "not_evaluated",
+                "reason": "missing_transaction_receipt",
+                "decision": "not_evaluated",
+                "applied": False,
+                "final_path": "baseline",
+            },
+        )
+        residual_telemetry_bytes = len(
+            json.dumps(
+                residual_geometry_receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        if residual_telemetry_bytes > 128 * 1024:
+            raise RuntimeError("residual geometry telemetry exceeded the 128 KiB transaction bound")
         binding.metrics.event(
             "partitioned_frame_gauge",
             mode="on" if config.frame_gauge_repair else "off",
@@ -2922,6 +2946,8 @@ def run_partitioned_progressive(
                 {},
             ),
             transaction_elapsed_ms=float(frame_gauge_transaction.get("elapsed_ms", 0.0)),
+            residual_geometry=residual_geometry_receipt,
+            residual_geometry_telemetry_bytes=residual_telemetry_bytes,
         )
 
         restored_clean = corrected_clean.clone()
