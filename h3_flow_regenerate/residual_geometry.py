@@ -195,9 +195,7 @@ def _field_metrics(
     denominator = sc.square().sum(dim=-1).sqrt() * tc.square().sum(dim=-1).sqrt()
     valid = denominator > 1e-12
     if bool(valid.any()):
-        ncc = float(
-            (sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()
-        )
+        ncc = float((sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item())
     else:
         ncc = -1.0
     return rms, ncc
