@@ -207,7 +207,7 @@ def test_low_texture_and_repeated_structure_fail_closed():
 
 
 def test_measurement_only_frame_gauge_is_byte_identical_to_rigid_v2():
-    prefix_learned, exact_prefix = _analytic_residual_pair(
+    _prefix_learned, exact_prefix = _analytic_residual_pair(
         dx=0.5,
         dy=-0.25,
         frames=6,
