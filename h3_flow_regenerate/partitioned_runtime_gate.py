@@ -554,8 +554,16 @@ def _validate_frame_gauge_transfer(
         int(transfer.get("suffix_dc_bridge_corrected_tokens", 0)) == 1,
         "frame-gauge transfer did not apply exactly one DC-corrected suffix token",
     )
+    overlap = transfer.get("partitioned_exact_overlap_bridge")
+    overlap_requested = isinstance(overlap, dict) and overlap.get("requested") is True
     expected_mapping = "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
-    expected_clean_source = "actual_provider" if accepted else "inverse_recovered"
+    expected_clean_source = (
+        "actual_provider"
+        if accepted
+        else "actual_provider_boundary_pair_plus_inverse_recovered"
+        if overlap_requested
+        else "inverse_recovered"
+    )
     _require(
         transfer.get("suffix_dc_bridge_state_mapping") == expected_mapping,
         "frame-gauge transfer changed DC routing for the selected arm",
@@ -573,7 +581,6 @@ def _validate_frame_gauge_transfer(
     # optional here so historical evidence remains replayable.  When present,
     # validate the partitioned-local exact-overlap fallback independently from
     # the rigid frame-gauge result; it is not a deprecated Mixed-Grid route.
-    overlap = transfer.get("partitioned_exact_overlap_bridge")
     if overlap is not None:
         _require(isinstance(overlap, dict), "partitioned exact-overlap receipt is malformed")
         _require(
@@ -591,6 +598,10 @@ def _validate_frame_gauge_transfer(
             "partitioned exact-overlap repair extrapolated into unmeasured later suffix tokens",
         )
         if requested:
+            _require(
+                overlap.get("source") == "actual_provider_boundary_pair",
+                "partitioned exact-overlap repair did not use the actual provider overlap witness",
+            )
             _require(
                 enabled and result == "rejected",
                 "partitioned exact-overlap repair was requested outside a rejected frame-gauge arm",
@@ -764,6 +775,10 @@ def _validate_frame_gauge(
                 "frame-gauge exact-overlap fallback lacks an accepted video registration",
             )
             _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
+            _require(
+                receipt.get("exact_overlap_fallback_source") == "actual_provider_boundary_pair",
+                "frame-gauge exact-overlap fallback did not use the actual provider overlap witness",
+            )
         _require(
             not fallback_applied or fallback_requested,
             "frame-gauge exact-overlap fallback applied without a request",
