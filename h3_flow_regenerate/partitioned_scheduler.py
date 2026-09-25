@@ -1632,10 +1632,19 @@ def _bounded_residual_stage_slice(
     video: torch.Tensor,
     *,
     prefix_t: int,
-) -> tuple[torch.Tensor, int, int]:
-    start = max(0, int(prefix_t) - 6)
-    stop = min(int(video.shape[2]), int(prefix_t) + 4)
-    return video[:, :, start:stop].detach(), start, stop
+    temporal_offset: int = 0,
+) -> tuple[torch.Tensor, int, int, int]:
+    local_prefix = int(prefix_t) - int(temporal_offset)
+    if not 0 <= local_prefix <= int(video.shape[2]):
+        raise RuntimeError("residual stage witness does not contain the declared prefix boundary")
+    local_start = max(0, local_prefix - 6)
+    local_stop = min(int(video.shape[2]), local_prefix + 4)
+    return (
+        video[:, :, local_start:local_stop].detach(),
+        int(temporal_offset) + local_start,
+        int(temporal_offset) + local_stop,
+        local_prefix - local_start,
+    )
 
 
 def _emit_residual_geometry_stage(
@@ -1652,9 +1661,13 @@ def _emit_residual_geometry_stage(
     temporal_relation: str,
     applied_transform: str,
     provenance: str,
+    temporal_offset: int = 0,
 ) -> dict[str, Any]:
-    bounded, start, stop = _bounded_residual_stage_slice(video, prefix_t=prefix_t)
-    local_prefix = int(prefix_t) - start
+    bounded, start, stop, local_prefix = _bounded_residual_stage_slice(
+        video,
+        prefix_t=prefix_t,
+        temporal_offset=temporal_offset,
+    )
     boundary = (
         measure_video_boundary(bounded, local_prefix)
         if 0 < local_prefix < int(bounded.shape[2])
