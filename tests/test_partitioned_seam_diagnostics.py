@@ -280,10 +280,7 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
 def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improvement"):
     receipt = {"dx": 0.0, "dy": 0.0, "response": 5.0, "clipped": False}
     checks = {
-        roi: {
-            variant: dict(receipt)
-            for variant in ("native", "transformed_native", "exact_restored", "candidate")
-        }
+        roi: {variant: dict(receipt) for variant in ("native", "transformed_native", "exact_restored", "candidate")}
         for roi in ("upper45", "full")
     }
     return {
@@ -300,9 +297,7 @@ def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improv
 
 
 def test_exact_overlap_fallback_requires_unambiguous_rigid_boundary_veto():
-    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(
-        _boundary_rejection_transaction()
-    )
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(_boundary_rejection_transaction())
     assert eligible is True
     assert trigger == "boundary_upper45_insufficient_improvement"
 
