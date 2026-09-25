@@ -795,6 +795,28 @@ def _model_receipts(
     }
     failures: list[str] = result["eligibility_failures"]
     required_tiles = {"TL", "TM", "TR", "BL", "BM", "BR"}
+    identity_observations = [
+        obs
+        for obs in observations
+        if obs.get("status") == "identity"
+        and float(obs.get("uncertainty_half_width_x", math.inf)) <= policy.uncertainty_floor
+        and float(obs.get("uncertainty_half_width_y", math.inf)) <= policy.uncertainty_floor
+    ]
+    identity_supported = True
+    for frame in fit_frames | holdout_frames:
+        identity_ids = {
+            str(obs["tile_id"])
+            for obs in identity_observations
+            if int(obs["frame_index"]) == int(frame)
+        }
+        if not required_tiles.issubset(identity_ids):
+            identity_supported = False
+            break
+    result["identity_supported"] = identity_supported
+    if identity_supported:
+        result["identity_max_residual_displacement"] = policy.uncertainty_floor
+        result["selected_model"] = "identity"
+
     for phase, frames in (("fit", fit_frames), ("holdout", holdout_frames)):
         usable_frames = 0
         for frame in frames:
@@ -804,6 +826,15 @@ def _model_receipts(
         result[f"{phase}_globally_supported_frames"] = usable_frames
         if usable_frames < 2:
             failures.append(f"insufficient_{phase}_global_support")
+    last_frame = max(fit_frames | holdout_frames)
+    last_ids = {
+        str(obs["tile_id"])
+        for obs in accepted
+        if int(obs["frame_index"]) == int(last_frame)
+    }
+    result["last_holdout_global_support"] = required_tiles.issubset(last_ids)
+    if not result["last_holdout_global_support"] and not identity_supported:
+        failures.append("insufficient_last_holdout_support")
     if horizontal.get("status") != "accepted" or constant.get("status") != "accepted":
         failures.append("model_fit_rejected")
         return result
@@ -899,6 +930,12 @@ def _model_receipts(
         [0.0, 1.0, float(rigid_dy)],
         [0.0, 0.0, 1.0],
     ]
+    roundtrip_error = 0.0
+    for row in range(3):
+        for col in range(3):
+            product = sum(forward[row][inner] * inverse[inner][col] for inner in range(3))
+            expected = 1.0 if row == col else 0.0
+            roundtrip_error = max(roundtrip_error, abs(product - expected))
     result["transform"] = {
         "a": a,
         "b": b,
@@ -906,12 +943,26 @@ def _model_receipts(
         "tx_residual": tx_residual,
         "inverse_matrix": inverse,
         "forward_matrix": forward,
+        "matrix_roundtrip_abs_max": roundtrip_error,
         "sign_convention": (
             "sample L at r-d-u(r); positive rigid dx/content and positive residual a expands forward x geometry"
         ),
         "units": "target_latent_cells",
     }
-    if not policy.min_forward_scale <= sx <= policy.max_forward_scale:
+    if roundtrip_error > 1e-12:
+        failures.append("matrix_roundtrip")
+    envelope_scales = []
+    for a_variant in (a_lo, a_hi):
+        if abs(1.0 - a_variant) <= 1e-12:
+            envelope_scales.append(math.inf)
+        else:
+            envelope_scales.append(1.0 / (1.0 - a_variant))
+    result["forward_scale_envelope"] = [min(envelope_scales), max(envelope_scales)]
+    if (
+        not policy.min_forward_scale <= sx <= policy.max_forward_scale
+        or min(envelope_scales) < policy.min_forward_scale
+        or max(envelope_scales) > policy.max_forward_scale
+    ):
         failures.append("forward_scale_bound")
     if max(abs(b_lo), abs(b_hi)) > policy.max_residual_intercept:
         failures.append("residual_intercept_bound")
@@ -932,6 +983,39 @@ def _model_receipts(
     )
     if total_x > policy.max_total_displacement or abs(float(rigid_dy)) > policy.max_total_displacement:
         failures.append("total_displacement_bound")
+
+    yy, xx = torch.meshgrid(
+        torch.arange(prepared.height, dtype=torch.float64),
+        torch.arange(prepared.width, dtype=torch.float64),
+        indexing="ij",
+    )
+    source_x = xx - a * (xx - cx) - b - float(rigid_dx)
+    source_y = yy - float(rigid_dy)
+    valid = (
+        (source_x >= 0.0)
+        & (source_x <= float(prepared.width - 1))
+        & (source_y >= 0.0)
+        & (source_y <= float(prepared.height - 1))
+    )
+    candidate_invalid_fraction = 1.0 - float(valid.to(torch.float64).mean().item())
+    result["candidate_invalid_fraction"] = candidate_invalid_fraction
+    if candidate_invalid_fraction > policy.max_invalid_fraction:
+        failures.append("invalid_fraction_bound")
+
+    affine = diagnostics["fits"].get("affine", {})
+    if affine.get("status") == "accepted":
+        x_extent = (prepared.width - 1) / 2.0
+        y_extent = (prepared.height - 1) / 2.0
+        omitted_ux = abs(float(affine["h"])) * y_extent
+        omitted_uy = (
+            abs(float(affine["k"])) * x_extent
+            + abs(float(affine["e"])) * y_extent
+            + abs(float(affine["by"]))
+        )
+        omitted_component = max(omitted_ux, omitted_uy)
+        result["diagnostic_omitted_component_max"] = omitted_component
+        if omitted_component > policy.max_cross_axis:
+            failures.append("diagnostic_cross_axis_component")
 
     direct = []
     by_key = {(int(obs["frame_index"]), str(obs["tile_id"])): obs for obs in holdout_obs}
