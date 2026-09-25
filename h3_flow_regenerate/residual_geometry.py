@@ -100,7 +100,13 @@ def _local_channels(prepared, region: tuple[int, int, int, int], policy: Residua
     gx = (work[..., 1:] - work[..., :-1]).square().mean(dim=(0, 2, 3)).sqrt()
     gy = (work[..., 1:, :] - work[..., :-1, :]).square().mean(dim=(0, 2, 3)).sqrt()
     texture = torch.sqrt(gx.square() + gy.square())
-    threshold = max(1e-6, 0.01 * float(torch.median(texture[texture > 0]).item())) if bool((texture > 0).any()) else 1e-6
+    if bool((texture > 0).any()):
+        threshold = max(
+            1e-6,
+            0.01 * float(torch.median(texture[texture > 0]).item()),
+        )
+    else:
+        threshold = 1e-6
     keep_local = texture > threshold
     keep = torch.zeros_like(valid)
     keep[valid] = keep_local
@@ -128,7 +134,12 @@ def _metrics(
     tc = target - target.mean(dim=-1, keepdim=True)
     denominator = sc.square().sum(dim=-1).sqrt() * tc.square().sum(dim=-1).sqrt()
     valid = denominator > 1e-12
-    ncc = float((sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()) if bool(valid.any()) else -1.0
+    if bool(valid.any()):
+        ncc = float(
+            (sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()
+        )
+    else:
+        ncc = -1.0
     return float(huber.mean().item()), rms, ncc
 
 
@@ -210,7 +221,7 @@ def _gradient_center(prepared, frames, coords, channels) -> tuple[float, float]:
 
 
 def _candidate_values(start: float, stop: float, step: float) -> list[float]:
-    count = int(round((stop - start) / step))
+    count = round((stop - start) / step)
     return [round(start + index * step, 8) for index in range(count + 1)]
 
 
@@ -273,6 +284,29 @@ def _measure_observation(
             evaluated[key] = key[0], key[1], loss, rms, ncc
         return evaluated[key]
 
+    zero = evaluate(0.0, 0.0)
+    if zero[2] <= policy.zero_loss_floor:
+        base.update(
+            zero_loss=float(zero[2]),
+            zero_rms=float(zero[3]),
+            best_loss=float(zero[2]),
+            best_rms=float(zero[3]),
+            ncc=float(zero[4]),
+            ux=0.0,
+            uy=0.0,
+            runner_separation=None,
+            runner_margin_ratio=None,
+            uncertainty_x=[-policy.uncertainty_floor, policy.uncertainty_floor],
+            uncertainty_y=[-policy.uncertainty_floor, policy.uncertainty_floor],
+            uncertainty_half_width_x=policy.uncertainty_floor,
+            uncertainty_half_width_y=policy.uncertainty_floor,
+            saturated=False,
+            search_count=1,
+            status="identity",
+            reason="rigid_residual_below_floor",
+        )
+        return base
+
     coarse_values = _candidate_values(-policy.search_radius, policy.search_radius, policy.coarse_step)
     for uy in coarse_values:
         for ux in coarse_values:
@@ -292,7 +326,6 @@ def _measure_observation(
         for ux in fine_x:
             evaluate(ux, uy)
     best = min(evaluated.values(), key=lambda item: (item[2], item[0] ** 2 + item[1] ** 2, item[1], item[0]))
-    zero = evaluate(0.0, 0.0)
     separated = [
         item for item in evaluated.values()
         if math.hypot(item[0] - best[0], item[1] - best[1]) >= policy.runner_separation - 1e-12
