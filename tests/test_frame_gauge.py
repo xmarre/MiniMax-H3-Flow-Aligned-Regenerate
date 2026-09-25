@@ -2,6 +2,8 @@ import pytest
 import torch
 
 from h3_flow_regenerate.frame_gauge import (
+    DEFAULT_POLICY,
+    FRAME_GAUGE_POLICY_VERSION,
     estimate_paired_prefix_translation,
     translate_video_cells,
 )
@@ -45,6 +47,11 @@ def _analytic_pair(
     exact = torch.stack(exact_frames, dim=1).unsqueeze(0).float()
     learned = torch.stack(learned_frames, dim=1).unsqueeze(0).float()
     return learned, exact
+
+
+def test_v2_prefix_fit_uses_non_degradation_gate_before_boundary_validation():
+    assert FRAME_GAUGE_POLICY_VERSION == "paired_prefix_rigid_v2"
+    assert DEFAULT_POLICY.min_rms_improvement == 0.0
 
 
 def test_exact_equality_is_bitwise_identity():
