@@ -575,6 +575,461 @@ def _validate_frame_gauge(
     )
 
 
+def _close_number(left: Any, right: Any, *, atol: float = 1e-9) -> bool:
+    try:
+        left_value = float(left)
+        right_value = float(right)
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(left_value)
+        and math.isfinite(right_value)
+        and math.isclose(left_value, right_value, rel_tol=1e-9, abs_tol=atol)
+    )
+
+
+def _validate_residual_observation(
+    observation: Any,
+    *,
+    fit_indices: set[int],
+    holdout_indices: set[int],
+) -> None:
+    _require(isinstance(observation, dict), "residual geometry contains a malformed regional observation")
+    status = str(observation.get("status", ""))
+    _require(
+        status in {"accepted", "rejected", "unavailable", "identity"},
+        f"unsupported residual regional status {status!r}",
+    )
+    frame_index = int(observation.get("frame_index"))
+    _require(
+        frame_index in fit_indices or frame_index in holdout_indices,
+        "residual regional observation references a frame outside fit/holdout support",
+    )
+    expected_phase = "fit" if frame_index in fit_indices else "holdout"
+    _require(
+        observation.get("phase") == expected_phase,
+        "residual regional observation fit/holdout phase drifted",
+    )
+    tile_id = str(observation.get("tile_id", ""))
+    _require(
+        tile_id in {"TL", "TM", "TR", "ML", "C", "MR", "BL", "BM", "BR"},
+        "residual regional observation tile identity drifted",
+    )
+    if "search_count" in observation:
+        search_count = int(observation["search_count"])
+        _require(1 <= search_count <= 162, "residual regional search exceeded the bounded score budget")
+    if status in {"accepted", "identity"}:
+        _require(
+            int(observation.get("valid_channels", 0)) >= DEFAULT_RESIDUAL_POLICY.min_textured_channels,
+            "residual regional accepted/identity observation lacks textured channels",
+        )
+        _require(
+            int(observation.get("support_y", 0)) >= DEFAULT_RESIDUAL_POLICY.min_tile_axis
+            and int(observation.get("support_x", 0)) >= DEFAULT_RESIDUAL_POLICY.min_tile_axis,
+            "residual regional accepted/identity observation lacks spatial support",
+        )
+        for key in (
+            "zero_loss",
+            "zero_rms",
+            "best_loss",
+            "best_rms",
+            "ncc",
+            "ux",
+            "uy",
+            "uncertainty_half_width_x",
+            "uncertainty_half_width_y",
+        ):
+            _finite_number(observation.get(key))
+    if status == "accepted":
+        _require(
+            _finite_number(observation.get("ncc")) >= DEFAULT_RESIDUAL_POLICY.min_ncc,
+            "residual regional NCC gate drifted",
+        )
+        _require(observation.get("saturated") is False, "accepted residual regional search saturated")
+        _require(
+            abs(_finite_number(observation.get("ux"))) <= DEFAULT_RESIDUAL_POLICY.search_radius
+            and abs(_finite_number(observation.get("uy"))) <= DEFAULT_RESIDUAL_POLICY.search_radius,
+            "accepted residual regional displacement exceeded its bounded search",
+        )
+        runner_margin = observation.get("runner_margin_ratio")
+        if runner_margin is not None:
+            _require(
+                _finite_number(runner_margin) >= DEFAULT_RESIDUAL_POLICY.min_runner_margin,
+                "accepted residual regional runner-up margin gate drifted",
+            )
+    elif status == "identity":
+        _require(
+            _finite_number(observation.get("zero_loss")) <= DEFAULT_RESIDUAL_POLICY.zero_loss_floor,
+            "residual identity observation is above the rigid-residual floor",
+        )
+        _require(
+            _finite_number(observation.get("ux")) == 0.0
+            and _finite_number(observation.get("uy")) == 0.0,
+            "residual identity observation is not an exact no-correction receipt",
+        )
+
+
+def _validate_residual_model_fit(
+    runtime_fit: Any,
+    recomputed_fit: Any,
+    *,
+    label: str,
+    parameters: tuple[str, ...],
+) -> None:
+    _require(isinstance(runtime_fit, dict), f"{label} runtime fit is missing")
+    _require(isinstance(recomputed_fit, dict), f"{label} recomputed fit is missing")
+    _require(
+        str(runtime_fit.get("status")) == str(recomputed_fit.get("status")),
+        f"{label} fit status does not reproduce from regional receipts",
+    )
+    if runtime_fit.get("status") != "accepted":
+        return
+    for parameter in parameters:
+        _require(
+            _close_number(runtime_fit.get(parameter), recomputed_fit.get(parameter)),
+            f"{label} parameter {parameter} does not reproduce from regional receipts",
+        )
+    if "rank" in runtime_fit:
+        _require(
+            int(runtime_fit["rank"]) == int(recomputed_fit["rank"]),
+            f"{label} fit rank does not reproduce",
+        )
+    if runtime_fit.get("condition") is not None:
+        _require(
+            _close_number(runtime_fit.get("condition"), recomputed_fit.get("condition"), atol=1e-7),
+            f"{label} fit condition does not reproduce",
+        )
+
+
+def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
+    _require(isinstance(fields, dict), f"{label} residual geometry receipt is missing")
+    _require(
+        fields.get("policy") == RESIDUAL_GEOMETRY_POLICY_VERSION,
+        f"{label} residual geometry policy version drifted",
+    )
+    _require(fields.get("status") == "measured", f"{label} residual geometry measurement did not complete")
+    support = fields.get("support")
+    _require(isinstance(support, dict), f"{label} residual geometry support receipt is missing")
+    height = int(support.get("height", 0))
+    width = int(support.get("width", 0))
+    _require(height > 0 and width > 0, f"{label} residual geometry dimensions are invalid")
+    _require(
+        int(support.get("valid_channels", 0)) <= 24,
+        f"{label} residual geometry exceeded the 24-channel bound",
+    )
+    _require(
+        int(support.get("max_support_axis", 0)) == 96,
+        f"{label} residual geometry support-axis policy drifted",
+    )
+
+    fit_indices_raw = fields.get("fit_indices")
+    holdout_indices_raw = fields.get("holdout_indices")
+    _require(
+        isinstance(fit_indices_raw, list) and isinstance(holdout_indices_raw, list),
+        f"{label} residual geometry fit/holdout indices are missing",
+    )
+    fit_indices = {int(value) for value in fit_indices_raw}
+    holdout_indices = {int(value) for value in holdout_indices_raw}
+    _require(
+        len(fit_indices) >= 2 and len(holdout_indices) >= 2 and fit_indices.isdisjoint(holdout_indices),
+        f"{label} residual geometry fit/holdout partition is invalid",
+    )
+    _require(
+        max(fit_indices | holdout_indices) in holdout_indices,
+        f"{label} residual geometry last selected prefix frame is not held out",
+    )
+
+    tile_bounds = fields.get("tile_bounds")
+    _require(isinstance(tile_bounds, dict), f"{label} residual geometry tile map is missing")
+    _require(
+        set(tile_bounds) == {"TL", "TM", "TR", "ML", "C", "MR", "BL", "BM", "BR"},
+        f"{label} residual geometry tile partition drifted",
+    )
+    for bounds in tile_bounds.values():
+        _require(
+            isinstance(bounds, list) and len(bounds) == 4,
+            f"{label} residual geometry contains malformed tile bounds",
+        )
+        y0, y1, x0, x1 = (int(value) for value in bounds)
+        _require(
+            0 <= y0 < y1 <= height and 0 <= x0 < x1 <= width,
+            f"{label} residual geometry tile lies outside the target latent",
+        )
+
+    observations = fields.get("observations")
+    _require(isinstance(observations, list), f"{label} residual regional observations are missing")
+    expected_observations = 9 * len(fit_indices | holdout_indices)
+    _require(
+        len(observations) == expected_observations <= 54,
+        f"{label} residual geometry observation count exceeded the bounded prefix/tile budget",
+    )
+    identities: set[tuple[int, str]] = set()
+    for observation in observations:
+        _validate_residual_observation(
+            observation,
+            fit_indices=fit_indices,
+            holdout_indices=holdout_indices,
+        )
+        key = (int(observation["frame_index"]), str(observation["tile_id"]))
+        _require(key not in identities, f"{label} residual geometry duplicated a frame/tile observation")
+        identities.add(key)
+
+    resource = fields.get("resource")
+    _require(isinstance(resource, dict), f"{label} residual geometry resource receipt is missing")
+    _require(
+        int(resource.get("estimated_cpu_scratch_bytes", 0))
+        <= int(resource.get("max_cpu_scratch_bytes", 0))
+        <= DEFAULT_RESIDUAL_POLICY.max_cpu_scratch_bytes,
+        f"{label} residual geometry exceeded the CPU scratch bound",
+    )
+
+    models = fields.get("models")
+    _require(isinstance(models, dict), f"{label} residual model receipts are missing")
+    recomputed = diagnostic_model_fits(
+        observations,
+        width=width,
+        height=height,
+        fit_indices=sorted(fit_indices),
+        holdout_indices=sorted(holdout_indices),
+    )
+    recomputed_fits = recomputed["fits"]
+    _validate_residual_model_fit(
+        models.get("residual_constant"),
+        recomputed_fits["residual_constant"],
+        label=f"{label} residual-constant",
+        parameters=("bx", "by"),
+    )
+    _validate_residual_model_fit(
+        models.get("horizontal"),
+        recomputed_fits["horizontal"],
+        label=f"{label} horizontal",
+        parameters=("a", "b"),
+    )
+    diagnostic_fits = models.get("diagnostic_fits")
+    _require(isinstance(diagnostic_fits, dict), f"{label} diagnostic model ladder is missing")
+    for model_name, parameters in (
+        ("axis_scales", ("a", "bx", "e", "by")),
+        ("similarity", ("scale_term", "rotation_term", "bx", "by")),
+        ("affine", ("a", "h", "bx", "k", "e", "by")),
+    ):
+        _validate_residual_model_fit(
+            diagnostic_fits.get(model_name),
+            recomputed_fits[model_name],
+            label=f"{label} {model_name}",
+            parameters=parameters,
+        )
+    local_model = diagnostic_fits.get("local_projective")
+    _require(
+        isinstance(local_model, dict)
+        and local_model.get("status") == "not_implemented",
+        f"{label} residual geometry unexpectedly enabled a local/projective optimizer",
+    )
+
+    horizontal = models.get("horizontal")
+    eligible = bool(models.get("eligible"))
+    failures = models.get("eligibility_failures")
+    _require(isinstance(failures, list), f"{label} residual eligibility failures are missing")
+    if eligible:
+        _require(not failures, f"{label} residual geometry claims eligibility with recorded failures")
+        _require(
+            isinstance(horizontal, dict) and horizontal.get("status") == "accepted",
+            f"{label} residual geometry claims eligibility without a horizontal fit",
+        )
+        transform = models.get("transform")
+        _require(isinstance(transform, dict), f"{label} eligible horizontal fit lacks transform algebra")
+        a = _finite_number(transform.get("a"))
+        b = _finite_number(transform.get("b"))
+        _require(
+            _close_number(a, horizontal.get("a")) and _close_number(b, horizontal.get("b")),
+            f"{label} transform algebra does not match its horizontal fit",
+        )
+        forward_scale = _finite_number(transform.get("forward_sx"))
+        _require(
+            DEFAULT_RESIDUAL_POLICY.min_forward_scale
+            <= forward_scale
+            <= DEFAULT_RESIDUAL_POLICY.max_forward_scale,
+            f"{label} eligible horizontal forward scale exceeds the policy bound",
+        )
+        _require(
+            _finite_number(models.get("max_corner_residual"))
+            <= DEFAULT_RESIDUAL_POLICY.max_residual_displacement,
+            f"{label} eligible horizontal corner displacement exceeds the policy bound",
+        )
+        direct = models.get("direct_feature_checks")
+        parity = models.get("parity_checks")
+        _require(
+            isinstance(direct, list)
+            and bool(direct)
+            and all(isinstance(item, dict) and item.get("nondegrading") is True for item in direct),
+            f"{label} eligible horizontal fit failed direct feature checks",
+        )
+        _require(
+            isinstance(parity, list)
+            and len(parity) == 4
+            and all(
+                isinstance(item, dict)
+                and item.get("status") == "accepted"
+                and item.get("nondegrading") is True
+                for item in parity
+            ),
+            f"{label} eligible horizontal fit failed H3 parity checks",
+        )
+    return eligible
+
+
+def _validate_residual_geometry(
+    window: list[dict[str, Any]],
+    *,
+    expected_mode: str | None,
+    expected_result: str | None,
+) -> tuple[str | None, str | None, bool, bool, str | None]:
+    if expected_mode is None and expected_result is None:
+        return None, None, False, False, None
+    _require(expected_mode in {"off", "measure"}, f"unsupported residual mode {expected_mode!r}")
+    _require(
+        expected_result in {"off", "not-evaluated", "measured-only"},
+        f"unsupported residual result {expected_result!r}",
+    )
+    frame_receipts = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"
+    ]
+    _require(len(frame_receipts) == 1, "residual gate requires exactly one partitioned frame-gauge receipt")
+    frame_receipt = frame_receipts[0]
+    receipt = frame_receipt.get("residual_geometry")
+    _require(isinstance(receipt, dict), "partitioned frame-gauge receipt is missing residual geometry")
+    _require(
+        receipt.get("policy") == RESIDUAL_GEOMETRY_POLICY_VERSION,
+        "residual geometry policy version drifted",
+    )
+    mode = str(receipt.get("requested_mode", ""))
+    _require(mode == expected_mode, f"residual mode {mode!r} != expected {expected_mode!r}")
+    _require(receipt.get("decision") == "not_evaluated", "measurement milestone made an application decision")
+    _require(receipt.get("applied") is False, "measurement milestone applied a residual transform")
+    _require(
+        frame_receipt.get("residual_geometry_telemetry_bytes", 2**31) <= 128 * 1024,
+        "residual geometry telemetry exceeded the 128 KiB bound",
+    )
+
+    stage_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_residual_geometry_stage"
+    ]
+    evidence_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_residual_geometry_evidence"
+    ]
+    if mode == "off":
+        _require(expected_result == "off", "residual OFF control expected a non-OFF result")
+        _require(receipt.get("measured") is False, "residual OFF control ran the regional estimator")
+        _require(not stage_events, "residual OFF control emitted measurement-stage receipts")
+        _require(not evidence_events, "residual OFF control exported measurement tensor evidence")
+        return mode, "off", True, False, None
+
+    frame_result = str(frame_receipt.get("result", ""))
+    if frame_result != "accepted":
+        _require(
+            expected_result == "not-evaluated",
+            "residual measurement was expected despite rigid v2 not accepting",
+        )
+        _require(receipt.get("measured") is False, "residual estimator ran before rigid-v2 acceptance")
+        _require(receipt.get("measurement_status") == "not_evaluated", "residual not-evaluated status drifted")
+        _require(not stage_events and not evidence_events, "not-evaluated residual arm emitted measurement evidence")
+        return mode, "not-evaluated", True, False, None
+
+    _require(expected_result == "measured-only", "accepted rigid-v2 arm expected the wrong residual result")
+    _require(receipt.get("measured") is True, "residual measure arm did not run after rigid-v2 acceptance")
+    _require(
+        receipt.get("measurement_status") == "measured",
+        "residual measure arm did not complete its bounded regional measurement",
+    )
+    _require(receipt.get("final_path") == "rigid_v2", "residual measurement changed the final correction path")
+    video_eligible = _validate_residual_measurement_receipt(receipt.get("video"), label="video")
+    guidance_mode = str(frame_receipt.get("guidance_mode", "off"))
+    guidance_receipt = receipt.get("guidance")
+    if guidance_mode == "off":
+        _require(
+            isinstance(guidance_receipt, dict) and guidance_receipt.get("status") == "off",
+            "guidance-off residual arm emitted a guidance fit",
+        )
+    else:
+        _validate_residual_measurement_receipt(guidance_receipt, label="guidance")
+
+    boundary_regional = receipt.get("boundary_regional")
+    _require(
+        isinstance(boundary_regional, dict)
+        and boundary_regional.get("policy") == "paired_prefix_residual_boundary_regions_v1",
+        "residual measure arm is missing regional native-motion controls",
+    )
+    tiles = boundary_regional.get("tiles")
+    _require(
+        isinstance(tiles, dict) and len(tiles) == 9,
+        "residual regional boundary control did not cover all nine disjoint tiles",
+    )
+    for tile in tiles.values():
+        _require(isinstance(tile, dict), "residual regional boundary tile is malformed")
+        for variant in (
+            "native",
+            "exact_unregistered",
+            "transformed_native",
+            "exact_rigid_pre_dc",
+            "exact_rigid_post_dc",
+        ):
+            variant_receipt = tile.get(variant)
+            _require(isinstance(variant_receipt, dict), "residual regional boundary variant is missing")
+            _finite_number(variant_receipt.get("dx"))
+            _finite_number(variant_receipt.get("dy"))
+            _finite_number(variant_receipt.get("response"))
+        _finite_number(tile.get("pre_dc_native_error"))
+        _finite_number(tile.get("post_dc_native_error"))
+
+    required_stages = {
+        "learned_native_same_time",
+        "learned_rigid_aligned_same_time",
+        "exact_restored_pre_high_dc",
+        "final_post_high_internal_clean",
+        "final_post_high_caller_domain",
+    }
+    if guidance_mode != "off":
+        required_stages |= {"guidance_native_same_time", "guidance_rigid_aligned_same_time"}
+    by_stage = {str(event.get("stage")): event for event in stage_events}
+    _require(required_stages.issubset(by_stage), "residual common-domain stage evidence is incomplete")
+    session_ids = {str(event.get("session_id")) for event in stage_events}
+    chunk_ids = {str(event.get("chunk_id")) for event in stage_events}
+    _require(len(session_ids) == 1 and len(chunk_ids) == 1, "residual stage invocation identity drifted")
+    for stage, stage_receipt in by_stage.items():
+        _require(
+            stage_receipt.get("policy") == RESIDUAL_GEOMETRY_POLICY_VERSION,
+            f"residual stage {stage} policy version drifted",
+        )
+        _require(_sha256(stage_receipt.get("tensor_sha256")), f"residual stage {stage} lacks a tensor digest")
+        domain = stage_receipt.get("domain")
+        if stage == "final_post_high_caller_domain":
+            _require(domain == "caller_output_latent", "caller-domain final receipt domain drifted")
+        else:
+            _require(domain == "model_internal_clean", f"residual stage {stage} is not in the common internal domain")
+
+    final_internal = by_stage["final_post_high_internal_clean"]
+    _require(
+        final_internal.get("owner_before") == "authoritative_exact_prefix_E",
+        "post-high internal comparison did not preserve authoritative exact-prefix ownership",
+    )
+
+    _require(len(evidence_events) == 1, "residual measure arm must emit exactly one evidence bundle receipt")
+    evidence = evidence_events[0]
+    _require(evidence.get("policy") == RESIDUAL_GEOMETRY_POLICY_VERSION, "residual evidence policy drifted")
+    _require(evidence.get("requested_mode") == "measure", "residual evidence mode drifted")
+    _require(evidence.get("decision") == "not_evaluated", "residual evidence made an application decision")
+    _require(evidence.get("applied") is False, "residual evidence claims a transform was applied")
+    _require(evidence.get("horizontal_application_enabled") is False, "horizontal correction was enabled prematurely")
+    _require(evidence.get("status") == "exported", "formal residual gate did not export raw tensor evidence")
+    _require(evidence.get("extra_vae_calls") == 0, "residual evidence export added a VAE call")
+    bundle = evidence.get("bundle")
+    _require(isinstance(bundle, str) and bool(bundle), "residual evidence bundle identity is missing")
+    return mode, "measured-only", True, video_eligible, bundle
+
+
 def _normalize_auto_strength_report(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         try:
