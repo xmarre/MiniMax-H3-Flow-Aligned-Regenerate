@@ -1136,9 +1136,7 @@ def _prepare_registered_guidance_reference(
         if residual_witnesses is not None:
             witness_start = max(0, prefix_t - 6)
             witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
-            residual_witnesses["guidance_native_bounded"] = target_ref[
-                :, :, witness_start:witness_end
-            ].detach().clone()
+            residual_witnesses["guidance_native_bounded"] = target_ref[:, :, witness_start:witness_end].detach().clone()
     elif residual_mode == "measure":
         guidance_residual = {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
