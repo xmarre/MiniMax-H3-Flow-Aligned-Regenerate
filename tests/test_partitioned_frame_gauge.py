@@ -157,9 +157,7 @@ def test_boundary_motion_gate_compact_witness_matches_full_translation():
     assert compact_result[2] == full_result[2]
     for name in ("upper45", "full"):
         for key in ("before_error_cells", "after_error_cells", "error_improvement_ratio"):
-            assert compact_result[1]["checks"][name][key] == pytest.approx(
-                full_result[1]["checks"][name][key]
-            )
+            assert compact_result[1]["checks"][name][key] == pytest.approx(full_result[1]["checks"][name][key])
 
 
 def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_transition():
