@@ -162,6 +162,7 @@ class ProgressiveTargetInputConfig:
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
     suffix_geometric_bridge: bool = False
     frame_gauge_repair: bool = False
+    frame_gauge_residual_mode: str = "off"
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -200,6 +201,8 @@ class ProgressiveTargetInputConfig:
             raise ValueError("suffix_geometric_bridge requires mixed-grid Continuum")
         if not isinstance(self.frame_gauge_repair, bool):
             raise TypeError("frame_gauge_repair must be boolean")
+        if self.frame_gauge_residual_mode not in {"off", "measure"}:
+            raise ValueError("frame_gauge_residual_mode must be off or measure")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
