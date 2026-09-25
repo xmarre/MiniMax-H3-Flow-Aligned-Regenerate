@@ -25,6 +25,7 @@ from .residual_geometry import (
     DEFAULT_RESIDUAL_POLICY,
     RESIDUAL_GEOMETRY_POLICY_VERSION,
     diagnostic_model_fits,
+    replay_horizontal_telemetry,
 )
 
 PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
@@ -823,6 +824,148 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
         f"{label} residual geometry unexpectedly enabled a local/projective optimizer",
     )
 
+    rigid_dx = _finite_number(fields.get("rigid_dx"))
+    rigid_dy = _finite_number(fields.get("rigid_dy"))
+    replay = replay_horizontal_telemetry(
+        observations,
+        width=width,
+        height=height,
+        fit_indices=sorted(fit_indices),
+        holdout_indices=sorted(holdout_indices),
+        rigid_dx=rigid_dx,
+        rigid_dy=rigid_dy,
+    )
+    runtime_envelope = models.get("deletion_sensitivity_envelope")
+    replay_envelope = replay.get("deletion_sensitivity_envelope")
+    _require(
+        isinstance(runtime_envelope, dict) and isinstance(replay_envelope, dict),
+        f"{label} residual deletion envelope is missing",
+    )
+    _require(
+        runtime_envelope.get("status") == replay_envelope.get("status"),
+        f"{label} residual deletion envelope status does not reproduce",
+    )
+    if runtime_envelope.get("status") == "accepted":
+        for key in ("a", "b"):
+            runtime_range = runtime_envelope.get(key)
+            replay_range = replay_envelope.get(key)
+            _require(
+                isinstance(runtime_range, list)
+                and isinstance(replay_range, list)
+                and len(runtime_range) == len(replay_range) == 2,
+                f"{label} residual deletion {key} envelope is malformed",
+            )
+            _require(
+                all(
+                    _close_number(runtime_value, replay_value, atol=1e-8)
+                    for runtime_value, replay_value in zip(runtime_range, replay_range)
+                ),
+                f"{label} residual deletion {key} envelope does not reproduce",
+            )
+
+    replay_holdout = replay.get("holdout")
+    runtime_holdout = models.get("holdout")
+    if isinstance(runtime_holdout, dict) or isinstance(replay_holdout, dict):
+        _require(
+            isinstance(runtime_holdout, dict) and isinstance(replay_holdout, dict),
+            f"{label} residual holdout summary does not reproduce",
+        )
+        for key in (
+            "horizontal_rms",
+            "horizontal_max",
+            "constant_rms",
+            "constant_max",
+            "improvement_ratio",
+        ):
+            _require(
+                _close_number(runtime_holdout.get(key), replay_holdout.get(key), atol=1e-8),
+                f"{label} residual holdout {key} does not reproduce",
+            )
+
+    runtime_transform = models.get("transform")
+    replay_transform = replay.get("transform")
+    if isinstance(runtime_transform, dict) or isinstance(replay_transform, dict):
+        _require(
+            isinstance(runtime_transform, dict) and isinstance(replay_transform, dict),
+            f"{label} residual transform algebra does not reproduce",
+        )
+        for key in ("a", "b", "forward_sx", "matrix_roundtrip_abs_max"):
+            _require(
+                _close_number(runtime_transform.get(key), replay_transform.get(key), atol=1e-10),
+                f"{label} residual transform {key} does not reproduce",
+            )
+        for matrix_key in ("forward_matrix", "inverse_matrix"):
+            runtime_matrix = runtime_transform.get(matrix_key)
+            replay_matrix = replay_transform.get(matrix_key)
+            _require(
+                isinstance(runtime_matrix, list)
+                and isinstance(replay_matrix, list)
+                and len(runtime_matrix) == len(replay_matrix) == 3,
+                f"{label} residual {matrix_key} is malformed",
+            )
+            for runtime_row, replay_row in zip(runtime_matrix, replay_matrix):
+                _require(
+                    isinstance(runtime_row, list)
+                    and isinstance(replay_row, list)
+                    and len(runtime_row) == len(replay_row) == 3
+                    and all(
+                        _close_number(runtime_value, replay_value, atol=1e-10)
+                        for runtime_value, replay_value in zip(runtime_row, replay_row)
+                    ),
+                    f"{label} residual {matrix_key} does not reproduce",
+                )
+        _require(
+            _finite_number(runtime_transform.get("matrix_roundtrip_abs_max")) <= 1e-12,
+            f"{label} residual forward/inverse matrices do not round-trip",
+        )
+
+    for runtime_key, replay_key in (
+        ("forward_scale_envelope", "forward_scale_envelope"),
+        ("max_corner_residual", "max_corner_residual"),
+        ("candidate_invalid_fraction", "candidate_invalid_fraction"),
+    ):
+        runtime_value = models.get(runtime_key)
+        replay_value = replay.get(replay_key)
+        if runtime_value is None and replay_value is None:
+            continue
+        if isinstance(runtime_value, list) or isinstance(replay_value, list):
+            _require(
+                isinstance(runtime_value, list)
+                and isinstance(replay_value, list)
+                and len(runtime_value) == len(replay_value)
+                and all(
+                    _close_number(left, right, atol=1e-8)
+                    for left, right in zip(runtime_value, replay_value)
+                ),
+                f"{label} residual {runtime_key} does not reproduce",
+            )
+        else:
+            _require(
+                _close_number(runtime_value, replay_value, atol=1e-8),
+                f"{label} residual {runtime_key} does not reproduce",
+            )
+
+    accepted_observations = [
+        observation
+        for observation in observations
+        if observation.get("status") == "accepted"
+        and _finite_number(observation.get("uncertainty_half_width_x"))
+        <= DEFAULT_RESIDUAL_POLICY.max_uncertainty_half_width
+        and _finite_number(observation.get("uncertainty_half_width_y"))
+        <= DEFAULT_RESIDUAL_POLICY.max_uncertainty_half_width
+    ]
+    required_tiles = {"TL", "TM", "TR", "BL", "BM", "BR"}
+    last_frame = max(fit_indices | holdout_indices)
+    last_ids = {
+        str(observation["tile_id"])
+        for observation in accepted_observations
+        if int(observation["frame_index"]) == last_frame
+    }
+    _require(
+        bool(models.get("last_holdout_global_support")) == required_tiles.issubset(last_ids),
+        f"{label} residual last-holdout support classification does not reproduce",
+    )
+
     horizontal = models.get("horizontal")
     eligible = bool(models.get("eligible"))
     failures = models.get("eligibility_failures")
@@ -849,6 +992,25 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
         _require(
             _finite_number(models.get("max_corner_residual")) <= DEFAULT_RESIDUAL_POLICY.max_residual_displacement,
             f"{label} eligible horizontal corner displacement exceeds the policy bound",
+        )
+        scale_envelope = models.get("forward_scale_envelope")
+        _require(
+            isinstance(scale_envelope, list)
+            and len(scale_envelope) == 2
+            and DEFAULT_RESIDUAL_POLICY.min_forward_scale
+            <= _finite_number(scale_envelope[0])
+            <= _finite_number(scale_envelope[1])
+            <= DEFAULT_RESIDUAL_POLICY.max_forward_scale,
+            f"{label} eligible horizontal deletion-scale envelope exceeds the policy bound",
+        )
+        _require(
+            _finite_number(models.get("candidate_invalid_fraction"))
+            <= DEFAULT_RESIDUAL_POLICY.max_invalid_fraction,
+            f"{label} eligible horizontal candidate invalid area exceeds the policy bound",
+        )
+        _require(
+            models.get("last_holdout_global_support") is True,
+            f"{label} eligible horizontal fit lacks last-frame global support",
         )
         direct = models.get("direct_feature_checks")
         parity = models.get("parity_checks")
