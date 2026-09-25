@@ -3425,6 +3425,59 @@ def run_partitioned_progressive(
             raise RuntimeError(
                 "partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling"
             )
+
+        residual_evidence_receipt: dict[str, Any] | None = None
+        if residual_mode == "measure" and frame_gauge_accepted:
+            video_registration = frame_gauge_transaction.get("video_registration", {})
+            guidance_registration = frame_gauge_transaction.get("guidance_registration", {})
+            residual_evidence_receipt = export_residual_geometry_evidence(
+                residual_evidence_tensors,
+                session_id=str(session_id),
+                chunk_id=str(chunk_id),
+                seed=int(seed or 0),
+                sigma=float(sigma),
+                metadata={
+                    "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                    "rigid_policy": FRAME_GAUGE_POLICY_VERSION,
+                    "prefix_t": int(stage_plan.prefix_t),
+                    "fit_indices": residual_geometry_receipt.get("video", {}).get("fit_indices", []),
+                    "holdout_indices": residual_geometry_receipt.get("video", {}).get("holdout_indices", []),
+                    "video_rigid_dx": float(video_registration.get("dx", 0.0)),
+                    "video_rigid_dy": float(video_registration.get("dy", 0.0)),
+                    "guidance_rigid_dx": float(guidance_registration.get("dx", 0.0)),
+                    "guidance_rigid_dy": float(guidance_registration.get("dy", 0.0)),
+                    "target_hw": [int(target_h), int(target_w)],
+                    "dtype": str(exact_prefix.dtype),
+                    "video_validity_policy": "translation_validity_v1",
+                    "video_invalid_fraction": float(video_registration.get("invalid_fraction", 0.0)),
+                    "guidance_invalid_fraction": float(guidance_registration.get("invalid_fraction", 0.0)),
+                    "exact_prefix_sha256": tensor_sha256(exact_prefix),
+                    "protected_noise_exact": bool(protected_video_noise_exact),
+                    "dc_policy": "existing_one_token_spatial_mean_v1",
+                    "dc_corrected_tokens": int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
+                    "stage_receipts": residual_stage_receipts,
+                    "extra_h3_nfe": 0,
+                    "extra_sampler_lifetimes": 0,
+                    "extra_history_boundaries": 0,
+                    "extra_provider_calls": 0,
+                    "extra_vae_calls": 0,
+                    "horizontal_application_enabled": False,
+                },
+            )
+            binding.metrics.event(
+                "partitioned_residual_geometry_evidence",
+                policy=RESIDUAL_GEOMETRY_POLICY_VERSION,
+                requested_mode=residual_mode,
+                decision="not_evaluated",
+                applied=False,
+                horizontal_application_enabled=False,
+                session_id=str(session_id),
+                chunk_id=str(chunk_id),
+                **residual_evidence_receipt,
+            )
+
+        if final_internal is not None:
+            del final_internal
         binding.metrics.event(
             "partitioned_exact_prefix_complete",
             final_prefix_exact=True,
