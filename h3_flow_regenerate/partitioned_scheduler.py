@@ -1138,11 +1138,6 @@ def _prepare_registered_guidance_reference(
             residual_witnesses["guidance_native_bounded"] = (
                 target_ref[:, :, witness_start:witness_end].detach().clone()
             )
-            residual_witnesses["guidance_witness_start"] = torch.tensor(
-                witness_start,
-                device="cpu",
-                dtype=torch.int64,
-            )
     elif residual_mode == "measure":
         guidance_residual = {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -1181,6 +1176,13 @@ def _prepare_registered_guidance_reference(
         start_frame=prefix_t,
         batch_frames=4,
     )
+    if residual_mode == "measure" and residual_witnesses is not None:
+        witness_start = max(0, prefix_t - 6)
+        witness_end = min(int(application.video.shape[2]), prefix_t + 4)
+        residual_witnesses["guidance_aligned_bounded"] = (
+            application.video[:, :, witness_start:witness_end].detach().clone()
+        )
+
     if application.invalid_fraction > 0.08:
         fields = dict(estimate_fields)
         fields.update(
