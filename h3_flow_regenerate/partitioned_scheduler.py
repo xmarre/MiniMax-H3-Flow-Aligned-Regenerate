@@ -1293,9 +1293,9 @@ def _frame_gauge_boundary_motion_check(
     Prefix-wide residual fit can be diluted by learned synthesis differences.
     This gate instead asks whether replacing the provider prefix with the exact
     prefix introduces a boundary-motion error relative to the provider's own
-    native transition, and whether the proposed suffix translation removes a
-    substantial fraction of that error in both the upper-region and full-frame
-    measurements.
+    native transition in each corresponding coordinate domain, and whether the
+    proposed suffix translation removes a substantial fraction of that error
+    in both the upper-region and full-frame measurements.
     """
 
     if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
@@ -1307,6 +1307,7 @@ def _frame_gauge_boundary_motion_check(
     exact_last = exact_prefix[:, :, -1].to(learned_clean)
     native_first = learned_clean[:, :, int(prefix_t)]
     if tuple(aligned_clean.shape) == tuple(learned_clean.shape):
+        aligned_last = aligned_clean[:, :, int(prefix_t) - 1]
         aligned_first = aligned_clean[:, :, int(prefix_t)]
     else:
         compact_shape = (
@@ -1318,6 +1319,7 @@ def _frame_gauge_boundary_motion_check(
         )
         if tuple(aligned_clean.shape) != compact_shape:
             raise RuntimeError("frame-gauge boundary check geometry drifted")
+        aligned_last = aligned_clean[:, :, 0]
         aligned_first = aligned_clean[:, :, 1]
 
     def shift(left: torch.Tensor, right: torch.Tensor, roi_fraction: float) -> dict[str, Any]:
@@ -1340,6 +1342,11 @@ def _frame_gauge_boundary_motion_check(
     checks: dict[str, Any] = {}
     for name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
         native = shift(learned_last, native_first, roi_fraction)
+        # A cropped/windowed phase estimate is not invariant to jointly warping
+        # both frames. Compare the candidate against the same transformed
+        # provider transition, so only exact-prefix replacement contributes to
+        # its error. The aligned prefix remains a witness, never output state.
+        transformed_native = shift(aligned_last, aligned_first, roi_fraction)
         restored = shift(exact_last, native_first, roi_fraction)
         candidate = shift(exact_last, aligned_first, roi_fraction)
         before_error = math.hypot(
@@ -1347,13 +1354,14 @@ def _frame_gauge_boundary_motion_check(
             restored["dy"] - native["dy"],
         )
         after_error = math.hypot(
-            candidate["dx"] - native["dx"],
-            candidate["dy"] - native["dy"],
+            candidate["dx"] - transformed_native["dx"],
+            candidate["dy"] - transformed_native["dy"],
         )
         improvement = (before_error - after_error) / max(before_error, 1e-12)
         checks[name] = {
             "roi_fraction": roi_fraction,
             "native": native,
+            "transformed_native": transformed_native,
             "exact_restored": restored,
             "candidate": candidate,
             "before_error_cells": before_error,
@@ -1363,7 +1371,7 @@ def _frame_gauge_boundary_motion_check(
         }
 
     fields: dict[str, Any] = {
-        "policy": "native_boundary_motion_preservation_v1",
+        "policy": "native_boundary_motion_preservation_v2",
         "min_error_cells": FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS,
         "min_improvement_ratio": FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT,
         "min_response": FRAME_GAUGE_BOUNDARY_MIN_RESPONSE,
@@ -1372,7 +1380,7 @@ def _frame_gauge_boundary_motion_check(
 
     for name in ("upper45", "full"):
         check = checks[name]
-        for variant in ("native", "exact_restored", "candidate"):
+        for variant in ("native", "transformed_native", "exact_restored", "candidate"):
             receipt = check[variant]
             if receipt["clipped"] or receipt["response"] < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
                 fields["status"] = "rejected"

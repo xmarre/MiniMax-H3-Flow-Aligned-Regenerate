@@ -10,6 +10,7 @@ from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
 from h3_flow_regenerate.frame_gauge import GUIDANCE_REFERENCE_POLICY, translate_video_cells
 from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
+from h3_flow_regenerate.partitioned_runtime_gate import RuntimeGateError, _validate_boundary_motion_receipt
 from h3_flow_regenerate.partitioned_scheduler import (
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
@@ -204,6 +205,58 @@ def test_boundary_motion_gate_accepts_equal_zero_error_as_nondegrading():
         assert check["informative"] is False
         assert check["after_error_cells"] == pytest.approx(check["before_error_cells"])
         assert check["after_error_cells"] == pytest.approx(0.0)
+
+
+def test_boundary_motion_gate_uses_transformed_native_for_competing_motion():
+    # Two textured layers move in opposite directions. Resampling changes which
+    # peak wins in the upper crop even though both frames share the same warp.
+    generator = torch.Generator().manual_seed(4)
+    left = torch.randn(1, 24, 1, 32, 32, generator=generator)
+    right = torch.randn(left.shape, generator=generator)
+    prefix = left + right
+    suffix = torch.roll(left, 1, -1) + torch.roll(right, -1, -1)
+    learned = torch.cat((prefix.repeat(1, 1, 4, 1, 1), suffix, suffix), dim=2)
+    aligned = translate_video_cells(learned, dx=-0.5, dy=-0.4375, start_frame=0).video
+    # Equality is the oracle: restoring this prefix makes the actual candidate
+    # exactly the transformed provider trajectory, hence replacement error is 0.
+    exact = aligned[:, :, :4].clone()
+    learned_before = learned.clone()
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(learned, exact, aligned, prefix_t=4)
+
+    assert accepted, reason
+    assert fields["policy"] == "native_boundary_motion_preservation_v2"
+    _validate_boundary_motion_receipt(fields)
+    for check in fields["checks"].values():
+        assert check["candidate"] == check["transformed_native"]
+        assert check["after_error_cells"] == 0.0
+        assert check["error_improvement_ratio"] == 1.0
+    upper = fields["checks"]["upper45"]
+    old_error = (
+        (upper["candidate"]["dx"] - upper["native"]["dx"]) ** 2
+        + (upper["candidate"]["dy"] - upper["native"]["dy"]) ** 2
+    ) ** 0.5
+    assert old_error > upper["before_error_cells"]
+    assert torch.equal(learned, learned_before)
+    assert torch.equal(exact, aligned[:, :, :4])
+
+
+@pytest.mark.parametrize("mutation", ["missing_witness", "wrong_domain", "wrong_summary", "ambiguous_witness"])
+def test_boundary_motion_v2_validator_rejects_inconsistent_receipts(mutation):
+    learned = _rigid_textured_video(shift_x=-1)
+    aligned = translate_video_cells(learned, dx=1.0, dy=0.0, start_frame=0).video
+    accepted, fields, _ = _frame_gauge_boundary_motion_check(learned, aligned[:, :, :4], aligned, prefix_t=4)
+    assert accepted
+    check = fields["checks"]["upper45"]
+    if mutation == "missing_witness":
+        del check["transformed_native"]
+    elif mutation == "wrong_domain":
+        check["transformed_native"]["dx"] += 0.5
+    elif mutation == "wrong_summary":
+        check["error_improvement_ratio"] = 0.9
+    else:
+        check["transformed_native"]["response"] = 2.0
+    with pytest.raises(RuntimeGateError):
+        _validate_boundary_motion_receipt(fields)
 
 
 def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():

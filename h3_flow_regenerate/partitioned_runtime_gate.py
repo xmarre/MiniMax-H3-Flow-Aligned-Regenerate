@@ -367,8 +367,9 @@ def _validate_registration_receipt(
 def _validate_boundary_motion_receipt(fields: Any) -> None:
     _require(isinstance(fields, dict), "accepted frame-gauge transaction is missing boundary-motion evidence")
     _require(fields.get("status") == "accepted", "accepted frame-gauge boundary-motion gate did not accept")
+    policy = fields.get("policy")
     _require(
-        fields.get("policy") == "native_boundary_motion_preservation_v1",
+        policy in {"native_boundary_motion_preservation_v1", "native_boundary_motion_preservation_v2"},
         "frame-gauge boundary-motion policy drifted",
     )
     min_error = _finite_number(fields.get("min_error_cells"))
@@ -402,7 +403,10 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                 improvement >= min_improvement,
                 f"frame-gauge boundary-motion {name} improvement gate failed",
             )
-        for variant in ("native", "exact_restored", "candidate"):
+        variants = ("native", "exact_restored", "candidate")
+        if policy == "native_boundary_motion_preservation_v2":
+            variants += ("transformed_native",)
+        for variant in variants:
             receipt = check.get(variant)
             _require(isinstance(receipt, dict), f"frame-gauge boundary-motion {name}/{variant} receipt is missing")
             _finite_number(receipt.get("dx"))
@@ -413,6 +417,24 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                 response >= min_response,
                 f"frame-gauge boundary-motion {name}/{variant} response gate failed",
             )
+        if policy == "native_boundary_motion_preservation_v2":
+            # Replay the coordinate-domain comparisons rather than trusting
+            # summary errors that could have been computed against native v1.
+            def distance(left, right):
+                return math.hypot(left["dx"] - right["dx"], left["dy"] - right["dy"])
+
+            expected_before = distance(check["exact_restored"], check["native"])
+            expected_after = distance(check["candidate"], check["transformed_native"])
+            expected_improvement = (expected_before - expected_after) / max(expected_before, 1e-12)
+            for label, actual, expected in (
+                ("before error", before_error, expected_before),
+                ("after error", after_error, expected_after),
+                ("improvement", improvement, expected_improvement),
+            ):
+                _require(
+                    math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-12),
+                    f"frame-gauge boundary-motion {name} {label} does not reproduce",
+                )
 
 
 def _validate_frame_gauge_transfer(
