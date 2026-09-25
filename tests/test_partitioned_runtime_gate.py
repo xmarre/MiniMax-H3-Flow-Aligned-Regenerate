@@ -1051,3 +1051,71 @@ def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
     measure["events"][3]["fields"]["actual"] = True
     with pytest.raises(RuntimeGateError, match="call topology"):
         compare_residual_measurement_pair(control, measure)
+
+
+
+def _install_exact_overlap_fallback_receipt(metrics):
+    reason = "boundary_upper45_insufficient_improvement"
+    metrics = _install_frame_gauge_transfer(metrics, mode="on", result="rejected")
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["frame_gauge_reason"] = reason
+    transfer["fields"]["partitioned_exact_overlap_bridge"] = {
+        "policy": "partitioned_exact_overlap_structural_plus_dc_v1",
+        "requested": True,
+        "trigger": reason,
+        "applied": True,
+        "state_mapping": "conditional_renoise_affine",
+        "authoritative_prefix_modified": False,
+        "later_suffix_extrapolated": False,
+        "suffix_representation_bridge_enabled": True,
+        "suffix_representation_bridge_accepted": True,
+        "suffix_representation_bridge_corrected_tokens": 1,
+    }
+    frame = _frame_gauge_event(mode="on", result="rejected")
+    frame["fields"].update(
+        reason=reason,
+        video_registration={"status": "accepted", "reason": "accepted"},
+        exact_overlap_fallback_policy="partitioned_exact_overlap_structural_plus_dc_v1",
+        exact_overlap_fallback_requested=True,
+        exact_overlap_fallback_trigger=reason,
+        exact_overlap_fallback_applied=True,
+    )
+    metrics["events"].insert(-2, frame)
+    return metrics
+
+
+def test_runtime_gate_accepts_partitioned_exact_overlap_fallback_after_rigid_boundary_veto():
+    report = validate_partitioned_runtime_evidence(
+        _install_exact_overlap_fallback_receipt(_metrics()),
+        _log(),
+        expected_frame_gauge_mode="on-rejected",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "rejected"
+
+
+def test_runtime_gate_rejects_exact_overlap_fallback_not_bound_to_transaction_reason():
+    metrics = _install_exact_overlap_fallback_receipt(_metrics())
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["partitioned_exact_overlap_bridge"]["trigger"] = "boundary_full_insufficient_improvement"
+
+    with pytest.raises(RuntimeGateError, match="trigger differs from the frame-gauge rejection"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-rejected",
+        )
+
+
+def test_runtime_gate_rejects_exact_overlap_fallback_that_extrapolates_later_suffix():
+    metrics = _install_exact_overlap_fallback_receipt(_metrics())
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["partitioned_exact_overlap_bridge"]["later_suffix_extrapolated"] = True
+
+    with pytest.raises(RuntimeGateError, match="extrapolated into unmeasured later suffix"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-rejected",
+        )
