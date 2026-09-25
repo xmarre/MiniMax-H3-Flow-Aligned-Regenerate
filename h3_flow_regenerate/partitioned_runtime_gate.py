@@ -571,14 +571,37 @@ def _validate_frame_gauge(
         "frame-gauge receipt did not mark auto-strength provenance as an acceptance prerequisite",
     )
     _validate_frame_gauge_transfer(window, mode=mode, result=result)
+    video_dx = _finite_number(receipt.get("video_dx", 0.0))
+    video_dy = _finite_number(receipt.get("video_dy", 0.0))
+    guidance_dx = _finite_number(receipt.get("guidance_dx", 0.0))
+    guidance_dy = _finite_number(receipt.get("guidance_dy", 0.0))
+    if mode == "on" and result == "accepted":
+        video_registration = receipt.get("video_registration")
+        _require(isinstance(video_registration, dict), "accepted transaction lacks video registration fields")
+        _require(
+            video_dx == _finite_number(video_registration.get("dx"))
+            and video_dy == _finite_number(video_registration.get("dy")),
+            "reported video displacement differs from the validated video registration",
+        )
+        if str(receipt.get("guidance_mode", "off")) != "off":
+            guidance_registration = receipt.get("guidance_registration")
+            _require(
+                isinstance(guidance_registration, dict),
+                "accepted transaction lacks guidance registration fields",
+            )
+            _require(
+                guidance_dx == _finite_number(guidance_registration.get("dx"))
+                and guidance_dy == _finite_number(guidance_registration.get("dy")),
+                "reported guidance displacement differs from the validated guidance registration",
+            )
     return (
         mode,
         result,
         True,
-        float(receipt.get("video_dx", 0.0)),
-        float(receipt.get("video_dy", 0.0)),
-        float(receipt.get("guidance_dx", 0.0)),
-        float(receipt.get("guidance_dy", 0.0)),
+        video_dx,
+        video_dy,
+        guidance_dx,
+        guidance_dy,
     )
 
 
