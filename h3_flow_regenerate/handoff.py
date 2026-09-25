@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +14,15 @@ from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 H3_LATENT_UPSCALER_API_VERSION = 1
 H3_LATENT_UPSCALER_KIND = "minimax_h3_learned_latent_upscaler"
+
+
+@dataclass(frozen=True, slots=True)
+class CleanVideoPostprocessResult:
+    """Validated clean-video replacement returned by the handoff postprocess hook."""
+
+    clean_video: torch.Tensor
+    protected_prefix_t: int
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def validate_learned_upscaler_provider(provider: Any) -> dict[str, Any]:
@@ -151,6 +161,7 @@ class ProgressiveTargetInputConfig:
     suffix_dc_bridge: bool = False
     learned_upscaler: Any | None = field(default=None, repr=False, compare=False)
     suffix_geometric_bridge: bool = False
+    frame_gauge_repair: bool = False
 
     def __post_init__(self) -> None:
         explicit = self.source_latent_h is not None or self.source_latent_w is not None
@@ -187,6 +198,8 @@ class ProgressiveTargetInputConfig:
             raise TypeError("suffix_geometric_bridge must be boolean")
         if self.suffix_geometric_bridge and self.exact_prefix_mode != "mixed_grid_low_suffix":
             raise ValueError("suffix_geometric_bridge requires mixed-grid Continuum")
+        if not isinstance(self.frame_gauge_repair, bool):
+            raise TypeError("frame_gauge_repair must be boolean")
         if self.min_high_steps < 1:
             raise ValueError("min_high_steps must be positive")
 
@@ -263,6 +276,7 @@ def build_handoff_state(
     transfer_mode: str = "bicubic",
     learned_upscaler: Any | None = None,
     transfer_metrics: dict[str, Any] | None = None,
+    clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -317,8 +331,53 @@ def build_handoff_state(
             raise TypeError("H3 latent-upscaler provider returned a non-floating tensor")
         if not bool(torch.isfinite(learned_x0).all().item()):
             raise RuntimeError("H3 latent-upscaler provider returned NaN or Inf values")
+        if clean_video_postprocess is None:
+            clean_operand = learned_x0
+            postprocess_metadata: dict[str, Any] = {
+                "enabled": False,
+                "result": "baseline",
+            }
+        else:
+            clean_operand = learned_x0.to(noise)
+            if torch.is_inference(clean_operand):
+                # Learned providers commonly run under ComfyUI's global
+                # inference_mode. Inference tensors deliberately have no
+                # version counter, but the hook's non-mutation contract relies
+                # on one. Materialize only the opt-in postprocess operand as a
+                # normal no-grad tensor; the provider output itself remains
+                # untouched and the OFF path acquires no copy.
+                with torch.inference_mode(False), torch.no_grad():
+                    clean_operand = clean_operand.clone()
+            input_version = clean_operand._version
+            postprocess_result = clean_video_postprocess(clean_operand)
+            if clean_operand._version != input_version:
+                raise RuntimeError("clean-video postprocess hook mutated its input tensor")
+            if not isinstance(postprocess_result, CleanVideoPostprocessResult):
+                raise TypeError("clean-video postprocess hook returned an unsupported result")
+            processed = postprocess_result.clean_video
+            if not torch.is_tensor(processed) or tuple(processed.shape) != expected_shape:
+                raise RuntimeError("clean-video postprocess hook changed learned handoff geometry")
+            if processed.device != clean_operand.device or processed.dtype != clean_operand.dtype:
+                raise RuntimeError("clean-video postprocess hook changed learned handoff device or dtype")
+            if not processed.is_floating_point() or not bool(torch.isfinite(processed).all().item()):
+                raise RuntimeError("clean-video postprocess hook returned non-finite clean video")
+            prefix_t = postprocess_result.protected_prefix_t
+            if type(prefix_t) is not int or not 0 <= prefix_t <= int(processed.shape[2]):
+                raise RuntimeError("clean-video postprocess hook returned an invalid protected prefix length")
+            if not torch.equal(processed[:, :, :prefix_t], clean_operand[:, :, :prefix_t]):
+                raise RuntimeError("clean-video postprocess hook altered learned prefix ownership")
+            if not isinstance(postprocess_result.metadata, dict):
+                raise TypeError("clean-video postprocess hook metadata must be a dictionary")
+            clean_operand = processed
+            postprocess_metadata = dict(postprocess_result.metadata)
+            postprocess_metadata.update(
+                enabled=True,
+                protected_prefix_t=prefix_t,
+                clean_dtype=str(clean_operand.dtype),
+                clean_device=str(clean_operand.device),
+            )
         target_video = conditional_renoise_target(
-            learned_x0,
+            clean_operand,
             sigma=float(sigma),
             noise=noise,
         )
@@ -342,6 +401,7 @@ def build_handoff_state(
             ),
             "output_dtype": str(learned_x0.dtype),
             "output_device": str(learned_x0.device),
+            "clean_video_postprocess": postprocess_metadata,
         }
     else:
         raise ValueError(f"unsupported progressive handoff transfer mode {transfer_mode!r}")
