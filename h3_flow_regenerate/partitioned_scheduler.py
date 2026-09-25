@@ -1302,15 +1302,27 @@ def _frame_gauge_boundary_motion_check(
 
     if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
         raise RuntimeError("frame-gauge boundary check requires a non-empty prefix and suffix")
-    if tuple(learned_clean.shape) != tuple(aligned_clean.shape):
-        raise RuntimeError("frame-gauge boundary check geometry drifted")
     if tuple(exact_prefix.shape) != tuple(learned_clean[:, :, : int(prefix_t)].shape):
         raise RuntimeError("frame-gauge boundary check exact-prefix geometry drifted")
 
     learned_last = learned_clean[:, :, int(prefix_t) - 1]
     exact_last = exact_prefix[:, :, -1].to(learned_clean)
     native_first = learned_clean[:, :, int(prefix_t)]
-    aligned_first = aligned_clean[:, :, int(prefix_t)]
+    if tuple(aligned_clean.shape) == tuple(learned_clean.shape):
+        aligned_last = aligned_clean[:, :, int(prefix_t) - 1]
+        aligned_first = aligned_clean[:, :, int(prefix_t)]
+    else:
+        compact_shape = (
+            int(learned_clean.shape[0]),
+            int(learned_clean.shape[1]),
+            2,
+            int(learned_clean.shape[-2]),
+            int(learned_clean.shape[-1]),
+        )
+        if tuple(aligned_clean.shape) != compact_shape:
+            raise RuntimeError("frame-gauge boundary check geometry drifted")
+        aligned_last = aligned_clean[:, :, 0]
+        aligned_first = aligned_clean[:, :, 1]
 
     def shift(left: torch.Tensor, right: torch.Tensor, roi_fraction: float) -> dict[str, Any]:
         pair = torch.stack((left, right), dim=2)
@@ -1558,14 +1570,21 @@ def _frame_gauge_clean_postprocess(
         )
         return result, None, {}, transaction
 
-    aligned_application = translate_video_cells(
-        learned_clean,
+    # The boundary gate only consumes the last learned-prefix frame and the
+    # first suffix frame. Translate that two-frame witness first; do not clone
+    # and warp the complete trajectory until every fail-closed gate (including
+    # guidance registration) has accepted.
+    boundary_translation_started = time.perf_counter()
+    boundary_application = translate_video_cells(
+        learned_clean[:, :, prefix_t - 1 : prefix_t + 1],
         dx=float(video_estimate.dx),
         dy=float(video_estimate.dy),
         start_frame=0,
-        batch_frames=4,
+        batch_frames=2,
     )
-    if aligned_application.invalid_fraction > 0.08:
+    boundary_translation_elapsed_ms = (time.perf_counter() - boundary_translation_started) * 1000.0
+    transaction["boundary_translation_elapsed_ms"] = boundary_translation_elapsed_ms
+    if boundary_application.invalid_fraction > 0.08:
         transaction.update(
             result="rejected",
             reason="video_invalid_area_over_bound",
@@ -1587,11 +1606,10 @@ def _frame_gauge_clean_postprocess(
         )
         return result, None, {}, transaction
 
-    aligned_full = aligned_application.video
     boundary_ok, boundary_fields, boundary_reason = _frame_gauge_boundary_motion_check(
         learned_clean,
         exact_prefix,
-        aligned_full,
+        boundary_application.video,
         prefix_t=prefix_t,
     )
     transaction["boundary_motion"] = boundary_fields
@@ -1615,6 +1633,7 @@ def _frame_gauge_clean_postprocess(
 
     registered_reference = None
     if guidance_active:
+        guidance_registration_started = time.perf_counter()
         registered_reference, guidance_fields, guidance_error = _prepare_registered_guidance_reference(
             run=guidance_run,
             guidance=guidance,
@@ -1628,6 +1647,9 @@ def _frame_gauge_clean_postprocess(
             residual_mode=residual_mode,
             residual_witnesses=residual_witnesses,
         )
+        transaction["guidance_registration_elapsed_ms"] = (
+            time.perf_counter() - guidance_registration_started
+        ) * 1000.0
         transaction["guidance_registration"] = guidance_fields
         if guidance_error is not None:
             transaction["result"] = "rejected"
@@ -1673,6 +1695,26 @@ def _frame_gauge_clean_postprocess(
         )
     else:
         residual_geometry.update(final_path="rigid_v2")
+
+    # Only now materialize the translated learned trajectory. The final clean
+    # state needs the translated suffix and one translated provider-prefix
+    # witness for the DC bridge. Measurement mode additionally keeps the last
+    # six prefix frames aligned for its bounded evidence bundle.
+    aligned_start_frame = max(0, prefix_t - 6) if residual_mode == "measure" else prefix_t - 1
+    aligned_translation_started = time.perf_counter()
+    aligned_application = translate_video_cells(
+        learned_clean,
+        dx=float(video_estimate.dx),
+        dy=float(video_estimate.dy),
+        start_frame=aligned_start_frame,
+        batch_frames=4,
+    )
+    aligned_translation_elapsed_ms = (time.perf_counter() - aligned_translation_started) * 1000.0
+    transaction["aligned_translation_elapsed_ms"] = aligned_translation_elapsed_ms
+    transaction["aligned_translation_start_frame"] = aligned_start_frame
+    if aligned_application.invalid_fraction > 0.08:
+        raise RuntimeError("frame-gauge accepted boundary witness but full translation exceeded invalid-area bound")
+    aligned_full = aligned_application.video
 
     diagnostic_end = min(
         int(learned_clean.shape[2]),
