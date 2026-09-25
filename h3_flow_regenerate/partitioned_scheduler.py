@@ -2670,6 +2670,8 @@ def run_partitioned_progressive(
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         pending_registered_reference = None
         frame_gauge_witnesses: dict[str, torch.Tensor] = {}
+        residual_evidence_tensors: dict[str, torch.Tensor] = {}
+        residual_stage_receipts: list[dict[str, Any]] = []
         frame_gauge_transaction: dict[str, Any] = {
             "policy_version": FRAME_GAUGE_POLICY_VERSION,
             "result": "off",
@@ -2924,6 +2926,109 @@ def run_partitioned_progressive(
 
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
+        if residual_mode == "measure" and frame_gauge_accepted:
+            evidence_start = max(0, stage_plan.prefix_t - 6)
+            evidence_stop = min(int(learned_clean.shape[2]), stage_plan.prefix_t + 4)
+            residual_evidence_tensors["exact_prefix_last6"] = (
+                exact_prefix[:, :, evidence_start:stage_plan.prefix_t].detach()
+            )
+            residual_evidence_tensors["learned_native_prefix_suffix"] = (
+                learned_clean[:, :, evidence_start:evidence_stop].detach()
+            )
+            residual_evidence_tensors["learned_rigid_aligned_prefix_suffix"] = (
+                aligned_witness[:, :, evidence_start:evidence_stop].detach()
+            )
+            residual_evidence_tensors["pre_high_exact_restored_dc"] = (
+                restored_clean[:, :, evidence_start:evidence_stop].detach()
+            )
+            residual_stage_receipts.extend(
+                [
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="learned_native_same_time",
+                        video=learned_clean,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="learned_provider_clean_L",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="none",
+                        provenance="actual_provider_clean_postprocess",
+                    ),
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="learned_rigid_aligned_same_time",
+                        video=aligned_witness,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="rigid_aligned_learned_L",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration_and_native_boundary",
+                        applied_transform="paired_prefix_rigid_v2",
+                        provenance="actual_provider_clean_postprocess",
+                    ),
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="exact_restored_pre_high_dc",
+                        video=restored_clean,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="authoritative_exact_prefix_E",
+                        owner_after="rigid_aligned_learned_suffix_plus_single_dc",
+                        temporal_relation="adjacent_time_boundary",
+                        applied_transform="paired_prefix_rigid_v2_then_one_token_dc",
+                        provenance="actual_pre_high_clean",
+                    ),
+                ]
+            )
+            guidance_native = frame_gauge_witnesses.get("guidance_native_bounded")
+            guidance_aligned = frame_gauge_witnesses.get("guidance_aligned_bounded")
+            guidance_offset = max(0, stage_plan.prefix_t - 6)
+            if guidance_native is not None:
+                residual_evidence_tensors["guidance_native_prefix_suffix"] = guidance_native.detach()
+                residual_stage_receipts.append(
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="guidance_native_same_time",
+                        video=guidance_native,
+                        prefix_t=stage_plan.prefix_t,
+                        temporal_offset=guidance_offset,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="time_matched_guidance_G",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="none",
+                        provenance="independent_guidance_registration_input",
+                    )
+                )
+            if guidance_aligned is not None:
+                residual_evidence_tensors["guidance_rigid_aligned_prefix_suffix"] = guidance_aligned.detach()
+                residual_stage_receipts.append(
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="guidance_rigid_aligned_same_time",
+                        video=guidance_aligned,
+                        prefix_t=stage_plan.prefix_t,
+                        temporal_offset=guidance_offset,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="independently_rigid_aligned_guidance_G",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="paired_prefix_rigid_v2_guidance_independent",
+                        provenance="independent_guidance_registration_output",
+                    )
+                )
+
         for roi_name, roi_fraction in (
             ("upper45", 0.45),
             ("full", 1.0),
