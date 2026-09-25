@@ -1105,7 +1105,7 @@ def _prepare_registered_guidance_reference(
     # first so rejected candidates do not pay for a full trajectory transfer.
     # If registration succeeds, resize the suffix exactly once and concatenate
     # the already-resized prefix. This preserves the numerical transfer while
-    # removing the large rejected-path cost seen in 00670.
+    # bounding rejected-path work to the prefix needed for registration.
     prefix_resize_started = time.perf_counter()
     target_prefix = resize_video(
         source_ref[:, :, :prefix_t],
