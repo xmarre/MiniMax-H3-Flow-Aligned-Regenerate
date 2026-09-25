@@ -1004,8 +1004,7 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
             f"{label} eligible horizontal deletion-scale envelope exceeds the policy bound",
         )
         _require(
-            _finite_number(models.get("candidate_invalid_fraction"))
-            <= DEFAULT_RESIDUAL_POLICY.max_invalid_fraction,
+            _finite_number(models.get("candidate_invalid_fraction")) <= DEFAULT_RESIDUAL_POLICY.max_invalid_fraction,
             f"{label} eligible horizontal candidate invalid area exceeds the policy bound",
         )
         _require(
