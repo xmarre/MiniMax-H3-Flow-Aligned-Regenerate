@@ -1136,9 +1136,9 @@ def _prepare_registered_guidance_reference(
         if residual_witnesses is not None:
             witness_start = max(0, prefix_t - 6)
             witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
-            residual_witnesses["guidance_native_bounded"] = (
-                target_ref[:, :, witness_start:witness_end].detach().clone()
-            )
+            residual_witnesses["guidance_native_bounded"] = target_ref[
+                :, :, witness_start:witness_end
+            ].detach().clone()
     elif residual_mode == "measure":
         guidance_residual = {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -1768,11 +1768,7 @@ def _emit_residual_geometry_stage(
         prefix_t=prefix_t,
         temporal_offset=temporal_offset,
     )
-    boundary = (
-        measure_video_boundary(bounded, local_prefix)
-        if 0 < local_prefix < int(bounded.shape[2])
-        else {}
-    )
+    boundary = measure_video_boundary(bounded, local_prefix) if 0 < local_prefix < int(bounded.shape[2]) else {}
     fields: dict[str, Any] = {
         "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
         "stage": stage,
@@ -3052,18 +3048,18 @@ def run_partitioned_progressive(
         if residual_mode == "measure" and frame_gauge_accepted:
             evidence_start = max(0, stage_plan.prefix_t - 6)
             evidence_stop = min(int(learned_clean.shape[2]), stage_plan.prefix_t + 4)
-            residual_evidence_tensors["exact_prefix_last6"] = (
-                exact_prefix[:, :, evidence_start:stage_plan.prefix_t].detach()
-            )
-            residual_evidence_tensors["learned_native_prefix_suffix"] = (
-                learned_clean[:, :, evidence_start:evidence_stop].detach()
-            )
-            residual_evidence_tensors["learned_rigid_aligned_prefix_suffix"] = (
-                aligned_witness[:, :, evidence_start:evidence_stop].detach()
-            )
-            residual_evidence_tensors["pre_high_exact_restored_dc"] = (
-                restored_clean[:, :, evidence_start:evidence_stop].detach()
-            )
+            residual_evidence_tensors["exact_prefix_last6"] = exact_prefix[
+                :, :, evidence_start : stage_plan.prefix_t
+            ].detach()
+            residual_evidence_tensors["learned_native_prefix_suffix"] = learned_clean[
+                :, :, evidence_start:evidence_stop
+            ].detach()
+            residual_evidence_tensors["learned_rigid_aligned_prefix_suffix"] = aligned_witness[
+                :, :, evidence_start:evidence_stop
+            ].detach()
+            residual_evidence_tensors["pre_high_exact_restored_dc"] = restored_clean[
+                :, :, evidence_start:evidence_stop
+            ].detach()
             residual_stage_receipts.extend(
                 [
                     _emit_residual_geometry_stage(
@@ -3374,11 +3370,9 @@ def run_partitioned_progressive(
                 raise RuntimeError(
                     "post-high latent-input conversion does not reproduce the authoritative internal exact prefix"
                 )
-            final_bounded, _final_start, _final_stop, _final_local_prefix = (
-                _bounded_residual_stage_slice(
-                    final_internal_video,
-                    prefix_t=stage_plan.prefix_t,
-                )
+            final_bounded, _final_start, _final_stop, _final_local_prefix = _bounded_residual_stage_slice(
+                final_internal_video,
+                prefix_t=stage_plan.prefix_t,
             )
             residual_evidence_tensors["final_post_high_internal_clean"] = final_bounded.detach()
             residual_stage_receipts.append(
