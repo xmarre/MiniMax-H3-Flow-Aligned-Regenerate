@@ -478,6 +478,11 @@ def estimate_paired_prefix_translation(
         "runner_loss": runner_loss,
         "runner_margin_ratio": runner_margin,
         "invalid_fraction": invalid_fraction,
+        "min_ncc": policy.min_ncc,
+        "min_rms_improvement": policy.min_rms_improvement,
+        "min_runner_margin": policy.min_runner_margin,
+        "consistency_tolerance": policy.consistency_tolerance,
+        "conflict_tolerance": policy.conflict_tolerance,
     }
 
     def reject(reason: str, **extra: Any) -> FrameGaugeEstimate:
