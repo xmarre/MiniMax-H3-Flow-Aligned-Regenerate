@@ -1086,7 +1086,6 @@ def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
         compare_residual_measurement_pair(control, measure)
 
 
-
 def _install_exact_overlap_fallback_receipt(metrics):
     reason = "boundary_upper45_insufficient_improvement"
     metrics = _install_frame_gauge_transfer(metrics, mode="on", result="rejected")
