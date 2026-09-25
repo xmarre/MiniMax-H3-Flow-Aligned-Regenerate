@@ -8,6 +8,7 @@ import torch
 from h3_flow_regenerate.partitioned_scheduler import _frame_gauge_clean_postprocess
 from h3_flow_regenerate.residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
+    ResidualGeometryPolicy,
     measure_residual_geometry,
 )
 
@@ -194,6 +195,25 @@ def test_low_texture_and_repeated_structure_fail_closed():
     assert receipt["status"] in {"measured", "rejected"}
     if receipt["status"] == "measured":
         assert receipt["models"]["eligible"] is False
+
+
+def test_cpu_scratch_preflight_uses_actual_input_channel_count():
+    learned = torch.randn(1, 48, 4, 56, 74)
+    exact = learned.clone()
+    policy = ResidualGeometryPolicy(max_cpu_scratch_bytes=8 * 1024 * 1024)
+
+    receipt = measure_residual_geometry(
+        learned,
+        exact,
+        rigid_dx=0.0,
+        rigid_dy=0.0,
+        policy=policy,
+    )
+
+    assert receipt["status"] == "rejected"
+    assert receipt["reason"] == "cpu_scratch_preflight"
+    assert receipt["estimated_cpu_scratch_bytes"] == 2 * 4 * 48 * 56 * 74 * 8
+    assert receipt["estimated_cpu_scratch_bytes"] > policy.max_cpu_scratch_bytes
 
 
 def test_measurement_only_frame_gauge_is_byte_identical_to_rigid_v2():
