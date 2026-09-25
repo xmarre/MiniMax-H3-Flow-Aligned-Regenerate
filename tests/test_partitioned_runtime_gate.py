@@ -593,6 +593,40 @@ def test_runtime_gate_keeps_guidance_on_strict_rms_policy():
         )
 
 
+def test_runtime_gate_allows_learned_video_global_runner_ambiguity_after_strong_checks():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted")
+    receipt["fields"]["video_registration"]["runner_margin_ratio"] = 0.04789114198525804
+    metrics["events"].insert(-2, receipt)
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-accepted",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "accepted"
+
+
+def test_runtime_gate_keeps_guidance_global_runner_margin_strict():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(
+        mode="on",
+        result="accepted",
+        guidance_mode="direction+temporal",
+    )
+    receipt["fields"]["guidance_registration"]["runner_margin_ratio"] = 0.04789114198525804
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="guidance registration runner-up margin"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
 def test_runtime_gate_requires_accepted_boundary_motion_receipt():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     receipt = _frame_gauge_event(mode="on", result="accepted")
