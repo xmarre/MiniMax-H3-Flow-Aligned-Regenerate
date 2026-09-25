@@ -8,7 +8,9 @@ import torch
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
 from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
+from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.partitioned_scheduler import (
+    _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
     _prepare_registered_guidance_reference,
 )
@@ -101,6 +103,7 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
     assert transaction["guidance_registration"]["dx"] == pytest.approx(-0.625, abs=0.125)
     assert transaction["guidance_registration"]["dy"] == pytest.approx(0.4375, abs=0.125)
     assert registered is not None
+    assert transaction["boundary_motion"]["status"] == "accepted"
     assert registered.dx != pytest.approx(transaction["video_registration"]["dx"], abs=0.125)
     assert torch.equal(postprocess.clean_video[:, :, :prefix_t], learned[:, :, :prefix_t])
     assert set(witnesses) == {
@@ -108,6 +111,54 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
         "paired_prefix_aligned_witness",
         "corrected_clean",
     }
+
+
+def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_transition():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    learned = _field_video(dx=0.5, dy=-0.375)
+    aligned = translate_video_cells(
+        learned,
+        dx=0.5,
+        dy=-0.375,
+        start_frame=0,
+    ).video
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact_full[:, :, :4],
+        aligned,
+        prefix_t=4,
+    )
+
+    assert accepted, fields
+    assert reason == "accepted"
+    assert fields["status"] == "accepted"
+    for name in ("upper45", "full"):
+        check = fields["checks"][name]
+        assert check["after_error_cells"] < check["before_error_cells"]
+        assert check["error_improvement_ratio"] >= 0.25
+
+
+def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():
+    exact_full = _field_video(dx=0.0, dy=0.0)
+    learned = _field_video(dx=0.5, dy=-0.375)
+    wrong = translate_video_cells(
+        learned,
+        dx=-0.5,
+        dy=0.375,
+        start_frame=0,
+    ).video
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact_full[:, :, :4],
+        wrong,
+        prefix_t=4,
+    )
+
+    assert not accepted
+    assert fields["status"] == "rejected"
+    assert reason != "accepted"
 
 
 def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
