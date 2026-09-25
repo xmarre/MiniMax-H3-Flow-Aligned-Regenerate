@@ -3123,15 +3123,11 @@ def run_partitioned_progressive(
                 {},
             ),
             transaction_elapsed_ms=float(frame_gauge_transaction.get("elapsed_ms", 0.0)),
-            boundary_translation_elapsed_ms=float(
-                frame_gauge_transaction.get("boundary_translation_elapsed_ms", 0.0)
-            ),
+            boundary_translation_elapsed_ms=float(frame_gauge_transaction.get("boundary_translation_elapsed_ms", 0.0)),
             guidance_registration_elapsed_ms=float(
                 frame_gauge_transaction.get("guidance_registration_elapsed_ms", 0.0)
             ),
-            aligned_translation_elapsed_ms=float(
-                frame_gauge_transaction.get("aligned_translation_elapsed_ms", 0.0)
-            ),
+            aligned_translation_elapsed_ms=float(frame_gauge_transaction.get("aligned_translation_elapsed_ms", 0.0)),
             aligned_translation_start_frame=frame_gauge_transaction.get("aligned_translation_start_frame"),
             residual_geometry=residual_geometry_receipt,
             residual_geometry_telemetry_bytes=residual_telemetry_bytes,
