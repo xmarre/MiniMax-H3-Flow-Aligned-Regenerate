@@ -111,19 +111,15 @@ def _local_channels(prepared, region: tuple[int, int, int, int], policy: Residua
     return keep, float(torch.median(gx).item()), float(torch.median(gy).item())
 
 
-def _metrics(
-    prepared,
-    frames: tuple[int, ...],
+def _metrics_presliced(
+    learned: torch.Tensor,
+    target: torch.Tensor,
     coords: tuple[torch.Tensor, torch.Tensor],
-    channels: torch.Tensor,
     dx: float,
     dy: float,
 ) -> tuple[float, float, float]:
     yy, xx = coords
-    learned = prepared.learned[list(frames)][:, channels]
-    exact = prepared.exact[list(frames)][:, channels]
     shifted = _sample(learned, yy, xx, dx, dy)
-    target = _gather_exact(exact, yy, xx)
     residual = shifted - target
     absolute = residual.abs()
     huber = torch.where(absolute <= 1.0, 0.5 * residual.square(), absolute - 0.5)
@@ -137,6 +133,21 @@ def _metrics(
     else:
         ncc = -1.0
     return float(huber.mean().item()), rms, ncc
+
+
+def _metrics(
+    prepared,
+    frames: tuple[int, ...],
+    coords: tuple[torch.Tensor, torch.Tensor],
+    channels: torch.Tensor,
+    dx: float,
+    dy: float,
+) -> tuple[float, float, float]:
+    yy, xx = coords
+    learned = prepared.learned[list(frames)][:, channels]
+    exact = prepared.exact[list(frames)][:, channels]
+    target = _gather_exact(exact, yy, xx)
+    return _metrics_presliced(learned, target, coords, dx, dy)
 
 
 def _sample_field(
@@ -267,16 +278,18 @@ def _measure_observation(
         base.update(status="unavailable", reason="one_sided_effective_center")
         return base
 
+    learned_sel = prepared.learned[frame : frame + 1][:, channels]
+    exact_sel = prepared.exact[frame : frame + 1][:, channels]
+    target = _gather_exact(exact_sel, yy, xx)
     evaluated: dict[tuple[float, float], tuple[float, float, float, float, float]] = {}
 
     def evaluate(ux: float, uy: float):
         key = (round(float(ux), 8), round(float(uy), 8))
         if key not in evaluated:
-            loss, rms, ncc = _metrics(
-                prepared,
-                (frame,),
+            loss, rms, ncc = _metrics_presliced(
+                learned_sel,
+                target,
                 coords,
-                channels,
                 float(rigid_dx) + key[0],
                 float(rigid_dy) + key[1],
             )
@@ -1207,14 +1220,16 @@ def measure_residual_geometry(
     if not torch.is_tensor(learned) or learned.ndim != 5:
         raise ValueError("residual geometry requires a BxCxTxHxW learned tensor")
     prefix_frames = min(int(learned.shape[2]), DEFAULT_POLICY.max_prefix_frames)
+    channels = int(learned.shape[1])
     height = int(learned.shape[-2])
     width = int(learned.shape[-1])
-    # _prepare retains two normalized float64 feature tensors on CPU.  Fail
-    # closed before building them, using the worst-case 24-channel support.
-    estimated_cpu_scratch = 2 * prefix_frames * 24 * height * width * 8
+    # _prepare retains two normalized float64 feature tensors on CPU. Fail
+    # closed using the actual input channel support rather than duplicating the
+    # current 24-channel producer contract in the resource arithmetic.
+    estimated_cpu_scratch = 2 * prefix_frames * channels * height * width * 8
     # Preparation also creates float32 source/smoothed/centered intermediates
     # on the input device before the bounded CPU representation is retained.
-    estimated_device_prep = 6 * prefix_frames * 24 * height * width * 4
+    estimated_device_prep = 6 * prefix_frames * channels * height * width * 4
     if estimated_cpu_scratch > policy.max_cpu_scratch_bytes:
         return {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
