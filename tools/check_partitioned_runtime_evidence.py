@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from h3_flow_regenerate.partitioned_runtime_gate import (  # noqa: E402
     RuntimeGateError,
+    compare_residual_measurement_pair,
     validate_partitioned_runtime_evidence,
 )
 
@@ -44,6 +45,14 @@ def main() -> None:
     )
     parser.add_argument("--metrics", required=True, type=Path, help="Flow H3 metrics JSON")
     parser.add_argument("--log", required=True, type=Path, help="ComfyUI process log")
+    parser.add_argument(
+        "--matched-control-metrics",
+        type=Path,
+        help=(
+            "Optional residual-OFF control metrics for structural OFF-vs-MEASURE comparison. "
+            "This does not replace the retained tensor/media hardware evidence."
+        ),
+    )
     parser.add_argument("--expected-vdn-api", type=int, default=4)
     parser.add_argument("--expected-logical", type=int)
     parser.add_argument("--expected-actual", type=int)
@@ -52,6 +61,42 @@ def main() -> None:
         "--expected-audio-position-domain",
         choices=("legacy_target", "source_carrier"),
         help="Validate the selected target-audio position policy and its candidate receipts.",
+    )
+    parser.add_argument(
+        "--expected-frame-gauge-mode",
+        choices=("off", "on-accepted", "on-rejected", "on-identity"),
+        help="Require the latest partitioned frame-gauge arm/result and its zero-extra-work receipt.",
+    )
+    parser.add_argument(
+        "--expected-residual-mode",
+        choices=("off", "measure"),
+        help="Validate the staged exact-prefix residual-geometry mode.",
+    )
+    parser.add_argument(
+        "--expected-residual-result",
+        choices=("off", "not-evaluated", "measured-only"),
+        help=(
+            "Require residual geometry to remain OFF/not-evaluated or to complete "
+            "measurement-only evidence without applying horizontal correction."
+        ),
+    )
+    parser.add_argument(
+        "--auto-strength-report",
+        action="append",
+        type=Path,
+        default=[],
+        help="Resolved DoRA auto_strength_report_json file. Repeat for every applicable loader.",
+    )
+    parser.add_argument(
+        "--require-auto-strength-off",
+        action="store_true",
+        help="Fail unless every supplied DoRA loader report proves resolved auto-strength OFF.",
+    )
+    parser.add_argument(
+        "--expected-auto-strength-digest",
+        action="append",
+        default=[],
+        help="Expected canonical DoRA report digest from the matched control arm. Repeat as needed.",
     )
     parser.add_argument(
         "--allow-no-spectrum",
@@ -70,8 +115,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if (args.expected_residual_mode is None) != (args.expected_residual_result is None):
+        parser.error("--expected-residual-mode and --expected-residual-result must be supplied together")
+    if args.expected_residual_mode == "measure" and args.expected_frame_gauge_mode is None:
+        parser.error("residual measurement validation requires --expected-frame-gauge-mode")
+    if args.expected_frame_gauge_mode is not None:
+        if not args.require_auto_strength_off:
+            parser.error("frame-gauge hardware validation requires --require-auto-strength-off")
+        if not args.auto_strength_report:
+            parser.error("frame-gauge hardware validation requires at least one --auto-strength-report")
+        if args.expected_frame_gauge_mode != "off" and not args.expected_auto_strength_digest:
+            parser.error(
+                "frame-gauge ON validation requires --expected-auto-strength-digest from the matched OFF control"
+            )
+
     metrics = _read_json(args.metrics)
     log_text = _read_text(args.log)
+    auto_strength_reports = [_read_json(path) for path in args.auto_strength_report]
     try:
         report = validate_partitioned_runtime_evidence(
             metrics,
@@ -84,11 +144,29 @@ def main() -> None:
             require_audio_overlap=not args.allow_no_audio_overlap,
             require_vdn_linear=not args.allow_no_vdn_linear,
             expected_audio_position_domain=args.expected_audio_position_domain,
+            expected_frame_gauge_mode=args.expected_frame_gauge_mode,
+            expected_residual_mode=args.expected_residual_mode,
+            expected_residual_result=args.expected_residual_result,
+            auto_strength_reports=auto_strength_reports,
+            require_auto_strength_off=args.require_auto_strength_off,
+            expected_auto_strength_digests=(
+                args.expected_auto_strength_digest if args.expected_auto_strength_digest else None
+            ),
         )
     except RuntimeGateError as exc:
         raise SystemExit(f"partitioned exact-prefix runtime gate: FAIL: {exc}") from exc
 
-    print(json.dumps({"status": "pass", **report.as_dict()}, indent=2, sort_keys=True))
+    output = {"status": "pass", **report.as_dict()}
+    if args.matched_control_metrics is not None:
+        control_metrics = _read_json(args.matched_control_metrics)
+        try:
+            output["residual_pair"] = compare_residual_measurement_pair(
+                control_metrics,
+                metrics,
+            )
+        except RuntimeGateError as exc:
+            raise SystemExit(f"partitioned residual matched-pair gate: FAIL: {exc}") from exc
+    print(json.dumps(output, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
