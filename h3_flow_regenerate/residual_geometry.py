@@ -752,6 +752,126 @@ def _deletion_envelope(observations: list[dict[str, Any]], width: int) -> dict[s
     }
 
 
+def replay_horizontal_telemetry(
+    observations: list[dict[str, Any]],
+    *,
+    width: int,
+    height: int,
+    fit_indices: tuple[int, ...] | list[int],
+    holdout_indices: tuple[int, ...] | list[int],
+    rigid_dx: float,
+    rigid_dy: float,
+    policy: ResidualGeometryPolicy = DEFAULT_RESIDUAL_POLICY,
+) -> dict[str, Any]:
+    """Recompute telemetry-only horizontal gates from saved regional observations."""
+
+    fit_set = {int(value) for value in fit_indices}
+    holdout_set = {int(value) for value in holdout_indices}
+    accepted = [
+        obs
+        for obs in observations
+        if obs.get("status") == "accepted"
+        and float(obs.get("uncertainty_half_width_x", math.inf)) <= policy.max_uncertainty_half_width
+        and float(obs.get("uncertainty_half_width_y", math.inf)) <= policy.max_uncertainty_half_width
+    ]
+    fit_obs = [obs for obs in accepted if int(obs["frame_index"]) in fit_set]
+    holdout_obs = [obs for obs in accepted if int(obs["frame_index"]) in holdout_set]
+    horizontal = _fit_horizontal(fit_obs, width)
+    constant = _fit_constant(fit_obs)
+    envelope = _deletion_envelope(fit_obs, width)
+    result: dict[str, Any] = {
+        "horizontal": horizontal,
+        "residual_constant": constant,
+        "deletion_sensitivity_envelope": envelope,
+    }
+    if (
+        horizontal.get("status") != "accepted"
+        or constant.get("status") != "accepted"
+        or envelope.get("status") != "accepted"
+    ):
+        return _finite_json(result)
+
+    holdout_h = _displacement_errors(horizontal, holdout_obs, width)
+    holdout_c = _constant_errors(constant, holdout_obs)
+    improvement = (
+        (holdout_c["rms"] - holdout_h["rms"]) / max(holdout_c["rms"], policy.zero_loss_floor)
+        if math.isfinite(holdout_c["rms"])
+        else -math.inf
+    )
+    result["holdout"] = {
+        "horizontal_rms": holdout_h["rms"],
+        "horizontal_max": holdout_h["max"],
+        "constant_rms": holdout_c["rms"],
+        "constant_max": holdout_c["max"],
+        "improvement_ratio": improvement,
+    }
+
+    a = float(horizontal["a"])
+    b = float(horizontal["b"])
+    a_lo, a_hi = map(float, envelope["a"])
+    b_lo, b_hi = map(float, envelope["b"])
+    cx = (width - 1) / 2.0
+    sx = 1.0 / (1.0 - a) if abs(1.0 - a) > 1e-12 else math.inf
+    inverse = [
+        [1.0 - a, 0.0, a * cx - b - float(rigid_dx)],
+        [0.0, 1.0, -float(rigid_dy)],
+        [0.0, 0.0, 1.0],
+    ]
+    forward = [
+        [sx, 0.0, (float(rigid_dx) + b - a * cx) * sx],
+        [0.0, 1.0, float(rigid_dy)],
+        [0.0, 0.0, 1.0],
+    ]
+    roundtrip_error = 0.0
+    for row in range(3):
+        for col in range(3):
+            product = sum(forward[row][inner] * inverse[inner][col] for inner in range(3))
+            expected = 1.0 if row == col else 0.0
+            roundtrip_error = max(roundtrip_error, abs(product - expected))
+    result["transform"] = {
+        "a": a,
+        "b": b,
+        "forward_sx": sx,
+        "inverse_matrix": inverse,
+        "forward_matrix": forward,
+        "matrix_roundtrip_abs_max": roundtrip_error,
+    }
+
+    envelope_scales = [
+        1.0 / (1.0 - value) if abs(1.0 - value) > 1e-12 else math.inf
+        for value in (a_lo, a_hi)
+    ]
+    result["forward_scale_envelope"] = [min(envelope_scales), max(envelope_scales)]
+    result["max_corner_residual"] = max(
+        abs(a_variant * (x - cx) + b_variant)
+        for a_variant in (a_lo, a_hi)
+        for b_variant in (b_lo, b_hi)
+        for x in (0.0, float(width - 1))
+    )
+    result["max_total_x_displacement"] = max(
+        abs(float(rigid_dx) + a_variant * (x - cx) + b_variant)
+        for a_variant in (a_lo, a_hi)
+        for b_variant in (b_lo, b_hi)
+        for x in (0.0, float(width - 1))
+    )
+
+    yy, xx = torch.meshgrid(
+        torch.arange(height, dtype=torch.float64),
+        torch.arange(width, dtype=torch.float64),
+        indexing="ij",
+    )
+    source_x = xx - a * (xx - cx) - b - float(rigid_dx)
+    source_y = yy - float(rigid_dy)
+    valid = (
+        (source_x >= 0.0)
+        & (source_x <= float(width - 1))
+        & (source_y >= 0.0)
+        & (source_y <= float(height - 1))
+    )
+    result["candidate_invalid_fraction"] = 1.0 - float(valid.to(torch.float64).mean().item())
+    return _finite_json(result)
+
+
 def _model_receipts(
     prepared,
     observations: list[dict[str, Any]],
@@ -1210,4 +1330,5 @@ __all__ = [
     "ResidualGeometryPolicy",
     "measure_residual_geometry",
     "normalize_residual_geometry_mode",
+    "replay_horizontal_telemetry",
 ]
