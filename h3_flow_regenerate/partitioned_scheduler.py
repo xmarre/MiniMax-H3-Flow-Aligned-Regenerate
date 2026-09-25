@@ -20,6 +20,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .contracts import H3FlowTrajectory
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
+    GUIDANCE_REFERENCE_POLICY,
     LEARNED_VIDEO_POLICY,
     estimate_paired_prefix_translation,
     translate_video_cells,
@@ -1115,6 +1116,7 @@ def _prepare_registered_guidance_reference(
     estimate = estimate_paired_prefix_translation(
         target_ref[:, :, :prefix_t],
         exact_prefix,
+        policy=GUIDANCE_REFERENCE_POLICY,
     )
     estimate_fields = estimate.telemetry()
     if estimate.rejected:
