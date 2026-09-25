@@ -3256,9 +3256,69 @@ def run_partitioned_progressive(
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
 
         final_video, final_audio = unpack_streams(result, target_shapes)
-        if diagnostic_audio_control:
+        final_internal = None
+        final_internal_video = None
+        final_internal_audio = None
+        if diagnostic_audio_control or (residual_mode == "measure" and frame_gauge_accepted):
             final_internal = _process_latent_in(base_model, result, target_shapes)
-            _final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+            final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+        if residual_mode == "measure" and frame_gauge_accepted:
+            if final_internal_video is None:
+                raise RuntimeError("residual measurement lost the common-domain final video operand")
+            final_internal_prefix = final_internal_video[:, :, : stage_plan.prefix_t]
+            if (
+                final_internal_prefix.shape != exact_prefix.shape
+                or final_internal_prefix.dtype != exact_prefix.dtype
+                or not torch.equal(
+                    final_internal_prefix,
+                    exact_prefix.to(device=final_internal_prefix.device),
+                )
+            ):
+                raise RuntimeError(
+                    "post-high latent-input conversion does not reproduce the authoritative internal exact prefix"
+                )
+            final_bounded, _final_start, _final_stop, _final_local_prefix = (
+                _bounded_residual_stage_slice(
+                    final_internal_video,
+                    prefix_t=stage_plan.prefix_t,
+                )
+            )
+            residual_evidence_tensors["final_post_high_internal_clean"] = final_bounded.detach()
+            residual_stage_receipts.append(
+                _emit_residual_geometry_stage(
+                    binding.metrics,
+                    stage="final_post_high_internal_clean",
+                    video=final_internal_video,
+                    prefix_t=stage_plan.prefix_t,
+                    session_id=session_id,
+                    chunk_id=chunk_id,
+                    domain="model_internal_clean",
+                    owner_before="authoritative_exact_prefix_E",
+                    owner_after="post_high_generated_suffix",
+                    temporal_relation="adjacent_time_boundary_and_next_three_suffix_pairs",
+                    applied_transform="none_post_high_observation",
+                    provenance="existing_post_high_output_via_model_latent_input_conversion",
+                )
+            )
+            residual_stage_receipts.append(
+                _emit_residual_geometry_stage(
+                    binding.metrics,
+                    stage="final_post_high_caller_domain",
+                    video=final_video,
+                    prefix_t=stage_plan.prefix_t,
+                    session_id=session_id,
+                    chunk_id=chunk_id,
+                    domain="caller_output_latent",
+                    owner_before="caller_owned_exact_prefix",
+                    owner_after="returned_generated_suffix",
+                    temporal_relation="adjacent_time_boundary_receipt_only",
+                    applied_transform="none",
+                    provenance="existing_post_high_output",
+                )
+            )
+        if diagnostic_audio_control:
+            if final_internal is None or final_internal_audio is None:
+                raise RuntimeError("audio diagnostics lost the converted final sampler state")
             final_audio_report = measure_audio_latent_boundary(
                 final_internal,
                 target_shapes,
@@ -3311,7 +3371,6 @@ def run_partitioned_progressive(
                         )
                     ),
                 )
-            del final_internal
         original_video, original_audio = unpack_streams(latent_image, target_shapes)
         final_prefix = final_video[:, :, : stage_plan.prefix_t]
         original_prefix = original_video[:, :, : stage_plan.prefix_t]
