@@ -256,6 +256,47 @@ def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
     assert postprocess.clean_video is learned
 
 
+def test_guidance_rejection_does_not_materialize_full_video_translation(monkeypatch):
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
+    ambiguous_guidance = torch.ones_like(exact_full)
+    prefix_t = 4
+    high_sigmas, split_coordinate = _schedule()
+    run = _run(ambiguous_guidance, split_coordinate)
+    translated = []
+    original = partitioned_scheduler.translate_video_cells
+
+    def capture_translation(video, **kwargs):
+        translated.append((int(video.shape[2]), int(kwargs.get("start_frame", 0))))
+        return original(video, **kwargs)
+
+    monkeypatch.setattr(
+        partitioned_scheduler,
+        "translate_video_cells",
+        capture_translation,
+    )
+
+    postprocess, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
+        learned,
+        exact_prefix=exact_full[:, :, :prefix_t],
+        guidance_run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        target_h=26,
+        target_w=26,
+        prefix_t=prefix_t,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert transaction["result"] == "rejected"
+    assert str(transaction["reason"]).startswith("guidance_")
+    assert registered is None
+    assert witnesses == {}
+    assert postprocess.clean_video is learned
+    assert translated == [(2, 0)]
+
+
 def test_identity_guidance_calibration_never_resamples_suffix():
     exact_full = _field_video(dx=0.0, dy=0.0)
     prefix_t = 4
