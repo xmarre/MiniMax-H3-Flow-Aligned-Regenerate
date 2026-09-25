@@ -952,6 +952,8 @@ def _model_receipts(
     result["last_holdout_global_support"] = required_tiles.issubset(last_ids)
     if not result["last_holdout_global_support"] and not identity_supported:
         failures.append("insufficient_last_holdout_support")
+    envelope = _deletion_envelope(fit_obs, prepared.width)
+    result["deletion_sensitivity_envelope"] = envelope
     if horizontal.get("status") != "accepted" or constant.get("status") != "accepted":
         failures.append("model_fit_rejected")
         return result
@@ -978,8 +980,6 @@ def _model_receipts(
     if holdout_h["max"] > policy.max_tile_error:
         failures.append("holdout_tile_error")
 
-    envelope = _deletion_envelope(fit_obs, prepared.width)
-    result["deletion_sensitivity_envelope"] = envelope
     if envelope.get("status") != "accepted":
         failures.append("deletion_instability")
         return result
