@@ -1091,19 +1091,7 @@ def _prepare_registered_guidance_reference(
         )
 
     source_ref = source_ref.to(device=exact_prefix.device, dtype=exact_prefix.dtype)
-    target_ref = resize_video(
-        source_ref,
-        target_h,
-        target_w,
-        mode=guidance.transfer_mode,
-    )
-    if tuple(target_ref.shape) != (
-        int(exact_prefix.shape[0]),
-        int(exact_prefix.shape[1]),
-        int(run.geometry.latent_t),
-        int(target_h),
-        int(target_w),
-    ):
+    if int(source_ref.shape[2]) < prefix_t:
         return (
             None,
             {
@@ -1113,12 +1101,37 @@ def _prepare_registered_guidance_reference(
             "guidance_target_geometry_mismatch",
         )
 
+    # Registration only needs the bounded authoritative prefix. Resize that
+    # first so rejected candidates do not pay for a full trajectory transfer.
+    # If registration succeeds, resize the suffix exactly once and concatenate
+    # the already-resized prefix. This preserves the numerical transfer while
+    # removing the large rejected-path cost seen in 00670.
+    prefix_resize_started = time.perf_counter()
+    target_prefix = resize_video(
+        source_ref[:, :, :prefix_t],
+        target_h,
+        target_w,
+        mode=guidance.transfer_mode,
+    )
+    prefix_resize_elapsed_ms = (time.perf_counter() - prefix_resize_started) * 1000.0
+    if tuple(target_prefix.shape) != tuple(exact_prefix.shape):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "guidance_target_geometry_mismatch",
+                "prefix_resize_elapsed_ms": prefix_resize_elapsed_ms,
+            },
+            "guidance_target_geometry_mismatch",
+        )
+
     estimate = estimate_paired_prefix_translation(
-        target_ref[:, :, :prefix_t],
+        target_prefix,
         exact_prefix,
         policy=GUIDANCE_REFERENCE_POLICY,
     )
     estimate_fields = estimate.telemetry()
+    estimate_fields["prefix_resize_elapsed_ms"] = prefix_resize_elapsed_ms
     if estimate.rejected:
         return None, estimate_fields, f"guidance_{estimate.reason}"
 
@@ -1130,15 +1143,11 @@ def _prepare_registered_guidance_reference(
     residual_mode = normalize_residual_geometry_mode(residual_mode)
     if residual_mode == "measure" and estimate.accepted:
         guidance_residual = measure_residual_geometry(
-            target_ref[:, :, :prefix_t],
+            target_prefix,
             exact_prefix,
             rigid_dx=applied_dx,
             rigid_dy=applied_dy,
         )
-        if residual_witnesses is not None:
-            witness_start = max(0, prefix_t - 6)
-            witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
-            residual_witnesses["guidance_native_bounded"] = target_ref[:, :, witness_start:witness_end].detach().clone()
     elif residual_mode == "measure":
         guidance_residual = {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -1170,6 +1179,41 @@ def _prepare_registered_guidance_reference(
             )
             return None, fields, "target_temporal_radius_over_bound"
 
+    suffix_resize_started = time.perf_counter()
+    if prefix_t < int(source_ref.shape[2]):
+        target_suffix = resize_video(
+            source_ref[:, :, prefix_t:],
+            target_h,
+            target_w,
+            mode=guidance.transfer_mode,
+        )
+        target_ref = torch.cat((target_prefix, target_suffix), dim=2)
+    else:
+        target_ref = target_prefix
+    suffix_resize_elapsed_ms = (time.perf_counter() - suffix_resize_started) * 1000.0
+    if tuple(target_ref.shape) != (
+        int(exact_prefix.shape[0]),
+        int(exact_prefix.shape[1]),
+        int(run.geometry.latent_t),
+        int(target_h),
+        int(target_w),
+    ):
+        fields = dict(estimate_fields)
+        fields.update(
+            status="rejected",
+            reason="guidance_target_geometry_mismatch",
+            suffix_resize_elapsed_ms=suffix_resize_elapsed_ms,
+        )
+        return None, fields, "guidance_target_geometry_mismatch"
+
+    if residual_mode == "measure" and residual_witnesses is not None:
+        witness_start = max(0, prefix_t - 6)
+        witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
+        residual_witnesses["guidance_native_bounded"] = (
+            target_ref[:, :, witness_start:witness_end].detach().clone()
+        )
+
+    translation_started = time.perf_counter()
     application = translate_video_cells(
         target_ref,
         dx=applied_dx,
@@ -1177,6 +1221,7 @@ def _prepare_registered_guidance_reference(
         start_frame=prefix_t,
         batch_frames=4,
     )
+    translation_elapsed_ms = (time.perf_counter() - translation_started) * 1000.0
     if residual_mode == "measure" and residual_witnesses is not None:
         witness_start = max(0, prefix_t - 6)
         witness_end = min(int(application.video.shape[2]), prefix_t + 4)
@@ -1231,6 +1276,9 @@ def _prepare_registered_guidance_reference(
         exact_prefix_restored=True,
         invalid_fraction=float(application.invalid_fraction),
         residual_geometry=guidance_residual,
+        prefix_resize_elapsed_ms=prefix_resize_elapsed_ms,
+        suffix_resize_elapsed_ms=suffix_resize_elapsed_ms,
+        translation_elapsed_ms=translation_elapsed_ms,
     )
     return registered, fields, None
 
