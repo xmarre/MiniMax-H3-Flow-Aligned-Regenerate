@@ -615,6 +615,51 @@ def test_registered_direction_guidance_uses_target_reference_and_preserves_prefi
     assert state.last_temporal_reference_clamped is False
 
 
+def test_registered_direction_guidance_excludes_invalid_translation_border_from_projection():
+    video = torch.ones(1, 24, 4, 8, 8)
+    trajectory = run_video(video, coords=(0.8, 0.2))
+    registered_video = torch.ones_like(video)
+    registered_video[:, :, 2:] = 2.0
+    registered_video[:, :, 2:, :, 0] = 100.0
+    validity = torch.ones(8, 8, dtype=torch.bool)
+    validity[:, 0] = False
+    reference = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=validity,
+        prefix_t=2,
+        run_id=str(trajectory.run_id),
+        reference_coordinate=0.2,
+        dx=0.5,
+        dy=0.0,
+        cache_key="registered-direction-invalid-border",
+        temporal_search_radius=1,
+    )
+    config = GuidanceConfig(
+        mode="direction",
+        direction_weight=1.0,
+        cutoff=0.5,
+        max_correction_rms_ratio=100.0,
+    )
+
+    result = apply_guidance(
+        video,
+        run=trajectory,
+        coordinate=0.1,
+        config=config,
+        state=GuidanceState(),
+        registered_reference=reference,
+    )
+
+    assert torch.equal(result[:, :, :2], video[:, :, :2])
+    assert torch.equal(result[:, :, 2:, :, 0], video[:, :, 2:, :, 0])
+    assert torch.allclose(
+        result[:, :, 2:, :, 1:],
+        torch.full_like(result[:, :, 2:, :, 1:], 2.0),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
 def test_registered_temporal_correspondence_excludes_prefix_and_crossing_pairs():
     torch.manual_seed(120)
     frame = torch.randn(1, 24, 1, 8, 8)
