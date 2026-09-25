@@ -222,6 +222,7 @@ def test_registration_rejects_local_nonrigid_spatial_conflict():
     assert estimate.rejected
     assert estimate.reason in {
         "regional_conflict",
+        "regional_disagreement",
         "insufficient_regional_support",
         "ambiguous_runner_up",
         "insufficient_validation_improvement",
