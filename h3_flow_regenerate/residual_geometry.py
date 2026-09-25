@@ -198,7 +198,12 @@ def _field_metrics(
     tc = target - target.mean(dim=-1, keepdim=True)
     denominator = sc.square().sum(dim=-1).sqrt() * tc.square().sum(dim=-1).sqrt()
     valid = denominator > 1e-12
-    ncc = float((sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()) if bool(valid.any()) else -1.0
+    if bool(valid.any()):
+        ncc = float(
+            (sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()
+        )
+    else:
+        ncc = -1.0
     return rms, ncc
 
 
@@ -864,7 +869,11 @@ def _model_receipts(
     if top_fit.get("status") != "accepted" or bottom_fit.get("status") != "accepted":
         failures.append("band_fit_missing")
     else:
-        signs = [math.copysign(1.0, float(top_fit["a"])), math.copysign(1.0, float(bottom_fit["a"])), math.copysign(1.0, a)]
+        signs = [
+            math.copysign(1.0, float(top_fit["a"])),
+            math.copysign(1.0, float(bottom_fit["a"])),
+            math.copysign(1.0, a),
+        ]
         if not (signs[0] == signs[1] == signs[2]):
             failures.append("band_slope_sign")
         cx = (prepared.width - 1) / 2.0
@@ -915,18 +924,31 @@ def _model_receipts(
         "tx_residual": tx_residual,
         "inverse_matrix": inverse,
         "forward_matrix": forward,
-        "sign_convention": "sample L at r-d-u(r); positive rigid dx/content and positive residual a expands forward x geometry",
+        "sign_convention": (
+            "sample L at r-d-u(r); positive rigid dx/content and positive residual a "
+            "expands forward x geometry"
+        ),
         "units": "target_latent_cells",
     }
     if not policy.min_forward_scale <= sx <= policy.max_forward_scale:
         failures.append("forward_scale_bound")
     if max(abs(b_lo), abs(b_hi)) > policy.max_residual_intercept:
         failures.append("residual_intercept_bound")
-    corner_residual = max(abs(a_variant * (x - cx) + b_variant) for a_variant in (a_lo, a_hi) for b_variant in (b_lo, b_hi) for x in (0.0, float(prepared.width - 1)))
+    corner_residual = max(
+        abs(a_variant * (x - cx) + b_variant)
+        for a_variant in (a_lo, a_hi)
+        for b_variant in (b_lo, b_hi)
+        for x in (0.0, float(prepared.width - 1))
+    )
     result["max_corner_residual"] = corner_residual
     if corner_residual > policy.max_residual_displacement:
         failures.append("residual_displacement_bound")
-    total_x = max(abs(float(rigid_dx) + a_variant * (x - cx) + b_variant) for a_variant in (a_lo, a_hi) for b_variant in (b_lo, b_hi) for x in (0.0, float(prepared.width - 1)))
+    total_x = max(
+        abs(float(rigid_dx) + a_variant * (x - cx) + b_variant)
+        for a_variant in (a_lo, a_hi)
+        for b_variant in (b_lo, b_hi)
+        for x in (0.0, float(prepared.width - 1))
+    )
     if total_x > policy.max_total_displacement or abs(float(rigid_dy)) > policy.max_total_displacement:
         failures.append("total_displacement_bound")
 
@@ -934,7 +956,7 @@ def _model_receipts(
     by_key = {(int(obs["frame_index"]), str(obs["tile_id"])): obs for obs in holdout_obs}
     bounds_by_tile = dict(_tile_bounds(prepared.height, prepared.width, DEFAULT_POLICY.margin))
     frame_to_index = {value: index for index, value in enumerate(prepared.frame_indices)}
-    for (frame_id, tile_id), obs in by_key.items():
+    for frame_id, tile_id in by_key:
         frame = frame_to_index[frame_id]
         region = bounds_by_tile[tile_id]
         coords = _coords(prepared, region=region, min_axis=policy.min_tile_axis)
