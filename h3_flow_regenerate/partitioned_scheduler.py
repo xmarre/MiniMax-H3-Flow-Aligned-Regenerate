@@ -82,6 +82,12 @@ from .partitioned_stage import (
     build_partitioned_stage_plan,
     tensor_sha256,
 )
+from .residual_evidence import export_residual_geometry_evidence
+from .residual_geometry import (
+    RESIDUAL_GEOMETRY_POLICY_VERSION,
+    measure_residual_geometry,
+    normalize_residual_geometry_mode,
+)
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
     FLOW_STAGE_KEY,
@@ -982,6 +988,8 @@ def _prepare_registered_guidance_reference(
     split_coordinate: float,
     high_sigmas: torch.Tensor,
     video_shift: float,
+    residual_mode: str = "off",
+    residual_witnesses: dict[str, torch.Tensor] | None = None,
 ) -> tuple[RegisteredGuidanceReference | None, dict[str, Any], str | None]:
     """Register the active target-grid Flow reference without mutating its trajectory."""
 
@@ -1308,6 +1316,7 @@ def _frame_gauge_clean_postprocess(
     split_coordinate: float,
     high_sigmas: torch.Tensor,
     video_shift: float,
+    residual_mode: str = "off",
 ) -> tuple[
     CleanVideoPostprocessResult,
     RegisteredGuidanceReference | None,
@@ -1317,6 +1326,7 @@ def _frame_gauge_clean_postprocess(
     """Run the all-or-nothing clean-domain frame-gauge registration transaction."""
 
     started = time.perf_counter()
+    residual_mode = normalize_residual_geometry_mode(residual_mode)
     exact_prefix = exact_prefix.to(
         device=learned_clean.device,
         dtype=learned_clean.dtype,
