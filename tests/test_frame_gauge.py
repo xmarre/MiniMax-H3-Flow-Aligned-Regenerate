@@ -1,9 +1,11 @@
 import pytest
 import torch
 
+import h3_flow_regenerate.frame_gauge as frame_gauge
 from h3_flow_regenerate.frame_gauge import (
     DEFAULT_POLICY,
     FRAME_GAUGE_POLICY_VERSION,
+    GUIDANCE_REFERENCE_POLICY,
     LEARNED_VIDEO_POLICY,
     estimate_paired_prefix_translation,
     translate_video_cells,
@@ -50,13 +52,45 @@ def _analytic_pair(
     return learned, exact
 
 
-def test_v2_video_fit_relaxation_does_not_weaken_default_guidance_policy():
+def test_v2_operand_policies_preserve_strict_guidance_ambiguity_checks():
     assert FRAME_GAUGE_POLICY_VERSION == "paired_prefix_rigid_v2"
     assert LEARNED_VIDEO_POLICY.min_rms_improvement == 0.0
+    assert GUIDANCE_REFERENCE_POLICY.min_rms_improvement == 0.0
     assert DEFAULT_POLICY.min_rms_improvement == 0.15
-    assert LEARNED_VIDEO_POLICY.min_runner_margin == DEFAULT_POLICY.min_runner_margin == 0.05
+    assert LEARNED_VIDEO_POLICY.min_runner_margin == GUIDANCE_REFERENCE_POLICY.min_runner_margin == 0.05
     assert LEARNED_VIDEO_POLICY.require_global_runner_margin is False
+    assert GUIDANCE_REFERENCE_POLICY.require_global_runner_margin is True
     assert DEFAULT_POLICY.require_global_runner_margin is True
+
+
+def test_search_preslices_target_and_avoids_full_metrics_per_candidate(monkeypatch):
+    learned, exact = _analytic_pair(dx=0.5, dy=-0.375)
+    gather_calls = 0
+    metric_calls = 0
+    original_gather = frame_gauge._gather_exact
+    original_metrics = frame_gauge._metrics_presliced
+
+    def counted_gather(*args, **kwargs):
+        nonlocal gather_calls
+        gather_calls += 1
+        return original_gather(*args, **kwargs)
+
+    def counted_metrics(*args, **kwargs):
+        nonlocal metric_calls
+        metric_calls += 1
+        return original_metrics(*args, **kwargs)
+
+    monkeypatch.setattr(frame_gauge, "_gather_exact", counted_gather)
+    monkeypatch.setattr(frame_gauge, "_metrics_presliced", counted_metrics)
+
+    estimate = estimate_paired_prefix_translation(learned, exact)
+
+    assert estimate.accepted, estimate.telemetry()
+    # Candidate searches use Huber-only loss on a presliced view. Full RMS/NCC
+    # metrics are computed only for the selected validation and last-holdout
+    # candidates, not once for every grid-search candidate.
+    assert metric_calls == 4
+    assert gather_calls <= 16
 
 
 def test_exact_equality_is_bitwise_identity():
