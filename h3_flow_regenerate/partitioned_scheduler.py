@@ -1209,9 +1209,7 @@ def _prepare_registered_guidance_reference(
     if residual_mode == "measure" and residual_witnesses is not None:
         witness_start = max(0, prefix_t - 6)
         witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
-        residual_witnesses["guidance_native_bounded"] = (
-            target_ref[:, :, witness_start:witness_end].detach().clone()
-        )
+        residual_witnesses["guidance_native_bounded"] = target_ref[:, :, witness_start:witness_end].detach().clone()
 
     translation_started = time.perf_counter()
     application = translate_video_cells(
