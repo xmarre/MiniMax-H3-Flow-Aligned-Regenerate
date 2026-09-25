@@ -1030,6 +1030,157 @@ def _validate_residual_geometry(
     return mode, "measured-only", True, video_eligible, bundle
 
 
+def compare_residual_measurement_pair(
+    control_metrics: dict[str, Any],
+    measure_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare matched rigid-v2 OFF and residual MEASURE metrics.
+
+    This comparison is deliberately limited to evidence already emitted by both
+    arms. Exact tensor bytes from the MEASURE bundle remain separate hardware
+    evidence; the OFF arm is not instrumented with extra tensor readbacks.
+    """
+
+    for label, metrics in (("control", control_metrics), ("measure", measure_metrics)):
+        _require(isinstance(metrics, dict), f"{label} pair metrics root must be an object")
+        _require(isinstance(metrics.get("events"), list), f"{label} pair metrics events are missing")
+    control = _latest_partitioned_window(control_metrics["events"])
+    measure = _latest_partitioned_window(measure_metrics["events"])
+
+    def one(window: list[dict[str, Any]], kind: str) -> dict[str, Any]:
+        rows = [_event_fields(event) for event in window if _event_kind(event) == kind]
+        _require(len(rows) == 1, f"matched pair requires exactly one {kind} receipt per arm")
+        return rows[0]
+
+    control_frame = one(control, "partitioned_frame_gauge")
+    measure_frame = one(measure, "partitioned_frame_gauge")
+    _require(
+        control_frame.get("mode") == measure_frame.get("mode") == "on"
+        and control_frame.get("result") == measure_frame.get("result") == "accepted",
+        "matched residual pair requires accepted rigid-v2 ON transactions in both arms",
+    )
+    control_residual = control_frame.get("residual_geometry")
+    measure_residual = measure_frame.get("residual_geometry")
+    _require(
+        isinstance(control_residual, dict)
+        and control_residual.get("requested_mode") == "off"
+        and control_residual.get("applied") is False,
+        "matched control is not residual OFF",
+    )
+    _require(
+        isinstance(measure_residual, dict)
+        and measure_residual.get("requested_mode") == "measure"
+        and measure_residual.get("measured") is True
+        and measure_residual.get("applied") is False
+        and measure_residual.get("final_path") == "rigid_v2",
+        "matched candidate is not residual measurement-only",
+    )
+
+    exact_fields = (
+        "policy_version",
+        "split_coordinate",
+        "video_dx",
+        "video_dy",
+        "guidance_dx",
+        "guidance_dy",
+        "exact_prefix_sha256",
+        "guidance_mode",
+        "provider_api_version",
+        "provider_kind",
+        "provider_model_name",
+        "deterministic_noise_seed",
+        "deterministic_noise_seed_offset",
+        "mask_classification",
+    )
+    for field in exact_fields:
+        _require(
+            control_frame.get(field) == measure_frame.get(field),
+            f"matched residual pair differs in frame-gauge field {field}",
+        )
+
+    control_transfer = one(control, "partitioned_transfer")
+    measure_transfer = one(measure, "partitioned_transfer")
+    transfer_fields = (
+        "provider_api_version",
+        "provider_kind",
+        "model_name",
+        "source_hw",
+        "target_hw",
+        "temporal_length",
+        "suffix_dc_bridge_policy",
+        "suffix_dc_bridge_corrected_tokens",
+        "suffix_dc_bridge_state_mapping",
+        "authoritative_target_prefix_restored",
+        "splice_clean_source",
+    )
+    for field in transfer_fields:
+        _require(
+            control_transfer.get(field) == measure_transfer.get(field),
+            f"matched residual pair differs in transfer field {field}",
+        )
+
+    control_noise = one(control, "handoff_transfer_wall")
+    measure_noise = one(measure, "handoff_transfer_wall")
+    _require(
+        control_noise.get("protected_video_noise_exact") is True
+        and measure_noise.get("protected_video_noise_exact") is True,
+        "matched residual pair does not preserve protected video noise",
+    )
+
+    def call_sequence(window: list[dict[str, Any]]) -> tuple[tuple[str, bool], ...]:
+        return tuple(
+            (str(_event_fields(event).get("stage")), bool(_event_fields(event).get("actual")))
+            for event in window
+            if _event_kind(event) == "model_call"
+        )
+
+    control_calls = call_sequence(control)
+    measure_calls = call_sequence(measure)
+    _require(control_calls == measure_calls, "matched residual pair changed logical/actual H3 call topology")
+
+    control_handoff = one(control, "handoff_complete")
+    measure_handoff = one(measure, "handoff_complete")
+    for field in (
+        "sampler_invocation_count",
+        "history_boundary_count",
+        "high_stage_model_calls",
+        "high_stage_first_call_actual",
+        "input_mode",
+        "transfer_mode",
+    ):
+        _require(
+            control_handoff.get(field) == measure_handoff.get(field),
+            f"matched residual pair differs in no-extra-work field {field}",
+        )
+
+    control_complete = one(control, "partitioned_exact_prefix_complete")
+    measure_complete = one(measure, "partitioned_exact_prefix_complete")
+    _require(
+        control_complete.get("final_prefix_exact") is True
+        and measure_complete.get("final_prefix_exact") is True,
+        "matched residual pair lost exact final prefix ownership",
+    )
+
+    return {
+        "status": "matched",
+        "control_residual_mode": "off",
+        "measure_residual_mode": "measure",
+        "rigid_policy": control_frame.get("policy_version"),
+        "exact_prefix_sha256": control_frame.get("exact_prefix_sha256"),
+        "video_dx": control_frame.get("video_dx"),
+        "video_dy": control_frame.get("video_dy"),
+        "guidance_dx": control_frame.get("guidance_dx"),
+        "guidance_dy": control_frame.get("guidance_dy"),
+        "model_call_topology": control_calls,
+        "protected_video_noise_exact": True,
+        "final_prefix_exact": True,
+        "numerical_output_identity": (
+            "established structurally/unit-wise; formal hardware tensor/media comparison "
+            "uses the retained MEASURE evidence bundle plus matched workflow outputs"
+        ),
+    }
+
+
 def _normalize_auto_strength_report(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         try:
@@ -1477,5 +1628,6 @@ __all__ = [
     "PARTITIONED_SOL_ABI",
     "RuntimeGateError",
     "RuntimeGateReport",
+    "compare_residual_measurement_pair",
     "validate_partitioned_runtime_evidence",
 ]
