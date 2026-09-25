@@ -1628,6 +1628,69 @@ def _frame_gauge_clean_postprocess(
     return result, registered_reference, witnesses, transaction
 
 
+def _bounded_residual_stage_slice(
+    video: torch.Tensor,
+    *,
+    prefix_t: int,
+) -> tuple[torch.Tensor, int, int]:
+    start = max(0, int(prefix_t) - 6)
+    stop = min(int(video.shape[2]), int(prefix_t) + 4)
+    return video[:, :, start:stop].detach(), start, stop
+
+
+def _emit_residual_geometry_stage(
+    metrics,
+    *,
+    stage: str,
+    video: torch.Tensor,
+    prefix_t: int,
+    session_id: str,
+    chunk_id: str,
+    domain: str,
+    owner_before: str,
+    owner_after: str,
+    temporal_relation: str,
+    applied_transform: str,
+    provenance: str,
+) -> dict[str, Any]:
+    bounded, start, stop = _bounded_residual_stage_slice(video, prefix_t=prefix_t)
+    local_prefix = int(prefix_t) - start
+    boundary = (
+        measure_video_boundary(bounded, local_prefix)
+        if 0 < local_prefix < int(bounded.shape[2])
+        else {}
+    )
+    fields: dict[str, Any] = {
+        "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+        "stage": stage,
+        "session_id": str(session_id),
+        "chunk_id": str(chunk_id),
+        "domain": domain,
+        "owner_before": owner_before,
+        "owner_after": owner_after,
+        "temporal_relation": temporal_relation,
+        "temporal_start": start,
+        "temporal_stop": stop,
+        "prefix_boundary_index": int(prefix_t),
+        "dtype": str(video.dtype),
+        "device": str(video.device),
+        "height": int(video.shape[-2]),
+        "width": int(video.shape[-1]),
+        "normalization": "none_stage_receipt",
+        "downsample": "none",
+        "applied_transform": applied_transform,
+        "provenance": provenance,
+        "tensor_sha256": tensor_sha256(bounded),
+        "bounded_prefix_frames": min(int(prefix_t), 6),
+        "bounded_suffix_frames": max(0, stop - int(prefix_t)),
+        "valid_support": "full_tensor_receipt",
+        "caller_domain_comparison_allowed": domain == "model_internal_clean",
+        **boundary,
+    }
+    metrics.event("partitioned_residual_geometry_stage", **fields)
+    return fields
+
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
