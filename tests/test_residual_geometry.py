@@ -18,7 +18,7 @@ def _analytic_residual_pair(
     b: float = 0.0,
     dx: float = 0.0,
     dy: float = 0.0,
-    frames: int = 6,
+    frames: int = 4,
     height: int = 56,
     width: int = 74,
     per_frame_a: tuple[float, ...] | None = None,
@@ -161,7 +161,7 @@ def test_shear_is_reported_by_affine_diagnostic_and_horizontal_rejects():
 
 
 def test_temporal_slope_sign_reversal_rejects_horizontal_eligibility():
-    per_frame_a = (0.006, 0.006, 0.006, -0.006, -0.006, -0.006)
+    per_frame_a = (0.006, 0.006, -0.006, -0.006)
     learned, exact = _analytic_residual_pair(
         dx=0.5,
         dy=0.0,
@@ -181,7 +181,7 @@ def test_temporal_slope_sign_reversal_rejects_horizontal_eligibility():
 
 
 def test_low_texture_and_repeated_structure_fail_closed():
-    constant = torch.ones(1, 24, 6, 56, 74)
+    constant = torch.ones(1, 24, 4, 56, 74)
     receipt = measure_residual_geometry(
         constant,
         constant,
@@ -193,7 +193,7 @@ def test_low_texture_and_repeated_structure_fail_closed():
 
     x = torch.arange(74, dtype=torch.float32)
     stripe = torch.cos(math.pi * x).view(1, 1, 1, 1, 74)
-    exact = stripe.expand(1, 24, 6, 56, 74).clone()
+    exact = stripe.expand(1, 24, 4, 56, 74).clone()
     learned = -exact
     receipt = measure_residual_geometry(
         learned,
