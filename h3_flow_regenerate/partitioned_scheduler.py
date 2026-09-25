@@ -1341,6 +1341,84 @@ def _frame_gauge_boundary_motion_check(
     return True, fields, "accepted"
 
 
+def _regional_boundary_motion_receipts(
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    aligned_witness: torch.Tensor,
+    corrected_clean: torch.Tensor,
+    *,
+    prefix_t: int,
+    tile_bounds: dict[str, list[int]],
+) -> dict[str, Any]:
+    """Measure the rigid-v2 boundary transaction on each disjoint residual tile."""
+
+    if prefix_t < 1 or prefix_t >= int(learned_clean.shape[2]):
+        raise RuntimeError("regional boundary receipt requires a prefix/suffix boundary")
+    exact_last = exact_prefix[:, :, -1].to(learned_clean)
+
+    def shift(left: torch.Tensor, right: torch.Tensor, bounds: list[int]) -> dict[str, Any]:
+        y0, y1, x0, x1 = (int(value) for value in bounds)
+        pair = torch.stack(
+            (
+                left[:, :, y0:y1, x0:x1],
+                right[:, :, y0:y1, x0:x1],
+            ),
+            dim=2,
+        )
+        fields = measure_translation_trajectory(
+            pair,
+            1,
+            forward_steps=1,
+            backward_steps=0,
+            roi_fraction=1.0,
+            max_shift=2,
+        )
+        return {
+            "dx": float(fields["pairwise_dx"][0]),
+            "dy": float(fields["pairwise_dy"][0]),
+            "response": float(fields["pairwise_response"][0]),
+            "clipped": bool(fields["pairwise_clipped"][0]),
+        }
+
+    learned_last = learned_clean[:, :, prefix_t - 1]
+    learned_first = learned_clean[:, :, prefix_t]
+    aligned_last = aligned_witness[:, :, prefix_t - 1]
+    aligned_first = aligned_witness[:, :, prefix_t]
+    corrected_first = corrected_clean[:, :, prefix_t]
+    receipts: dict[str, Any] = {}
+    for tile_id, bounds in tile_bounds.items():
+        native = shift(learned_last, learned_first, bounds)
+        exact_unregistered = shift(exact_last, learned_first, bounds)
+        transformed_native = shift(aligned_last, aligned_first, bounds)
+        exact_rigid_pre_dc = shift(exact_last, aligned_first, bounds)
+        exact_rigid_post_dc = shift(exact_last, corrected_first, bounds)
+        receipts[str(tile_id)] = {
+            "bounds": list(bounds),
+            "native": native,
+            "exact_unregistered": exact_unregistered,
+            "transformed_native": transformed_native,
+            "exact_rigid_pre_dc": exact_rigid_pre_dc,
+            "exact_rigid_post_dc": exact_rigid_post_dc,
+            "pre_dc_native_error": math.hypot(
+                exact_rigid_pre_dc["dx"] - transformed_native["dx"],
+                exact_rigid_pre_dc["dy"] - transformed_native["dy"],
+            ),
+            "post_dc_native_error": math.hypot(
+                exact_rigid_post_dc["dx"] - transformed_native["dx"],
+                exact_rigid_post_dc["dy"] - transformed_native["dy"],
+            ),
+        }
+    return {
+        "policy": "paired_prefix_residual_boundary_regions_v1",
+        "coordinate_units": "target_latent_cells",
+        "comparison": (
+            "exact-restored boundary versus rigid-transformed native motion; "
+            "pre-DC and actual post-DC are reported separately"
+        ),
+        "tiles": receipts,
+    }
+
+
 def _frame_gauge_clean_postprocess(
     learned_clean: torch.Tensor,
     *,
