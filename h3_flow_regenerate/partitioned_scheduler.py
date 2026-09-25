@@ -119,6 +119,9 @@ from .tone_bridge import (
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
 FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
+FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS = 0.125
+FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT = 0.25
+FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 PARTITIONED_SOL_REQUIRED_METADATA = {
     "api": 1,
     "owner": "comfyui_sol_h3",
@@ -1186,6 +1189,111 @@ def _prepare_registered_guidance_reference(
     return registered, fields, None
 
 
+def _frame_gauge_boundary_motion_check(
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    aligned_clean: torch.Tensor,
+    *,
+    prefix_t: int,
+) -> tuple[bool, dict[str, Any], str]:
+    """Verify that the proposed rigid shift repairs the actual splice motion.
+
+    Prefix-wide residual fit can be diluted by learned synthesis differences.
+    This gate instead asks whether replacing the provider prefix with the exact
+    prefix introduces a boundary-motion error relative to the provider's own
+    native transition, and whether the proposed suffix translation removes a
+    substantial fraction of that error in both the upper-region and full-frame
+    measurements.
+    """
+
+    if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
+        raise RuntimeError("frame-gauge boundary check requires a non-empty prefix and suffix")
+    if tuple(learned_clean.shape) != tuple(aligned_clean.shape):
+        raise RuntimeError("frame-gauge boundary check geometry drifted")
+    if tuple(exact_prefix.shape) != tuple(learned_clean[:, :, : int(prefix_t)].shape):
+        raise RuntimeError("frame-gauge boundary check exact-prefix geometry drifted")
+
+    learned_last = learned_clean[:, :, int(prefix_t) - 1]
+    exact_last = exact_prefix[:, :, -1].to(learned_clean)
+    native_first = learned_clean[:, :, int(prefix_t)]
+    aligned_first = aligned_clean[:, :, int(prefix_t)]
+
+    def shift(left: torch.Tensor, right: torch.Tensor, roi_fraction: float) -> dict[str, Any]:
+        pair = torch.stack((left, right), dim=2)
+        fields = measure_translation_trajectory(
+            pair,
+            1,
+            forward_steps=1,
+            backward_steps=0,
+            roi_fraction=roi_fraction,
+            max_shift=4,
+        )
+        return {
+            "dx": float(fields["pairwise_dx"][0]),
+            "dy": float(fields["pairwise_dy"][0]),
+            "response": float(fields["pairwise_response"][0]),
+            "clipped": bool(fields["pairwise_clipped"][0]),
+        }
+
+    checks: dict[str, Any] = {}
+    for name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+        native = shift(learned_last, native_first, roi_fraction)
+        restored = shift(exact_last, native_first, roi_fraction)
+        candidate = shift(exact_last, aligned_first, roi_fraction)
+        before_error = math.hypot(
+            restored["dx"] - native["dx"],
+            restored["dy"] - native["dy"],
+        )
+        after_error = math.hypot(
+            candidate["dx"] - native["dx"],
+            candidate["dy"] - native["dy"],
+        )
+        improvement = (before_error - after_error) / max(before_error, 1e-12)
+        checks[name] = {
+            "roi_fraction": roi_fraction,
+            "native": native,
+            "exact_restored": restored,
+            "candidate": candidate,
+            "before_error_cells": before_error,
+            "after_error_cells": after_error,
+            "error_improvement_ratio": improvement,
+            "informative": bool(before_error >= FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS),
+        }
+
+    fields: dict[str, Any] = {
+        "policy": "native_boundary_motion_preservation_v1",
+        "min_error_cells": FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS,
+        "min_improvement_ratio": FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT,
+        "min_response": FRAME_GAUGE_BOUNDARY_MIN_RESPONSE,
+        "checks": checks,
+    }
+
+    for name in ("upper45", "full"):
+        check = checks[name]
+        if not check["informative"]:
+            fields["status"] = "rejected"
+            fields["reason"] = f"boundary_{name}_insufficient_displacement"
+            return False, fields, str(fields["reason"])
+        for variant in ("native", "exact_restored", "candidate"):
+            receipt = check[variant]
+            if receipt["clipped"] or receipt["response"] < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
+                fields["status"] = "rejected"
+                fields["reason"] = f"boundary_{name}_{variant}_ambiguous"
+                return False, fields, str(fields["reason"])
+        if check["after_error_cells"] >= check["before_error_cells"]:
+            fields["status"] = "rejected"
+            fields["reason"] = f"boundary_{name}_not_improved"
+            return False, fields, str(fields["reason"])
+        if check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
+            fields["status"] = "rejected"
+            fields["reason"] = f"boundary_{name}_insufficient_improvement"
+            return False, fields, str(fields["reason"])
+
+    fields["status"] = "accepted"
+    fields["reason"] = "accepted"
+    return True, fields, "accepted"
+
+
 def _frame_gauge_clean_postprocess(
     learned_clean: torch.Tensor,
     *,
@@ -1215,16 +1323,31 @@ def _frame_gauge_clean_postprocess(
         learned_clean[:, :, :prefix_t],
         exact_prefix,
     )
+    guidance_active = guidance is not None and guidance.mode != "off"
     transaction: dict[str, Any] = {
         "policy_version": FRAME_GAUGE_POLICY_VERSION,
         "video_registration": video_estimate.telemetry(),
-        "guidance_registration": {"status": "off", "reason": "guidance_off"},
+        "guidance_registration": (
+            {"status": "not_evaluated", "reason": "pending_video_acceptance"}
+            if guidance_active
+            else {"status": "off", "reason": "guidance_off"}
+        ),
+        "boundary_motion": {"status": "not_evaluated", "reason": "pending_video_acceptance"},
         "result": "baseline",
         "reason": video_estimate.reason,
         "dc_applied_in_clean_hook": False,
         "spatial_warp_applied": False,
     }
     if not video_estimate.accepted:
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "video_registration_not_accepted",
+            }
+        transaction["boundary_motion"] = {
+            "status": "not_evaluated",
+            "reason": "video_registration_not_accepted",
+        }
         transaction["result"] = video_estimate.status
         transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
         result = CleanVideoPostprocessResult(
@@ -1234,8 +1357,63 @@ def _frame_gauge_clean_postprocess(
         )
         return result, None, {}, transaction
 
+    aligned_application = translate_video_cells(
+        learned_clean,
+        dx=float(video_estimate.dx),
+        dy=float(video_estimate.dy),
+        start_frame=0,
+        batch_frames=4,
+    )
+    if aligned_application.invalid_fraction > 0.08:
+        transaction.update(
+            result="rejected",
+            reason="video_invalid_area_over_bound",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        transaction["boundary_motion"] = {
+            "status": "not_evaluated",
+            "reason": "video_invalid_area_over_bound",
+        }
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "video_invalid_area_over_bound",
+            }
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
+    aligned_full = aligned_application.video
+    boundary_ok, boundary_fields, boundary_reason = _frame_gauge_boundary_motion_check(
+        learned_clean,
+        exact_prefix,
+        aligned_full,
+        prefix_t=prefix_t,
+    )
+    transaction["boundary_motion"] = boundary_fields
+    if not boundary_ok:
+        transaction.update(
+            result="rejected",
+            reason=boundary_reason,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "boundary_motion_rejected",
+            }
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
     registered_reference = None
-    if guidance is not None and guidance.mode != "off":
+    if guidance_active:
         registered_reference, guidance_fields, guidance_error = _prepare_registered_guidance_reference(
             run=guidance_run,
             guidance=guidance,
@@ -1259,27 +1437,6 @@ def _frame_gauge_clean_postprocess(
             )
             return result, None, {}, transaction
 
-    aligned_application = translate_video_cells(
-        learned_clean,
-        dx=float(video_estimate.dx),
-        dy=float(video_estimate.dy),
-        start_frame=0,
-        batch_frames=4,
-    )
-    if aligned_application.invalid_fraction > 0.08:
-        transaction.update(
-            result="baseline",
-            reason="video_invalid_area_over_bound",
-            elapsed_ms=(time.perf_counter() - started) * 1000.0,
-        )
-        result = CleanVideoPostprocessResult(
-            clean_video=learned_clean,
-            protected_prefix_t=prefix_t,
-            metadata=transaction,
-        )
-        return result, None, {}, transaction
-
-    aligned_full = aligned_application.video
     diagnostic_end = min(
         int(learned_clean.shape[2]),
         prefix_t + 4,
@@ -1360,7 +1517,6 @@ def _frame_gauge_clean_postprocess(
         metadata=transaction,
     )
     return result, registered_reference, witnesses, transaction
-
 
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
