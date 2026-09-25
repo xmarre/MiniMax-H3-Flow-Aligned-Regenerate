@@ -858,7 +858,7 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
             _require(
                 all(
                     _close_number(runtime_value, replay_value, atol=1e-8)
-                    for runtime_value, replay_value in zip(runtime_range, replay_range)
+                    for runtime_value, replay_value in zip(runtime_range, replay_range, strict=True)
                 ),
                 f"{label} residual deletion {key} envelope does not reproduce",
             )
@@ -903,14 +903,14 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
                 and len(runtime_matrix) == len(replay_matrix) == 3,
                 f"{label} residual {matrix_key} is malformed",
             )
-            for runtime_row, replay_row in zip(runtime_matrix, replay_matrix):
+            for runtime_row, replay_row in zip(runtime_matrix, replay_matrix, strict=True):
                 _require(
                     isinstance(runtime_row, list)
                     and isinstance(replay_row, list)
                     and len(runtime_row) == len(replay_row) == 3
                     and all(
                         _close_number(runtime_value, replay_value, atol=1e-10)
-                        for runtime_value, replay_value in zip(runtime_row, replay_row)
+                        for runtime_value, replay_value in zip(runtime_row, replay_row, strict=True)
                     ),
                     f"{label} residual {matrix_key} does not reproduce",
                 )
@@ -935,7 +935,7 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
                 and len(runtime_value) == len(replay_value)
                 and all(
                     _close_number(left, right, atol=1e-8)
-                    for left, right in zip(runtime_value, replay_value)
+                    for left, right in zip(runtime_value, replay_value, strict=True)
                 ),
                 f"{label} residual {runtime_key} does not reproduce",
             )
