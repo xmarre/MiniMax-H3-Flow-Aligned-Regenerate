@@ -1327,7 +1327,7 @@ def _frame_gauge_boundary_motion_check(
         # improve by the stronger minimum ratio.
         if check["after_error_cells"] > check["before_error_cells"]:
             fields["status"] = "rejected"
-            fields["reason"] = f"boundary_{name}_degraded"
+            fields["reason"] = f"boundary_{name}_not_improved"
             return False, fields, str(fields["reason"])
         if check["informative"] and check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
             fields["status"] = "rejected"
