@@ -641,6 +641,26 @@ def test_runtime_gate_requires_accepted_boundary_motion_receipt():
         )
 
 
+def test_runtime_gate_accepts_equal_noninformative_boundary_error():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted")
+    for name in ("upper45", "full"):
+        check = receipt["fields"]["boundary_motion"]["checks"][name]
+        check["before_error_cells"] = 0.0
+        check["after_error_cells"] = 0.0
+        check["error_improvement_ratio"] = 0.0
+        check["informative"] = False
+    metrics["events"].insert(-2, receipt)
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-accepted",
+    )
+
+    assert report.frame_gauge_verified is True
+
+
 def test_runtime_gate_validates_identity_video_registration():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="identity")
     metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="identity"))
