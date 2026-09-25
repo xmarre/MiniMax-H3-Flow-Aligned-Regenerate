@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
+from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
-from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.partitioned_scheduler import (
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
