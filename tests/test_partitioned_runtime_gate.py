@@ -960,11 +960,7 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
             "session_id": "session",
             "chunk_id": "chunk",
             "tensor_sha256": "a" * 64,
-            "domain": (
-                "caller_output_latent"
-                if stage == "final_post_high_caller_domain"
-                else "model_internal_clean"
-            ),
+            "domain": ("caller_output_latent" if stage == "final_post_high_caller_domain" else "model_internal_clean"),
         }
         if stage == "final_post_high_internal_clean":
             fields["owner_before"] = "authoritative_exact_prefix_E"
