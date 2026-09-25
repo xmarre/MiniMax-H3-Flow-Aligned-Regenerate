@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from h3_flow_regenerate.partitioned_runtime_gate import (  # noqa: E402
     RuntimeGateError,
+    compare_residual_measurement_pair,
     validate_partitioned_runtime_evidence,
 )
 
@@ -44,6 +45,14 @@ def main() -> None:
     )
     parser.add_argument("--metrics", required=True, type=Path, help="Flow H3 metrics JSON")
     parser.add_argument("--log", required=True, type=Path, help="ComfyUI process log")
+    parser.add_argument(
+        "--matched-control-metrics",
+        type=Path,
+        help=(
+            "Optional residual-OFF control metrics for structural OFF-vs-MEASURE comparison. "
+            "This does not replace the retained tensor/media hardware evidence."
+        ),
+    )
     parser.add_argument("--expected-vdn-api", type=int, default=4)
     parser.add_argument("--expected-logical", type=int)
     parser.add_argument("--expected-actual", type=int)
@@ -147,7 +156,17 @@ def main() -> None:
     except RuntimeGateError as exc:
         raise SystemExit(f"partitioned exact-prefix runtime gate: FAIL: {exc}") from exc
 
-    print(json.dumps({"status": "pass", **report.as_dict()}, indent=2, sort_keys=True))
+    output = {"status": "pass", **report.as_dict()}
+    if args.matched_control_metrics is not None:
+        control_metrics = _read_json(args.matched_control_metrics)
+        try:
+            output["residual_pair"] = compare_residual_measurement_pair(
+                control_metrics,
+                metrics,
+            )
+        except RuntimeGateError as exc:
+            raise SystemExit(f"partitioned residual matched-pair gate: FAIL: {exc}") from exc
+    print(json.dumps(output, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
