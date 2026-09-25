@@ -233,7 +233,6 @@ def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
 
 
-
 def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_and_scope():
     torch.manual_seed(77)
     learned = torch.randn(1, 24, 5, 8, 10, dtype=torch.float32)
