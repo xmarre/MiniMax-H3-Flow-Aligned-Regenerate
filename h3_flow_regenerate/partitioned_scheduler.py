@@ -85,11 +85,11 @@ from .partitioned_stage import (
     tensor_sha256,
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
-from .residual_evidence import export_residual_geometry_evidence
 from .representation_bridge import (
     apply_suffix_representation_bridge,
     disabled_suffix_representation_bridge_metrics,
 )
+from .residual_evidence import export_residual_geometry_evidence
 from .residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
     measure_residual_geometry,
