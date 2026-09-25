@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
     AUDIO_POSITION_DOMAIN_SOURCE,
@@ -349,19 +350,26 @@ def test_partitioned_runtime_gate_rejects_candidate_position_or_av_receipt_drift
         )
 
 
-def _accepted_registration(dx=0.5, dy=-0.25):
+def _accepted_registration(
+    dx=0.5,
+    dy=-0.25,
+    *,
+    rms_improvement=0.31,
+    last_holdout_improvement=0.29,
+):
     return {
         "status": "accepted",
         "reason": "accepted",
+        "policy_version": FRAME_GAUGE_POLICY_VERSION,
         "dx": dx,
         "dy": dy,
         "units": "target_latent_cells",
         "invalid_fraction": 0.04,
         "validation_ncc": 0.91,
-        "rms_improvement": 0.31,
+        "rms_improvement": rms_improvement,
         "runner_margin_ratio": 0.12,
         "last_holdout_ncc": 0.90,
-        "last_holdout_improvement": 0.29,
+        "last_holdout_improvement": last_holdout_improvement,
         "frame_checks": [
             {"informative": True, "supports_global": True},
             {"informative": True, "supports_global": True},
@@ -379,9 +387,68 @@ def _accepted_registration(dx=0.5, dy=-0.25):
     }
 
 
-def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
+def _identity_registration():
+    return {
+        "status": "identity",
+        "reason": "already_aligned",
+        "policy_version": FRAME_GAUGE_POLICY_VERSION,
+        "dx": 0.0,
+        "dy": 0.0,
+        "units": "target_latent_cells",
+        "invalid_fraction": 0.0,
+    }
+
+
+def _accepted_boundary_motion():
+    return {
+        "status": "accepted",
+        "reason": "accepted",
+        "policy": "native_boundary_motion_preservation_v1",
+        "min_error_cells": 0.125,
+        "min_improvement_ratio": 0.25,
+        "min_response": 3.0,
+        "checks": {
+            "upper45": {
+                "informative": True,
+                "before_error_cells": 0.8,
+                "after_error_cells": 0.2,
+                "error_improvement_ratio": 0.75,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 12.0, "clipped": False},
+                "exact_restored": {"dx": 0.6, "dy": 0.5, "response": 9.0, "clipped": False},
+                "candidate": {"dx": 0.1, "dy": 0.1, "response": 11.0, "clipped": False},
+            },
+            "full": {
+                "informative": True,
+                "before_error_cells": 0.7,
+                "after_error_cells": 0.25,
+                "error_improvement_ratio": 0.6428571428571429,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "exact_restored": {"dx": 0.5, "dy": 0.45, "response": 8.0, "clipped": False},
+                "candidate": {"dx": 0.15, "dy": 0.1, "response": 9.0, "clipped": False},
+            },
+        },
+    }
+
+
+def _frame_gauge_event(
+    *,
+    mode="off",
+    result="off",
+    guidance_mode="off",
+    video_rms_improvement=0.31,
+    video_last_holdout_improvement=0.29,
+):
     accepted = mode == "on" and result == "accepted"
-    video_registration = _accepted_registration() if accepted else {"status": result, "reason": result}
+    identity = mode == "on" and result == "identity"
+    if accepted:
+        video_registration = _accepted_registration(
+            rms_improvement=video_rms_improvement,
+            last_holdout_improvement=video_last_holdout_improvement,
+        )
+    elif identity:
+        video_registration = _identity_registration()
+    else:
+        video_registration = {"status": result, "reason": result}
     guidance_registration = (
         _accepted_registration(0.375, -0.125)
         if accepted and guidance_mode != "off"
@@ -392,6 +459,7 @@ def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
         mode=mode,
         enabled=mode == "on",
         result=result,
+        policy_version=FRAME_GAUGE_POLICY_VERSION,
         spatial_warp_applied=accepted,
         authoritative_prefix_modified=False,
         exact_prefix_sha256="9" * 64,
@@ -399,6 +467,7 @@ def _frame_gauge_event(*, mode="off", result="off", guidance_mode="off"):
         transform_domain="actual_clean_target_video" if accepted else "none",
         video_registration=video_registration,
         guidance_registration=guidance_registration,
+        boundary_motion=(_accepted_boundary_motion() if accepted else {"status": "not_evaluated"}),
         registered_guidance_reference=accepted and guidance_mode != "off",
         guidance_mode=guidance_mode,
         video_dx=0.5 if accepted else 0.0,
@@ -484,6 +553,71 @@ def test_runtime_gate_verifies_accepted_frame_gauge_transaction_with_guidance():
     assert report.frame_gauge_result == "accepted"
     assert report.frame_gauge_video_dx == pytest.approx(0.5)
     assert report.frame_gauge_guidance_dx == pytest.approx(0.375)
+
+
+def test_runtime_gate_accepts_v2_video_below_legacy_rms_threshold():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    metrics["events"].insert(
+        -2,
+        _frame_gauge_event(
+            mode="on",
+            result="accepted",
+            video_rms_improvement=0.069,
+            video_last_holdout_improvement=0.05,
+        ),
+    )
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-accepted",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "accepted"
+
+
+def test_runtime_gate_keeps_guidance_on_strict_rms_policy():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
+    receipt["fields"]["guidance_registration"]["rms_improvement"] = 0.069
+    receipt["fields"]["guidance_registration"]["last_holdout_improvement"] = 0.05
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="guidance registration held-out RMS-improvement"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
+def test_runtime_gate_requires_accepted_boundary_motion_receipt():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted")
+    receipt["fields"]["boundary_motion"]["checks"]["upper45"]["after_error_cells"] = 0.9
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="upper45 candidate did not improve"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+
+def test_runtime_gate_validates_identity_video_registration():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="identity")
+    metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="identity"))
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-identity",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "identity"
 
 
 def test_runtime_gate_rejects_missing_or_enabled_auto_strength_evidence():
