@@ -40,6 +40,15 @@ def _field_video(*, dx: float, dy: float, frames: int = 6, height: int = 26, wid
     return torch.stack(output, dim=1).unsqueeze(0).float()
 
 
+def _rigid_textured_video(*, shift_x: int = 0, shift_y: int = 0, frames: int = 6) -> torch.Tensor:
+    generator = torch.Generator().manual_seed(12345)
+    base = torch.randn(1, 24, 1, 26, 26, generator=generator)
+    video = base.repeat(1, 1, frames, 1, 1)
+    if shift_x or shift_y:
+        video = torch.roll(video, shifts=(shift_y, shift_x), dims=(-2, -1))
+    return video
+
+
 def _run(reference: torch.Tensor, coordinate: float) -> TrajectoryRun:
     sample = TrajectorySample(
         coordinate,
@@ -77,9 +86,9 @@ def _schedule():
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
-    exact_full = _field_video(dx=0.0, dy=0.0)
-    learned = _field_video(dx=0.5, dy=-0.375)
-    guidance_reference = _field_video(dx=-0.625, dy=0.4375)
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
+    guidance_reference = _rigid_textured_video(shift_x=1)
     prefix_t = 4
     high_sigmas, split_coordinate = _schedule()
     run = _run(guidance_reference, split_coordinate)
@@ -98,10 +107,10 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
     )
 
     assert transaction["result"] == "accepted", transaction
-    assert transaction["video_registration"]["dx"] == pytest.approx(0.5, abs=0.125)
-    assert transaction["video_registration"]["dy"] == pytest.approx(-0.375, abs=0.125)
-    assert transaction["guidance_registration"]["dx"] == pytest.approx(-0.625, abs=0.125)
-    assert transaction["guidance_registration"]["dy"] == pytest.approx(0.4375, abs=0.125)
+    assert transaction["video_registration"]["dx"] == pytest.approx(1.0, abs=0.125)
+    assert transaction["video_registration"]["dy"] == pytest.approx(0.0, abs=0.125)
+    assert transaction["guidance_registration"]["dx"] == pytest.approx(-1.0, abs=0.125)
+    assert transaction["guidance_registration"]["dy"] == pytest.approx(0.0, abs=0.125)
     assert registered is not None
     assert transaction["boundary_motion"]["status"] == "accepted"
     assert registered.dx != pytest.approx(transaction["video_registration"]["dx"], abs=0.125)
@@ -114,12 +123,12 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
 
 
 def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_transition():
-    exact_full = _field_video(dx=0.0, dy=0.0)
-    learned = _field_video(dx=0.5, dy=-0.375)
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
     aligned = translate_video_cells(
         learned,
-        dx=0.5,
-        dy=-0.375,
+        dx=1.0,
+        dy=0.0,
         start_frame=0,
     ).video
 
@@ -140,12 +149,12 @@ def test_boundary_motion_gate_accepts_rigid_correction_that_restores_native_tran
 
 
 def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():
-    exact_full = _field_video(dx=0.0, dy=0.0)
-    learned = _field_video(dx=0.5, dy=-0.375)
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
     wrong = translate_video_cells(
         learned,
-        dx=-0.5,
-        dy=0.375,
+        dx=-1.0,
+        dy=0.0,
         start_frame=0,
     ).video
 
@@ -162,8 +171,8 @@ def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_tr
 
 
 def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
-    exact_full = _field_video(dx=0.0, dy=0.0)
-    learned = _field_video(dx=0.5, dy=-0.375)
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
     ambiguous_guidance = torch.ones_like(exact_full)
     prefix_t = 4
     high_sigmas, split_coordinate = _schedule()
