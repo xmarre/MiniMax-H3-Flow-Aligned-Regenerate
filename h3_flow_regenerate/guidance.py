@@ -261,11 +261,7 @@ def _masked_low_frequency_projection(
         )
         filtered = filtered * expanded_mask
 
-    return (
-        filtered.reshape(video.shape[0], video.shape[2], video.shape[1], height, width)
-        .permute(0, 2, 1, 3, 4)
-        .to(video)
-    )
+    return filtered.reshape(video.shape[0], video.shape[2], video.shape[1], height, width).permute(0, 2, 1, 3, 4).to(video)
 
 
 def _rms_ratio(correction: torch.Tensor, reference: torch.Tensor) -> float:
