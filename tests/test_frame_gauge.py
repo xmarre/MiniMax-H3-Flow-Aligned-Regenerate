@@ -54,6 +54,9 @@ def test_v2_video_fit_relaxation_does_not_weaken_default_guidance_policy():
     assert FRAME_GAUGE_POLICY_VERSION == "paired_prefix_rigid_v2"
     assert LEARNED_VIDEO_POLICY.min_rms_improvement == 0.0
     assert DEFAULT_POLICY.min_rms_improvement == 0.15
+    assert LEARNED_VIDEO_POLICY.min_runner_margin == DEFAULT_POLICY.min_runner_margin == 0.05
+    assert LEARNED_VIDEO_POLICY.require_global_runner_margin is False
+    assert DEFAULT_POLICY.require_global_runner_margin is True
 
 
 def test_exact_equality_is_bitwise_identity():
@@ -310,9 +313,16 @@ def test_registration_rejects_repeated_stripes_with_multiple_equal_solutions():
     learned = -exact
 
     estimate = estimate_paired_prefix_translation(learned, exact)
+    video_estimate = estimate_paired_prefix_translation(
+        learned,
+        exact,
+        policy=LEARNED_VIDEO_POLICY,
+    )
 
     assert estimate.rejected
     assert estimate.reason == "ambiguous_runner_up"
+    assert video_estimate.rejected
+    assert video_estimate.reason != "accepted"
 
 
 def test_registration_rejects_when_fewer_than_eight_channels_are_informative():
