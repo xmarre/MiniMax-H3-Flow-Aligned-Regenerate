@@ -15,7 +15,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .frame_gauge import DEFAULT_POLICY, FRAME_GAUGE_POLICY_VERSION, LEARNED_VIDEO_POLICY, FrameGaugePolicy
+from .frame_gauge import (
+    DEFAULT_POLICY,
+    FRAME_GAUGE_POLICY_VERSION,
+    LEARNED_VIDEO_POLICY,
+    FrameGaugePolicy,
+)
+from .residual_geometry import (
+    DEFAULT_RESIDUAL_POLICY,
+    RESIDUAL_GEOMETRY_POLICY_VERSION,
+    diagnostic_model_fits,
+)
 
 PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
@@ -65,6 +75,11 @@ class RuntimeGateReport:
     frame_gauge_video_dy: float | None
     frame_gauge_guidance_dx: float | None
     frame_gauge_guidance_dy: float | None
+    residual_geometry_mode: str | None
+    residual_geometry_result: str | None
+    residual_geometry_verified: bool
+    residual_geometry_horizontal_eligible: bool
+    residual_geometry_evidence_bundle: str | None
     auto_strength_verified_off: bool
     auto_strength_report_digests: tuple[str, ...]
 
