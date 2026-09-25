@@ -417,6 +417,283 @@ def _fit_constant(observations: list[dict[str, Any]]) -> dict[str, Any]:
     return {"status": "accepted", "bx": bx, "by": by}
 
 
+def _model_scale(width: int, height: int) -> float:
+    return max((width - 1) / 2.0, (height - 1) / 2.0, 1.0)
+
+
+def _centered_coordinates(
+    obs: dict[str, Any],
+    width: int,
+    height: int,
+) -> tuple[float, float, float]:
+    scale = _model_scale(width, height)
+    x = (float(obs["effective_center"][0]) - (width - 1) / 2.0) / scale
+    y = (float(obs["effective_center"][1]) - (height - 1) / 2.0) / scale
+    return x, y, scale
+
+
+def _fit_axis_scales(
+    observations: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    if len(observations) < 2:
+        return {
+            "status": "rejected",
+            "reason": "insufficient_observations",
+            "rank": 0,
+            "condition": None,
+        }
+    rows_x = []
+    rows_y = []
+    values_x = []
+    values_y = []
+    scale = _model_scale(width, height)
+    for obs in observations:
+        x, y, _ = _centered_coordinates(obs, width, height)
+        rows_x.append([x, 1.0])
+        rows_y.append([y, 1.0])
+        values_x.append([float(obs["ux"])])
+        values_y.append([float(obs["uy"])])
+    solution_x, rank_x, condition_x = _lstsq(
+        torch.tensor(rows_x, dtype=torch.float64),
+        torch.tensor(values_x, dtype=torch.float64),
+    )
+    solution_y, rank_y, condition_y = _lstsq(
+        torch.tensor(rows_y, dtype=torch.float64),
+        torch.tensor(values_y, dtype=torch.float64),
+    )
+    if solution_x is None or solution_y is None:
+        return {
+            "status": "rejected",
+            "reason": "rank_or_condition",
+            "rank": min(rank_x, rank_y),
+            "condition": max(condition_x, condition_y),
+        }
+    return {
+        "status": "accepted",
+        "rank": min(rank_x, rank_y),
+        "condition": max(condition_x, condition_y),
+        "a": float(solution_x[0, 0].item()) / scale,
+        "bx": float(solution_x[1, 0].item()),
+        "e": float(solution_y[0, 0].item()) / scale,
+        "by": float(solution_y[1, 0].item()),
+    }
+
+
+def _fit_similarity(
+    observations: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    if len(observations) < 2:
+        return {
+            "status": "rejected",
+            "reason": "insufficient_observations",
+            "rank": 0,
+            "condition": None,
+        }
+    rows = []
+    values = []
+    scale = _model_scale(width, height)
+    for obs in observations:
+        x, y, _ = _centered_coordinates(obs, width, height)
+        rows.append([x, -y, 1.0, 0.0])
+        values.append([float(obs["ux"])])
+        rows.append([y, x, 0.0, 1.0])
+        values.append([float(obs["uy"])])
+    solution, rank, condition = _lstsq(
+        torch.tensor(rows, dtype=torch.float64),
+        torch.tensor(values, dtype=torch.float64),
+    )
+    if solution is None:
+        return {
+            "status": "rejected",
+            "reason": "rank_or_condition",
+            "rank": rank,
+            "condition": condition,
+        }
+    return {
+        "status": "accepted",
+        "rank": rank,
+        "condition": condition,
+        "scale_term": float(solution[0, 0].item()) / scale,
+        "rotation_term": float(solution[1, 0].item()) / scale,
+        "bx": float(solution[2, 0].item()),
+        "by": float(solution[3, 0].item()),
+    }
+
+
+def _fit_affine(
+    observations: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    if len(observations) < 3:
+        return {
+            "status": "rejected",
+            "reason": "insufficient_observations",
+            "rank": 0,
+            "condition": None,
+        }
+    rows = []
+    values = []
+    scale = _model_scale(width, height)
+    for obs in observations:
+        x, y, _ = _centered_coordinates(obs, width, height)
+        rows.append([x, y, 1.0, 0.0, 0.0, 0.0])
+        values.append([float(obs["ux"])])
+        rows.append([0.0, 0.0, 0.0, x, y, 1.0])
+        values.append([float(obs["uy"])])
+    solution, rank, condition = _lstsq(
+        torch.tensor(rows, dtype=torch.float64),
+        torch.tensor(values, dtype=torch.float64),
+    )
+    if solution is None:
+        return {
+            "status": "rejected",
+            "reason": "rank_or_condition",
+            "rank": rank,
+            "condition": condition,
+        }
+    return {
+        "status": "accepted",
+        "rank": rank,
+        "condition": condition,
+        "a": float(solution[0, 0].item()) / scale,
+        "h": float(solution[1, 0].item()) / scale,
+        "bx": float(solution[2, 0].item()),
+        "k": float(solution[3, 0].item()) / scale,
+        "e": float(solution[4, 0].item()) / scale,
+        "by": float(solution[5, 0].item()),
+    }
+
+
+def _predict_model(
+    model_name: str,
+    fit: dict[str, Any],
+    obs: dict[str, Any],
+    width: int,
+    height: int,
+) -> tuple[float, float]:
+    x = float(obs["effective_center"][0]) - (width - 1) / 2.0
+    y = float(obs["effective_center"][1]) - (height - 1) / 2.0
+    if model_name == "horizontal":
+        return float(fit["a"]) * x + float(fit["b"]), 0.0
+    if model_name == "axis_scales":
+        return (
+            float(fit["a"]) * x + float(fit["bx"]),
+            float(fit["e"]) * y + float(fit["by"]),
+        )
+    if model_name == "similarity":
+        scale_term = float(fit["scale_term"])
+        rotation = float(fit["rotation_term"])
+        return (
+            scale_term * x - rotation * y + float(fit["bx"]),
+            rotation * x + scale_term * y + float(fit["by"]),
+        )
+    if model_name == "affine":
+        return (
+            float(fit["a"]) * x + float(fit["h"]) * y + float(fit["bx"]),
+            float(fit["k"]) * x + float(fit["e"]) * y + float(fit["by"]),
+        )
+    if model_name == "residual_constant":
+        return float(fit["bx"]), float(fit["by"])
+    raise ValueError(f"unknown residual model {model_name!r}")
+
+
+def _model_errors(
+    model_name: str,
+    fit: dict[str, Any],
+    observations: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> dict[str, float]:
+    if not observations or fit.get("status") != "accepted":
+        return {"rms": math.inf, "max": math.inf}
+    errors = []
+    for obs in observations:
+        px, py = _predict_model(model_name, fit, obs, width, height)
+        errors.append(math.hypot(px - float(obs["ux"]), py - float(obs["uy"])))
+    return {
+        "rms": math.sqrt(sum(value * value for value in errors) / len(errors)),
+        "max": max(errors),
+    }
+
+
+def diagnostic_model_fits(
+    observations: list[dict[str, Any]],
+    *,
+    width: int,
+    height: int,
+    fit_indices: tuple[int, ...] | list[int],
+    holdout_indices: tuple[int, ...] | list[int],
+    policy: ResidualGeometryPolicy = DEFAULT_RESIDUAL_POLICY,
+) -> dict[str, Any]:
+    """Recompute model fits from bounded regional receipts only.
+
+    This deliberately cannot authorize application. It exists so the offline
+    validator can reproduce rank, conditioning and holdout displacement errors
+    without trusting thresholds copied from runtime telemetry.
+    """
+
+    fit_set = {int(value) for value in fit_indices}
+    holdout_set = {int(value) for value in holdout_indices}
+    usable = [
+        obs
+        for obs in observations
+        if obs.get("status") == "accepted"
+        and float(obs.get("uncertainty_half_width_x", math.inf))
+        <= policy.max_uncertainty_half_width
+        and float(obs.get("uncertainty_half_width_y", math.inf))
+        <= policy.max_uncertainty_half_width
+    ]
+    fit_obs = [obs for obs in usable if int(obs["frame_index"]) in fit_set]
+    holdout_obs = [obs for obs in usable if int(obs["frame_index"]) in holdout_set]
+    fits = {
+        "residual_constant": _fit_constant(fit_obs),
+        "horizontal": _fit_horizontal(fit_obs, width),
+        "axis_scales": _fit_axis_scales(fit_obs, width, height),
+        "similarity": _fit_similarity(fit_obs, width, height),
+        "affine": _fit_affine(fit_obs, width, height),
+        "local_projective": {
+            "status": "not_implemented",
+            "reason": "diagnostic_only_no_production_optimizer",
+        },
+    }
+    for model_name, fit in tuple(fits.items()):
+        if model_name == "local_projective":
+            continue
+        fit["fit_error"] = _model_errors(
+            model_name,
+            fit,
+            fit_obs,
+            width,
+            height,
+        )
+        fit["holdout_error"] = _model_errors(
+            model_name,
+            fit,
+            holdout_obs,
+            width,
+            height,
+        )
+        if (
+            fit.get("status") == "accepted"
+            and (
+                int(fit.get("rank", 2)) <= 0
+                or float(fit.get("condition", 1.0)) > policy.max_condition
+            )
+        ):
+            fit["status"] = "rejected"
+            fit["reason"] = "rank_or_condition"
+    return {
+        "fit_observations": len(fit_obs),
+        "holdout_observations": len(holdout_obs),
+        "fits": fits,
+    }
+
+
 def _predict_horizontal(fit: dict[str, Any], obs: dict[str, Any], width: int) -> tuple[float, float]:
     cx = (width - 1) / 2.0
     return float(fit["a"]) * (float(obs["effective_center"][0]) - cx) + float(fit["b"]), 0.0
