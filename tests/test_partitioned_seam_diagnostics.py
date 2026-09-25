@@ -8,8 +8,10 @@ import torch
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import deterministic_video_noise
 from h3_flow_regenerate.partitioned_scheduler import (
+    _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
+    _partitioned_exact_overlap_fallback_eligibility,
 )
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
 
@@ -229,3 +231,88 @@ def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
     assert corrected.data_ptr() != learned.data_ptr()
     assert metrics["suffix_dc_bridge_enabled"] is False
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
+
+
+
+def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_and_scope():
+    torch.manual_seed(77)
+    learned = torch.randn(1, 24, 5, 8, 10, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    yy = torch.linspace(-1.0, 1.0, 8).view(1, 1, 8, 1)
+    xx = torch.linspace(-1.0, 1.0, 10).view(1, 1, 1, 10)
+    exact[:, :, 1] += 0.15 + 0.09 * yy - 0.06 * xx
+
+    sigma = 0.4
+    seed = 991
+    noise = deterministic_video_noise(
+        tuple(learned.shape),
+        seed=seed,
+        device=learned.device,
+        dtype=learned.dtype,
+    )
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+
+    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
+        state,
+        learned,
+        exact,
+        sigma=sigma,
+    )
+
+    assert representation["suffix_representation_bridge_accepted"] is True
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 1
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+
+    native_transition = learned[:, :, 2].float() - learned[:, :, 1].float()
+    restored_transition = corrected[:, :, 2].float() - exact[:, :, 1].float()
+    assert torch.allclose(restored_transition, native_transition, rtol=0.0, atol=2e-6)
+
+    assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
+    assert torch.equal(corrected[:, :, 3:], learned[:, :, 3:])
+    assert torch.equal(mapped[:, :, :2], state[:, :, :2])
+    assert torch.equal(mapped[:, :, 3:], state[:, :, 3:])
+
+    expected = state.clone()
+    expected[:, :, 2] += (1.0 - sigma) * (corrected[:, :, 2] - learned[:, :, 2])
+    assert torch.allclose(mapped, expected, rtol=1e-6, atol=1e-6)
+
+
+def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improvement"):
+    receipt = {"dx": 0.0, "dy": 0.0, "response": 5.0, "clipped": False}
+    checks = {
+        roi: {
+            variant: dict(receipt)
+            for variant in ("native", "transformed_native", "exact_restored", "candidate")
+        }
+        for roi in ("upper45", "full")
+    }
+    return {
+        "result": "rejected",
+        "reason": reason,
+        "video_registration": {"status": "accepted"},
+        "boundary_motion": {
+            "policy": "native_boundary_motion_preservation_v2",
+            "status": "rejected",
+            "reason": reason,
+            "checks": checks,
+        },
+    }
+
+
+def test_exact_overlap_fallback_requires_unambiguous_rigid_boundary_veto():
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(
+        _boundary_rejection_transaction()
+    )
+    assert eligible is True
+    assert trigger == "boundary_upper45_insufficient_improvement"
+
+    ambiguous = _boundary_rejection_transaction()
+    ambiguous["boundary_motion"]["checks"]["upper45"]["transformed_native"]["response"] = 2.0
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(ambiguous)
+    assert eligible is False
+    assert trigger == "boundary_upper45_transformed_native_ambiguous"
+
+    wrong_failure = _boundary_rejection_transaction("guidance_insufficient_validation_improvement")
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(wrong_failure)
+    assert eligible is False
+    assert trigger == "frame_gauge_rejection_not_structural_overlap_eligible"
