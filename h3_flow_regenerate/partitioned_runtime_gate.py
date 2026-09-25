@@ -529,6 +529,10 @@ def _validate_frame_gauge_transfer(
                 str(overlap.get("trigger", "")) in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
                 "partitioned exact-overlap repair used an ineligible frame-gauge rejection",
             )
+            _require(
+                transfer.get("frame_gauge_reason") == overlap.get("trigger"),
+                "partitioned exact-overlap trigger differs from the frame-gauge rejection",
+            )
         if applied:
             _require(requested, "partitioned exact-overlap repair applied without being requested")
             _require(
@@ -675,6 +679,10 @@ def _validate_frame_gauge(
                 str(receipt.get("exact_overlap_fallback_trigger", ""))
                 in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
                 "frame-gauge exact-overlap fallback trigger is not eligible",
+            )
+            _require(
+                receipt.get("reason") == receipt.get("exact_overlap_fallback_trigger"),
+                "frame-gauge exact-overlap fallback trigger differs from the transaction rejection",
             )
         _require(
             not fallback_applied or fallback_requested,
