@@ -832,6 +832,6 @@ def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
         ("high", False),
     )
 
-    measure["events"][2]["fields"]["actual"] = True
+    measure["events"][3]["fields"]["actual"] = True
     with pytest.raises(RuntimeGateError, match="call topology"):
         compare_residual_measurement_pair(control, measure)
