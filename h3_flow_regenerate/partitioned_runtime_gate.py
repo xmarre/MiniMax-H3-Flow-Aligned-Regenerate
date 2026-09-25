@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .frame_gauge import (
-    DEFAULT_POLICY,
     FRAME_GAUGE_POLICY_VERSION,
+    GUIDANCE_REFERENCE_POLICY,
     LEARNED_VIDEO_POLICY,
     FrameGaugePolicy,
 )
@@ -552,7 +552,7 @@ def _validate_frame_gauge(
                 _validate_registration_receipt(
                     receipt.get("guidance_registration"),
                     label="guidance",
-                    policy=DEFAULT_POLICY,
+                    policy=GUIDANCE_REFERENCE_POLICY,
                 )
         elif result == "identity":
             _require(
