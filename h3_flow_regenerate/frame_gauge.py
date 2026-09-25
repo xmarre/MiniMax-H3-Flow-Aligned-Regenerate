@@ -116,6 +116,14 @@ class _Prepared:
     width: int
 
 
+@dataclass(slots=True)
+class _MetricView:
+    learned: torch.Tensor
+    target: torch.Tensor
+    yy: torch.Tensor
+    xx: torch.Tensor
+
+
 def _validate_pair(learned: torch.Tensor, exact: torch.Tensor) -> tuple[int, int, int, int, int]:
     if not torch.is_tensor(learned) or not torch.is_tensor(exact):
         raise TypeError("frame-gauge registration requires tensor inputs")
@@ -293,6 +301,47 @@ def _sample(
     return top * (1.0 - wy) + bottom * wy
 
 
+def _metric_view(
+    prepared: _Prepared,
+    frames: tuple[int, ...],
+    coords: tuple[torch.Tensor, torch.Tensor],
+) -> _MetricView:
+    yy, xx = coords
+    channels = prepared.valid_channels
+    learned = prepared.learned[list(frames)][:, channels]
+    exact = prepared.exact[list(frames)][:, channels]
+    return _MetricView(
+        learned=learned,
+        target=_gather_exact(exact, yy, xx),
+        yy=yy,
+        xx=xx,
+    )
+
+
+def _loss_presliced(view: _MetricView, dx: float, dy: float) -> float:
+    shifted = _sample(view.learned, view.yy, view.xx, dx, dy)
+    residual = shifted - view.target
+    absolute = residual.abs()
+    huber = torch.where(absolute <= 1.0, 0.5 * residual.square(), absolute - 0.5)
+    return float(huber.mean().item())
+
+
+def _metrics_presliced(view: _MetricView, dx: float, dy: float) -> tuple[float, float, float]:
+    shifted = _sample(view.learned, view.yy, view.xx, dx, dy)
+    residual = shifted - view.target
+    absolute = residual.abs()
+    huber = torch.where(absolute <= 1.0, 0.5 * residual.square(), absolute - 0.5)
+    rms = float(residual.square().mean().sqrt().item())
+
+    shifted_centered = shifted - shifted.mean(dim=-1, keepdim=True)
+    target_centered = view.target - view.target.mean(dim=-1, keepdim=True)
+    denominator = shifted_centered.square().sum(dim=-1).sqrt() * target_centered.square().sum(dim=-1).sqrt()
+    numerator = (shifted_centered * target_centered).sum(dim=-1)
+    valid = denominator > 1e-12
+    ncc = float((numerator[valid] / denominator[valid]).mean().item()) if bool(valid.any().item()) else -1.0
+    return float(huber.mean().item()), rms, ncc
+
+
 def _metrics(
     prepared: _Prepared,
     frames: tuple[int, ...],
@@ -300,24 +349,7 @@ def _metrics(
     dx: float,
     dy: float,
 ) -> tuple[float, float, float]:
-    yy, xx = coords
-    channels = prepared.valid_channels
-    learned = prepared.learned[list(frames)][:, channels]
-    exact = prepared.exact[list(frames)][:, channels]
-    shifted = _sample(learned, yy, xx, dx, dy)
-    target = _gather_exact(exact, yy, xx)
-    residual = shifted - target
-    absolute = residual.abs()
-    huber = torch.where(absolute <= 1.0, 0.5 * residual.square(), absolute - 0.5)
-    rms = float(residual.square().mean().sqrt().item())
-
-    shifted_centered = shifted - shifted.mean(dim=-1, keepdim=True)
-    target_centered = target - target.mean(dim=-1, keepdim=True)
-    denominator = shifted_centered.square().sum(dim=-1).sqrt() * target_centered.square().sum(dim=-1).sqrt()
-    numerator = (shifted_centered * target_centered).sum(dim=-1)
-    valid = denominator > 1e-12
-    ncc = float((numerator[valid] / denominator[valid]).mean().item()) if bool(valid.any().item()) else -1.0
-    return float(huber.mean().item()), rms, ncc
+    return _metrics_presliced(_metric_view(prepared, frames, coords), dx, dy)
 
 
 def _candidate_key(candidate: tuple[float, float, float]) -> tuple[float, float, float, float]:
@@ -332,12 +364,12 @@ def _search(
     policy: FrameGaugePolicy,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float] | None, float, bool]:
     evaluated: dict[tuple[float, float], tuple[float, float, float]] = {}
+    view = _metric_view(prepared, frames, coords)
 
     def evaluate(dx: float, dy: float) -> tuple[float, float, float]:
         key = round(float(dx), 8), round(float(dy), 8)
         if key not in evaluated:
-            loss, _, _ = _metrics(prepared, frames, coords, key[0], key[1])
-            evaluated[key] = key[0], key[1], loss
+            evaluated[key] = key[0], key[1], _loss_presliced(view, key[0], key[1])
         return evaluated[key]
 
     integers = [
