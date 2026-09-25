@@ -1520,6 +1520,7 @@ def _frame_gauge_clean_postprocess(
     )
     return result, registered_reference, witnesses, transaction
 
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
