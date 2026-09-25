@@ -19,6 +19,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .contracts import H3FlowTrajectory
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
+    LEARNED_VIDEO_POLICY,
     estimate_paired_prefix_translation,
     translate_video_cells,
 )
@@ -1322,6 +1323,7 @@ def _frame_gauge_clean_postprocess(
     video_estimate = estimate_paired_prefix_translation(
         learned_clean[:, :, :prefix_t],
         exact_prefix,
+        policy=LEARNED_VIDEO_POLICY,
     )
     guidance_active = guidance is not None and guidance.mode != "off"
     transaction: dict[str, Any] = {
