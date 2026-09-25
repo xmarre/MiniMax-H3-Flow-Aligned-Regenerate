@@ -1643,9 +1643,7 @@ def _frame_gauge_clean_postprocess(
             residual_mode=residual_mode,
             residual_witnesses=residual_witnesses,
         )
-        transaction["guidance_registration_elapsed_ms"] = (
-            time.perf_counter() - guidance_registration_started
-        ) * 1000.0
+        transaction["guidance_registration_elapsed_ms"] = (time.perf_counter() - guidance_registration_started) * 1000.0
         transaction["guidance_registration"] = guidance_fields
         if guidance_error is not None:
             transaction["result"] = "rejected"
