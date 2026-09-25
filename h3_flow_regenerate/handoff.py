@@ -339,9 +339,18 @@ def build_handoff_state(
             }
         else:
             clean_operand = learned_x0.to(noise)
-            input_version = getattr(clean_operand, "_version", None)
+            if torch.is_inference(clean_operand):
+                # Learned providers commonly run under ComfyUI's global
+                # inference_mode. Inference tensors deliberately have no
+                # version counter, but the hook's non-mutation contract relies
+                # on one. Materialize only the opt-in postprocess operand as a
+                # normal no-grad tensor; the provider output itself remains
+                # untouched and the OFF path acquires no copy.
+                with torch.inference_mode(False), torch.no_grad():
+                    clean_operand = clean_operand.clone()
+            input_version = clean_operand._version
             postprocess_result = clean_video_postprocess(clean_operand)
-            if input_version is not None and getattr(clean_operand, "_version", input_version) != input_version:
+            if clean_operand._version != input_version:
                 raise RuntimeError("clean-video postprocess hook mutated its input tensor")
             if not isinstance(postprocess_result, CleanVideoPostprocessResult):
                 raise TypeError("clean-video postprocess hook returned an unsupported result")
