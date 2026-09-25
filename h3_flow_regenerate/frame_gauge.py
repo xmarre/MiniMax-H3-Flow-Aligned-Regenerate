@@ -22,12 +22,7 @@ class FrameGaugePolicy:
     accepted_bound: float = 2.0
     identity_bound: float = 0.0625
     min_ncc: float = 0.75
-    # Prefix-wide normalized RMS is a sanity check, not the media objective.
-    # Hardware run 00662 showed strong NCC/runner separation but modest global
-    # RMS gain because learned synthesis differs from the exact prefix. The
-    # transaction has a separate boundary-motion preservation gate, so the
-    # prefix fit only requires held-out residual RMS not to become worse.
-    min_rms_improvement: float = 0.0
+    min_rms_improvement: float = 0.15
     min_runner_margin: float = 0.05
     consistency_tolerance: float = 0.25
     conflict_tolerance: float = 0.5
@@ -35,6 +30,13 @@ class FrameGaugePolicy:
 
 
 DEFAULT_POLICY = FrameGaugePolicy()
+
+# Hardware run 00662 showed a coherent learned-video displacement with strong
+# NCC/runner separation but only 6.9% prefix-wide RMS gain. Learned synthesis
+# differs from the authoritative exact prefix, so video activation now uses
+# non-degradation here and a separate direct boundary-motion preservation gate.
+# Guidance retains the stricter default until equivalent runtime evidence exists.
+LEARNED_VIDEO_POLICY = FrameGaugePolicy(min_rms_improvement=0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,6 +745,7 @@ def translate_video_cells(
 __all__ = [
     "DEFAULT_POLICY",
     "FRAME_GAUGE_POLICY_VERSION",
+    "LEARNED_VIDEO_POLICY",
     "FrameGaugeEstimate",
     "FrameGaugePolicy",
     "TranslationApplication",
