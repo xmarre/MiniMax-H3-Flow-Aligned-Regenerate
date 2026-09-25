@@ -48,10 +48,10 @@ LEARNED_VIDEO_POLICY = FrameGaugePolicy(
 # prefix. Its aggregate prefix RMS improvement is only a coarse non-degradation
 # signal: the estimator already requires a strict global runner margin and then
 # rechecks held-out frames, spatial regions, parity phases, and the final held-
-# out frame. Keeping a hard 15% aggregate-improvement cliff here can therefore
-# discard a geometrically consistent guidance correction by an arbitrarily
-# small amount (00670 measured 14.931%). Preserve the strict ambiguity/NCC/
-# consistency gates while letting the stronger held-out evidence decide.
+# out frame. A hard aggregate-improvement cliff can otherwise discard a
+# geometrically consistent correction despite the stronger independent
+# evidence. Preserve the strict ambiguity/NCC/consistency gates while letting
+# the held-out evidence decide.
 GUIDANCE_REFERENCE_POLICY = FrameGaugePolicy(
     min_rms_improvement=0.0,
     require_global_runner_margin=True,
