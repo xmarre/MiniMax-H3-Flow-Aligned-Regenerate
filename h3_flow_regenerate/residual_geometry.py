@@ -51,9 +51,7 @@ DEFAULT_RESIDUAL_POLICY = ResidualGeometryPolicy()
 def normalize_residual_geometry_mode(value: Any) -> str:
     mode = str(value or "off").strip().lower()
     if mode not in RESIDUAL_GEOMETRY_MODES:
-        raise ValueError(
-            f"frame_gauge_residual_mode must be one of {RESIDUAL_GEOMETRY_MODES}, got {value!r}"
-        )
+        raise ValueError(f"frame_gauge_residual_mode must be one of {RESIDUAL_GEOMETRY_MODES}, got {value!r}")
     return mode
 
 
@@ -135,9 +133,7 @@ def _metrics(
     denominator = sc.square().sum(dim=-1).sqrt() * tc.square().sum(dim=-1).sqrt()
     valid = denominator > 1e-12
     if bool(valid.any()):
-        ncc = float(
-            (sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item()
-        )
+        ncc = float((sc[valid] * tc[valid]).sum(dim=-1).div(denominator[valid]).mean().item())
     else:
         ncc = -1.0
     return float(huber.mean().item()), rms, ncc
@@ -332,7 +328,8 @@ def _measure_observation(
             evaluate(ux, uy)
     best = min(evaluated.values(), key=lambda item: (item[2], item[0] ** 2 + item[1] ** 2, item[1], item[0]))
     separated = [
-        item for item in evaluated.values()
+        item
+        for item in evaluated.values()
         if math.hypot(item[0] - best[0], item[1] - best[1]) >= policy.runner_separation - 1e-12
     ]
     runner = min(separated, key=lambda item: item[2]) if separated else None
@@ -346,10 +343,7 @@ def _measure_observation(
     uy_max = max(item[1] for item in near)
     ux_half = max((ux_max - ux_min) / 2.0, policy.uncertainty_floor)
     uy_half = max((uy_max - uy_min) / 2.0, policy.uncertainty_floor)
-    saturated = (
-        abs(best[0]) >= policy.search_radius - 1e-12
-        or abs(best[1]) >= policy.search_radius - 1e-12
-    )
+    saturated = abs(best[0]) >= policy.search_radius - 1e-12 or abs(best[1]) >= policy.search_radius - 1e-12
     base.update(
         zero_loss=float(zero[2]),
         zero_rms=float(zero[3]),
@@ -648,10 +642,8 @@ def diagnostic_model_fits(
         obs
         for obs in observations
         if obs.get("status") == "accepted"
-        and float(obs.get("uncertainty_half_width_x", math.inf))
-        <= policy.max_uncertainty_half_width
-        and float(obs.get("uncertainty_half_width_y", math.inf))
-        <= policy.max_uncertainty_half_width
+        and float(obs.get("uncertainty_half_width_x", math.inf)) <= policy.max_uncertainty_half_width
+        and float(obs.get("uncertainty_half_width_y", math.inf)) <= policy.max_uncertainty_half_width
     ]
     fit_obs = [obs for obs in usable if int(obs["frame_index"]) in fit_set]
     holdout_obs = [obs for obs in usable if int(obs["frame_index"]) in holdout_set]
@@ -683,12 +675,8 @@ def diagnostic_model_fits(
             width,
             height,
         )
-        if (
-            fit.get("status") == "accepted"
-            and (
-                int(fit.get("rank", 2)) <= 0
-                or float(fit.get("condition", 1.0)) > policy.max_condition
-            )
+        if fit.get("status") == "accepted" and (
+            int(fit.get("rank", 2)) <= 0 or float(fit.get("condition", 1.0)) > policy.max_condition
         ):
             fit["status"] = "rejected"
             fit["reason"] = "rank_or_condition"
@@ -721,8 +709,7 @@ def _constant_errors(fit: dict[str, Any], observations: list[dict[str, Any]]) ->
     if not observations:
         return {"rms": math.inf, "max": math.inf}
     errors = [
-        math.hypot(float(fit["bx"]) - float(obs["ux"]), float(fit["by"]) - float(obs["uy"]))
-        for obs in observations
+        math.hypot(float(fit["bx"]) - float(obs["ux"]), float(fit["by"]) - float(obs["uy"])) for obs in observations
     ]
     return {"rms": math.sqrt(sum(value * value for value in errors) / len(errors)), "max": max(errors)}
 
@@ -775,7 +762,8 @@ def _model_receipts(
     policy: ResidualGeometryPolicy,
 ) -> dict[str, Any]:
     accepted = [
-        obs for obs in observations
+        obs
+        for obs in observations
         if obs.get("status") == "accepted"
         and float(obs.get("uncertainty_half_width_x", math.inf)) <= policy.max_uncertainty_half_width
         and float(obs.get("uncertainty_half_width_y", math.inf)) <= policy.max_uncertainty_half_width
@@ -795,9 +783,7 @@ def _model_receipts(
         policy=policy,
     )
     result: dict[str, Any] = {
-        "selected_model": (
-            "horizontal" if horizontal.get("status") == "accepted" else "residual_constant"
-        ),
+        "selected_model": ("horizontal" if horizontal.get("status") == "accepted" else "residual_constant"),
         "horizontal": horizontal,
         "residual_constant": constant,
         "diagnostic_fits": diagnostics["fits"],
@@ -829,7 +815,8 @@ def _model_receipts(
     holdout_c = _constant_errors(constant, holdout_obs)
     improvement = (
         (holdout_c["rms"] - holdout_h["rms"]) / max(holdout_c["rms"], policy.zero_loss_floor)
-        if math.isfinite(holdout_c["rms"]) else -math.inf
+        if math.isfinite(holdout_c["rms"])
+        else -math.inf
     )
     result["holdout"] = {
         "horizontal_rms": holdout_h["rms"],
@@ -894,10 +881,7 @@ def _model_receipts(
     result["heldout_frame_fits"] = heldout_fits
 
     max_uy = max(
-        (
-            abs(float(obs["uy"])) + float(obs["uncertainty_half_width_y"])
-            for obs in accepted
-        ),
+        (abs(float(obs["uy"])) + float(obs["uncertainty_half_width_y"]) for obs in accepted),
         default=math.inf,
     )
     result["max_cross_axis_with_uncertainty"] = max_uy
@@ -925,8 +909,7 @@ def _model_receipts(
         "inverse_matrix": inverse,
         "forward_matrix": forward,
         "sign_convention": (
-            "sample L at r-d-u(r); positive rigid dx/content and positive residual a "
-            "expands forward x geometry"
+            "sample L at r-d-u(r); positive rigid dx/content and positive residual a expands forward x geometry"
         ),
         "units": "target_latent_cells",
     }
