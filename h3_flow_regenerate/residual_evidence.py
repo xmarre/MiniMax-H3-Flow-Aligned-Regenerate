@@ -83,11 +83,16 @@ def export_residual_geometry_evidence(
 
     tensor_manifest: dict[str, Any] = {}
     total_bytes = 0
+    used_files: set[str] = set()
     try:
         for name, tensor in tensors.items():
             if not torch.is_tensor(tensor):
                 raise TypeError(f"residual evidence {name!r} is not a tensor")
-            receipt = _write_exact_tensor(bundle / f"{_safe_component(name)}.bin", tensor)
+            file_name = f"{_safe_component(name)}.bin"
+            if file_name in used_files:
+                raise ValueError(f"residual evidence {name!r} collides with file {file_name!r}")
+            used_files.add(file_name)
+            receipt = _write_exact_tensor(bundle / file_name, tensor)
             tensor_manifest[name] = receipt
             total_bytes += int(receipt["nbytes"])
         manifest = {
