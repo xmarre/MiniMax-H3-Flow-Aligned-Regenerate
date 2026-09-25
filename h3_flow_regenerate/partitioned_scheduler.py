@@ -1309,7 +1309,6 @@ def _frame_gauge_boundary_motion_check(
     exact_last = exact_prefix[:, :, -1].to(learned_clean)
     native_first = learned_clean[:, :, int(prefix_t)]
     if tuple(aligned_clean.shape) == tuple(learned_clean.shape):
-        aligned_last = aligned_clean[:, :, int(prefix_t) - 1]
         aligned_first = aligned_clean[:, :, int(prefix_t)]
     else:
         compact_shape = (
@@ -1321,7 +1320,6 @@ def _frame_gauge_boundary_motion_check(
         )
         if tuple(aligned_clean.shape) != compact_shape:
             raise RuntimeError("frame-gauge boundary check geometry drifted")
-        aligned_last = aligned_clean[:, :, 0]
         aligned_first = aligned_clean[:, :, 1]
 
     def shift(left: torch.Tensor, right: torch.Tensor, roi_fraction: float) -> dict[str, Any]:
