@@ -1,9 +1,11 @@
-"""Exact-prefix representation reconciliation for Mixed-Grid Continuum.
+"""Exact-prefix representation reconciliation for learned 3D handoffs.
 
-The learned 3D upscaler produces a coherent target-grid prefix and suffix, but
-Mixed-Grid must discard that learned prefix and restore Continuum's authoritative
-prefix.  The overlap therefore gives us an exact, same-frame measurement of the
-representation residual introduced by that replacement.
+The learned 3D upscaler produces a coherent target-grid prefix and suffix, while
+exact-prefix continuation must discard that learned prefix and restore the
+caller-owned authoritative prefix.  The overlap therefore gives us an exact,
+same-frame measurement of the representation residual introduced by that
+replacement.  The primitive is independent of the retired Mixed-Grid execution
+contract and can be used by any handoff that preserves these ownership rules.
 
 This module transfers only the zero-spatial-mean part of the last overlap
 residual onto the first generated suffix token.  The existing DC bridge owns the
