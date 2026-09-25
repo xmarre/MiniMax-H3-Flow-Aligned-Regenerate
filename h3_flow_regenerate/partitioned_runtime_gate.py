@@ -390,7 +390,7 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
         _require(before_error >= 0.0 and after_error >= 0.0, f"frame-gauge boundary-motion {name} error is negative")
         _require(
             after_error <= before_error,
-            f"frame-gauge boundary-motion {name} candidate degraded",
+            f"frame-gauge boundary-motion {name} candidate did not improve",
         )
         expected_informative = before_error >= min_error
         _require(
