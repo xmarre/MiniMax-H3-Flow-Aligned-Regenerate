@@ -1100,6 +1100,8 @@ def validate_partitioned_runtime_evidence(
     require_vdn_linear: bool = True,
     expected_audio_position_domain: str | None = None,
     expected_frame_gauge_mode: str | None = None,
+    expected_residual_mode: str | None = None,
+    expected_residual_result: str | None = None,
     auto_strength_reports: Iterable[dict[str, Any] | str] | None = None,
     require_auto_strength_off: bool = False,
     expected_auto_strength_digests: Iterable[str] | None = None,
@@ -1134,6 +1136,17 @@ def validate_partitioned_runtime_evidence(
     ) = _validate_frame_gauge(
         window,
         expected_mode=expected_frame_gauge_mode,
+    )
+    (
+        residual_geometry_mode,
+        residual_geometry_result,
+        residual_geometry_verified,
+        residual_geometry_horizontal_eligible,
+        residual_geometry_evidence_bundle,
+    ) = _validate_residual_geometry(
+        window,
+        expected_mode=expected_residual_mode,
+        expected_result=expected_residual_result,
     )
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
@@ -1448,6 +1461,11 @@ def validate_partitioned_runtime_evidence(
         frame_gauge_video_dy=frame_gauge_video_dy,
         frame_gauge_guidance_dx=frame_gauge_guidance_dx,
         frame_gauge_guidance_dy=frame_gauge_guidance_dy,
+        residual_geometry_mode=residual_geometry_mode,
+        residual_geometry_result=residual_geometry_result,
+        residual_geometry_verified=residual_geometry_verified,
+        residual_geometry_horizontal_eligible=residual_geometry_horizontal_eligible,
+        residual_geometry_evidence_bundle=residual_geometry_evidence_bundle,
         auto_strength_verified_off=auto_strength_verified_off,
         auto_strength_report_digests=auto_strength_report_digests,
     )
