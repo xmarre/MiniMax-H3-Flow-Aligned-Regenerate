@@ -1124,6 +1124,39 @@ def _prepare_registered_guidance_reference(
     # diagnostic only and must not become a spatial interpolation.
     applied_dx = 0.0 if estimate.identity else float(estimate.dx)
     applied_dy = 0.0 if estimate.identity else float(estimate.dy)
+    residual_mode = normalize_residual_geometry_mode(residual_mode)
+    if residual_mode == "measure" and estimate.accepted:
+        guidance_residual = measure_residual_geometry(
+            target_ref[:, :, :prefix_t],
+            exact_prefix,
+            rigid_dx=applied_dx,
+            rigid_dy=applied_dy,
+        )
+        if residual_witnesses is not None:
+            witness_start = max(0, prefix_t - 6)
+            witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
+            residual_witnesses["guidance_native_bounded"] = (
+                target_ref[:, :, witness_start:witness_end].detach().clone()
+            )
+            residual_witnesses["guidance_witness_start"] = torch.tensor(
+                witness_start,
+                device="cpu",
+                dtype=torch.int64,
+            )
+    elif residual_mode == "measure":
+        guidance_residual = {
+            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+            "status": "not_evaluated",
+            "reason": "rigid_not_accepted",
+            "eligible": False,
+        }
+    else:
+        guidance_residual = {
+            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+            "status": "off",
+            "reason": "disabled",
+            "eligible": False,
+        }
 
     temporal_radius = int(guidance.temporal_search_radius)
     if guidance.mode == "direction+temporal":
@@ -1194,6 +1227,7 @@ def _prepare_registered_guidance_reference(
         trajectory_mutated=False,
         exact_prefix_restored=True,
         invalid_fraction=float(application.invalid_fraction),
+        residual_geometry=guidance_residual,
     )
     return registered, fields, None
 
