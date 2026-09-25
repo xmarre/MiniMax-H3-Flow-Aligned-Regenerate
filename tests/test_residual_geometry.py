@@ -57,19 +57,9 @@ def _analytic_residual_pair(
             # analytically by evaluating the exact field at the inverse of that
             # pullback map, rather than by warping a discrete tensor.
             denom_x = 1.0 - frame_a
-            source_x = (
-                xx
-                - frame_a * cx
-                + float(b)
-                + float(dx)
-                - float(shear) * (yy - cy)
-            ) / denom_x
+            source_x = (xx - frame_a * cx + float(b) + float(dx) - float(shear) * (yy - cy)) / denom_x
             denom_y = 1.0 - float(vertical_scale)
-            source_y = (
-                yy
-                - float(vertical_scale) * cy
-                + float(dy)
-            ) / denom_y
+            source_y = (yy - float(vertical_scale) * cy + float(dy)) / denom_y
             learned_channels.append(field(source_y, source_x + temporal_pan))
         exact_frames.append(torch.stack(exact_channels))
         learned_frames.append(torch.stack(learned_channels))
