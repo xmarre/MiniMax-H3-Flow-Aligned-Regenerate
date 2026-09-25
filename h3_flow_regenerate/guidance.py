@@ -223,6 +223,51 @@ def low_frequency_projection(video: torch.Tensor, cutoff: float) -> torch.Tensor
     return filtered.reshape(video.shape[0], video.shape[2], video.shape[1], h, w).permute(0, 2, 1, 3, 4).to(video)
 
 
+def _masked_low_frequency_projection(
+    video: torch.Tensor,
+    validity: torch.Tensor,
+    cutoff: float,
+) -> torch.Tensor:
+    """Project only over valid spatial support and keep invalid pixels zero."""
+
+    if video.ndim != 5:
+        raise ValueError("masked low-frequency projection expects BxCxTxHxW")
+    if validity.shape != video.shape[-2:] or validity.dtype != torch.bool:
+        raise ValueError("masked low-frequency projection requires an HxW boolean validity mask")
+    height, width = video.shape[-2:]
+    mask_2d = validity.to(device=video.device, dtype=torch.float32).view(1, 1, height, width)
+    work = video.permute(0, 2, 1, 3, 4).reshape(-1, video.shape[1], height, width).float()
+    expanded_mask = mask_2d.expand(work.shape[0], 1, height, width)
+
+    if cutoff >= 1.0:
+        filtered = work * expanded_mask
+    else:
+        radius = max(1, round(0.5 / cutoff))
+        kernel = 2 * radius + 1
+        numerator = F.avg_pool2d(
+            F.pad(work * expanded_mask, (radius, radius, radius, radius), mode="replicate"),
+            kernel_size=kernel,
+            stride=1,
+        )
+        denominator = F.avg_pool2d(
+            F.pad(expanded_mask, (radius, radius, radius, radius), mode="replicate"),
+            kernel_size=kernel,
+            stride=1,
+        )
+        filtered = torch.where(
+            denominator > 0,
+            numerator / denominator.clamp_min(1e-12),
+            torch.zeros_like(numerator),
+        )
+        filtered = filtered * expanded_mask
+
+    return (
+        filtered.reshape(video.shape[0], video.shape[2], video.shape[1], height, width)
+        .permute(0, 2, 1, 3, 4)
+        .to(video)
+    )
+
+
 def _rms_ratio(correction: torch.Tensor, reference: torch.Tensor) -> float:
     dims = tuple(range(1, correction.ndim))
     corr_rms = correction.float().square().mean(dim=dims, keepdim=True).sqrt()
@@ -929,10 +974,19 @@ def apply_guidance(
         "direction+acceleration",
         "direction+temporal",
     }:
-        residual = low_frequency_projection(
-            ref - high_x0,
-            config.cutoff,
-        )
+        direction_delta = ref - high_x0
+        if registered:
+            assert temporal_validity is not None
+            residual = _masked_low_frequency_projection(
+                direction_delta,
+                temporal_validity,
+                config.cutoff,
+            )
+        else:
+            residual = low_frequency_projection(
+                direction_delta,
+                config.cutoff,
+            )
         if registered and prefix_t:
             residual = residual.clone()
             residual[:, :, :prefix_t] = 0
