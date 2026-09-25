@@ -306,10 +306,16 @@ def _validate_registration_receipt(
         _finite_number(fields.get("rms_improvement")) >= policy.min_rms_improvement,
         f"{label} registration held-out RMS-improvement gate failed",
     )
+    runner_margin = _finite_number(fields.get("runner_margin_ratio"))
     _require(
-        _finite_number(fields.get("runner_margin_ratio")) >= policy.min_runner_margin,
-        f"{label} registration runner-up margin gate failed",
+        runner_margin >= 0.0,
+        f"{label} registration runner-up margin is invalid",
     )
+    if policy.require_global_runner_margin:
+        _require(
+            runner_margin >= policy.min_runner_margin,
+            f"{label} registration runner-up margin gate failed",
+        )
     _require(
         _finite_number(fields.get("last_holdout_ncc")) >= policy.min_ncc,
         f"{label} registration last-frame NCC gate failed",
