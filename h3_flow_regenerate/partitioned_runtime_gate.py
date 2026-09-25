@@ -15,6 +15,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from .frame_gauge import DEFAULT_POLICY, FRAME_GAUGE_POLICY_VERSION, LEARNED_VIDEO_POLICY, FrameGaugePolicy
+
 PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
@@ -254,38 +256,50 @@ def _finite_number(value: Any) -> float:
     return result
 
 
-def _validate_registration_receipt(fields: Any, *, label: str) -> str:
+def _validate_registration_receipt(
+    fields: Any,
+    *,
+    label: str,
+    policy: FrameGaugePolicy,
+) -> str:
     _require(isinstance(fields, dict), f"{label} registration receipt is missing")
     status = str(fields.get("status", ""))
     _require(status in {"accepted", "identity"}, f"{label} registration was not accepted/identity")
+    _require(fields.get("policy_version") == FRAME_GAUGE_POLICY_VERSION, f"{label} registration policy version drifted")
     _require(fields.get("units") == "target_latent_cells", f"{label} registration units drifted")
     dx = _finite_number(fields.get("dx"))
     dy = _finite_number(fields.get("dy"))
-    _require(abs(dx) <= 2.0 and abs(dy) <= 2.0, f"{label} registration exceeds the v1 displacement bound")
+    _require(
+        abs(dx) <= policy.accepted_bound and abs(dy) <= policy.accepted_bound,
+        f"{label} registration exceeds the displacement bound",
+    )
     invalid_fraction = _finite_number(fields.get("invalid_fraction", 0.0))
-    _require(0.0 <= invalid_fraction <= 0.08, f"{label} registration invalid-area bound failed")
+    _require(
+        0.0 <= invalid_fraction <= policy.max_invalid_fraction,
+        f"{label} registration invalid-area bound failed",
+    )
     if status == "identity":
         _require(dx == 0.0 and dy == 0.0, f"{label} identity registration is not an exact no-op")
         return status
 
     _require(
-        _finite_number(fields.get("validation_ncc")) >= 0.75,
+        _finite_number(fields.get("validation_ncc")) >= policy.min_ncc,
         f"{label} registration held-out NCC gate failed",
     )
     _require(
-        _finite_number(fields.get("rms_improvement")) >= 0.15,
+        _finite_number(fields.get("rms_improvement")) >= policy.min_rms_improvement,
         f"{label} registration held-out RMS-improvement gate failed",
     )
     _require(
-        _finite_number(fields.get("runner_margin_ratio")) >= 0.05,
+        _finite_number(fields.get("runner_margin_ratio")) >= policy.min_runner_margin,
         f"{label} registration runner-up margin gate failed",
     )
     _require(
-        _finite_number(fields.get("last_holdout_ncc")) >= 0.75,
+        _finite_number(fields.get("last_holdout_ncc")) >= policy.min_ncc,
         f"{label} registration last-frame NCC gate failed",
     )
     _require(
-        _finite_number(fields.get("last_holdout_improvement")) >= 0.15,
+        _finite_number(fields.get("last_holdout_improvement")) >= policy.min_rms_improvement,
         f"{label} registration last-frame improvement gate failed",
     )
 
@@ -326,6 +340,54 @@ def _validate_registration_receipt(fields: Any, *, label: str) -> str:
         f"{label} registration patch-phase agreement failed",
     )
     return status
+
+
+def _validate_boundary_motion_receipt(fields: Any) -> None:
+    _require(isinstance(fields, dict), "accepted frame-gauge transaction is missing boundary-motion evidence")
+    _require(fields.get("status") == "accepted", "accepted frame-gauge boundary-motion gate did not accept")
+    _require(
+        fields.get("policy") == "native_boundary_motion_preservation_v1",
+        "frame-gauge boundary-motion policy drifted",
+    )
+    min_error = _finite_number(fields.get("min_error_cells"))
+    min_improvement = _finite_number(fields.get("min_improvement_ratio"))
+    min_response = _finite_number(fields.get("min_response"))
+    _require(min_error == 0.125, "frame-gauge boundary-motion error threshold drifted")
+    _require(min_improvement == 0.25, "frame-gauge boundary-motion improvement threshold drifted")
+    _require(min_response == 3.0, "frame-gauge boundary-motion response threshold drifted")
+
+    checks = fields.get("checks")
+    _require(isinstance(checks, dict), "frame-gauge boundary-motion ROI receipts are missing")
+    _require(set(checks) == {"upper45", "full"}, "frame-gauge boundary-motion ROI set drifted")
+    for name in ("upper45", "full"):
+        check = checks[name]
+        _require(isinstance(check, dict), f"frame-gauge boundary-motion {name} receipt is malformed")
+        before_error = _finite_number(check.get("before_error_cells"))
+        after_error = _finite_number(check.get("after_error_cells"))
+        improvement = _finite_number(check.get("error_improvement_ratio"))
+        _require(before_error >= 0.0 and after_error >= 0.0, f"frame-gauge boundary-motion {name} error is negative")
+        _require(after_error < before_error, f"frame-gauge boundary-motion {name} candidate did not improve")
+        expected_informative = before_error >= min_error
+        _require(
+            check.get("informative") is expected_informative,
+            f"frame-gauge boundary-motion {name} informative classification drifted",
+        )
+        if expected_informative:
+            _require(
+                improvement >= min_improvement,
+                f"frame-gauge boundary-motion {name} improvement gate failed",
+            )
+        for variant in ("native", "exact_restored", "candidate"):
+            receipt = check.get(variant)
+            _require(isinstance(receipt, dict), f"frame-gauge boundary-motion {name}/{variant} receipt is missing")
+            _finite_number(receipt.get("dx"))
+            _finite_number(receipt.get("dy"))
+            response = _finite_number(receipt.get("response"))
+            _require(receipt.get("clipped") is False, f"frame-gauge boundary-motion {name}/{variant} clipped")
+            _require(
+                response >= min_response,
+                f"frame-gauge boundary-motion {name}/{variant} response gate failed",
+            )
 
 
 def _validate_frame_gauge_transfer(
@@ -445,13 +507,38 @@ def _validate_frame_gauge(
         receipt.get("transform_domain") == expected_transform_domain,
         "frame-gauge transaction used the wrong correction domain",
     )
-    if mode == "on" and result == "accepted":
+    if mode == "on":
         _require(
-            _validate_registration_receipt(receipt.get("video_registration"), label="video") == "accepted",
-            "accepted transaction lacks an accepted video registration",
+            receipt.get("policy_version") == FRAME_GAUGE_POLICY_VERSION,
+            "frame-gauge transaction policy version drifted",
         )
-        if str(receipt.get("guidance_mode", "off")) != "off":
-            _validate_registration_receipt(receipt.get("guidance_registration"), label="guidance")
+        if result == "accepted":
+            _require(
+                _validate_registration_receipt(
+                    receipt.get("video_registration"),
+                    label="video",
+                    policy=LEARNED_VIDEO_POLICY,
+                )
+                == "accepted",
+                "accepted transaction lacks an accepted video registration",
+            )
+            _validate_boundary_motion_receipt(receipt.get("boundary_motion"))
+            if str(receipt.get("guidance_mode", "off")) != "off":
+                _validate_registration_receipt(
+                    receipt.get("guidance_registration"),
+                    label="guidance",
+                    policy=DEFAULT_POLICY,
+                )
+        elif result == "identity":
+            _require(
+                _validate_registration_receipt(
+                    receipt.get("video_registration"),
+                    label="video",
+                    policy=LEARNED_VIDEO_POLICY,
+                )
+                == "identity",
+                "identity transaction lacks an identity video registration",
+            )
     _require(receipt.get("extra_h3_nfe") == 0, "frame-gauge transaction added H3 NFE")
     _require(receipt.get("extra_sampler_lifetimes") == 0, "frame-gauge transaction added a sampler lifetime")
     _require(receipt.get("extra_history_boundaries") == 0, "frame-gauge transaction added a history boundary")
