@@ -663,8 +663,7 @@ def _validate_residual_observation(
             "residual identity observation is above the rigid-residual floor",
         )
         _require(
-            _finite_number(observation.get("ux")) == 0.0
-            and _finite_number(observation.get("uy")) == 0.0,
+            _finite_number(observation.get("ux")) == 0.0 and _finite_number(observation.get("uy")) == 0.0,
             "residual identity observation is not an exact no-correction receipt",
         )
 
@@ -820,8 +819,7 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
         )
     local_model = diagnostic_fits.get("local_projective")
     _require(
-        isinstance(local_model, dict)
-        and local_model.get("status") == "not_implemented",
+        isinstance(local_model, dict) and local_model.get("status") == "not_implemented",
         f"{label} residual geometry unexpectedly enabled a local/projective optimizer",
     )
 
@@ -845,14 +843,11 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
         )
         forward_scale = _finite_number(transform.get("forward_sx"))
         _require(
-            DEFAULT_RESIDUAL_POLICY.min_forward_scale
-            <= forward_scale
-            <= DEFAULT_RESIDUAL_POLICY.max_forward_scale,
+            DEFAULT_RESIDUAL_POLICY.min_forward_scale <= forward_scale <= DEFAULT_RESIDUAL_POLICY.max_forward_scale,
             f"{label} eligible horizontal forward scale exceeds the policy bound",
         )
         _require(
-            _finite_number(models.get("max_corner_residual"))
-            <= DEFAULT_RESIDUAL_POLICY.max_residual_displacement,
+            _finite_number(models.get("max_corner_residual")) <= DEFAULT_RESIDUAL_POLICY.max_residual_displacement,
             f"{label} eligible horizontal corner displacement exceeds the policy bound",
         )
         direct = models.get("direct_feature_checks")
@@ -867,9 +862,7 @@ def _validate_residual_measurement_receipt(fields: Any, *, label: str) -> bool:
             isinstance(parity, list)
             and len(parity) == 4
             and all(
-                isinstance(item, dict)
-                and item.get("status") == "accepted"
-                and item.get("nondegrading") is True
+                isinstance(item, dict) and item.get("status") == "accepted" and item.get("nondegrading") is True
                 for item in parity
             ),
             f"{label} eligible horizontal fit failed H3 parity checks",
@@ -890,9 +883,7 @@ def _validate_residual_geometry(
         expected_result in {"off", "not-evaluated", "measured-only"},
         f"unsupported residual result {expected_result!r}",
     )
-    frame_receipts = [
-        _event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"
-    ]
+    frame_receipts = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
     _require(len(frame_receipts) == 1, "residual gate requires exactly one partitioned frame-gauge receipt")
     frame_receipt = frame_receipts[0]
     receipt = frame_receipt.get("residual_geometry")
@@ -911,14 +902,10 @@ def _validate_residual_geometry(
     )
 
     stage_events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_residual_geometry_stage"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_residual_geometry_stage"
     ]
     evidence_events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_residual_geometry_evidence"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_residual_geometry_evidence"
     ]
     if mode == "off":
         _require(expected_result == "off", "residual OFF control expected a non-OFF result")
@@ -1156,8 +1143,7 @@ def compare_residual_measurement_pair(
     control_complete = one(control, "partitioned_exact_prefix_complete")
     measure_complete = one(measure, "partitioned_exact_prefix_complete")
     _require(
-        control_complete.get("final_prefix_exact") is True
-        and measure_complete.get("final_prefix_exact") is True,
+        control_complete.get("final_prefix_exact") is True and measure_complete.get("final_prefix_exact") is True,
         "matched residual pair lost exact final prefix ownership",
     )
 
