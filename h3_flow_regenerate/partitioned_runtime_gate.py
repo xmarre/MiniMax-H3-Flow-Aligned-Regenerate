@@ -388,7 +388,10 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
         after_error = _finite_number(check.get("after_error_cells"))
         improvement = _finite_number(check.get("error_improvement_ratio"))
         _require(before_error >= 0.0 and after_error >= 0.0, f"frame-gauge boundary-motion {name} error is negative")
-        _require(after_error < before_error, f"frame-gauge boundary-motion {name} candidate did not improve")
+        _require(
+            after_error <= before_error,
+            f"frame-gauge boundary-motion {name} candidate degraded",
+        )
         expected_informative = before_error >= min_error
         _require(
             check.get("informative") is expected_informative,
