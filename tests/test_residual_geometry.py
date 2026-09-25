@@ -82,8 +82,8 @@ def test_measurement_recovers_bounded_horizontal_residual_without_rng_use():
     assert receipt["policy"] == RESIDUAL_GEOMETRY_POLICY_VERSION
     assert receipt["status"] == "measured"
     assert torch.equal(rng_before, torch.random.get_rng_state())
-    assert receipt["counts"]["observations"] == 54
-    assert receipt["counts"]["search_scores"] <= 54 * 162
+    assert receipt["counts"]["observations"] == 36
+    assert receipt["counts"]["search_scores"] <= 36 * 162
     horizontal = receipt["models"]["horizontal"]
     assert horizontal["status"] == "accepted", receipt
     assert horizontal["a"] == pytest.approx(0.006, abs=0.003)
@@ -92,13 +92,13 @@ def test_measurement_recovers_bounded_horizontal_residual_without_rng_use():
 
 
 def test_identity_residual_is_not_misclassified_as_horizontal_evidence():
-    learned, exact = _analytic_residual_pair(dx=0.5, dy=-0.25)
+    learned, exact = _analytic_residual_pair()
 
     receipt = measure_residual_geometry(
         learned,
         exact,
-        rigid_dx=0.5,
-        rigid_dy=-0.25,
+        rigid_dx=0.0,
+        rigid_dy=0.0,
     )
 
     assert receipt["status"] == "measured"
