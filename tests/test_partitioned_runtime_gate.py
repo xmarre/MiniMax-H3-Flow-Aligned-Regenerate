@@ -10,6 +10,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_SOL_ABI,
     RuntimeGateError,
+    compare_residual_measurement_pair,
     validate_partitioned_runtime_evidence,
 )
 
@@ -724,3 +725,114 @@ def test_runtime_gate_rejects_wrong_clean_domain_and_retired_residual_routing():
             _log(),
             expected_frame_gauge_mode="on-accepted",
         )
+
+
+
+def _install_residual_receipt(event, *, mode="off", measured=False, final_path="rigid_v2"):
+    event["fields"]["residual_geometry"] = {
+        "policy": "paired_prefix_residual_geometry_v1",
+        "requested_mode": mode,
+        "measured": measured,
+        "measurement_status": "measured" if measured else ("off" if mode == "off" else "not_evaluated"),
+        "reason": "measurement_only" if measured else ("disabled" if mode == "off" else "rigid_not_accepted"),
+        "selected_model": "none",
+        "decision": "not_evaluated",
+        "applied": False,
+        "final_path": final_path,
+        "video": {"status": "off" if mode == "off" else "not_evaluated"},
+        "guidance": {"status": "off", "reason": "guidance_off"},
+    }
+    event["fields"]["residual_geometry_telemetry_bytes"] = 1024
+    return event
+
+
+def test_runtime_gate_preserves_historical_rigid_v2_when_residual_mode_is_off():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="accepted"),
+        mode="off",
+    )
+    metrics["events"].insert(-2, frame)
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_residual_mode="off",
+        expected_residual_result="off",
+    )
+
+    assert report.residual_geometry_verified is True
+    assert report.residual_geometry_mode == "off"
+    assert report.residual_geometry_result == "off"
+    assert report.residual_geometry_horizontal_eligible is False
+
+
+def test_runtime_gate_rejects_measurement_receipt_that_claims_application():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="rejected")
+    frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="rejected"),
+        mode="measure",
+        final_path="baseline",
+    )
+    frame["fields"]["residual_geometry"]["applied"] = True
+    metrics["events"].insert(-2, frame)
+
+    with pytest.raises(RuntimeGateError, match="applied a residual transform"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_residual_mode="measure",
+            expected_residual_result="not-evaluated",
+        )
+
+
+def test_runtime_gate_accepts_measure_mode_as_not_evaluated_when_rigid_v2_rejects():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="rejected")
+    frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="rejected"),
+        mode="measure",
+        final_path="baseline",
+    )
+    metrics["events"].insert(-2, frame)
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_residual_mode="measure",
+        expected_residual_result="not-evaluated",
+    )
+
+    assert report.residual_geometry_verified is True
+    assert report.residual_geometry_result == "not-evaluated"
+    assert report.residual_geometry_evidence_bundle is None
+
+
+def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
+    control = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    control_frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="accepted"),
+        mode="off",
+    )
+    control["events"].insert(-2, control_frame)
+
+    measure = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    measure_frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="accepted"),
+        mode="measure",
+        measured=True,
+    )
+    measure["events"].insert(-2, measure_frame)
+
+    pair = compare_residual_measurement_pair(control, measure)
+    assert pair["status"] == "matched"
+    assert pair["model_call_topology"] == (
+        ("low", True),
+        ("low", False),
+        ("probe", True),
+        ("high", True),
+        ("high", False),
+    )
+
+    measure["events"][2]["fields"]["actual"] = True
+    with pytest.raises(RuntimeGateError, match="call topology"):
+        compare_residual_measurement_pair(control, measure)
