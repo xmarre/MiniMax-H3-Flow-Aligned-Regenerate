@@ -3481,9 +3481,7 @@ def run_partitioned_progressive(
                 "policy": PARTITIONED_EXACT_OVERLAP_POLICY,
                 "requested": bool(exact_overlap_fallback_requested),
                 "trigger": str(exact_overlap_fallback_trigger),
-                "applied": bool(
-                    representation_metrics.get("suffix_representation_bridge_accepted", False)
-                ),
+                "applied": bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
                 "state_mapping": (
                     "conditional_renoise_affine"
                     if representation_metrics.get("suffix_representation_bridge_accepted", False)
