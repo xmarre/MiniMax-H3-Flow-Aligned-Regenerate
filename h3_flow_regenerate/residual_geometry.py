@@ -1039,35 +1039,43 @@ def measure_residual_geometry(
     started = time.perf_counter()
     if not _finite(rigid_dx) or not _finite(rigid_dy):
         raise ValueError("residual geometry requires finite accepted rigid displacement")
+    if not torch.is_tensor(learned) or learned.ndim != 5:
+        raise ValueError("residual geometry requires a BxCxTxHxW learned tensor")
+    prefix_frames = min(int(learned.shape[2]), DEFAULT_POLICY.max_prefix_frames)
+    height = int(learned.shape[-2])
+    width = int(learned.shape[-1])
+    # _prepare retains two normalized float64 feature tensors on CPU.  Fail
+    # closed before building them, using the worst-case 24-channel support.
+    estimated_cpu_scratch = 2 * prefix_frames * 24 * height * width * 8
+    # Preparation also creates float32 source/smoothed/centered intermediates
+    # on the input device before the bounded CPU representation is retained.
+    estimated_device_prep = 6 * prefix_frames * 24 * height * width * 4
+    if estimated_cpu_scratch > policy.max_cpu_scratch_bytes:
+        return {
+            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+            "status": "rejected",
+            "reason": "cpu_scratch_preflight",
+            "estimated_cpu_scratch_bytes": estimated_cpu_scratch,
+            "estimated_device_prep_upper_bound_bytes": estimated_device_prep,
+            "max_cpu_scratch_bytes": policy.max_cpu_scratch_bytes,
+            "eligible": False,
+            "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+        }
+
     prepared_or_reason = _prepare(learned, exact, DEFAULT_POLICY)
     if isinstance(prepared_or_reason, str):
         return {
             "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
             "status": "rejected",
             "reason": prepared_or_reason,
+            "estimated_cpu_scratch_bytes": estimated_cpu_scratch,
+            "estimated_device_prep_upper_bound_bytes": estimated_device_prep,
+            "max_cpu_scratch_bytes": policy.max_cpu_scratch_bytes,
             "eligible": False,
             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
         }
     prepared = prepared_or_reason
     selected_channels = int(prepared.valid_channels.sum().item())
-    estimated_scratch = (
-        2
-        * len(prepared.frame_indices)
-        * selected_channels
-        * prepared.height
-        * prepared.width
-        * 8
-    )
-    if estimated_scratch > policy.max_cpu_scratch_bytes:
-        return {
-            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
-            "status": "rejected",
-            "reason": "cpu_scratch_preflight",
-            "estimated_cpu_scratch_bytes": estimated_scratch,
-            "max_cpu_scratch_bytes": policy.max_cpu_scratch_bytes,
-            "eligible": False,
-            "elapsed_ms": (time.perf_counter() - started) * 1000.0,
-        }
     observations = []
     bounds = _tile_bounds(prepared.height, prepared.width, DEFAULT_POLICY.margin)
     fit_positions = set(prepared.fit)
@@ -1120,8 +1128,10 @@ def measure_residual_geometry(
             "max_support_axis": DEFAULT_POLICY.max_support_axis,
         },
         "resource": {
-            "estimated_cpu_scratch_bytes": estimated_scratch,
+            "estimated_cpu_scratch_bytes": estimated_cpu_scratch,
+            "estimated_device_prep_upper_bound_bytes": estimated_device_prep,
             "max_cpu_scratch_bytes": policy.max_cpu_scratch_bytes,
+            "allocator_peak_measured": False,
         },
         "elapsed_ms": (time.perf_counter() - started) * 1000.0,
     }
