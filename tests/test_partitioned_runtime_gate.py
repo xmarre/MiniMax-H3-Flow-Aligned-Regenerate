@@ -727,7 +727,6 @@ def test_runtime_gate_rejects_wrong_clean_domain_and_retired_residual_routing():
         )
 
 
-
 def _install_residual_receipt(event, *, mode="off", measured=False, final_path="rigid_v2"):
     event["fields"]["residual_geometry"] = {
         "policy": "paired_prefix_residual_geometry_v1",
