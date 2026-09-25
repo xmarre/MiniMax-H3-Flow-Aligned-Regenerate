@@ -453,7 +453,10 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     """Replay the rejected rigid-v2 boundary gate before authorizing fallback."""
 
     _require(isinstance(fields, dict), "exact-overlap fallback is missing boundary-motion evidence")
-    _require(fields.get("policy") == "native_boundary_motion_preservation_v2", "exact-overlap fallback requires rigid-v2")
+    _require(
+        fields.get("policy") == "native_boundary_motion_preservation_v2",
+        "exact-overlap fallback requires rigid-v2",
+    )
     _require(fields.get("status") == "rejected", "exact-overlap fallback boundary gate was not rejected")
     _require(str(fields.get("reason", "")) == reason, "exact-overlap fallback boundary reason drifted")
     _require(reason in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS, "exact-overlap fallback rejection is ineligible")
