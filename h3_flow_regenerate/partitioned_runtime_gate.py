@@ -369,7 +369,7 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
     _require(fields.get("status") == "accepted", "accepted frame-gauge boundary-motion gate did not accept")
     policy = fields.get("policy")
     _require(
-        policy in {"native_boundary_motion_preservation_v1", "native_boundary_motion_preservation_v2"},
+        policy in ("native_boundary_motion_preservation_v1", "native_boundary_motion_preservation_v2"),
         "frame-gauge boundary-motion policy drifted",
     )
     min_error = _finite_number(fields.get("min_error_cells"))
@@ -421,7 +421,10 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
             # Replay the coordinate-domain comparisons rather than trusting
             # summary errors that could have been computed against native v1.
             def distance(left, right):
-                return math.hypot(left["dx"] - right["dx"], left["dy"] - right["dy"])
+                return math.hypot(
+                    _finite_number(left["dx"]) - _finite_number(right["dx"]),
+                    _finite_number(left["dy"]) - _finite_number(right["dy"]),
+                )
 
             expected_before = distance(check["exact_restored"], check["native"])
             expected_after = distance(check["candidate"], check["transformed_native"])
