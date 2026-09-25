@@ -83,13 +83,13 @@ from .partitioned_stage import (
     build_partitioned_stage_plan,
     tensor_sha256,
 )
+from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .residual_evidence import export_residual_geometry_evidence
 from .residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
     measure_residual_geometry,
     normalize_residual_geometry_mode,
 )
-from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .runtime import (
     FLOW_STAGE_KEY,
     PROBE_CONTEXT_KEY,
