@@ -86,6 +86,10 @@ from .partitioned_stage import (
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .residual_evidence import export_residual_geometry_evidence
+from .representation_bridge import (
+    apply_suffix_representation_bridge,
+    disabled_suffix_representation_bridge_metrics,
+)
 from .residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
     measure_residual_geometry,
@@ -131,6 +135,15 @@ FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
 FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS = 0.125
 FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT = 0.25
 FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
+PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
+    {
+        "boundary_upper45_not_improved",
+        "boundary_full_not_improved",
+        "boundary_upper45_insufficient_improvement",
+        "boundary_full_insufficient_improvement",
+    }
+)
 PARTITIONED_SOL_REQUIRED_METADATA = {
     "api": 1,
     "owner": "comfyui_sol_h3",
@@ -977,6 +990,102 @@ def _apply_partitioned_suffix_dc_bridge(
         corrected_tokens=corrected_tokens,
     )
     return mapped_state, corrected_clean, bridge_metrics
+
+
+def _partitioned_exact_overlap_fallback_eligibility(
+    transaction: dict[str, Any],
+) -> tuple[bool, str]:
+    """Authorize structural overlap repair only after an unambiguous rigid boundary veto.
+
+    The rigid-v2 transaction remains authoritative.  This fallback is not a
+    weaker registration threshold: it is eligible only when video registration
+    accepted, all four boundary-motion witnesses were measurable in both ROIs,
+    and the proposed rigid translation was rejected solely because it did not
+    preserve enough native boundary motion.  Ambiguous, clipped, invalid-area,
+    guidance, or registration failures remain exact baseline fallbacks.
+    """
+
+    if transaction.get("result") != "rejected":
+        return False, "frame_gauge_not_rejected"
+    reason = str(transaction.get("reason", ""))
+    if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
+        return False, "frame_gauge_rejection_not_structural_overlap_eligible"
+    video_registration = transaction.get("video_registration")
+    if not isinstance(video_registration, dict) or video_registration.get("status") != "accepted":
+        return False, "video_registration_not_accepted"
+    boundary = transaction.get("boundary_motion")
+    if (
+        not isinstance(boundary, dict)
+        or boundary.get("status") != "rejected"
+        or str(boundary.get("reason", "")) != reason
+        or boundary.get("policy") != "native_boundary_motion_preservation_v2"
+    ):
+        return False, "boundary_receipt_inconsistent"
+    checks = boundary.get("checks")
+    if not isinstance(checks, dict) or set(checks) != {"upper45", "full"}:
+        return False, "boundary_receipt_incomplete"
+    for roi in ("upper45", "full"):
+        check = checks.get(roi)
+        if not isinstance(check, dict):
+            return False, f"boundary_{roi}_receipt_missing"
+        for variant in ("native", "transformed_native", "exact_restored", "candidate"):
+            receipt = check.get(variant)
+            if not isinstance(receipt, dict):
+                return False, f"boundary_{roi}_{variant}_missing"
+            try:
+                response = float(receipt.get("response"))
+            except (TypeError, ValueError):
+                return False, f"boundary_{roi}_{variant}_response_invalid"
+            if not math.isfinite(response) or response < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
+                return False, f"boundary_{roi}_{variant}_ambiguous"
+            if bool(receipt.get("clipped")):
+                return False, f"boundary_{roi}_{variant}_clipped"
+    return True, reason
+
+
+def _apply_partitioned_exact_overlap_bridge(
+    target_video: torch.Tensor,
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    sigma: float,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
+    """Reconcile the measured exact/learned overlap before authoritative restore.
+
+    The existing representation primitive transfers only the zero-spatial-mean
+    overlap residual onto the first generated suffix token.  The existing DC
+    bridge then transfers the spatial mean.  Their sum is exactly the measured
+    same-time residual E_p-L_p, so the immediate exact-prefix -> suffix clean
+    transition equals the learned provider's native L_p -> L_s transition
+    algebraically.  No later suffix token is extrapolated.
+    """
+
+    prefix_t = int(exact_prefix.shape[2])
+    structured_clean, representation_metrics = apply_suffix_representation_bridge(
+        learned_clean,
+        exact_prefix,
+        requested=True,
+    )
+    corrected_clean, dc_metrics = apply_suffix_dc_bridge(
+        structured_clean,
+        exact_prefix,
+        weights=(1.0,),
+    )
+    corrected_tokens = max(
+        int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
+        int(dc_metrics["suffix_dc_bridge_corrected_tokens"]),
+    )
+    if corrected_tokens < 1:
+        return target_video.clone(), corrected_clean, representation_metrics, dc_metrics
+    mapped_state = map_clean_bridge_to_conditional_state(
+        target_video,
+        learned_clean,
+        corrected_clean,
+        sigma=float(sigma),
+        prefix_t=prefix_t,
+        corrected_tokens=corrected_tokens,
+    )
+    return mapped_state, corrected_clean, representation_metrics, dc_metrics
 
 
 def _prepare_registered_guidance_reference(
@@ -2977,6 +3086,15 @@ def run_partitioned_progressive(
             dtype=target_video.dtype,
         )
         frame_gauge_accepted = frame_gauge_transaction.get("result") == "accepted"
+        exact_overlap_fallback_requested, exact_overlap_fallback_trigger = (
+            _partitioned_exact_overlap_fallback_eligibility(frame_gauge_transaction)
+            if config.frame_gauge_repair and not frame_gauge_accepted
+            else (False, "rigid_v2_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled")
+        )
+        representation_metrics = disabled_suffix_representation_bridge_metrics(
+            prefix_t=stage_plan.prefix_t,
+            requested=False,
+        )
         splice_started = time.perf_counter()
         aligned_witness = None
         if frame_gauge_accepted:
@@ -3003,13 +3121,23 @@ def run_partitioned_progressive(
                 sigma=sigma,
                 seed=diagnostic_seed,
             )
-            target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
-                target_video,
-                learned_clean,
-                exact_prefix,
-                sigma=sigma,
-                enabled=True,
-            )
+            if exact_overlap_fallback_requested:
+                target_video, corrected_clean, representation_metrics, dc_metrics = (
+                    _apply_partitioned_exact_overlap_bridge(
+                        target_video,
+                        learned_clean,
+                        exact_prefix,
+                        sigma=sigma,
+                    )
+                )
+            else:
+                target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
+                    target_video,
+                    learned_clean,
+                    exact_prefix,
+                    sigma=sigma,
+                    enabled=True,
+                )
             splice_recovery = "inverse_conditional_renoise"
 
         splice_diagnostics = measure_exact_prefix_splice(
@@ -3139,6 +3267,36 @@ def run_partitioned_progressive(
             aligned_translation_start_frame=frame_gauge_transaction.get("aligned_translation_start_frame"),
             residual_geometry=residual_geometry_receipt,
             residual_geometry_telemetry_bytes=residual_telemetry_bytes,
+            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+            exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
+            exact_overlap_fallback_applied=bool(
+                representation_metrics.get("suffix_representation_bridge_accepted", False)
+            ),
+            exact_overlap_fallback_policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+            exact_overlap_fallback_transformed_states=(
+                ["learned_suffix_first"]
+                if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                else []
+            ),
+        )
+
+        binding.metrics.event(
+            "partitioned_exact_overlap_bridge",
+            policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+            requested=bool(exact_overlap_fallback_requested),
+            trigger=str(exact_overlap_fallback_trigger),
+            applied=bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
+            state_mapping=(
+                "conditional_renoise_affine"
+                if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                else "disabled_or_noop"
+            ),
+            authoritative_prefix_modified=False,
+            later_suffix_extrapolated=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            **representation_metrics,
         )
 
         restored_clean = corrected_clean.clone()
@@ -3319,6 +3477,22 @@ def run_partitioned_progressive(
                 "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
             ),
             suffix_dc_bridge_policy="one_token_spatial_mean_v1",
+            partitioned_exact_overlap_bridge={
+                "policy": PARTITIONED_EXACT_OVERLAP_POLICY,
+                "requested": bool(exact_overlap_fallback_requested),
+                "trigger": str(exact_overlap_fallback_trigger),
+                "applied": bool(
+                    representation_metrics.get("suffix_representation_bridge_accepted", False)
+                ),
+                "state_mapping": (
+                    "conditional_renoise_affine"
+                    if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                    else "disabled_or_noop"
+                ),
+                "authoritative_prefix_modified": False,
+                "later_suffix_extrapolated": False,
+                **representation_metrics,
+            },
             **dc_metrics,
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
