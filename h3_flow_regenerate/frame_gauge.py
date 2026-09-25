@@ -150,7 +150,7 @@ def _prepare(
     learned_positive = learned_channel_rms[learned_channel_rms > 0]
     exact_positive = exact_channel_rms[exact_channel_rms > 0]
     if learned_positive.numel() == 0 or exact_positive.numel() == 0:
-        return "ambiguous_low_energy"
+        return "insufficient_valid_channels"
     learned_threshold = max(
         1e-6,
         0.01 * float(torch.median(learned_positive).item()),
