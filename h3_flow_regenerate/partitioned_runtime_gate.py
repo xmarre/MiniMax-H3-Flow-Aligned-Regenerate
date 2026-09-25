@@ -35,6 +35,15 @@ VDN_LINEAR_ACTIVE_MARKER = (
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
+PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
+    {
+        "boundary_upper45_not_improved",
+        "boundary_full_not_improved",
+        "boundary_upper45_insufficient_improvement",
+        "boundary_full_insufficient_improvement",
+    }
+)
 _SOL_PREFIX = "Sol-H3 "
 
 
@@ -490,6 +499,57 @@ def _validate_frame_gauge_transfer(
         "retired full-field residual/gauge bridge became active",
     )
 
+    # Current partitioned heads emit this nested receipt on every path.  It is
+    # optional here so historical evidence remains replayable.  When present,
+    # validate the partitioned-local exact-overlap fallback independently from
+    # the rigid frame-gauge result; it is not a deprecated Mixed-Grid route.
+    overlap = transfer.get("partitioned_exact_overlap_bridge")
+    if overlap is not None:
+        _require(isinstance(overlap, dict), "partitioned exact-overlap receipt is malformed")
+        _require(
+            overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_POLICY,
+            "partitioned exact-overlap policy version drifted",
+        )
+        requested = overlap.get("requested") is True
+        applied = overlap.get("applied") is True
+        _require(
+            overlap.get("authoritative_prefix_modified") is False,
+            "partitioned exact-overlap repair altered authoritative prefix ownership",
+        )
+        _require(
+            overlap.get("later_suffix_extrapolated") is False,
+            "partitioned exact-overlap repair extrapolated into unmeasured later suffix tokens",
+        )
+        if requested:
+            _require(
+                enabled and result == "rejected",
+                "partitioned exact-overlap repair was requested outside a rejected frame-gauge arm",
+            )
+            _require(
+                str(overlap.get("trigger", "")) in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+                "partitioned exact-overlap repair used an ineligible frame-gauge rejection",
+            )
+        if applied:
+            _require(requested, "partitioned exact-overlap repair applied without being requested")
+            _require(
+                overlap.get("suffix_representation_bridge_accepted") is True
+                and overlap.get("suffix_representation_bridge_enabled") is True,
+                "partitioned exact-overlap repair lacks an accepted structural-overlap receipt",
+            )
+            _require(
+                int(overlap.get("suffix_representation_bridge_corrected_tokens", 0)) == 1,
+                "partitioned exact-overlap repair changed more than the first suffix token",
+            )
+            _require(
+                overlap.get("state_mapping") == "conditional_renoise_affine",
+                "partitioned exact-overlap repair used the wrong conditional-state mapping",
+            )
+        else:
+            _require(
+                overlap.get("state_mapping") == "disabled_or_noop",
+                "inactive partitioned exact-overlap repair reports an active state mapping",
+            )
+
 
 def _validate_frame_gauge(
     window: list[dict[str, Any]],
@@ -599,6 +659,27 @@ def _validate_frame_gauge(
         "frame-gauge receipt did not mark auto-strength provenance as an acceptance prerequisite",
     )
     _validate_frame_gauge_transfer(window, mode=mode, result=result)
+    if "exact_overlap_fallback_policy" in receipt:
+        _require(
+            receipt.get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_POLICY,
+            "frame-gauge exact-overlap fallback policy version drifted",
+        )
+        fallback_requested = receipt.get("exact_overlap_fallback_requested") is True
+        fallback_applied = receipt.get("exact_overlap_fallback_applied") is True
+        if fallback_requested:
+            _require(
+                mode == "on" and result == "rejected",
+                "frame-gauge exact-overlap fallback was requested outside the rejected ON arm",
+            )
+            _require(
+                str(receipt.get("exact_overlap_fallback_trigger", ""))
+                in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+                "frame-gauge exact-overlap fallback trigger is not eligible",
+            )
+        _require(
+            not fallback_applied or fallback_requested,
+            "frame-gauge exact-overlap fallback applied without a request",
+        )
     video_dx = _finite_number(receipt.get("video_dx", 0.0))
     video_dy = _finite_number(receipt.get("video_dy", 0.0))
     guidance_dx = _finite_number(receipt.get("guidance_dx", 0.0))
