@@ -491,20 +491,9 @@ def estimate_paired_prefix_translation(
         policy,
     )
     dx, dy, fit_loss = best
-    _, validation_rms, validation_ncc = _metrics(
-        prepared,
-        prepared.validation,
-        coords,
-        dx,
-        dy,
-    )
-    _, zero_rms, zero_ncc = _metrics(
-        prepared,
-        prepared.validation,
-        coords,
-        0.0,
-        0.0,
-    )
+    validation_view = _metric_view(prepared, prepared.validation, coords)
+    _, validation_rms, validation_ncc = _metrics_presliced(validation_view, dx, dy)
+    _, zero_rms, zero_ncc = _metrics_presliced(validation_view, 0.0, 0.0)
     improvement = (zero_rms - validation_rms) / max(zero_rms, 1e-8)
     runner_loss = math.inf if runner is None else runner[2]
     runner_margin = (runner_loss - fit_loss) / max(zero_fit_loss, 1e-8)
@@ -669,8 +658,9 @@ def estimate_paired_prefix_translation(
                 )
 
     last = prepared.validation[-1]
-    _, last_rms, last_ncc = _metrics(prepared, (last,), coords, dx, dy)
-    _, last_zero_rms, last_zero_ncc = _metrics(prepared, (last,), coords, 0.0, 0.0)
+    last_view = _metric_view(prepared, (last,), coords)
+    _, last_rms, last_ncc = _metrics_presliced(last_view, dx, dy)
+    _, last_zero_rms, last_zero_ncc = _metrics_presliced(last_view, 0.0, 0.0)
     last_improvement = (last_zero_rms - last_rms) / max(last_zero_rms, 1e-8)
     if identity_candidate:
         if last_zero_ncc < policy.min_ncc:
