@@ -61,6 +61,18 @@ def _finite(value: float) -> bool:
     return math.isfinite(float(value))
 
 
+def _finite_json(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_finite_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [_finite_json(item) for item in value]
+    return value
+
+
 def _tile_bounds(height: int, width: int, margin: int) -> tuple[tuple[str, tuple[int, int, int, int]], ...]:
     y0, y3 = margin, height - margin
     x0, x3 = margin, width - margin
@@ -732,7 +744,7 @@ def measure_residual_geometry(
     unavailable_count = sum(item.get("status") == "unavailable" for item in observations)
     rejected_count = sum(item.get("status") == "rejected" for item in observations)
     identity_count = sum(item.get("status") == "identity" for item in observations)
-    return {
+    receipt = {
         "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
         "status": "measured",
         "reason": "measured",
@@ -767,6 +779,7 @@ def measure_residual_geometry(
         },
         "elapsed_ms": (time.perf_counter() - started) * 1000.0,
     }
+    return _finite_json(receipt)
 
 
 __all__ = [
