@@ -2628,6 +2628,7 @@ def run_partitioned_progressive(
                     split_coordinate=split_coordinate,
                     high_sigmas=high_sigmas,
                     video_shift=video_shift,
+                    residual_mode=config.frame_gauge_residual_mode,
                 )
                 pending_registered_reference = registered
                 frame_gauge_witnesses = witnesses
