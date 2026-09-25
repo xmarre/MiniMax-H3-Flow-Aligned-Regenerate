@@ -24,6 +24,7 @@ class FrameGaugePolicy:
     min_ncc: float = 0.75
     min_rms_improvement: float = 0.15
     min_runner_margin: float = 0.05
+    require_global_runner_margin: bool = True
     consistency_tolerance: float = 0.25
     conflict_tolerance: float = 0.5
     max_invalid_fraction: float = 0.08
@@ -33,9 +34,15 @@ DEFAULT_POLICY = FrameGaugePolicy()
 
 # Learned provider synthesis can differ from the authoritative exact prefix
 # beyond a rigid displacement. Video activation therefore treats prefix-wide
-# RMS as a non-degradation check and separately verifies boundary-motion
-# preservation. Guidance remains on the stricter generic registration policy.
-LEARNED_VIDEO_POLICY = FrameGaugePolicy(min_rms_improvement=0.0)
+# RMS as a non-degradation check and does not let the aggregate fit's runner
+# margin short-circuit the stronger held-out frame/region/parity checks plus
+# the downstream native-boundary-motion preservation gate. The per-check
+# runner margin itself remains strict. Guidance remains on the stricter generic
+# registration policy.
+LEARNED_VIDEO_POLICY = FrameGaugePolicy(
+    min_rms_improvement=0.0,
+    require_global_runner_margin=False,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,6 +487,7 @@ def estimate_paired_prefix_translation(
         "min_ncc": policy.min_ncc,
         "min_rms_improvement": policy.min_rms_improvement,
         "min_runner_margin": policy.min_runner_margin,
+        "require_global_runner_margin": policy.require_global_runner_margin,
         "consistency_tolerance": policy.consistency_tolerance,
         "conflict_tolerance": policy.conflict_tolerance,
     }
@@ -504,7 +512,7 @@ def estimate_paired_prefix_translation(
             return reject("validation_ncc")
         if improvement < policy.min_rms_improvement:
             return reject("insufficient_validation_improvement")
-        if runner_margin < policy.min_runner_margin:
+        if policy.require_global_runner_margin and runner_margin < policy.min_runner_margin:
             return reject("ambiguous_runner_up")
 
     frame_checks = []
