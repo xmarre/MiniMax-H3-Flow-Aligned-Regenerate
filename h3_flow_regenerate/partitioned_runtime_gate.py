@@ -449,6 +449,73 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                 )
 
 
+def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
+    """Replay the rejected rigid-v2 boundary gate before authorizing fallback."""
+
+    _require(isinstance(fields, dict), "exact-overlap fallback is missing boundary-motion evidence")
+    _require(fields.get("policy") == "native_boundary_motion_preservation_v2", "exact-overlap fallback requires rigid-v2")
+    _require(fields.get("status") == "rejected", "exact-overlap fallback boundary gate was not rejected")
+    _require(str(fields.get("reason", "")) == reason, "exact-overlap fallback boundary reason drifted")
+    _require(reason in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS, "exact-overlap fallback rejection is ineligible")
+
+    min_error = _finite_number(fields.get("min_error_cells"))
+    min_improvement = _finite_number(fields.get("min_improvement_ratio"))
+    min_response = _finite_number(fields.get("min_response"))
+    _require(min_error == 0.125, "exact-overlap fallback boundary error threshold drifted")
+    _require(min_improvement == 0.25, "exact-overlap fallback boundary improvement threshold drifted")
+    _require(min_response == 3.0, "exact-overlap fallback boundary response threshold drifted")
+
+    checks = fields.get("checks")
+    _require(isinstance(checks, dict) and set(checks) == {"upper45", "full"}, "exact-overlap fallback ROI set drifted")
+
+    observed_reason = None
+    for name in ("upper45", "full"):
+        check = checks[name]
+        _require(isinstance(check, dict), f"exact-overlap fallback {name} receipt is malformed")
+        before_error = _finite_number(check.get("before_error_cells"))
+        after_error = _finite_number(check.get("after_error_cells"))
+        improvement = _finite_number(check.get("error_improvement_ratio"))
+        _require(before_error >= 0.0 and after_error >= 0.0, f"exact-overlap fallback {name} error is negative")
+        informative = before_error >= min_error
+        _require(check.get("informative") is informative, f"exact-overlap fallback {name} informative flag drifted")
+
+        for variant in ("native", "transformed_native", "exact_restored", "candidate"):
+            receipt = check.get(variant)
+            _require(isinstance(receipt, dict), f"exact-overlap fallback {name}/{variant} receipt is missing")
+            _finite_number(receipt.get("dx"))
+            _finite_number(receipt.get("dy"))
+            response = _finite_number(receipt.get("response"))
+            _require(receipt.get("clipped") is False, f"exact-overlap fallback {name}/{variant} clipped")
+            _require(response >= min_response, f"exact-overlap fallback {name}/{variant} response gate failed")
+
+        def distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+            return math.hypot(
+                _finite_number(left["dx"]) - _finite_number(right["dx"]),
+                _finite_number(left["dy"]) - _finite_number(right["dy"]),
+            )
+
+        expected_before = distance(check["exact_restored"], check["native"])
+        expected_after = distance(check["candidate"], check["transformed_native"])
+        expected_improvement = (expected_before - expected_after) / max(expected_before, 1e-12)
+        for label, actual, expected in (
+            ("before error", before_error, expected_before),
+            ("after error", after_error, expected_after),
+            ("improvement", improvement, expected_improvement),
+        ):
+            _require(
+                math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-12),
+                f"exact-overlap fallback {name} {label} does not reproduce",
+            )
+
+        if observed_reason is None:
+            if after_error > before_error:
+                observed_reason = f"boundary_{name}_not_improved"
+            elif informative and improvement < min_improvement:
+                observed_reason = f"boundary_{name}_insufficient_improvement"
+
+    _require(observed_reason == reason, "exact-overlap fallback does not reproduce the recorded boundary veto")
+
+
 def _validate_frame_gauge_transfer(
     window: list[dict[str, Any]],
     *,
@@ -675,15 +742,25 @@ def _validate_frame_gauge(
                 mode == "on" and result == "rejected",
                 "frame-gauge exact-overlap fallback was requested outside the rejected ON arm",
             )
+            trigger = str(receipt.get("exact_overlap_fallback_trigger", ""))
             _require(
-                str(receipt.get("exact_overlap_fallback_trigger", ""))
-                in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+                trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
                 "frame-gauge exact-overlap fallback trigger is not eligible",
             )
             _require(
-                receipt.get("reason") == receipt.get("exact_overlap_fallback_trigger"),
+                receipt.get("reason") == trigger,
                 "frame-gauge exact-overlap fallback trigger differs from the transaction rejection",
             )
+            _require(
+                _validate_registration_receipt(
+                    receipt.get("video_registration"),
+                    label="video",
+                    policy=LEARNED_VIDEO_POLICY,
+                )
+                == "accepted",
+                "frame-gauge exact-overlap fallback lacks an accepted video registration",
+            )
+            _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
         _require(
             not fallback_applied or fallback_requested,
             "frame-gauge exact-overlap fallback applied without a request",
