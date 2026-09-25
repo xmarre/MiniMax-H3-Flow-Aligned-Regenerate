@@ -146,8 +146,15 @@ def test_split_frame_translation_is_rejected_instead_of_lower_mad_acceptance():
         per_frame_shift=shifts,
     )
     estimate = estimate_paired_prefix_translation(learned, exact)
+    video_estimate = estimate_paired_prefix_translation(
+        learned,
+        exact,
+        policy=LEARNED_VIDEO_POLICY,
+    )
     assert estimate.rejected
     assert estimate.reason != "accepted"
+    assert video_estimate.rejected
+    assert video_estimate.reason != "accepted"
 
 
 def test_translation_sign_border_prefix_and_input_ownership():
@@ -230,6 +237,11 @@ def test_registration_rejects_local_nonrigid_spatial_conflict():
     learned[..., : learned.shape[-1] // 2] = learned_left[..., : learned.shape[-1] // 2]
 
     estimate = estimate_paired_prefix_translation(learned, exact)
+    video_estimate = estimate_paired_prefix_translation(
+        learned,
+        exact,
+        policy=LEARNED_VIDEO_POLICY,
+    )
 
     assert estimate.rejected
     assert estimate.reason in {
@@ -239,6 +251,8 @@ def test_registration_rejects_local_nonrigid_spatial_conflict():
         "ambiguous_runner_up",
         "insufficient_validation_improvement",
     }
+    assert video_estimate.rejected
+    assert video_estimate.reason != "accepted"
 
 
 def test_registration_rejects_informative_patch_phase_disagreement():
@@ -248,6 +262,11 @@ def test_registration_rejects_informative_patch_phase_disagreement():
     learned[..., 0::2, 0::2] = learned_phase[..., 0::2, 0::2]
 
     estimate = estimate_paired_prefix_translation(learned, exact)
+    video_estimate = estimate_paired_prefix_translation(
+        learned,
+        exact,
+        policy=LEARNED_VIDEO_POLICY,
+    )
 
     assert estimate.rejected, estimate.telemetry()
     assert estimate.reason in {
@@ -256,6 +275,8 @@ def test_registration_rejects_informative_patch_phase_disagreement():
         "regional_disagreement",
         "regional_conflict",
     }
+    assert video_estimate.rejected, video_estimate.telemetry()
+    assert video_estimate.reason != "accepted"
 
 
 def test_last_holdout_disagreement_cannot_be_averaged_away():
