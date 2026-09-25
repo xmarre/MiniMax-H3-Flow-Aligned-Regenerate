@@ -43,6 +43,7 @@ def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_rest
     assert fields["splice_diagnostic_version"] == 1
     assert fields["splice_prefix_temporal_length"] == 2
     assert fields["splice_recovery"] == "inverse_conditional_renoise"
+    assert fields["splice_clean_source"] == "inverse_recovered"
     assert fields["splice_scope"] == "learned_clean_before_exact_prefix_restore"
     assert fields["upscaler_native_seam_rms"] == pytest.approx(1.0, abs=1e-5)
     assert fields["exact_restored_seam_rms"] == pytest.approx(8.0, abs=1e-5)

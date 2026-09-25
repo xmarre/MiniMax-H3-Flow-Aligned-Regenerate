@@ -54,6 +54,29 @@ def main() -> None:
         help="Validate the selected target-audio position policy and its candidate receipts.",
     )
     parser.add_argument(
+        "--expected-frame-gauge-mode",
+        choices=("off", "on-accepted", "on-rejected", "on-identity"),
+        help="Require the latest partitioned frame-gauge arm/result and its zero-extra-work receipt.",
+    )
+    parser.add_argument(
+        "--auto-strength-report",
+        action="append",
+        type=Path,
+        default=[],
+        help="Resolved DoRA auto_strength_report_json file. Repeat for every applicable loader.",
+    )
+    parser.add_argument(
+        "--require-auto-strength-off",
+        action="store_true",
+        help="Fail unless every supplied DoRA loader report proves resolved auto-strength OFF.",
+    )
+    parser.add_argument(
+        "--expected-auto-strength-digest",
+        action="append",
+        default=[],
+        help="Expected canonical DoRA report digest from the matched control arm. Repeat as needed.",
+    )
+    parser.add_argument(
         "--allow-no-spectrum",
         action="store_true",
         help="Do not require at least one Spectrum forecast call.",
@@ -70,8 +93,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.expected_frame_gauge_mode is not None:
+        if not args.require_auto_strength_off:
+            parser.error("frame-gauge hardware validation requires --require-auto-strength-off")
+        if not args.auto_strength_report:
+            parser.error("frame-gauge hardware validation requires at least one --auto-strength-report")
+        if args.expected_frame_gauge_mode != "off" and not args.expected_auto_strength_digest:
+            parser.error(
+                "frame-gauge ON validation requires --expected-auto-strength-digest from the matched OFF control"
+            )
+
     metrics = _read_json(args.metrics)
     log_text = _read_text(args.log)
+    auto_strength_reports = [_read_json(path) for path in args.auto_strength_report]
     try:
         report = validate_partitioned_runtime_evidence(
             metrics,
@@ -84,6 +118,12 @@ def main() -> None:
             require_audio_overlap=not args.allow_no_audio_overlap,
             require_vdn_linear=not args.allow_no_vdn_linear,
             expected_audio_position_domain=args.expected_audio_position_domain,
+            expected_frame_gauge_mode=args.expected_frame_gauge_mode,
+            auto_strength_reports=auto_strength_reports,
+            require_auto_strength_off=args.require_auto_strength_off,
+            expected_auto_strength_digests=(
+                args.expected_auto_strength_digest if args.expected_auto_strength_digest else None
+            ),
         )
     except RuntimeGateError as exc:
         raise SystemExit(f"partitioned exact-prefix runtime gate: FAIL: {exc}") from exc
