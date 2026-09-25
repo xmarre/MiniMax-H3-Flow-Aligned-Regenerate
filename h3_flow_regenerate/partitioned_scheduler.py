@@ -1667,6 +1667,25 @@ def _frame_gauge_clean_postprocess(
     ):
         raise RuntimeError("frame-gauge clean transaction altered learned prefix ownership")
 
+    if residual_mode == "measure":
+        video_residual = residual_geometry.get("video", {})
+        tile_bounds = video_residual.get("tile_bounds")
+        if isinstance(tile_bounds, dict):
+            residual_geometry["boundary_regional"] = _regional_boundary_motion_receipts(
+                learned_clean,
+                exact_prefix,
+                aligned_witness,
+                corrected_clean,
+                prefix_t=prefix_t,
+                tile_bounds=tile_bounds,
+            )
+        else:
+            residual_geometry["boundary_regional"] = {
+                "policy": "paired_prefix_residual_boundary_regions_v1",
+                "status": "not_evaluated",
+                "reason": "regional_measurement_unavailable",
+            }
+
     video_registration = dict(transaction["video_registration"])
     video_registration["invalid_fraction"] = float(aligned_application.invalid_fraction)
     transaction["video_registration"] = video_registration
