@@ -59,6 +59,19 @@ def main() -> None:
         help="Require the latest partitioned frame-gauge arm/result and its zero-extra-work receipt.",
     )
     parser.add_argument(
+        "--expected-residual-mode",
+        choices=("off", "measure"),
+        help="Validate the staged exact-prefix residual-geometry mode.",
+    )
+    parser.add_argument(
+        "--expected-residual-result",
+        choices=("off", "not-evaluated", "measured-only"),
+        help=(
+            "Require residual geometry to remain OFF/not-evaluated or to complete "
+            "measurement-only evidence without applying horizontal correction."
+        ),
+    )
+    parser.add_argument(
         "--auto-strength-report",
         action="append",
         type=Path,
@@ -93,6 +106,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if (args.expected_residual_mode is None) != (args.expected_residual_result is None):
+        parser.error("--expected-residual-mode and --expected-residual-result must be supplied together")
+    if args.expected_residual_mode == "measure" and args.expected_frame_gauge_mode is None:
+        parser.error("residual measurement validation requires --expected-frame-gauge-mode")
     if args.expected_frame_gauge_mode is not None:
         if not args.require_auto_strength_off:
             parser.error("frame-gauge hardware validation requires --require-auto-strength-off")
@@ -119,6 +136,8 @@ def main() -> None:
             require_vdn_linear=not args.allow_no_vdn_linear,
             expected_audio_position_domain=args.expected_audio_position_domain,
             expected_frame_gauge_mode=args.expected_frame_gauge_mode,
+            expected_residual_mode=args.expected_residual_mode,
+            expected_residual_result=args.expected_residual_result,
             auto_strength_reports=auto_strength_reports,
             require_auto_strength_off=args.require_auto_strength_off,
             expected_auto_strength_digests=(
