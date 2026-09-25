@@ -837,10 +837,7 @@ def replay_horizontal_telemetry(
         "matrix_roundtrip_abs_max": roundtrip_error,
     }
 
-    envelope_scales = [
-        1.0 / (1.0 - value) if abs(1.0 - value) > 1e-12 else math.inf
-        for value in (a_lo, a_hi)
-    ]
+    envelope_scales = [1.0 / (1.0 - value) if abs(1.0 - value) > 1e-12 else math.inf for value in (a_lo, a_hi)]
     result["forward_scale_envelope"] = [min(envelope_scales), max(envelope_scales)]
     result["max_corner_residual"] = max(
         abs(a_variant * (x - cx) + b_variant)
@@ -862,12 +859,7 @@ def replay_horizontal_telemetry(
     )
     source_x = xx - a * (xx - cx) - b - float(rigid_dx)
     source_y = yy - float(rigid_dy)
-    valid = (
-        (source_x >= 0.0)
-        & (source_x <= float(width - 1))
-        & (source_y >= 0.0)
-        & (source_y <= float(height - 1))
-    )
+    valid = (source_x >= 0.0) & (source_x <= float(width - 1)) & (source_y >= 0.0) & (source_y <= float(height - 1))
     result["candidate_invalid_fraction"] = 1.0 - float(valid.to(torch.float64).mean().item())
     return _finite_json(result)
 
@@ -924,11 +916,7 @@ def _model_receipts(
     ]
     identity_supported = True
     for frame in fit_frames | holdout_frames:
-        identity_ids = {
-            str(obs["tile_id"])
-            for obs in identity_observations
-            if int(obs["frame_index"]) == int(frame)
-        }
+        identity_ids = {str(obs["tile_id"]) for obs in identity_observations if int(obs["frame_index"]) == int(frame)}
         if not required_tiles.issubset(identity_ids):
             identity_supported = False
             break
@@ -947,11 +935,7 @@ def _model_receipts(
         if usable_frames < 2:
             failures.append(f"insufficient_{phase}_global_support")
     last_frame = max(fit_frames | holdout_frames)
-    last_ids = {
-        str(obs["tile_id"])
-        for obs in accepted
-        if int(obs["frame_index"]) == int(last_frame)
-    }
+    last_ids = {str(obs["tile_id"]) for obs in accepted if int(obs["frame_index"]) == int(last_frame)}
     result["last_holdout_global_support"] = required_tiles.issubset(last_ids)
     if not result["last_holdout_global_support"] and not identity_supported:
         failures.append("insufficient_last_holdout_support")
@@ -1127,11 +1111,7 @@ def _model_receipts(
         x_extent = (prepared.width - 1) / 2.0
         y_extent = (prepared.height - 1) / 2.0
         omitted_ux = abs(float(affine["h"])) * y_extent
-        omitted_uy = (
-            abs(float(affine["k"])) * x_extent
-            + abs(float(affine["e"])) * y_extent
-            + abs(float(affine["by"]))
-        )
+        omitted_uy = abs(float(affine["k"])) * x_extent + abs(float(affine["e"])) * y_extent + abs(float(affine["by"]))
         omitted_component = max(omitted_ux, omitted_uy)
         result["diagnostic_omitted_component_max"] = omitted_component
         if omitted_component > policy.max_cross_axis:
