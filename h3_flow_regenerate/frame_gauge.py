@@ -31,11 +31,10 @@ class FrameGaugePolicy:
 
 DEFAULT_POLICY = FrameGaugePolicy()
 
-# Hardware run 00662 showed a coherent learned-video displacement with strong
-# NCC/runner separation but only 6.9% prefix-wide RMS gain. Learned synthesis
-# differs from the authoritative exact prefix, so video activation now uses
-# non-degradation here and a separate direct boundary-motion preservation gate.
-# Guidance retains the stricter default until equivalent runtime evidence exists.
+# Learned provider synthesis can differ from the authoritative exact prefix
+# beyond a rigid displacement. Video activation therefore treats prefix-wide
+# RMS as a non-degradation check and separately verifies boundary-motion
+# preservation. Guidance remains on the stricter generic registration policy.
 LEARNED_VIDEO_POLICY = FrameGaugePolicy(min_rms_improvement=0.0)
 
 
