@@ -773,7 +773,7 @@ def test_runtime_gate_rejects_unbound_or_nonfinite_reported_frame_gauge_displace
     receipt["fields"]["video_dx"] = float("nan")
     metrics["events"].insert(-2, receipt)
 
-    with pytest.raises(RuntimeGateError, match="finite number"):
+    with pytest.raises(RuntimeGateError, match="non-finite numeric value"):
         validate_partitioned_runtime_evidence(
             metrics,
             _log(),
