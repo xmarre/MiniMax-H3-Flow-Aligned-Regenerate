@@ -1371,6 +1371,30 @@ def _frame_gauge_clean_postprocess(
         policy=LEARNED_VIDEO_POLICY,
     )
     guidance_active = guidance is not None and guidance.mode != "off"
+    residual_witnesses: dict[str, torch.Tensor] = {}
+    residual_geometry: dict[str, Any] = {
+        "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+        "requested_mode": residual_mode,
+        "measured": False,
+        "measurement_status": "off" if residual_mode == "off" else "not_evaluated",
+        "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+        "selected_model": "none",
+        "decision": "not_evaluated",
+        "applied": False,
+        "final_path": "baseline",
+        "video": {
+            "status": "off" if residual_mode == "off" else "not_evaluated",
+            "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+        },
+        "guidance": (
+            {"status": "off", "reason": "guidance_off"}
+            if not guidance_active
+            else {
+                "status": "off" if residual_mode == "off" else "not_evaluated",
+                "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+            }
+        ),
+    }
     transaction: dict[str, Any] = {
         "policy_version": FRAME_GAUGE_POLICY_VERSION,
         "video_registration": video_estimate.telemetry(),
@@ -1384,6 +1408,7 @@ def _frame_gauge_clean_postprocess(
         "reason": video_estimate.reason,
         "dc_applied_in_clean_hook": False,
         "spatial_warp_applied": False,
+        "residual_geometry": residual_geometry,
     }
     if not video_estimate.accepted:
         if guidance_active:
@@ -1471,6 +1496,8 @@ def _frame_gauge_clean_postprocess(
             split_coordinate=split_coordinate,
             high_sigmas=high_sigmas,
             video_shift=video_shift,
+            residual_mode=residual_mode,
+            residual_witnesses=residual_witnesses,
         )
         transaction["guidance_registration"] = guidance_fields
         if guidance_error is not None:
@@ -1483,6 +1510,40 @@ def _frame_gauge_clean_postprocess(
                 metadata=transaction,
             )
             return result, None, {}, transaction
+
+    if residual_mode == "measure":
+        video_residual = measure_residual_geometry(
+            learned_clean[:, :, :prefix_t],
+            exact_prefix,
+            rigid_dx=float(video_estimate.dx),
+            rigid_dy=float(video_estimate.dy),
+        )
+        guidance_residual = (
+            transaction["guidance_registration"].get(
+                "residual_geometry",
+                {
+                    "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                    "status": "not_evaluated",
+                    "reason": "guidance_residual_missing",
+                    "eligible": False,
+                },
+            )
+            if guidance_active
+            else {"status": "off", "reason": "guidance_off"}
+        )
+        residual_geometry.update(
+            measured=True,
+            measurement_status="measured",
+            reason="measurement_only",
+            selected_model=str(video_residual.get("selected_model", "none")),
+            decision="not_evaluated",
+            applied=False,
+            final_path="rigid_v2",
+            video=video_residual,
+            guidance=guidance_residual,
+        )
+    else:
+        residual_geometry.update(final_path="rigid_v2")
 
     diagnostic_end = min(
         int(learned_clean.shape[2]),
@@ -1558,6 +1619,7 @@ def _frame_gauge_clean_postprocess(
         "paired_prefix_aligned_witness": aligned_witness,
         "corrected_clean": (corrected_clean[:, :, :diagnostic_end].detach().clone()),
     }
+    witnesses.update(residual_witnesses)
     result = CleanVideoPostprocessResult(
         clean_video=corrected_clean,
         protected_prefix_t=prefix_t,
