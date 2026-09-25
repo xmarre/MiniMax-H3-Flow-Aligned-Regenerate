@@ -1742,7 +1742,12 @@ def _frame_gauge_clean_postprocess(
             protected_prefix_t=prefix_t,
             metadata=transaction,
         )
-        return result, None, {}, transaction
+        witnesses = {
+            "learned_boundary_pair": learned_clean[
+                :, :, prefix_t - 1 : prefix_t + 1
+            ].detach().clone()
+        }
+        return result, None, witnesses, transaction
 
     registered_reference = None
     if guidance_active:
@@ -3122,6 +3127,26 @@ def run_partitioned_progressive(
                 seed=diagnostic_seed,
             )
             if exact_overlap_fallback_requested:
+                learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
+                if learned_boundary_pair is None:
+                    raise RuntimeError(
+                        "eligible exact-overlap fallback lost the actual provider boundary witness"
+                    )
+                expected_boundary_shape = (
+                    int(learned_clean.shape[0]),
+                    int(learned_clean.shape[1]),
+                    2,
+                    int(learned_clean.shape[-2]),
+                    int(learned_clean.shape[-1]),
+                )
+                if tuple(learned_boundary_pair.shape) != expected_boundary_shape:
+                    raise RuntimeError(
+                        "eligible exact-overlap fallback provider boundary witness geometry drifted"
+                    )
+                learned_clean = learned_clean.clone()
+                learned_clean[:, :, stage_plan.prefix_t - 1 : stage_plan.prefix_t + 1] = (
+                    learned_boundary_pair.to(learned_clean)
+                )
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
                     _apply_partitioned_exact_overlap_bridge(
                         target_video,
@@ -3138,7 +3163,11 @@ def run_partitioned_progressive(
                     sigma=sigma,
                     enabled=True,
                 )
-            splice_recovery = "inverse_conditional_renoise"
+            splice_recovery = (
+                "inverse_conditional_renoise_with_actual_provider_boundary_pair"
+                if exact_overlap_fallback_requested
+                else "inverse_conditional_renoise"
+            )
 
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
@@ -3148,7 +3177,13 @@ def run_partitioned_progressive(
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery=splice_recovery,
-            splice_clean_source=("actual_provider" if frame_gauge_accepted else "inverse_recovered"),
+            splice_clean_source=(
+                "actual_provider"
+                if frame_gauge_accepted
+                else "actual_provider_boundary_pair_plus_inverse_recovered"
+                if exact_overlap_fallback_requested
+                else "inverse_recovered"
+            ),
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
 
@@ -3273,6 +3308,11 @@ def run_partitioned_progressive(
                 representation_metrics.get("suffix_representation_bridge_accepted", False)
             ),
             exact_overlap_fallback_policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+            exact_overlap_fallback_source=(
+                "actual_provider_boundary_pair"
+                if exact_overlap_fallback_requested
+                else "not_used"
+            ),
             exact_overlap_fallback_transformed_states=(
                 ["learned_suffix_first"]
                 if representation_metrics.get("suffix_representation_bridge_accepted", False)
@@ -3486,6 +3526,11 @@ def run_partitioned_progressive(
                     "conditional_renoise_affine"
                     if representation_metrics.get("suffix_representation_bridge_accepted", False)
                     else "disabled_or_noop"
+                ),
+                "source": (
+                    "actual_provider_boundary_pair"
+                    if exact_overlap_fallback_requested
+                    else "not_used"
                 ),
                 "authoritative_prefix_modified": False,
                 "later_suffix_extrapolated": False,
