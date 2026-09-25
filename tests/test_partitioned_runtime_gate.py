@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
-from h3_flow_regenerate.residual_geometry import measure_residual_geometry
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
     AUDIO_POSITION_DOMAIN_SOURCE,
@@ -15,6 +14,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     compare_residual_measurement_pair,
     validate_partitioned_runtime_evidence,
 )
+from h3_flow_regenerate.residual_geometry import measure_residual_geometry
 
 
 def _event(kind: str, **fields):
