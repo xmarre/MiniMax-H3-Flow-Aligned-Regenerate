@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 
 import pytest
+import torch
 
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
+from h3_flow_regenerate.residual_geometry import measure_residual_geometry
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
     AUDIO_POSITION_DOMAIN_SOURCE,
@@ -896,6 +898,102 @@ def test_runtime_gate_accepts_measure_mode_as_not_evaluated_when_rigid_v2_reject
     assert report.residual_geometry_verified is True
     assert report.residual_geometry_result == "not-evaluated"
     assert report.residual_geometry_evidence_bundle is None
+
+
+def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
+    torch.manual_seed(321)
+    latent = torch.randn(1, 24, 4, 56, 74)
+    video_measurement = measure_residual_geometry(
+        latent,
+        latent.clone(),
+        rigid_dx=0.0,
+        rigid_dy=0.0,
+    )
+    assert video_measurement["status"] == "measured"
+
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    frame = _install_residual_receipt(
+        _frame_gauge_event(mode="on", result="accepted"),
+        mode="measure",
+        measured=True,
+    )
+    frame["fields"]["video_dx"] = 0.0
+    frame["fields"]["video_dy"] = 0.0
+    frame["fields"]["video_registration"]["dx"] = 0.0
+    frame["fields"]["video_registration"]["dy"] = 0.0
+    frame["fields"]["residual_geometry"].update(
+        video=video_measurement,
+        guidance={"status": "off", "reason": "guidance_off"},
+        boundary_regional={
+            "policy": "paired_prefix_residual_boundary_regions_v1",
+            "tiles": {
+                tile_id: {
+                    variant: {"dx": 0.0, "dy": 0.0, "response": 1.0, "clipped": False}
+                    for variant in (
+                        "native",
+                        "exact_unregistered",
+                        "transformed_native",
+                        "exact_rigid_pre_dc",
+                        "exact_rigid_post_dc",
+                    )
+                }
+                | {
+                    "pre_dc_native_error": 0.0,
+                    "post_dc_native_error": 0.0,
+                }
+                for tile_id in ("TL", "TM", "TR", "ML", "C", "MR", "BL", "BM", "BR")
+            },
+        },
+    )
+
+    stages = []
+    for stage in (
+        "learned_native_same_time",
+        "learned_rigid_aligned_same_time",
+        "exact_restored_pre_high_dc",
+        "final_post_high_internal_clean",
+        "final_post_high_caller_domain",
+    ):
+        fields = {
+            "policy": "paired_prefix_residual_geometry_v1",
+            "stage": stage,
+            "session_id": "session",
+            "chunk_id": "chunk",
+            "tensor_sha256": "a" * 64,
+            "domain": (
+                "caller_output_latent"
+                if stage == "final_post_high_caller_domain"
+                else "model_internal_clean"
+            ),
+        }
+        if stage == "final_post_high_internal_clean":
+            fields["owner_before"] = "authoritative_exact_prefix_E"
+        stages.append(_event("partitioned_residual_geometry_stage", **fields))
+
+    evidence = _event(
+        "partitioned_residual_geometry_evidence",
+        policy="paired_prefix_residual_geometry_v1",
+        requested_mode="measure",
+        decision="not_evaluated",
+        applied=False,
+        horizontal_application_enabled=False,
+        status="exported",
+        extra_vae_calls=0,
+        bundle="h3_flow_regenerate/residual_geometry/test-bundle",
+    )
+    insert_at = len(metrics["events"]) - 2
+    metrics["events"][insert_at:insert_at] = [frame, *stages, evidence]
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_residual_mode="measure",
+        expected_residual_result="measured-only",
+    )
+
+    assert report.residual_geometry_verified is True
+    assert report.residual_geometry_result == "measured-only"
+    assert report.residual_geometry_evidence_bundle == "h3_flow_regenerate/residual_geometry/test-bundle"
 
 
 def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
