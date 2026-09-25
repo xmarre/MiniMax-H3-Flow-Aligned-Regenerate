@@ -433,6 +433,39 @@ def _accepted_boundary_motion():
     }
 
 
+def _rejected_v2_boundary_motion():
+    return {
+        "status": "rejected",
+        "reason": "boundary_upper45_insufficient_improvement",
+        "policy": "native_boundary_motion_preservation_v2",
+        "min_error_cells": 0.125,
+        "min_improvement_ratio": 0.25,
+        "min_response": 3.0,
+        "checks": {
+            "upper45": {
+                "informative": True,
+                "before_error_cells": 1.0,
+                "after_error_cells": 0.8,
+                "error_improvement_ratio": 0.2,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "transformed_native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "exact_restored": {"dx": 1.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "candidate": {"dx": 0.8, "dy": 0.0, "response": 10.0, "clipped": False},
+            },
+            "full": {
+                "informative": True,
+                "before_error_cells": 1.0,
+                "after_error_cells": 0.5,
+                "error_improvement_ratio": 0.5,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "transformed_native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "exact_restored": {"dx": 1.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "candidate": {"dx": 0.5, "dy": 0.0, "response": 10.0, "clipped": False},
+            },
+        },
+    }
+
+
 def _frame_gauge_event(
     *,
     mode="off",
@@ -1074,7 +1107,8 @@ def _install_exact_overlap_fallback_receipt(metrics):
     frame = _frame_gauge_event(mode="on", result="rejected")
     frame["fields"].update(
         reason=reason,
-        video_registration={"status": "accepted", "reason": "accepted"},
+        video_registration=_accepted_registration(),
+        boundary_motion=_rejected_v2_boundary_motion(),
         exact_overlap_fallback_policy="partitioned_exact_overlap_structural_plus_dc_v1",
         exact_overlap_fallback_requested=True,
         exact_overlap_fallback_trigger=reason,
