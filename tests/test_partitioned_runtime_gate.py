@@ -721,6 +721,44 @@ def test_runtime_gate_rejects_accepted_registration_below_heldout_threshold():
         )
 
 
+def test_runtime_gate_rejects_unbound_or_nonfinite_reported_frame_gauge_displacement():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
+    receipt["fields"]["video_dx"] = 0.625
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="reported video displacement differs"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
+    receipt = _frame_gauge_event(mode="on", result="accepted", guidance_mode="direction+temporal")
+    receipt["fields"]["guidance_dx"] = -0.25
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="reported guidance displacement differs"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-accepted",
+        )
+
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="rejected")
+    receipt = _frame_gauge_event(mode="on", result="rejected")
+    receipt["fields"]["video_dx"] = float("nan")
+    metrics["events"].insert(-2, receipt)
+
+    with pytest.raises(RuntimeGateError, match="finite number"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-rejected",
+        )
+
+
 def test_runtime_gate_requires_protected_video_noise_ownership_receipt():
     metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="accepted")
     metrics["events"].insert(-2, _frame_gauge_event(mode="on", result="accepted"))
