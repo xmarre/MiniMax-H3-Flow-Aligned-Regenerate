@@ -9,12 +9,14 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+    PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
     apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
@@ -27,6 +29,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
     _validate_provider_boundary_stabilization,
+    _validate_provider_boundary_post_high_shadow,
     _validate_provider_boundary_stabilization_shadow,
 )
 
@@ -508,7 +511,7 @@ def test_provider_boundary_soft_support_production_candidate_noops_without_eligi
     assert receipt["eligible_tiles"] == []
 
 
-def test_runtime_gate_accepts_applied_provider_boundary_stabilization_receipt():
+def test_runtime_gate_rejects_applied_provider_boundary_stabilization_after_00681():
     video = _video_with_local_boundary_change(scale=4.0)
     torch.manual_seed(7011)
     video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
@@ -540,9 +543,6 @@ def test_runtime_gate_accepts_applied_provider_boundary_stabilization_receipt():
             "reason": "applied",
             "exact_overlap_fallback_required": True,
             "exact_overlap_fallback_requested": True,
-            "exact_overlap_fallback_trigger": "boundary_upper45_insufficient_improvement",
-            "shadow_recomputed_from_native_provider": True,
-            "local_compute_elapsed_ms": 1.0,
             "extra_h3_nfe": 0,
             "extra_sampler_lifetimes": 0,
             "extra_history_boundaries": 0,
@@ -551,25 +551,144 @@ def test_runtime_gate_accepts_applied_provider_boundary_stabilization_receipt():
             **production,
         },
     }
+
+    with pytest.raises(RuntimeGateError, match="production mutation must stay disabled"):
+        _validate_provider_boundary_stabilization([production_event])
+
+
+def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_domain():
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7012)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    content = measure_boundary_content_continuity(video, 5)
+    before = video.clone()
+
+    receipt = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+
+    assert torch.equal(video, before)
+    assert receipt["policy"] == PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY
+    assert receipt["diagnostic_only"] is True
+    assert receipt["production_gate"] is False
+    assert receipt["production_application_permitted"] is False
+    assert receipt["output_mutated"] is False
+    assert receipt["source_stage"] == "post_high_internal_clean"
+    assert receipt["hard_shadow"]["output_mutated"] is False
+    assert receipt["soft_shadow"]["output_mutated"] is False
+    assert receipt["eligible_tiles"] == receipt["soft_shadow"]["eligible_tiles"]
+
+
+def test_runtime_gate_accepts_fail_closed_00681_receipt_and_post_high_shadow():
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7013)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    content = measure_boundary_content_continuity(video, 5)
+    shadow = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+    stabilization = {
+        "kind": "partitioned_provider_boundary_stabilization",
+        "fields": {
+            "requested": True,
+            "mode": "soft_support_v1",
+            "applied": False,
+            "reason": "disabled_after_00681_post_high_regression",
+            "authoritative_prefix_modified": False,
+            "later_suffix_extrapolated": False,
+            "corrected_tokens": 0,
+            "exact_overlap_fallback_required": True,
+            "exact_overlap_fallback_requested": True,
+            "historical_candidate_policy": PROVIDER_BOUNDARY_STABILIZATION_POLICY,
+            "historical_candidate_mutation_disabled": True,
+            "production_mutation_allowed": False,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        },
+    }
+    post_event = {
+        "kind": "partitioned_provider_boundary_post_high_shadow",
+        "fields": {
+            "mode": "soft_support_v1",
+            "domain": "model_internal_clean",
+            "owner_before": "authoritative_exact_prefix",
+            "owner_after": "post_high_generated_suffix",
+            "legacy_pre_high_mutation_disabled": True,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            "elapsed_ms": 1.0,
+            **shadow,
+        },
+    }
+    # The post-high validator is coupled to the existing boundary-content path.
+    boundary_event = _event("post_high_internal_clean", content)
+    window = [stabilization, boundary_event, post_event]
+
+    _validate_provider_boundary_stabilization(window)
+    _validate_provider_boundary_post_high_shadow(window)
+
+
+def test_runtime_gate_rejects_post_high_shadow_that_claims_output_mutation():
+    video = _video_with_local_boundary_change(scale=4.0)
+    content = measure_boundary_content_continuity(video, 5)
+    shadow = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+    shadow["output_mutated"] = True
     window = [
-        production_event,
-        _soft_shadow_event(soft),
         {
-            "kind": "partitioned_frame_gauge",
+            "kind": "partitioned_provider_boundary_stabilization",
             "fields": {
-                "result": "rejected",
-                "spatial_warp_applied": False,
-                "registered_guidance_reference": False,
+                "requested": True,
+                "mode": "soft_support_v1",
+                "applied": False,
+                "reason": "disabled_after_00681_post_high_regression",
+                "authoritative_prefix_modified": False,
+                "later_suffix_extrapolated": False,
+                "corrected_tokens": 0,
+                "exact_overlap_fallback_required": True,
                 "exact_overlap_fallback_requested": True,
+                "historical_candidate_policy": PROVIDER_BOUNDARY_STABILIZATION_POLICY,
+                "historical_candidate_mutation_disabled": True,
+                "production_mutation_allowed": False,
+                "extra_h3_nfe": 0,
+                "extra_sampler_lifetimes": 0,
+                "extra_history_boundaries": 0,
+                "extra_provider_calls": 0,
+                "extra_vae_calls": 0,
             },
         },
+        _event("post_high_internal_clean", content),
         {
-            "kind": "partitioned_exact_overlap_bridge",
-            "fields": {"requested": True, "applied": True},
+            "kind": "partitioned_provider_boundary_post_high_shadow",
+            "fields": {
+                "mode": "soft_support_v1",
+                "legacy_pre_high_mutation_disabled": True,
+                "extra_h3_nfe": 0,
+                "extra_sampler_lifetimes": 0,
+                "extra_history_boundaries": 0,
+                "extra_provider_calls": 0,
+                "extra_vae_calls": 0,
+                "elapsed_ms": 1.0,
+                **shadow,
+            },
         },
     ]
 
-    _validate_provider_boundary_stabilization(window)
+    with pytest.raises(RuntimeGateError, match="mutated output"):
+        _validate_provider_boundary_post_high_shadow(window)
 
 
 def _shadow_event(receipt: dict) -> dict:
