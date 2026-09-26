@@ -421,7 +421,6 @@ def measure_boundary_content_continuity(
     }
 
 
-
 def _centered_region(value: torch.Tensor) -> torch.Tensor:
     return value.float() - value.float().mean(dim=(-2, -1), keepdim=True)
 
