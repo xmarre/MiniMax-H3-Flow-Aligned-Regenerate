@@ -1247,6 +1247,7 @@ def measure_provider_boundary_post_high_shadow(
     if not bool(torch.isfinite(video).all().item()):
         raise RuntimeError("post-high provider-boundary shadow input contains NaN or Inf")
     prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
     if post_high_content_receipt.get("policy") != BOUNDARY_CONTENT_DIAGNOSTIC_POLICY:
         raise ValueError("post-high provider-boundary shadow content policy mismatch")
     if int(post_high_content_receipt.get("prefix_t", -1)) != prefix_t:
