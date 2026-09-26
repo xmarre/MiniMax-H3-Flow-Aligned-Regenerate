@@ -3186,13 +3186,13 @@ def run_partitioned_progressive(
                 provider_native_clean = learned_clean
 
                 if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
-                    # 00681 disproved the pre-high-only promotion gate: the exact same
+                    # Hardware validation disproved the pre-high-only promotion gate: the same
                     # provider/shadow state improved before target-high, then target-high
-                    # amplified the selected tile and the decoded frame shift returned.
+                    # amplified the selected tile and decoded-media validation regressed.
                     # Preserve the serialized selector for old workflows but fail closed.
                     # The same requested run now emits a post-high shadow below instead.
                     provider_boundary_stabilization_receipt.update(
-                        reason="disabled_after_00681_post_high_regression",
+                        reason="disabled_pending_post_high_validation",
                         exact_overlap_fallback_required=True,
                         historical_candidate_policy="partitioned_provider_boundary_soft_support_production_v1",
                         historical_candidate_mutation_disabled=True,
