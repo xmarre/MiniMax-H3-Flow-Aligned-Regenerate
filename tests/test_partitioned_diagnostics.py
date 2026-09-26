@@ -148,12 +148,9 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
     assert diagnostic["frame_gauge_repair"][1]["default"] is False
-    assert diagnostic["provider_boundary_stabilization"][0] == list(
-        PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS
-    )
+    assert diagnostic["provider_boundary_stabilization"][0] == list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS)
     assert (
-        diagnostic["provider_boundary_stabilization"][1]["default"]
-        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+        diagnostic["provider_boundary_stabilization"][1]["default"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
     )
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
