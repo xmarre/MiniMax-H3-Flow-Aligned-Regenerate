@@ -51,6 +51,7 @@ def apply_suffix_dc_bridge(
     exact_prefix: torch.Tensor,
     *,
     weights: Sequence[float] = (1.0,),
+    clone_output: bool = True,
 ) -> tuple[torch.Tensor, dict[str, float | int | bool]]:
     """Translate the learned native boundary offset onto an authoritative prefix.
 
@@ -63,6 +64,8 @@ def apply_suffix_dc_bridge(
     prefix_t = _validate_video_pair(upscaled_clean_video, exact_prefix)
     if not isinstance(weights, Sequence) or isinstance(weights, (str, bytes)) or not weights:
         raise ValueError("suffix DC bridge weights must be a non-empty sequence")
+    if not isinstance(clone_output, bool):
+        raise TypeError("suffix DC bridge clone_output must be boolean")
     normalized_weights = tuple(float(weight) for weight in weights)
     if any(not math.isfinite(weight) or weight < 0.0 or weight > 1.0 for weight in normalized_weights):
         raise ValueError("suffix DC bridge weights must be finite values inside [0, 1]")
@@ -75,7 +78,7 @@ def apply_suffix_dc_bridge(
     if not bool(torch.isfinite(delta).all().item()):
         raise RuntimeError("suffix DC bridge produced a non-finite channel offset")
 
-    corrected = upscaled_clean_video.clone()
+    corrected = upscaled_clean_video.clone() if clone_output else upscaled_clean_video
     for offset in range(corrected_tokens):
         weight = normalized_weights[offset]
         if weight == 0.0:
