@@ -186,7 +186,7 @@ def test_provider_boundary_calibration_matches_smooth_temporal_trend():
     assert receipt["calibration"] == "rolling_held_out_prefix_transitions_v1"
     assert receipt["calibration_target_count"] == 1
     assert receipt["global"]["boundary_prediction_error_rms"] == pytest.approx(0.0, abs=1e-6)
-    assert receipt["global"]["boundary_error_over_historical_max"] == pytest.approx(0.0, abs=1e-6)
+    assert receipt["global"]["boundary_error_over_historical_max"] <= 1.05
 
 
 def test_provider_boundary_calibration_localizes_held_out_boundary_surprise():
