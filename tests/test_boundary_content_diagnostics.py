@@ -511,7 +511,7 @@ def test_provider_boundary_soft_support_production_candidate_noops_without_eligi
     assert receipt["eligible_tiles"] == []
 
 
-def test_runtime_gate_rejects_applied_provider_boundary_stabilization_after_00681():
+def test_runtime_gate_rejects_applied_provider_boundary_stabilization_after_post_high_regression():
     video = _video_with_local_boundary_change(scale=4.0)
     torch.manual_seed(7011)
     video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
@@ -597,7 +597,7 @@ def test_runtime_gate_accepts_fail_closed_00681_receipt_and_post_high_shadow():
             "requested": True,
             "mode": "soft_support_v1",
             "applied": False,
-            "reason": "disabled_after_00681_post_high_regression",
+            "reason": "disabled_pending_post_high_validation",
             "authoritative_prefix_modified": False,
             "later_suffix_extrapolated": False,
             "corrected_tokens": 0,
@@ -654,7 +654,7 @@ def test_runtime_gate_rejects_post_high_shadow_that_claims_output_mutation():
                 "requested": True,
                 "mode": "soft_support_v1",
                 "applied": False,
-                "reason": "disabled_after_00681_post_high_regression",
+                "reason": "disabled_pending_post_high_validation",
                 "authoritative_prefix_modified": False,
                 "later_suffix_extrapolated": False,
                 "corrected_tokens": 0,
