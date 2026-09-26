@@ -23,7 +23,9 @@ from .boundary_content_diagnostics import (
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
     PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+    evaluate_provider_boundary_temporal_support_production,
 )
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
@@ -1570,6 +1572,159 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
 
 
+
+def _validate_provider_boundary_post_high_stabilization(window: list[dict[str, Any]]) -> None:
+    """Validate the opt-in final-domain temporal-support production transaction."""
+
+    stabilization = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_provider_boundary_stabilization"
+    ]
+    requested_soft = bool(
+        stabilization and stabilization[0].get("requested") and stabilization[0].get("mode") == "soft_support_v1"
+    )
+    has_boundary_diagnostics = any(_event_kind(event) == "partitioned_boundary_content_continuity" for event in window)
+    events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_post_high_stabilization"
+    ]
+    if not (requested_soft and has_boundary_diagnostics):
+        _require(not events, "unexpected post-high provider-boundary production stabilization")
+        return
+
+    _require(len(events) == 1, "requested soft-support mode must emit one post-high production stabilization receipt")
+    receipt = events[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+        "post-high provider-boundary production policy drifted",
+    )
+    _require(receipt.get("requested") is True, "post-high provider-boundary production was not requested")
+    _require(receipt.get("mode") == "soft_support_v1", "post-high provider-boundary production mode drifted")
+    _require(
+        receipt.get("source_stage") == "post_high_internal_clean",
+        "post-high provider-boundary production source stage drifted",
+    )
+    _require(
+        receipt.get("source_shadow_policy") == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+        "post-high provider-boundary production shadow provenance drifted",
+    )
+    _require(receipt.get("production_default_changed") is False, "post-high content repair changed a production default")
+    _require(
+        receipt.get("authoritative_prefix_modified") is False,
+        "post-high content repair modified the authoritative prefix",
+    )
+    _require(receipt.get("audio_modified") is False, "post-high content repair modified audio")
+    _require(
+        receipt.get("later_suffix_outside_horizon_modified") is False,
+        "post-high content repair escaped its fixed temporal horizon",
+    )
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(receipt.get(field) == 0, f"post-high content repair added work: {field}")
+
+    shadow_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_post_high_shadow"
+    ]
+    _require(len(shadow_events) == 1, "post-high content repair lost its source shadow")
+    temporal = shadow_events[0].get("temporal_support_shadow")
+    _require(isinstance(temporal, dict), "post-high content repair source temporal shadow is missing")
+    expected_gate = evaluate_provider_boundary_temporal_support_production(temporal)
+    gate = receipt.get("gate")
+    _require(isinstance(gate, dict), "post-high content repair gate receipt is missing")
+    _require(
+        gate.get("policy") == expected_gate.get("policy")
+        and gate.get("accepted") == expected_gate.get("accepted")
+        and gate.get("reason") == expected_gate.get("reason"),
+        "post-high content repair gate decision drifted from the measured shadow",
+    )
+    _require(
+        receipt.get("eligible_tiles") == temporal.get("eligible_tiles")
+        and int(receipt.get("eligible_tile_count", -1)) == int(temporal.get("eligible_tile_count", -2)),
+        "post-high content repair eligibility drifted from the measured shadow",
+    )
+    _require(
+        math.isclose(
+            _finite_number(receipt.get("correction_rms")),
+            _finite_number(temporal.get("spatial_correction_rms")),
+            rel_tol=1e-6,
+            abs_tol=1e-8,
+        )
+        and math.isclose(
+            _finite_number(receipt.get("correction_abs_max")),
+            _finite_number(temporal.get("spatial_correction_abs_max")),
+            rel_tol=1e-6,
+            abs_tol=1e-8,
+        ),
+        "post-high content repair correction magnitude drifted from the measured shadow",
+    )
+
+    frame_events = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
+    _require(len(frame_events) == 1, "post-high content repair requires one frame-gauge receipt")
+    frame = frame_events[0]
+    frame_accepted = frame.get("result") == "accepted"
+    residual = frame.get("residual_geometry")
+    residual_mode = str(residual.get("requested_mode", "off")) if isinstance(residual, dict) else "off"
+    caller_identity = receipt.get("internal_caller_video_identity_exact") is True
+    applied = receipt.get("applied") is True
+    reason = str(receipt.get("reason", ""))
+
+    if applied:
+        _require(bool(expected_gate.get("accepted")), "post-high content repair applied after a rejected gate")
+        _require(frame_accepted, "post-high content repair applied without an accepted frame gauge")
+        _require(residual_mode == "off", "post-high content repair applied with residual geometry active")
+        _require(caller_identity, "post-high content repair applied without exact internal/caller identity")
+        _require(reason == "applied", "post-high content repair applied with the wrong reason")
+        _require(
+            receipt.get("shadow_candidate_commit_exact") is True,
+            "post-high content repair did not commit the measured shadow candidate exactly",
+        )
+        _require(int(receipt.get("corrected_tokens", -1)) == 3, "post-high content repair token count drifted")
+        weights = receipt.get("weights")
+        _require(isinstance(weights, list) and len(weights) == 3, "post-high content repair weights are malformed")
+        for actual, expected in zip(weights, (1.0, 0.75, 0.25), strict=True):
+            _require(
+                math.isclose(_finite_number(actual), expected, rel_tol=1e-12, abs_tol=1e-12),
+                "post-high content repair weights drifted",
+            )
+        candidate = receipt.get("candidate")
+        _require(isinstance(candidate, dict), "post-high content repair candidate receipt is missing")
+        _require(
+            candidate.get("policy") == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY
+            and candidate.get("candidate_constructed") is True,
+            "post-high content repair candidate identity drifted",
+        )
+        _require(
+            candidate.get("eligible_tiles") == temporal.get("eligible_tiles")
+            and int(candidate.get("corrected_tokens", -1)) == 3,
+            "post-high content repair candidate geometry drifted",
+        )
+    else:
+        _require(int(receipt.get("corrected_tokens", -1)) == 0, "skipped post-high content repair corrected tokens")
+        _require(receipt.get("weights") == [], "skipped post-high content repair published active weights")
+        allowed_reasons = {
+            str(expected_gate.get("reason", "temporal_support_gate_rejected")),
+            "frame_gauge_not_accepted",
+            "residual_geometry_mode_not_off",
+            "internal_caller_video_identity_not_exact",
+            "caller_domain_commit_not_exact",
+            "audio_roundtrip_not_exact",
+        }
+        _require(reason in allowed_reasons, "post-high content repair failed closed for an unknown reason")
+        if reason == "frame_gauge_not_accepted":
+            _require(not frame_accepted, "post-high content repair falsely reported frame-gauge rejection")
+        if reason == "residual_geometry_mode_not_off":
+            _require(residual_mode != "off", "post-high content repair falsely reported residual-mode conflict")
+        if reason == "internal_caller_video_identity_not_exact":
+            _require(not caller_identity, "post-high content repair falsely reported caller-domain identity failure")
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
@@ -2874,6 +3029,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_soft_support_shadow(window)
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
+    _validate_provider_boundary_post_high_stabilization(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
