@@ -77,7 +77,7 @@ def _gradient_rms(left: torch.Tensor, right: torch.Tensor) -> float:
     right_dy = right[..., 1:, :] - right[..., :-1, :]
     squared_sum = (right_dx - left_dx).float().square().sum()
     squared_sum = squared_sum + (right_dy - left_dy).float().square().sum()
-    count = (right_dx.numel() + right_dy.numel())
+    count = right_dx.numel() + right_dy.numel()
     if count == 0:
         return 0.0
     return _finite((squared_sum / float(count)).sqrt())
@@ -222,9 +222,7 @@ def _region_metrics(
         "lowpass_rms": _rms(right_low_region - left_low_region),
         "centered_lowpass_rms": _rms(right_centered - left_centered),
         "gradient_rms": _gradient_rms(left_low_region, right_low_region),
-        "spatial_mean_rms": _rms(
-            right_region.float().mean(dim=(-2, -1)) - left_region.float().mean(dim=(-2, -1))
-        ),
+        "spatial_mean_rms": _rms(right_region.float().mean(dim=(-2, -1)) - left_region.float().mean(dim=(-2, -1))),
         "ncc": _ncc(left_low_region, right_low_region),
         "high_similarity_fraction": _finite(high_similarity.float().mean()),
         "unique_fraction": _finite(unique.float().mean()),
@@ -316,8 +314,8 @@ def _comparison(boundary: dict[str, float], baseline: dict[str, float]) -> dict[
         fields[f"{name}_over_prefix_median"] = _safe_ratio(boundary[name], baseline[name])
     for name in _DELTA_FIELDS:
         fields[f"{name}_minus_prefix_median"] = float(boundary[name]) - float(baseline[name])
-    fields["cycle_consistent_fraction_minus_prefix_median"] = (
-        float(boundary["cycle_consistent_fraction"]) - float(baseline["cycle_consistent_fraction"])
+    fields["cycle_consistent_fraction_minus_prefix_median"] = float(boundary["cycle_consistent_fraction"]) - float(
+        baseline["cycle_consistent_fraction"]
     )
     return fields
 
