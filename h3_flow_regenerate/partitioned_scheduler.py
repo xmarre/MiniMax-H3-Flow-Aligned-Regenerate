@@ -155,6 +155,7 @@ FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
         "boundary_full_not_improved",
         "boundary_upper45_insufficient_improvement",
         "boundary_full_insufficient_improvement",
+        "boundary_no_informative_roi_strong_improvement",
     }
 )
 PARTITIONED_SOL_REQUIRED_METADATA = {
@@ -1417,7 +1418,11 @@ def _frame_gauge_boundary_motion_check(
     prefix introduces a boundary-motion error relative to the provider's own
     native transition in each corresponding coordinate domain, and whether the
     proposed suffix translation removes a substantial fraction of that error
-    in both the upper-region and full-frame measurements.
+    in at least one informative ROI while remaining non-degrading in every ROI.
+    The full-frame and upper-region witnesses intentionally have symmetric veto
+    power but no longer both need to clear the same strong-improvement threshold:
+    local object motion can make one crop a poor magnitude proxy for a coherent
+    frame-wide gauge offset.
     """
 
     if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
@@ -1493,13 +1498,16 @@ def _frame_gauge_boundary_motion_check(
         }
 
     fields: dict[str, Any] = {
-        "policy": "native_boundary_motion_preservation_v2",
+        "policy": "native_boundary_motion_consensus_v3",
         "min_error_cells": FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS,
         "min_improvement_ratio": FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT,
         "min_response": FRAME_GAUGE_BOUNDARY_MIN_RESPONSE,
+        "acceptance_rule": "all_rois_nondegrading_and_any_informative_roi_strong_v1",
         "checks": checks,
     }
 
+    informative_rois: list[str] = []
+    strong_improvement_rois: list[str] = []
     for name in ("upper45", "full"):
         check = checks[name]
         for variant in ("native", "transformed_native", "exact_restored", "candidate"):
@@ -1508,19 +1516,25 @@ def _frame_gauge_boundary_motion_check(
                 fields["status"] = "rejected"
                 fields["reason"] = f"boundary_{name}_{variant}_ambiguous"
                 return False, fields, str(fields["reason"])
-        # A low-amplitude boundary receipt is not evidence against the prefix
-        # estimator: smooth/periodic synthetic fields can make phase correlation
-        # under-report an otherwise well-conditioned rigid shift. It remains a
-        # non-degradation veto, while a clearly measurable boundary error must
-        # improve by the stronger minimum ratio.
+        # Every ROI remains a strict non-degradation veto.  Strong improvement
+        # is a consensus property of the transaction, not an independent 25%
+        # requirement on every crop: local object motion can dominate one crop
+        # even when the global camera-gauge estimate is coherent.
         if check["after_error_cells"] > check["before_error_cells"]:
             fields["status"] = "rejected"
             fields["reason"] = f"boundary_{name}_not_improved"
             return False, fields, str(fields["reason"])
-        if check["informative"] and check["error_improvement_ratio"] < FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
-            fields["status"] = "rejected"
-            fields["reason"] = f"boundary_{name}_insufficient_improvement"
-            return False, fields, str(fields["reason"])
+        if check["informative"]:
+            informative_rois.append(name)
+            if check["error_improvement_ratio"] >= FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
+                strong_improvement_rois.append(name)
+
+    fields["informative_rois"] = informative_rois
+    fields["strong_improvement_rois"] = strong_improvement_rois
+    if informative_rois and not strong_improvement_rois:
+        fields["status"] = "rejected"
+        fields["reason"] = "boundary_no_informative_roi_strong_improvement"
+        return False, fields, str(fields["reason"])
 
     fields["status"] = "accepted"
     fields["reason"] = "accepted"
