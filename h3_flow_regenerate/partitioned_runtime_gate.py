@@ -1120,11 +1120,7 @@ def _validate_provider_boundary_soft_support_shadow(window: list[dict[str, Any]]
 def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> None:
     """Validate optional opt-in provider-native first-suffix stabilization."""
 
-    events = [
-        event
-        for event in window
-        if _event_kind(event) == "partitioned_provider_boundary_stabilization"
-    ]
+    events = [event for event in window if _event_kind(event) == "partitioned_provider_boundary_stabilization"]
     if not events:
         return
     _require(len(events) == 1, "provider-boundary stabilization must emit exactly one receipt")
@@ -1237,11 +1233,7 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     _finite_number(receipt.get("soft_ncc_delta"))
     _finite_number(receipt.get("local_compute_elapsed_ms"))
 
-    frame_receipts = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_frame_gauge"
-    ]
+    frame_receipts = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
     _require(len(frame_receipts) == 1, "provider-boundary stabilization requires one frame-gauge receipt")
     frame = frame_receipts[0]
     _require(frame.get("result") == "rejected", "provider-boundary stabilization requires rejected rigid v2")
@@ -1258,11 +1250,7 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         "provider-boundary stabilization requires exact-overlap fallback",
     )
 
-    overlap = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_exact_overlap_bridge"
-    ]
+    overlap = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_overlap_bridge"]
     _require(len(overlap) == 1, "provider-boundary stabilization requires one exact-overlap bridge receipt")
     _require(
         overlap[0].get("requested") is True and overlap[0].get("applied") is True,
@@ -1275,9 +1263,7 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         if _event_kind(event) == "partitioned_provider_boundary_stabilization"
     )
     overlap_index = next(
-        index
-        for index, event in enumerate(window)
-        if _event_kind(event) == "partitioned_exact_overlap_bridge"
+        index for index, event in enumerate(window) if _event_kind(event) == "partitioned_exact_overlap_bridge"
     )
     _require(
         stabilization_index < overlap_index,
