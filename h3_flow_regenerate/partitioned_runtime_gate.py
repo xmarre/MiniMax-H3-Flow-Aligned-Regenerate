@@ -19,6 +19,7 @@ from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+    PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
 )
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
@@ -690,6 +691,194 @@ def _validate_provider_boundary_predictor_calibration(window: list[dict[str, Any
             isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
             f"provider-boundary calibration {ranking_name} identity drifted",
         )
+
+
+def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]]) -> None:
+    """Validate optional observation-only first-suffix stabilization shadow evidence."""
+
+    receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_stabilization_shadow"
+    ]
+    if not receipts:
+        return
+    _require(len(receipts) == 1, "provider-boundary stabilization shadow must emit exactly one receipt")
+    receipt = receipts[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+        "provider-boundary stabilization shadow policy drifted",
+    )
+    _require(
+        receipt.get("diagnostic_only") is True,
+        "provider-boundary stabilization shadow mutated into a production path",
+    )
+    _require(
+        receipt.get("production_gate") is False,
+        "provider-boundary stabilization shadow became a production gate",
+    )
+    _require(
+        receipt.get("production_applied") is False,
+        "provider-boundary stabilization shadow claims a production mutation",
+    )
+    _require(
+        receipt.get("output_mutated") is False,
+        "provider-boundary stabilization shadow mutated the provider output",
+    )
+    _require(
+        receipt.get("candidate") == "heldout_max_prediction_residual_shrink_v1",
+        "provider-boundary stabilization shadow candidate drifted",
+    )
+    _require(
+        receipt.get("eligibility_rule")
+        == "absolute_and_dispersion_normalized_error_exceed_heldout_max",
+        "provider-boundary stabilization shadow eligibility drifted",
+    )
+    _require(
+        receipt.get("support") == "hard_fixed_tile_shadow_only_v1",
+        "provider-boundary stabilization shadow support drifted",
+    )
+    _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary stabilization shadow history depth drifted")
+    _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary stabilization shadow tile-row count drifted")
+    _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary stabilization shadow tile-column count drifted")
+    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary stabilization shadow low-pass kernel drifted")
+    _require(receipt.get("extra_h3_nfe") == 0, "provider-boundary stabilization shadow added H3 NFE")
+    _require(receipt.get("extra_sampler_lifetimes") == 0, "provider-boundary stabilization shadow added a sampler lifetime")
+    _require(receipt.get("extra_history_boundaries") == 0, "provider-boundary stabilization shadow added a history boundary")
+    _require(receipt.get("extra_provider_calls") == 0, "provider-boundary stabilization shadow added a provider call")
+    _require(receipt.get("extra_vae_calls") == 0, "provider-boundary stabilization shadow added a VAE call")
+
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+    tiles = receipt.get("tiles")
+    _require(
+        isinstance(tiles, dict) and set(tiles) == expected_tiles,
+        "provider-boundary stabilization shadow tile set drifted",
+    )
+    eligible_tiles = receipt.get("eligible_tiles")
+    _require(
+        isinstance(eligible_tiles, list)
+        and len(eligible_tiles) == int(receipt.get("eligible_tile_count", -1))
+        and len(set(eligible_tiles)) == len(eligible_tiles)
+        and set(eligible_tiles) <= expected_tiles,
+        "provider-boundary stabilization shadow eligible tile set is malformed",
+    )
+
+    tile_metric_fields = {
+        "boundary_error_over_historical_max",
+        "boundary_dispersion_ratio_over_historical_max",
+        "residual_scale",
+        "predicted_error_over_historical_max_after",
+        "predicted_dispersion_ratio_over_historical_max_after",
+        "prediction_residual_rms",
+        "shadow_correction_rms",
+        "shadow_correction_abs_max",
+        "provider_centered_lowpass_rms_before",
+        "shadow_centered_lowpass_rms_after",
+        "shadow_centered_lowpass_rms_ratio",
+        "provider_gradient_rms_before",
+        "shadow_gradient_rms_after",
+        "shadow_gradient_rms_ratio",
+        "provider_ncc_before",
+        "shadow_ncc_after",
+        "shadow_ncc_delta",
+    }
+    for tile_id, tile in tiles.items():
+        _require(isinstance(tile, dict), f"provider-boundary stabilization shadow tile {tile_id} is malformed")
+        bounds = tile.get("bounds")
+        _require(
+            isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
+            f"provider-boundary stabilization shadow tile {tile_id} bounds are malformed",
+        )
+        _require(tile_metric_fields <= set(tile), f"provider-boundary stabilization shadow tile {tile_id} fields are incomplete")
+        for field in tile_metric_fields:
+            _finite_number(tile.get(field))
+        eligible = bool(tile.get("eligible"))
+        _require(
+            eligible is (tile_id in eligible_tiles),
+            f"provider-boundary stabilization shadow tile {tile_id} eligibility drifted",
+        )
+        error_ratio = _finite_number(tile.get("boundary_error_over_historical_max"))
+        dispersion_ratio = _finite_number(tile.get("boundary_dispersion_ratio_over_historical_max"))
+        residual_scale = _finite_number(tile.get("residual_scale"))
+        expected_eligible = error_ratio > 1.0 and dispersion_ratio > 1.0
+        _require(
+            eligible is expected_eligible,
+            f"provider-boundary stabilization shadow tile {tile_id} does not replay eligibility",
+        )
+        expected_scale = (
+            min(
+                1.0,
+                1.0 / max(error_ratio, 1e-12),
+                1.0 / max(dispersion_ratio, 1e-12),
+            )
+            if eligible
+            else 1.0
+        )
+        _require(
+            math.isclose(residual_scale, expected_scale, rel_tol=1e-9, abs_tol=1e-12),
+            f"provider-boundary stabilization shadow tile {tile_id} residual scale drifted",
+        )
+        _require(
+            math.isclose(
+                _finite_number(tile.get("predicted_error_over_historical_max_after")),
+                error_ratio * residual_scale,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            ),
+            f"provider-boundary stabilization shadow tile {tile_id} absolute envelope replay failed",
+        )
+        _require(
+            math.isclose(
+                _finite_number(tile.get("predicted_dispersion_ratio_over_historical_max_after")),
+                dispersion_ratio * residual_scale,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            ),
+            f"provider-boundary stabilization shadow tile {tile_id} dispersion envelope replay failed",
+        )
+        if eligible:
+            _require(
+                _finite_number(tile.get("predicted_error_over_historical_max_after")) <= 1.0 + 1e-9,
+                f"provider-boundary stabilization shadow tile {tile_id} exceeds absolute held-out envelope",
+            )
+            _require(
+                _finite_number(tile.get("predicted_dispersion_ratio_over_historical_max_after")) <= 1.0 + 1e-9,
+                f"provider-boundary stabilization shadow tile {tile_id} exceeds dispersion held-out envelope",
+            )
+        else:
+            _require(
+                _finite_number(tile.get("shadow_correction_rms")) == 0.0
+                and _finite_number(tile.get("shadow_correction_abs_max")) == 0.0,
+                f"provider-boundary stabilization shadow tile {tile_id} corrected an ineligible tile",
+            )
+
+    for field in ("correction_rms", "correction_abs_max"):
+        _finite_number(receipt.get(field))
+    global_fields = receipt.get("global")
+    _require(isinstance(global_fields, dict), "provider-boundary stabilization shadow global receipt is missing")
+    global_metric_fields = {
+        "provider_centered_lowpass_rms_before",
+        "shadow_centered_lowpass_rms_after",
+        "shadow_centered_lowpass_rms_ratio",
+        "provider_gradient_rms_before",
+        "shadow_gradient_rms_after",
+        "shadow_gradient_rms_ratio",
+        "provider_ncc_before",
+        "shadow_ncc_after",
+        "shadow_ncc_delta",
+    }
+    _require(
+        global_metric_fields <= set(global_fields),
+        "provider-boundary stabilization shadow global fields are incomplete",
+    )
+    for field in global_metric_fields:
+        _finite_number(global_fields.get(field))
+
+    ranking = receipt.get("tiles_by_shadow_centered_lowpass_ratio")
+    _require(
+        isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
+        "provider-boundary stabilization shadow ranking drifted",
+    )
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
@@ -1992,6 +2181,7 @@ def validate_partitioned_runtime_evidence(
     _validate_boundary_content_diagnostics(window)
     _validate_provider_boundary_predictor(window)
     _validate_provider_boundary_predictor_calibration(window)
+    _validate_provider_boundary_stabilization_shadow(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
