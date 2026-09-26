@@ -1160,7 +1160,12 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     _require(mode == "soft_support_v1", "provider-boundary stabilization requested unknown mode")
     if not applied:
         _require(
-            receipt.get("reason") in {"exact_overlap_fallback_not_selected", "no_eligible_provider_region", "rigid_v2_selected"},
+            receipt.get("reason")
+            in {
+                "exact_overlap_fallback_not_selected",
+                "no_eligible_provider_region",
+                "rigid_v2_selected",
+            },
             "provider-boundary stabilization failed closed for an unknown reason",
         )
         _require(corrected_tokens == 0, "non-applied provider-boundary stabilization corrected tokens")
@@ -1196,7 +1201,10 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         str(receipt.get("exact_overlap_fallback_trigger", "")) in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
         "provider-boundary stabilization trigger is not exact-overlap eligible",
     )
-    _require(receipt.get("shadow_recomputed_from_native_provider") is True, "provider-boundary stabilization lost native shadow provenance")
+    _require(
+        receipt.get("shadow_recomputed_from_native_provider") is True,
+        "provider-boundary stabilization lost native shadow provenance",
+    )
     _require(corrected_tokens == 1, "provider-boundary stabilization must correct exactly one suffix token")
     _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary stabilization history depth drifted")
     _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary stabilization tile-row count drifted")
@@ -1214,7 +1222,10 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         "provider-boundary stabilization eligible tile set is malformed",
     )
     _require(_finite_number(receipt.get("correction_rms")) > 0.0, "provider-boundary stabilization has zero correction")
-    _require(_finite_number(receipt.get("correction_abs_max")) > 0.0, "provider-boundary stabilization has zero max correction")
+    _require(
+        _finite_number(receipt.get("correction_abs_max")) > 0.0,
+        "provider-boundary stabilization has zero max correction",
+    )
     hard_rms = _finite_number(receipt.get("hard_frontier_edge_jump_rms"))
     hard_max = _finite_number(receipt.get("hard_frontier_edge_jump_abs_max"))
     soft_rms = _finite_number(receipt.get("soft_frontier_edge_jump_rms"))
@@ -1234,7 +1245,10 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     _require(len(frame_receipts) == 1, "provider-boundary stabilization requires one frame-gauge receipt")
     frame = frame_receipts[0]
     _require(frame.get("result") == "rejected", "provider-boundary stabilization requires rejected rigid v2")
-    _require(frame.get("spatial_warp_applied") is False, "provider-boundary stabilization combined with rejected rigid warp")
+    _require(
+        frame.get("spatial_warp_applied") is False,
+        "provider-boundary stabilization combined with rejected rigid warp",
+    )
     _require(
         frame.get("registered_guidance_reference") is False,
         "provider-boundary stabilization published rejected-arm registered guidance",
