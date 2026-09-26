@@ -259,7 +259,9 @@ def _shadow_receipt(video: torch.Tensor, prefix_t: int, *, calibration_targets: 
 
 
 def test_provider_boundary_stabilization_shadow_is_non_mutating_and_localized():
-    video = _video_with_local_boundary_change(scale=2.0)
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7005)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
     before = video.clone()
 
     receipt = _shadow_receipt(video, 5)
