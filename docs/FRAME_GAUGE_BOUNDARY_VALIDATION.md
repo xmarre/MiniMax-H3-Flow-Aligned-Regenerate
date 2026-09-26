@@ -209,3 +209,61 @@ The runtime gate treats predictor receipts as optional for historical evidence.
 When present, it requires one receipt, the fixed predictor policy and geometry,
 finite global/tile metrics, complete 4x4 rankings, diagnostic-only ownership,
 and zero extra H3 NFE/provider/VAE/sampler/history work.
+
+
+## 00677 provider predictor result and held-out calibration
+
+00677 reproduces the 00676 provider-native handoff state. The authoritative
+exact-prefix SHA-256 remains
+`36ea0b7b0578642f895a7a2e2fdfab16f23755e509d8f2e84d248d585c425b7a`;
+rigid-v2 again rejects on
+`boundary_upper45_insufficient_improvement`; the exact-overlap fallback
+applies from the actual provider boundary pair; and the provider-native,
+pre-high exact-restored, frame-gauge, exact-overlap, and clean seam values are
+identical to 00676 apart from elapsed-time fields. The high-stage output remains
+allowed to differ numerically because those downstream GPU operations are not
+used as an identity requirement for the provider-native diagnostic.
+
+The first provider temporal predictor receipt confirms that the dominant local
+boundary regions are not merely large continuations of recent motion. Globally,
+the first-suffix structural delta is poorly aligned with the median of the
+previous three provider deltas: cosine is about 0.033 and prediction error is
+about 1.16 times recent prefix-delta dispersion.
+
+The regional evidence is stronger. `r2c0`, which was already the largest
+content-continuity outlier, is also the largest dispersion-normalized predictor
+outlier: prediction error is about 2.64 times recent local dispersion while the
+actual/predicted cosine is only about 0.13. `r2c2`, `r2c1`, `r1c1`, and
+`r3c1` follow, with error/dispersion ratios about 1.74, 1.61, 1.55, and 1.53.
+Their cosines are approximately 0.008, -0.212, 0.032, and -0.396 respectively.
+The same five regions are the leading provider-native centered-structural
+outliers. This is consistent with a first-suffix provider-state discontinuity,
+not a rigid gauge failure or an exact-prefix representation seam.
+
+Those ratios are not yet production thresholds. The denominator in the first
+predictor receipt measures dispersion of the same three history deltas used to
+form the predictor; it does not establish how surprising that prediction error
+is relative to ordinary held-out provider transitions. Using a threshold
+selected from 00677 would therefore overfit this single boundary.
+
+The next diagnostic layer is
+`partitioned_provider_boundary_temporal_calibration_v1`. It keeps the same
+three-transition median predictor but evaluates it on up to the previous five
+held-out prefix transitions. For each historical target, only earlier provider
+deltas are used to predict it. The actual first-suffix prediction error is then
+reported relative to the median and maximum held-out historical error, both in
+absolute RMS and after normalization by each target's preceding-delta
+dispersion. Cosine and projection-gain baselines are reported as well.
+
+This calibration remains observation-only. It does not select tiles for
+correction, alter the provider output, modify exact-prefix ownership, change
+frame-gauge decisions, or add model/provider/VAE/sampler/history work. Its
+purpose is to establish whether the 00677 first-suffix outliers exceed the
+provider predictor's own recent held-out error envelope before any stabilization
+policy is designed.
+
+The offline runtime gate treats this new receipt as optional for historical
+evidence. When present, it requires one calibration receipt, the fixed
+three-transition predictor, five requested held-out targets, fixed 4x4
+geometry and low-pass kernel, complete finite global/tile metrics, complete
+rankings, diagnostic-only ownership, and zero extra work.
