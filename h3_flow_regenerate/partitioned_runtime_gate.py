@@ -1388,7 +1388,6 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
             "unavailable post-high successor receipt has an unknown reason",
         )
 
-
     temporal = receipt.get("temporal_support_shadow")
     _require(isinstance(temporal, dict), "post-high temporal-support shadow is missing")
     _require(
@@ -1428,8 +1427,7 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         "post-high temporal-support weights are malformed",
     )
     expected_weights = [
-        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span)))
-        for offset in range(corrected_tokens)
+        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span))) for offset in range(corrected_tokens)
     ]
     for actual, expected in zip(weights, expected_weights, strict=True):
         _require(
@@ -1437,8 +1435,7 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
             "post-high temporal-support weight drifted",
         )
     _require(
-        temporal.get("eligible_tiles") == eligible
-        and int(temporal.get("eligible_tile_count", -1)) == len(eligible),
+        temporal.get("eligible_tiles") == eligible and int(temporal.get("eligible_tile_count", -1)) == len(eligible),
         "post-high temporal-support eligibility drifted",
     )
     temporal_correction_rms = _finite_number(temporal.get("spatial_correction_rms"))
