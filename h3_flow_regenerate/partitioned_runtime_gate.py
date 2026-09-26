@@ -1572,7 +1572,6 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
 
 
-
 def _validate_provider_boundary_post_high_stabilization(window: list[dict[str, Any]]) -> None:
     """Validate the opt-in final-domain temporal-support production transaction."""
 
