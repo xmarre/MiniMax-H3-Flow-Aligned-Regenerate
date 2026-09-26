@@ -16,6 +16,7 @@ PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_c
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
 PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_temporal_support_shadow_v1"
 PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
@@ -1223,6 +1224,180 @@ def measure_provider_boundary_soft_support_shadow(
     }
 
 
+def measure_provider_boundary_temporal_support_shadow(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    post_high_content_receipt: dict[str, Any],
+    soft_shadow_receipt: dict[str, Any],
+    temporal_span: int = 3,
+) -> dict[str, Any]:
+    """Measure a discarded temporal fade of the final-domain spatial correction.
+
+    The existing one-token shadow improves the incoming boundary but can move the
+    discontinuity to the first-suffix -> second-suffix transition.  This shadow
+    keeps exactly the same measured spatial correction and support, then fades it
+    across a fixed number of suffix tokens with a raised-cosine envelope.  The
+    horizon is fixed by the provider predictor history depth rather than fitted
+    from the boundary being evaluated.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("temporal-support shadow expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("temporal-support shadow input contains NaN or Inf")
+    if post_high_content_receipt.get("policy") != BOUNDARY_CONTENT_DIAGNOSTIC_POLICY:
+        raise ValueError("temporal-support shadow content policy mismatch")
+    if soft_shadow_receipt.get("policy") != PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY:
+        raise ValueError("temporal-support shadow soft-shadow policy mismatch")
+    if soft_shadow_receipt.get("diagnostic_only") is not True:
+        raise ValueError("temporal-support shadow requires diagnostic soft-support evidence")
+    if soft_shadow_receipt.get("output_mutated") is not False:
+        raise ValueError("temporal-support shadow requires a non-mutating soft shadow")
+
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    if int(post_high_content_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("temporal-support shadow content prefix drifted")
+    if int(soft_shadow_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("temporal-support shadow soft prefix drifted")
+    temporal_span = int(temporal_span)
+    if temporal_span != int(soft_shadow_receipt.get("pre_steps", -1)) or temporal_span < 1:
+        raise ValueError("temporal-support shadow horizon must equal the fixed predictor history depth")
+    if prefix_t >= temporal:
+        raise ValueError("temporal-support shadow lacks a suffix")
+
+    one_token_candidate, one_token_receipt = apply_provider_boundary_soft_support_stabilization(
+        video,
+        prefix_t,
+        soft_shadow_receipt=soft_shadow_receipt,
+    )
+    if not torch.equal(video[:, :, :prefix_t], one_token_candidate[:, :, :prefix_t]):
+        raise RuntimeError("temporal-support source candidate modified the authoritative prefix")
+    spatial_correction = video[:, :, prefix_t].float() - one_token_candidate[:, :, prefix_t].float()
+    spatial_correction_rms = _rms(spatial_correction)
+    spatial_correction_abs_max = (
+        _finite(spatial_correction.abs().max()) if spatial_correction.numel() else 0.0
+    )
+
+    corrected_tokens = min(temporal_span, temporal - prefix_t)
+    weights = [
+        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span)))
+        for offset in range(corrected_tokens)
+    ]
+    candidate = video.clone()
+    for offset, weight in enumerate(weights):
+        candidate[:, :, prefix_t + offset] = (
+            candidate[:, :, prefix_t + offset].float()
+            - float(weight) * spatial_correction
+        ).to(candidate)
+    if not torch.equal(candidate[:, :, :prefix_t], video[:, :, :prefix_t]):
+        raise RuntimeError("temporal-support shadow modified the authoritative prefix")
+    if prefix_t + corrected_tokens < temporal and not torch.equal(
+        candidate[:, :, prefix_t + corrected_tokens :],
+        video[:, :, prefix_t + corrected_tokens :],
+    ):
+        raise RuntimeError("temporal-support shadow modified suffix tokens outside its fixed horizon")
+
+    height, width = map(int, video.shape[-2:])
+    tile_rows = int(post_high_content_receipt["tile_rows"])
+    tile_cols = int(post_high_content_receipt["tile_cols"])
+    lowpass_kernel = int(post_high_content_receipt["lowpass_kernel"])
+    correspondence_radius = int(post_high_content_receipt["correspondence_radius"])
+    min_similarity = float(post_high_content_receipt["min_similarity"])
+    min_margin = float(post_high_content_receipt["min_margin"])
+    tiles = _tile_bounds(height, width, tile_rows, tile_cols)
+
+    transition_comparisons: dict[str, Any] = {}
+    transition_order: list[str] = []
+    for transition_offset in range(corrected_tokens + 1):
+        left_index = prefix_t - 1 + transition_offset
+        right_index = left_index + 1
+        if right_index >= temporal:
+            break
+        if transition_offset == 0:
+            label = "prefix_to_suffix0"
+            left_weight = 0.0
+            right_weight = weights[0]
+        else:
+            label = f"suffix{transition_offset - 1}_to_suffix{transition_offset}"
+            left_weight = weights[transition_offset - 1]
+            right_weight = weights[transition_offset] if transition_offset < corrected_tokens else 0.0
+        before_pair = _pair_metrics(
+            video[:, :, left_index],
+            video[:, :, right_index],
+            lowpass_kernel=lowpass_kernel,
+            radius=correspondence_radius,
+            min_similarity=min_similarity,
+            min_margin=min_margin,
+            tiles=tiles,
+        )
+        after_pair = _pair_metrics(
+            candidate[:, :, left_index],
+            candidate[:, :, right_index],
+            lowpass_kernel=lowpass_kernel,
+            radius=correspondence_radius,
+            min_similarity=min_similarity,
+            min_margin=min_margin,
+            tiles=tiles,
+        )
+        comparison = _compare_pair_candidate(before_pair, after_pair)
+        comparison.update(
+            left_index=left_index,
+            right_index=right_index,
+            left_weight=float(left_weight),
+            right_weight=float(right_weight),
+            direct_correction_jump_rms=abs(float(right_weight) - float(left_weight))
+            * spatial_correction_rms,
+            direct_correction_jump_abs_max=abs(float(right_weight) - float(left_weight))
+            * spatial_correction_abs_max,
+        )
+        transition_order.append(label)
+        transition_comparisons[label] = comparison
+
+    selected_tiles = list(soft_shadow_receipt.get("eligible_tiles", []))
+    selected_centered_ratios = []
+    selected_gradient_ratios = []
+    selected_ncc_deltas = []
+    for comparison in transition_comparisons.values():
+        for tile_id in selected_tiles:
+            tile = comparison["tiles"][tile_id]
+            selected_centered_ratios.append(float(tile["centered_lowpass_rms_after_over_before"]))
+            selected_gradient_ratios.append(float(tile["gradient_rms_after_over_before"]))
+            selected_ncc_deltas.append(float(tile["ncc_after_minus_before"]))
+
+    return {
+        "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "production_application_permitted": False,
+        "output_mutated": False,
+        "candidate_output_discarded": True,
+        "candidate": "post_high_soft_support_raised_cosine_temporal_fade_v1",
+        "temporal_support": "raised_cosine_fade_to_zero_v1",
+        "temporal_span": temporal_span,
+        "temporal_span_source": "provider_predictor_pre_steps",
+        "corrected_tokens": corrected_tokens,
+        "weights": [float(weight) for weight in weights],
+        "eligible_tiles": selected_tiles,
+        "eligible_tile_count": len(selected_tiles),
+        "spatial_correction_rms": spatial_correction_rms,
+        "spatial_correction_abs_max": spatial_correction_abs_max,
+        "one_token_candidate_applied": bool(one_token_receipt.get("applied")),
+        "transition_order": transition_order,
+        "transitions": transition_comparisons,
+        "selected_tile_max_centered_lowpass_ratio": (
+            max(selected_centered_ratios) if selected_centered_ratios else 1.0
+        ),
+        "selected_tile_max_gradient_ratio": (
+            max(selected_gradient_ratios) if selected_gradient_ratios else 1.0
+        ),
+        "selected_tile_min_ncc_delta": (
+            min(selected_ncc_deltas) if selected_ncc_deltas else 0.0
+        ),
+    }
+
+
 def measure_provider_boundary_post_high_shadow(
     video: torch.Tensor,
     prefix_t: int,
@@ -1262,6 +1437,13 @@ def measure_provider_boundary_post_high_shadow(
         calibration_receipt=calibration,
         provider_content_receipt=post_high_content_receipt,
         hard_shadow_receipt=hard_shadow,
+    )
+    temporal_support_shadow = measure_provider_boundary_temporal_support_shadow(
+        video,
+        prefix_t,
+        post_high_content_receipt=post_high_content_receipt,
+        soft_shadow_receipt=soft_shadow,
+        temporal_span=int(soft_shadow.get("pre_steps", 3)),
     )
 
     if hard_shadow.get("output_mutated") is not False or soft_shadow.get("output_mutated") is not False:
@@ -1333,6 +1515,7 @@ def measure_provider_boundary_post_high_shadow(
         "soft_correction_rms": float(soft_shadow.get("soft_correction_rms", 0.0)),
         "soft_correction_abs_max": float(soft_shadow.get("soft_correction_abs_max", 0.0)),
         "successor_transition": successor_transition,
+        "temporal_support_shadow": temporal_support_shadow,
     }
 
 
