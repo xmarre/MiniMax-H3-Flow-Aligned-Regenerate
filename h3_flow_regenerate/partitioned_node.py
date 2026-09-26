@@ -357,18 +357,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             },
         )
         # Append after all prior controls so saved workflow widget positions stay
-        # stable. The production candidate is explicitly opt-in until decoded
-        # media validation closes the hardware gate.
+        # stable. The historical soft_support_v1 value remains loadable, but 00681
+        # invalidated its pre-high production application; it is now diagnostic-only.
         spec["required"]["provider_boundary_stabilization"] = (
             list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS),
             {
                 "default": PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
                 "tooltip": (
-                    "off preserves the current provider boundary exactly. soft_support_v1 applies "
-                    "the held-out-calibrated first-suffix residual attenuation only when rigid v2 "
-                    "is rejected by an exact-overlap-eligible boundary-motion veto; support uses "
-                    "the validated raised-cosine frontier taper and never changes the exact prefix "
-                    "or later suffix tokens."
+                    "off preserves the current provider boundary exactly. soft_support_v1 is retained "
+                    "for saved-workflow compatibility but is now fail-closed and diagnostic-only: 00681 "
+                    "showed that its pre-high correction was amplified by target-high. When selected, "
+                    "the runtime leaves sampler state unchanged and emits a bounded post-high shadow "
+                    "for the next hardware gate."
                 ),
             },
         )
