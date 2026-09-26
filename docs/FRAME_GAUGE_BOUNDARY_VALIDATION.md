@@ -73,3 +73,61 @@ their original interpretation; they cannot establish a v2 acceptance result.
 This gate validates geometric replacement consistency. It does not establish
 semantic continuity or decoded-video quality. A successful structural test or
 runtime receipt still requires inspection of matching decoded boundary media.
+
+
+## Diagnostic-only boundary content continuity
+
+00675 separated the remaining failure from the rigid frame-gauge defect: direct
+video inspection found the camera/frame snap substantially gone while multiple
+background objects still changed across the exact-prefix boundary. That is a
+content/state continuity problem, not evidence that the rigid threshold should
+be weakened.
+
+When frame-gauge repair is enabled, the partitioned runtime now records
+`partitioned_boundary_content_continuity_v1` at three existing clean-domain
+stages:
+
+- `provider_native`: the learned provider's own prefix -> suffix transition.
+- `pre_high_exact_restored`: authoritative exact prefix -> corrected learned
+  suffix immediately before target-grid high-stage sampling.
+- `post_high_internal_clean`: authoritative exact prefix -> final generated
+  suffix after high-stage sampling, converted through the existing model latent
+  input transform for a common-domain comparison.
+
+The diagnostic is observation-only. It never alters the sampler state, guidance
+reference, prefix ownership, suffix tokens, frame-gauge decision, or fallback
+selection. It adds no H3 NFE, provider call, VAE call, sampler lifetime, or
+history boundary.
+
+Each stage compares the boundary pair against the previous three prefix-internal
+pairs. A fixed 4x4 target-latent tile grid publishes raw RMS, spatial low-pass
+RMS, spatial-mean-removed low-pass RMS, low-pass gradient RMS, per-channel
+spatial-mean RMS, normalized cross-correlation, and conservative local
+correspondence statistics. The local matcher uses a bounded 3-cell search,
+minimum similarity 0.35, minimum uniqueness margin 0.02, and exact integer
+forward/backward cycle consistency. These values are diagnostic parameters, not
+production acceptance thresholds.
+
+The receipt also ranks tile identities by boundary centered-structural residual
+relative to the local prefix baseline. A separate
+`partitioned_boundary_content_stage_delta` compares pre-high and post-high
+receipts. This is intended to answer two questions before any new correction is
+designed:
+
+1. Is the changed object/region already inconsistent immediately after the
+   exact-prefix restoration and learned handoff?
+2. Or does target-grid high-stage sampling introduce or amplify the local
+   structural change?
+
+The diagnostic deliberately does **not** re-enable temporal correspondence
+across the exact-prefix crossing. Registered Flow guidance currently excludes
+prefix-internal pairs and the exact-prefix -> first generated-suffix pair, and
+00675 reported only about 0.12% valid temporal support after registration. A
+future boundary-local correction must therefore be justified by measured local
+evidence rather than by broadly enabling ambiguous cross-prefix transport.
+
+The offline runtime validator treats these receipts as optional for historical
+evidence, but when they are present it requires all three stages, exactly one
+pre/post stage delta, the fixed diagnostic policy/geometry, finite metrics, and
+zero extra model/provider/VAE/sampler/history work. It also requires
+`diagnostic_only=true` and `production_gate=false`.
