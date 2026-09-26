@@ -1296,6 +1296,45 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         correction_rms >= 0.0 and correction_max >= 0.0,
         "post-high provider-boundary correction summary is invalid",
     )
+    successor = receipt.get("successor_transition")
+    _require(isinstance(successor, dict), "post-high provider-boundary successor receipt is missing")
+    _require(
+        successor.get("candidate_output_discarded") is True,
+        "post-high provider-boundary successor candidate was not discarded",
+    )
+    available = bool(successor.get("available"))
+    if available:
+        _require(
+            int(successor.get("left_index", -1)) == prefix_t
+            and int(successor.get("right_index", -1)) == prefix_t + 1,
+            "post-high provider-boundary successor indices drifted",
+        )
+        global_successor = successor.get("global")
+        tile_successor = successor.get("tiles")
+        ranked_successor = successor.get("tiles_by_centered_structural_amplification")
+        _require(isinstance(global_successor, dict), "post-high successor global comparison is missing")
+        for value in global_successor.values():
+            _finite_number(value)
+        expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+        _require(
+            isinstance(tile_successor, dict) and set(tile_successor) == expected_tiles,
+            "post-high successor tile comparison is malformed",
+        )
+        for fields in tile_successor.values():
+            _require(isinstance(fields, dict), "post-high successor tile comparison is malformed")
+            for value in fields.values():
+                _finite_number(value)
+        _require(
+            isinstance(ranked_successor, list)
+            and len(ranked_successor) == len(expected_tiles)
+            and set(ranked_successor) == expected_tiles,
+            "post-high successor ranking is malformed",
+        )
+    else:
+        _require(
+            successor.get("reason") == "no_second_suffix_token",
+            "unavailable post-high successor receipt has an unknown reason",
+        )
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
