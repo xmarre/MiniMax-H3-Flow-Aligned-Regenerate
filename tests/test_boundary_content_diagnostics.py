@@ -7,12 +7,15 @@ import torch
 
 from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_temporal_predictor,
 )
 from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
+    _validate_provider_boundary_predictor,
 )
 
 
@@ -93,6 +96,75 @@ def test_boundary_content_stage_delta_localizes_post_high_amplification():
     assert delta["production_gate"] is False
     assert delta["tiles_by_post_high_structural_amplification"][0] == "r0c0"
     assert delta["tiles"]["r0c0"]["centered_lowpass_rms_post_over_pre"] > 1.0
+
+
+
+def test_provider_boundary_predictor_matches_smooth_temporal_trend():
+    video = _video_with_local_boundary_change(scale=0.0)
+    before = video.clone()
+
+    receipt = measure_provider_boundary_temporal_predictor(video, 5)
+
+    assert torch.equal(video, before)
+    assert receipt["policy"] == PROVIDER_BOUNDARY_PREDICTOR_POLICY
+    assert receipt["diagnostic_only"] is True
+    assert receipt["production_gate"] is False
+    assert receipt["predictor"] == "elementwise_median_centered_lowpass_delta_v1"
+    assert receipt["global"]["prediction_error_rms"] == pytest.approx(0.0, abs=1e-6)
+    assert receipt["global"]["actual_vs_predictor_cosine"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_provider_boundary_predictor_localizes_unexpected_first_suffix_change():
+    receipt = measure_provider_boundary_temporal_predictor(
+        _video_with_local_boundary_change(scale=2.0),
+        5,
+    )
+
+    assert receipt["tiles_by_prediction_error_rms"][0] == "r0c0"
+    changed = receipt["tiles"]["r0c0"]
+    quiet = receipt["tiles"]["r3c3"]
+    assert changed["prediction_error_rms"] > quiet["prediction_error_rms"]
+    assert changed["prediction_error_over_actual_delta"] > quiet["prediction_error_over_actual_delta"]
+    assert changed["actual_vs_predictor_cosine"] < quiet["actual_vs_predictor_cosine"]
+
+
+def _predictor_event(receipt: dict) -> dict:
+    return {
+        "kind": "partitioned_provider_boundary_predictor",
+        "fields": {
+            "domain": "model_internal_clean",
+            "owner_before": "learned_provider_prefix",
+            "owner_after": "learned_provider_suffix",
+            "elapsed_ms": 1.0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            **receipt,
+        },
+    }
+
+
+def test_runtime_gate_accepts_provider_boundary_predictor_receipt():
+    receipt = measure_provider_boundary_temporal_predictor(
+        _video_with_local_boundary_change(scale=0.7),
+        5,
+    )
+
+    _validate_provider_boundary_predictor([_predictor_event(receipt)])
+
+
+def test_runtime_gate_rejects_provider_boundary_predictor_that_claims_production_control():
+    receipt = measure_provider_boundary_temporal_predictor(
+        _video_with_local_boundary_change(scale=0.7),
+        5,
+    )
+    bad = _predictor_event(copy.deepcopy(receipt))
+    bad["fields"]["production_gate"] = True
+
+    with pytest.raises(RuntimeGateError, match="production gate"):
+        _validate_provider_boundary_predictor([bad])
 
 
 def _event(stage: str, receipt: dict) -> dict:
