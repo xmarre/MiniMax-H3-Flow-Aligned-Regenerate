@@ -15,7 +15,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .boundary_content_diagnostics import BOUNDARY_CONTENT_DIAGNOSTIC_POLICY
+from .boundary_content_diagnostics import (
+    BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+)
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
     GUIDANCE_REFERENCE_POLICY,
@@ -518,6 +521,75 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 observed_reason = f"boundary_{name}_insufficient_improvement"
 
     _require(observed_reason == reason, "exact-overlap fallback does not reproduce the recorded boundary veto")
+
+
+def _validate_provider_boundary_predictor(window: list[dict[str, Any]]) -> None:
+    """Validate optional observation-only provider temporal predictor evidence."""
+
+    receipts = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_provider_boundary_predictor"
+    ]
+    if not receipts:
+        return
+    _require(len(receipts) == 1, "provider-boundary predictor must emit exactly one receipt")
+    receipt = receipts[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+        "provider-boundary predictor policy drifted",
+    )
+    _require(receipt.get("diagnostic_only") is True, "provider-boundary predictor mutated into a production path")
+    _require(receipt.get("production_gate") is False, "provider-boundary predictor became a production gate")
+    _require(
+        receipt.get("predictor") == "elementwise_median_centered_lowpass_delta_v1",
+        "provider-boundary predictor algorithm drifted",
+    )
+    _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary predictor history depth drifted")
+    _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary predictor tile-row count drifted")
+    _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary predictor tile-column count drifted")
+    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary predictor low-pass kernel drifted")
+    _require(receipt.get("extra_h3_nfe") == 0, "provider-boundary predictor added H3 NFE")
+    _require(receipt.get("extra_sampler_lifetimes") == 0, "provider-boundary predictor added a sampler lifetime")
+    _require(receipt.get("extra_history_boundaries") == 0, "provider-boundary predictor added a history boundary")
+    _require(receipt.get("extra_provider_calls") == 0, "provider-boundary predictor added a provider call")
+    _require(receipt.get("extra_vae_calls") == 0, "provider-boundary predictor added a VAE call")
+
+    metric_fields = {
+        "actual_centered_lowpass_delta_rms",
+        "prefix_median_centered_lowpass_delta_rms",
+        "predictor_centered_lowpass_delta_rms",
+        "prediction_error_rms",
+        "prediction_error_over_prefix_dispersion",
+        "prediction_error_over_actual_delta",
+        "prefix_dispersion_rms",
+        "actual_vs_predictor_cosine",
+        "actual_projection_gain_on_predictor",
+    }
+    global_fields = receipt.get("global")
+    _require(isinstance(global_fields, dict), "provider-boundary predictor global receipt is missing")
+    _require(metric_fields <= set(global_fields), "provider-boundary predictor global fields are incomplete")
+    for value in global_fields.values():
+        _finite_number(value)
+
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+    tiles = receipt.get("tiles")
+    _require(isinstance(tiles, dict) and set(tiles) == expected_tiles, "provider-boundary predictor tile set drifted")
+    for tile_id, tile in tiles.items():
+        _require(isinstance(tile, dict), f"provider-boundary predictor tile {tile_id} is malformed")
+        bounds = tile.get("bounds")
+        _require(
+            isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
+            f"provider-boundary predictor tile {tile_id} bounds are malformed",
+        )
+        _require(metric_fields <= set(tile), f"provider-boundary predictor tile {tile_id} fields are incomplete")
+        for field in metric_fields:
+            _finite_number(tile.get(field))
+
+    for ranking_name in ("tiles_by_prediction_error_ratio", "tiles_by_prediction_error_rms"):
+        ranking = receipt.get(ranking_name)
+        _require(
+            isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
+            f"provider-boundary predictor {ranking_name} identity drifted",
+        )
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
@@ -1818,6 +1890,7 @@ def validate_partitioned_runtime_evidence(
         expected_result=expected_residual_result,
     )
     _validate_boundary_content_diagnostics(window)
+    _validate_provider_boundary_predictor(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
