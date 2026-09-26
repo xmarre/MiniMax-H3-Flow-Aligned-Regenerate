@@ -1190,7 +1190,6 @@ def measure_provider_boundary_soft_support_shadow(
     }
 
 
-
 def apply_provider_boundary_soft_support_stabilization(
     video: torch.Tensor,
     prefix_t: int,
@@ -1322,9 +1321,7 @@ def apply_provider_boundary_soft_support_stabilization(
         "hard_frontier_edge_jump_abs_max": float(soft_shadow_receipt["hard_frontier_edge_jump_abs_max"]),
         "soft_frontier_edge_jump_rms": float(soft_shadow_receipt["soft_frontier_edge_jump_rms"]),
         "soft_frontier_edge_jump_abs_max": float(soft_shadow_receipt["soft_frontier_edge_jump_abs_max"]),
-        "soft_centered_lowpass_rms_ratio": float(
-            soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]
-        ),
+        "soft_centered_lowpass_rms_ratio": float(soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]),
         "soft_gradient_rms_ratio": float(soft_shadow_receipt["global"]["soft_gradient_rms_ratio"]),
         "soft_ncc_delta": float(soft_shadow_receipt["global"]["soft_ncc_delta"]),
     }
