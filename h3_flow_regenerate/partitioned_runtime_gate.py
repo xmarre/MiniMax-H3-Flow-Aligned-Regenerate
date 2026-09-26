@@ -20,6 +20,7 @@ from .boundary_content_diagnostics import (
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
 )
 from .frame_gauge import (
@@ -1113,6 +1114,160 @@ def _validate_provider_boundary_soft_support_shadow(window: list[dict[str, Any]]
     _require(
         isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
         "provider-boundary soft-support ranking drifted",
+    )
+
+
+def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> None:
+    """Validate optional opt-in provider-native first-suffix stabilization."""
+
+    events = [
+        event
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_stabilization"
+    ]
+    if not events:
+        return
+    _require(len(events) == 1, "provider-boundary stabilization must emit exactly one receipt")
+    receipt = _event_fields(events[0])
+    requested = bool(receipt.get("requested"))
+    mode = str(receipt.get("mode", "off"))
+    applied = bool(receipt.get("applied"))
+    corrected_tokens = int(receipt.get("corrected_tokens", -1))
+
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(receipt.get(field) == 0, f"provider-boundary stabilization added work: {field}")
+    _require(
+        receipt.get("authoritative_prefix_modified") is False,
+        "provider-boundary stabilization modified the authoritative prefix",
+    )
+    _require(
+        receipt.get("later_suffix_extrapolated") is False,
+        "provider-boundary stabilization extrapolated into later suffix tokens",
+    )
+
+    if not requested:
+        _require(mode == "off", "disabled provider-boundary stabilization mode drifted")
+        _require(not applied and corrected_tokens == 0, "disabled provider-boundary stabilization mutated state")
+        _require(receipt.get("reason") == "off", "disabled provider-boundary stabilization reason drifted")
+        return
+
+    _require(mode == "soft_support_v1", "provider-boundary stabilization requested unknown mode")
+    if not applied:
+        _require(
+            receipt.get("reason") in {"exact_overlap_fallback_not_selected", "no_eligible_provider_region", "rigid_v2_selected"},
+            "provider-boundary stabilization failed closed for an unknown reason",
+        )
+        _require(corrected_tokens == 0, "non-applied provider-boundary stabilization corrected tokens")
+        return
+
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_STABILIZATION_POLICY,
+        "provider-boundary stabilization policy drifted",
+    )
+    _require(
+        receipt.get("source_shadow_policy") == PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "provider-boundary stabilization shadow source drifted",
+    )
+    _require(
+        receipt.get("source_shadow_candidate") == "heldout_max_prediction_residual_shrink_v1",
+        "provider-boundary stabilization candidate drifted",
+    )
+    _require(
+        receipt.get("support") == "inside_raised_cosine_selected_frontier_v1",
+        "provider-boundary stabilization support drifted",
+    )
+    _require(
+        receipt.get("support_owner") == "production_first_suffix_only",
+        "provider-boundary stabilization support ownership drifted",
+    )
+    _require(receipt.get("reason") == "applied", "provider-boundary stabilization applied reason drifted")
+    _require(
+        receipt.get("exact_overlap_fallback_required") is True
+        and receipt.get("exact_overlap_fallback_requested") is True,
+        "provider-boundary stabilization escaped the exact-overlap fallback arm",
+    )
+    _require(
+        str(receipt.get("exact_overlap_fallback_trigger", "")) in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+        "provider-boundary stabilization trigger is not exact-overlap eligible",
+    )
+    _require(receipt.get("shadow_recomputed_from_native_provider") is True, "provider-boundary stabilization lost native shadow provenance")
+    _require(corrected_tokens == 1, "provider-boundary stabilization must correct exactly one suffix token")
+    _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary stabilization history depth drifted")
+    _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary stabilization tile-row count drifted")
+    _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary stabilization tile-column count drifted")
+    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary stabilization kernel drifted")
+    _require(int(receipt.get("feather_width", 0)) == 3, "provider-boundary stabilization feather width drifted")
+    eligible = receipt.get("eligible_tiles")
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+    _require(
+        isinstance(eligible, list)
+        and len(eligible) == int(receipt.get("eligible_tile_count", -1))
+        and len(eligible) > 0
+        and len(set(eligible)) == len(eligible)
+        and set(eligible) <= expected_tiles,
+        "provider-boundary stabilization eligible tile set is malformed",
+    )
+    _require(_finite_number(receipt.get("correction_rms")) > 0.0, "provider-boundary stabilization has zero correction")
+    _require(_finite_number(receipt.get("correction_abs_max")) > 0.0, "provider-boundary stabilization has zero max correction")
+    hard_rms = _finite_number(receipt.get("hard_frontier_edge_jump_rms"))
+    hard_max = _finite_number(receipt.get("hard_frontier_edge_jump_abs_max"))
+    soft_rms = _finite_number(receipt.get("soft_frontier_edge_jump_rms"))
+    soft_max = _finite_number(receipt.get("soft_frontier_edge_jump_abs_max"))
+    _require(soft_rms <= hard_rms + 1e-9, "provider-boundary stabilization increased frontier RMS jump")
+    _require(soft_max <= hard_max + 1e-9, "provider-boundary stabilization increased frontier max jump")
+    _finite_number(receipt.get("soft_centered_lowpass_rms_ratio"))
+    _finite_number(receipt.get("soft_gradient_rms_ratio"))
+    _finite_number(receipt.get("soft_ncc_delta"))
+    _finite_number(receipt.get("local_compute_elapsed_ms"))
+
+    frame_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_frame_gauge"
+    ]
+    _require(len(frame_receipts) == 1, "provider-boundary stabilization requires one frame-gauge receipt")
+    frame = frame_receipts[0]
+    _require(frame.get("result") == "rejected", "provider-boundary stabilization requires rejected rigid v2")
+    _require(frame.get("spatial_warp_applied") is False, "provider-boundary stabilization combined with rejected rigid warp")
+    _require(
+        frame.get("registered_guidance_reference") is False,
+        "provider-boundary stabilization published rejected-arm registered guidance",
+    )
+    _require(
+        frame.get("exact_overlap_fallback_requested") is True,
+        "provider-boundary stabilization requires exact-overlap fallback",
+    )
+
+    overlap = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_exact_overlap_bridge"
+    ]
+    _require(len(overlap) == 1, "provider-boundary stabilization requires one exact-overlap bridge receipt")
+    _require(
+        overlap[0].get("requested") is True and overlap[0].get("applied") is True,
+        "provider-boundary stabilization exact-overlap bridge did not apply",
+    )
+
+    stabilization_index = next(
+        index
+        for index, event in enumerate(window)
+        if _event_kind(event) == "partitioned_provider_boundary_stabilization"
+    )
+    overlap_index = next(
+        index
+        for index, event in enumerate(window)
+        if _event_kind(event) == "partitioned_exact_overlap_bridge"
+    )
+    _require(
+        stabilization_index < overlap_index,
+        "provider-boundary stabilization must precede exact-overlap mapping",
     )
 
 
@@ -2418,6 +2573,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_predictor_calibration(window)
     _validate_provider_boundary_stabilization_shadow(window)
     _validate_provider_boundary_soft_support_shadow(window)
+    _validate_provider_boundary_stabilization(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
