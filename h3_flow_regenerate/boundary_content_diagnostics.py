@@ -1336,7 +1336,12 @@ def measure_provider_boundary_post_high_shadow(
             "gradient_non_degraded": gradient_non_degraded,
             "ncc_non_degraded": ncc_non_degraded,
         }
-        boundary_non_degrading = boundary_non_degrading and centered_improved and gradient_non_degraded and ncc_non_degraded
+        boundary_non_degrading = (
+            boundary_non_degrading
+            and centered_improved
+            and gradient_non_degraded
+            and ncc_non_degraded
+        )
 
     suffix_gauge_shadow = {
         **suffix_gauge_receipt,

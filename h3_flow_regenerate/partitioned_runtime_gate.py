@@ -1173,6 +1173,20 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     else:
         allowed_reasons.add("deferred_to_post_high_suffix_gauge")
     _require(reason in allowed_reasons, "provider-boundary stabilization failed closed for an unknown reason")
+    if reason == "deferred_to_post_high_suffix_gauge":
+        _require(
+            receipt.get("historical_candidate_mutation_disabled") is True,
+            "post-high suffix gauge did not disable the historical pre-high mutation",
+        )
+        _require(
+            receipt.get("production_mutation_allowed") is False,
+            "post-high suffix gauge unexpectedly permits a pre-high mutation",
+        )
+        _require(
+            receipt.get("exact_overlap_fallback_required") is True
+            and receipt.get("exact_overlap_fallback_requested") is True,
+            "post-high suffix gauge escaped the exact-overlap fallback arm",
+        )
     if reason == "disabled_pending_post_high_validation":
         _require(
             receipt.get("historical_candidate_policy") == PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -1385,12 +1399,15 @@ def _validate_provider_boundary_post_high_suffix_gauge(window: list[dict[str, An
         and stabilization[0].get("requested")
         and stabilization[0].get("mode") == "post_high_suffix_gauge_v1"
     )
+    has_boundary_diagnostics = any(
+        _event_kind(event) == "partitioned_boundary_content_continuity" for event in window
+    )
     events = [
         _event_fields(event)
         for event in window
         if _event_kind(event) == "partitioned_provider_boundary_post_high_suffix_gauge"
     ]
-    if not requested:
+    if not (requested and has_boundary_diagnostics):
         _require(not events, "unexpected post-high suffix-gauge production receipt")
         return
 
@@ -1421,6 +1438,7 @@ def _validate_provider_boundary_post_high_suffix_gauge(window: list[dict[str, An
                 "boundary_non_degradation_failed",
                 "suffix_temporal_invariant_failed",
                 "post_high_prefix_not_exact",
+                "pre_high_arm_not_eligible",
                 "shadow_gate_rejected",
                 "zero_correction",
             },

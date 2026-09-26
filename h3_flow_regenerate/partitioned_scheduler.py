@@ -4026,7 +4026,14 @@ def run_partitioned_progressive(
                         "extra_provider_calls": 0,
                         "extra_vae_calls": 0,
                     }
-                    if prefix_recanonicalized:
+                    pre_high_arm_eligible = bool(
+                        exact_overlap_fallback_requested
+                        and provider_boundary_stabilization_receipt.get("reason")
+                        == "deferred_to_post_high_suffix_gauge"
+                    )
+                    if not pre_high_arm_eligible:
+                        gauge_event["reason"] = "pre_high_arm_not_eligible"
+                    elif prefix_recanonicalized:
                         gauge_event["reason"] = "post_high_prefix_not_exact"
                     elif gauge_supported:
                         if final_internal_audio is None:
@@ -4084,9 +4091,15 @@ def run_partitioned_progressive(
                                 .item()
                             ),
                         )
-                        roundtrip_tolerance = 8.0 * float(torch.finfo(corrected_internal_video.dtype).eps) * roundtrip_scale
+                        roundtrip_tolerance = (
+                            8.0
+                            * float(torch.finfo(corrected_internal_video.dtype).eps)
+                            * roundtrip_scale
+                        )
                         if roundtrip_abs_max > roundtrip_tolerance:
-                            raise RuntimeError("post-high suffix gauge caller/internal roundtrip drift exceeded dtype bound")
+                            raise RuntimeError(
+                                "post-high suffix gauge caller/internal roundtrip drift exceeded dtype bound"
+                            )
 
                         final_video = corrected_caller_video
                         final_internal = roundtrip_internal
