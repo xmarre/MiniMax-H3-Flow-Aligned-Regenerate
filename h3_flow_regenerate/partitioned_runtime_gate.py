@@ -1608,7 +1608,10 @@ def _validate_provider_boundary_post_high_stabilization(window: list[dict[str, A
         receipt.get("source_shadow_policy") == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
         "post-high provider-boundary production shadow provenance drifted",
     )
-    _require(receipt.get("production_default_changed") is False, "post-high content repair changed a production default")
+    _require(
+        receipt.get("production_default_changed") is False,
+        "post-high content repair changed a production default",
+    )
     _require(
         receipt.get("authoritative_prefix_modified") is False,
         "post-high content repair modified the authoritative prefix",
