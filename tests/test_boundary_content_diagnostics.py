@@ -662,7 +662,6 @@ def test_post_high_temporal_support_shadow_covers_full_fade_and_terminal_return(
         )
 
 
-
 def _production_temporal_receipt(
     *,
     first_successor_centered: float = 1.02,
