@@ -24,6 +24,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -354,6 +356,22 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after all prior controls so saved workflow widget positions stay
+        # stable. The production candidate is explicitly opt-in until decoded
+        # media validation closes the hardware gate.
+        spec["required"]["provider_boundary_stabilization"] = (
+            list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS),
+            {
+                "default": PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+                "tooltip": (
+                    "off preserves the current provider boundary exactly. soft_support_v1 applies "
+                    "the held-out-calibrated first-suffix residual attenuation only when rigid v2 "
+                    "is rejected by an exact-overlap-eligible boundary-motion veto; support uses "
+                    "the validated raised-cosine frontier taper and never changes the exact prefix "
+                    "or later suffix tokens."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -391,6 +409,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
         frame_gauge_repair=False,
         frame_gauge_residual_mode="off",
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -426,6 +445,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             av_handoff_source=av_handoff_source,
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
+            provider_boundary_stabilization=provider_boundary_stabilization,
         )
 
 
