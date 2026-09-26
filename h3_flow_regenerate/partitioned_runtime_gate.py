@@ -1233,6 +1233,54 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     _finite_number(receipt.get("soft_ncc_delta"))
     _finite_number(receipt.get("local_compute_elapsed_ms"))
 
+    soft_shadow_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_soft_support_shadow"
+    ]
+    _require(
+        len(soft_shadow_receipts) == 1,
+        "provider-boundary stabilization requires one emitted soft-shadow receipt",
+    )
+    soft_shadow = soft_shadow_receipts[0]
+    _require(
+        soft_shadow.get("eligible_tiles") == eligible,
+        "provider-boundary stabilization eligible tiles diverged from emitted soft shadow",
+    )
+    _require(
+        math.isclose(
+            _finite_number(receipt.get("correction_rms")),
+            _finite_number(soft_shadow.get("soft_correction_rms")),
+            rel_tol=1e-6,
+            abs_tol=1e-8,
+        ),
+        "provider-boundary stabilization correction RMS diverged from emitted soft shadow",
+    )
+    _require(
+        math.isclose(
+            _finite_number(receipt.get("correction_abs_max")),
+            _finite_number(soft_shadow.get("soft_correction_abs_max")),
+            rel_tol=1e-6,
+            abs_tol=1e-8,
+        ),
+        "provider-boundary stabilization correction max diverged from emitted soft shadow",
+    )
+    for production_field, shadow_field in (
+        ("hard_frontier_edge_jump_rms", "hard_frontier_edge_jump_rms"),
+        ("hard_frontier_edge_jump_abs_max", "hard_frontier_edge_jump_abs_max"),
+        ("soft_frontier_edge_jump_rms", "soft_frontier_edge_jump_rms"),
+        ("soft_frontier_edge_jump_abs_max", "soft_frontier_edge_jump_abs_max"),
+    ):
+        _require(
+            math.isclose(
+                _finite_number(receipt.get(production_field)),
+                _finite_number(soft_shadow.get(shadow_field)),
+                rel_tol=1e-6,
+                abs_tol=1e-8,
+            ),
+            f"provider-boundary stabilization {production_field} diverged from emitted soft shadow",
+        )
+
     frame_receipts = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
     _require(len(frame_receipts) == 1, "provider-boundary stabilization requires one frame-gauge receipt")
     frame = frame_receipts[0]
