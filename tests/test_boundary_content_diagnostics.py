@@ -98,7 +98,6 @@ def test_boundary_content_stage_delta_localizes_post_high_amplification():
     assert delta["tiles"]["r0c0"]["centered_lowpass_rms_post_over_pre"] > 1.0
 
 
-
 def test_provider_boundary_predictor_matches_smooth_temporal_trend():
     video = _video_with_local_boundary_change(scale=0.0)
     before = video.clone()
