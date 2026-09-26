@@ -893,11 +893,21 @@ frames retain 1,024 target-grid rows/frame while the 50 generated suffix frames
 use 484 source-grid rows/frame. The extra exact-prefix rows and variable-grid VDN
 linear/attention work are the performance axis to optimize.
 
-No speed workaround is promoted by 00686. Falling back to
-`source_carrier_uniform_only` would recover speed by reintroducing the
-background-content failure that this run just isolated. Correctness and
-performance must therefore be addressed separately: v4 restores the rigid
-transaction on the exact-main path; exact-prefix low/probe acceleration remains
-a follow-up implementation problem rather than a reason to discard exact
-transformer context.
+Falling back to `source_carrier_uniform_only` would recover speed by
+reintroducing the background-content failure that this run just isolated.
+Correctness and performance must therefore remain separate.
+
+A pre-existing VDN-H3-Plus performance candidate already targets the exact
+hot path exposed by 00686: VDN-H3-Plus PR #33 at
+`da3627f85d494bdf4213251deb3ba2a94b8a2f36`. That PR batches contiguous
+equal-grid variable-linear work by domain while retaining the scalar
+implementation as an arithmetic oracle. It does not change learned weights,
+physical-grid mapping, recurrence, measure semantics, grouped softmax, Sol
+requests, or native/uniform execution. Hosted CI and review are green, but its
+SM120 speedup remains a hardware gate.
+
+Flow #89 therefore pins that exact VDN candidate for cross-repository contract
+validation. The next matched run must keep the 00686 exact-main semantics and
+measure whether VDN #33 materially closes the low/probe timing gap while v4
+restores the independently validated rigid frame-gauge transaction.
 
