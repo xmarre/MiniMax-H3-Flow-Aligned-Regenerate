@@ -609,6 +609,22 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-12),
                 f"exact-overlap fallback {name} {label} does not reproduce",
             )
+        if policy == "native_boundary_motion_consensus_v4":
+            expected_delta = after_error - before_error
+            _require(
+                math.isclose(
+                    _finite_number(check.get("error_delta_cells")),
+                    expected_delta,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                ),
+                f"exact-overlap fallback {name} error-delta summary drifted",
+            )
+            _require(
+                check.get("within_degradation_bound")
+                is bool(expected_delta <= max_degradation + 1e-12),
+                f"exact-overlap fallback {name} degradation-bound summary drifted",
+            )
 
         if observed_reason is None:
             if policy == "native_boundary_motion_consensus_v4":
