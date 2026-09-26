@@ -36,6 +36,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -48,6 +52,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_guidance_trajectory_source,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
+    normalize_provider_boundary_stabilization,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -108,6 +113,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "guidance_trajectory_source" not in ordinary
     assert "low_probe_execution_source" not in ordinary
     assert "frame_gauge_repair" not in ordinary
+    assert "provider_boundary_stabilization" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -142,6 +148,13 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
     assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["provider_boundary_stabilization"][0] == list(
+        PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS
+    )
+    assert (
+        diagnostic["provider_boundary_stabilization"][1]["default"]
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+    )
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
@@ -170,6 +183,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("av_handoff_source") < keys.index("guidance_trajectory_source")
     assert keys.index("guidance_trajectory_source") < keys.index("low_probe_execution_source")
     assert keys.index("low_probe_execution_source") < keys.index("frame_gauge_repair")
+    assert keys.index("frame_gauge_repair") < keys.index("frame_gauge_residual_mode")
+    assert keys.index("frame_gauge_residual_mode") < keys.index("provider_boundary_stabilization")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -215,6 +230,54 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
             },
         )
     ]
+
+
+def test_provider_boundary_stabilization_control_is_model_local_and_opt_in():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    )
+
+    assert (
+        model.model_options["transformer_options"][PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY]
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+    )
+    assert metrics.events[-1][1]["provider_boundary_stabilization"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+
+    model = SimpleNamespace(
+        model_options={
+            "transformer_options": {
+                PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY: PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+            }
+        }
+    )
+    apply_partitioned_diagnostic_controls(
+        model,
+        _Metrics(),
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    )
+    assert PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY not in model.model_options["transformer_options"]
+
+
+def test_provider_boundary_stabilization_normalization_is_bounded():
+    assert (
+        normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF)
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+    )
+    assert (
+        normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT)
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+    )
+    with pytest.raises(ValueError, match="provider-boundary stabilization"):
+        normalize_provider_boundary_stabilization("invented")
 
 
 def test_prefix_transformer_context_normalization_is_bounded():
