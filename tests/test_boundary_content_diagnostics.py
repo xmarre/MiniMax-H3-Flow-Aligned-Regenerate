@@ -553,6 +553,7 @@ def test_runtime_gate_accepts_applied_provider_boundary_stabilization_receipt():
     }
     window = [
         production_event,
+        _soft_shadow_event(soft),
         {
             "kind": "partitioned_frame_gauge",
             "fields": {
