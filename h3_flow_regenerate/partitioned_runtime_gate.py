@@ -1157,26 +1157,26 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
     _require(mode == "soft_support_v1", "provider-boundary stabilization requested unknown mode")
     _require(
         not applied and corrected_tokens == 0,
-        "00681 invalidated pre-high-only provider stabilization; production mutation must stay disabled",
+        "pre-high-only provider stabilization is invalidated; production mutation must stay disabled",
     )
     reason = str(receipt.get("reason", ""))
     _require(
         reason
         in {
-            "disabled_after_00681_post_high_regression",
+            "disabled_pending_post_high_validation",
             "exact_overlap_fallback_not_selected",
             "rigid_v2_selected",
         },
         "provider-boundary stabilization failed closed for an unknown reason",
     )
-    if reason == "disabled_after_00681_post_high_regression":
+    if reason == "disabled_pending_post_high_validation":
         _require(
             receipt.get("historical_candidate_policy") == PROVIDER_BOUNDARY_STABILIZATION_POLICY,
             "provider-boundary stabilization historical policy identity drifted",
         )
         _require(
             receipt.get("historical_candidate_mutation_disabled") is True,
-            "provider-boundary stabilization did not mark the invalidated mutation disabled",
+            "provider-boundary stabilization did not mark the pre-high mutation disabled",
         )
         _require(
             receipt.get("production_mutation_allowed") is False,
@@ -1190,7 +1190,7 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
 
 
 def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -> None:
-    """Validate the 00681 follow-up against the existing post-high clean state."""
+    """Validate the follow-up shadow against the existing post-high clean state."""
 
     stabilization = [
         _event_fields(event)
@@ -1234,10 +1234,10 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
     _require(
         receipt.get("legacy_pre_high_mutation_disabled") is True,
-        "post-high provider-boundary shadow lost the 00681 fail-closed guard",
+        "post-high provider-boundary shadow lost the fail-closed guard",
     )
     _require(
-        receipt.get("reason") == "00681_requires_post_high_validation_before_any_provider_boundary_mutation",
+        receipt.get("reason") == "post_high_validation_required_before_any_provider_boundary_mutation",
         "post-high provider-boundary shadow reason drifted",
     )
     for field in (
