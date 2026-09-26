@@ -539,7 +539,6 @@ def measure_provider_boundary_temporal_predictor(
     }
 
 
-
 def _calibration_region_summary(
     history_rows: list[dict[str, float]],
     boundary: dict[str, float],
@@ -563,9 +562,7 @@ def _calibration_region_summary(
         "historical_prediction_error_rms_max": error_max,
         "boundary_error_over_historical_median": _safe_ratio(boundary["prediction_error_rms"], error_median),
         "boundary_error_over_historical_max": _safe_ratio(boundary["prediction_error_rms"], error_max),
-        "boundary_prediction_error_over_prefix_dispersion": float(
-            boundary["prediction_error_over_prefix_dispersion"]
-        ),
+        "boundary_prediction_error_over_prefix_dispersion": float(boundary["prediction_error_over_prefix_dispersion"]),
         "historical_error_over_prefix_dispersion_median": ratio_median,
         "historical_error_over_prefix_dispersion_max": ratio_max,
         "boundary_dispersion_ratio_over_historical_median": _safe_ratio(
@@ -579,13 +576,10 @@ def _calibration_region_summary(
         "boundary_actual_vs_predictor_cosine": float(boundary["actual_vs_predictor_cosine"]),
         "historical_actual_vs_predictor_cosine_median": cosine_median,
         "historical_actual_vs_predictor_cosine_min": cosine_min,
-        "boundary_cosine_minus_historical_median": float(boundary["actual_vs_predictor_cosine"])
-        - cosine_median,
+        "boundary_cosine_minus_historical_median": float(boundary["actual_vs_predictor_cosine"]) - cosine_median,
         "boundary_projection_gain_on_predictor": float(boundary["actual_projection_gain_on_predictor"]),
         "historical_projection_gain_median": gain_median,
-        "boundary_projection_gain_minus_historical_median": float(
-            boundary["actual_projection_gain_on_predictor"]
-        )
+        "boundary_projection_gain_minus_historical_median": float(boundary["actual_projection_gain_on_predictor"])
         - gain_median,
     }
 
@@ -657,9 +651,7 @@ def measure_provider_boundary_temporal_calibration(
     )
     by_max_dispersion = sorted(
         tile_fields,
-        key=lambda tile_id: float(
-            tile_fields[tile_id]["boundary_dispersion_ratio_over_historical_max"]
-        ),
+        key=lambda tile_id: float(tile_fields[tile_id]["boundary_dispersion_ratio_over_historical_max"]),
         reverse=True,
     )
     return {
