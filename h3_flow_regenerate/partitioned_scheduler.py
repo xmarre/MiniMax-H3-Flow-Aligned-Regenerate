@@ -17,6 +17,10 @@ from typing import Any
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
+from .boundary_content_diagnostics import (
+    compare_boundary_content_stages,
+    measure_boundary_content_continuity,
+)
 from .contracts import H3FlowTrajectory
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
@@ -77,10 +81,6 @@ from .partitioned_diagnostics import (
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
-)
-from .boundary_content_diagnostics import (
-    compare_boundary_content_stages,
-    measure_boundary_content_continuity,
 )
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
