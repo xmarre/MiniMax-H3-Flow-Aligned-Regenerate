@@ -10,7 +10,9 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+    apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
     measure_provider_boundary_soft_support_shadow,
@@ -24,6 +26,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
+    _validate_provider_boundary_stabilization,
     _validate_provider_boundary_stabilization_shadow,
 )
 
@@ -432,6 +435,140 @@ def test_runtime_gate_rejects_provider_boundary_soft_support_production_mutation
 
     with pytest.raises(RuntimeGateError, match="production mutation"):
         _validate_provider_boundary_soft_support_shadow([_shadow_event(hard), bad])
+
+
+def test_provider_boundary_soft_support_production_candidate_changes_only_first_suffix():
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7010)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    provider = measure_boundary_content_continuity(video, 5)
+    calibration = measure_provider_boundary_temporal_calibration(video, 5, calibration_targets=1)
+    hard = measure_provider_boundary_stabilization_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+    )
+    soft = measure_provider_boundary_soft_support_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+        hard_shadow_receipt=hard,
+    )
+    before = video.clone()
+
+    stabilized, receipt = apply_provider_boundary_soft_support_stabilization(
+        video,
+        5,
+        soft_shadow_receipt=soft,
+    )
+
+    assert torch.equal(video, before)
+    assert receipt["policy"] == PROVIDER_BOUNDARY_STABILIZATION_POLICY
+    assert receipt["source_shadow_policy"] == PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY
+    assert receipt["applied"] is True
+    assert receipt["corrected_tokens"] == 1
+    assert receipt["authoritative_prefix_modified"] is False
+    assert receipt["later_suffix_extrapolated"] is False
+    assert torch.equal(stabilized[:, :, :5], before[:, :, :5])
+    assert not torch.equal(stabilized[:, :, 5], before[:, :, 5])
+    assert torch.equal(stabilized[:, :, 6:], before[:, :, 6:])
+    assert receipt["correction_rms"] == pytest.approx(soft["soft_correction_rms"], rel=1e-6, abs=1e-8)
+    assert receipt["correction_abs_max"] == pytest.approx(soft["soft_correction_abs_max"], rel=1e-6, abs=1e-8)
+
+
+def test_provider_boundary_soft_support_production_candidate_noops_without_eligible_region():
+    video = _video_with_local_boundary_change(scale=0.0)
+    provider = measure_boundary_content_continuity(video, 5)
+    calibration = measure_provider_boundary_temporal_calibration(video, 5, calibration_targets=1)
+    hard = measure_provider_boundary_stabilization_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+    )
+    soft = measure_provider_boundary_soft_support_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+        hard_shadow_receipt=hard,
+    )
+
+    stabilized, receipt = apply_provider_boundary_soft_support_stabilization(
+        video,
+        5,
+        soft_shadow_receipt=soft,
+    )
+
+    assert torch.equal(stabilized, video)
+    assert receipt["applied"] is False
+    assert receipt["corrected_tokens"] == 0
+    assert receipt["eligible_tiles"] == []
+
+
+def test_runtime_gate_accepts_applied_provider_boundary_stabilization_receipt():
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7011)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    provider = measure_boundary_content_continuity(video, 5)
+    calibration = measure_provider_boundary_temporal_calibration(video, 5, calibration_targets=1)
+    hard = measure_provider_boundary_stabilization_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+    )
+    soft = measure_provider_boundary_soft_support_shadow(
+        video,
+        5,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+        hard_shadow_receipt=hard,
+    )
+    _, production = apply_provider_boundary_soft_support_stabilization(
+        video,
+        5,
+        soft_shadow_receipt=soft,
+    )
+    production_event = {
+        "kind": "partitioned_provider_boundary_stabilization",
+        "fields": {
+            "requested": True,
+            "mode": "soft_support_v1",
+            "reason": "applied",
+            "exact_overlap_fallback_required": True,
+            "exact_overlap_fallback_requested": True,
+            "exact_overlap_fallback_trigger": "boundary_upper45_insufficient_improvement",
+            "shadow_recomputed_from_native_provider": True,
+            "local_compute_elapsed_ms": 1.0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            **production,
+        },
+    }
+    window = [
+        production_event,
+        {
+            "kind": "partitioned_frame_gauge",
+            "fields": {
+                "result": "rejected",
+                "spatial_warp_applied": False,
+                "registered_guidance_reference": False,
+                "exact_overlap_fallback_requested": True,
+            },
+        },
+        {
+            "kind": "partitioned_exact_overlap_bridge",
+            "fields": {"requested": True, "applied": True},
+        },
+    ]
+
+    _validate_provider_boundary_stabilization(window)
 
 
 def _shadow_event(receipt: dict) -> dict:
