@@ -670,3 +670,93 @@ and adds no H3 NFE, provider call, VAE call, sampler lifetime, or history
 boundary. No final-domain content correction is promoted until this temporal
 support is measured on hardware and decoded media is inspected.
 
+## 00683 hardware validation: rigid geometry fixed, local content seam isolated
+
+00683 is the first hardware/media run in which
+`native_boundary_motion_consensus_v3` actually selected the rigid frame-gauge
+transaction. The full-frame witness again improved by about 40.6%, the
+upper-45 witness remained non-degrading, guidance registration accepted, the
+spatial warp was applied, and the exact-overlap fallback was not used. Direct
+decoded-media inspection confirmed the important production result: the large
+whole-frame/camera shift at the Continuum boundary is gone.
+
+The remaining visible defect is different. Static scene content inside the frame
+still changes appearance and shape at the boundary (for example the cabinet and
+background curtains in the matched validation scene). The upper-45 decoded
+trajectory still reports a large first-pair displacement, while the full-frame
+trajectory remains stable. With the global camera shift removed, that upper
+signal is therefore treated as local content motion/deformation evidence, not as
+a reason to undo the now-validated rigid repair.
+
+The model-internal structural receipts agree with the visual distinction.
+`r2c0` remains the dominant local outlier:
+
+- provider-native centered-low-pass boundary residual is about `0.3029`, or
+  `2.156x` its recent prefix median;
+- after exact-prefix restoration and accepted rigid registration it is about
+  `0.3458`, or `2.278x` its prefix median;
+- after target-high it falls to about `0.3120`, or `2.055x` its prefix median.
+
+For `r2c0`, target-high changes the pre-high boundary by about `0.902x` in
+centered-low-pass RMS, `0.945x` in gradient RMS, and `+0.0156` NCC. The high
+stage is therefore not the origin of the remaining content seam; it partially
+reduces an anomaly that is already present at the learned-provider/exact-prefix
+handoff.
+
+The final-domain one-token correction remains rejected. In 00683 it improves
+the incoming `r2c0` boundary but worsens the immediately following
+suffix0->suffix1 transition by about `10.1%` centered-low-pass RMS, `2.4%`
+gradient RMS, and `-0.0082` NCC. That is the same relocation failure identified
+before.
+
+The three-token temporal-support shadow does not show that failure pattern. With
+the fixed `[1.0, 0.75, 0.25]` raised-cosine fade it measures, for `r2c0`:
+
+- prefix->suffix0: centered `0.8148x`, gradient `0.9067x`, NCC `+0.01715`;
+- suffix0->suffix1: centered `1.0213x`, gradient `1.00285x`, NCC `-0.00334`;
+- suffix1->suffix2: centered `0.9695x`, gradient `1.00014x`, NCC `+0.00054`;
+- suffix2->suffix3: centered `0.9830x`, gradient `0.99759x`, NCC `-0.00029`.
+
+Global effects are also bounded: the incoming boundary improves slightly, the
+largest downstream global centered-low-pass increase is about `0.10%`, and the
+largest selected-tile centered-low-pass increase is about `2.13%`.
+
+### Bounded post-high production policy
+
+00683 supplies the hardware evidence required to move the measured three-token
+candidate behind a new opt-in, self-validating production gate:
+`partitioned_provider_boundary_temporal_support_production_v1`.
+
+This does **not** revive the invalidated pre-high mutation. `soft_support_v1`
+still leaves the provider/high-stage input untouched. The candidate is measured
+only after target-high on the actual final clean state and is committed only
+when all of the following hold on that same run:
+
+1. frame-gauge repair accepted and residual-geometry application is OFF;
+2. exactly one held-out-calibrated 4x4 tile is eligible;
+3. the complete three-token `[1.0, 0.75, 0.25]` horizon and terminal return are
+   available;
+4. every selected tile strictly improves centered-low-pass RMS, gradient RMS,
+   and NCC on the incoming exact-prefix boundary;
+5. global incoming centered-low-pass RMS and gradient RMS do not worsen and
+   global NCC does not decrease;
+6. no downstream tile worsens centered-low-pass or gradient RMS by more than 5%
+   and no downstream tile loses more than `0.01` NCC;
+7. aggregate downstream collateral, separately for selected-tile and global
+   centered-low-pass, gradient, and NCC evidence, is at most 50% of the measured
+   incoming benefit;
+8. the actual runtime proves the MiniMax-H3 model-internal video and caller
+   output video are byte-identical before committing the correction;
+9. after repacking, the committed three-token internal suffix must equal the
+   measured shadow candidate exactly; the authoritative prefix, audio, and all
+   suffix tokens outside the three-token horizon remain unchanged.
+
+Any failed condition leaves the original post-high output untouched and records
+the fail-closed reason. The policy adds no H3 NFE, learned-provider call, VAE
+call, sampler lifetime, or history boundary. The control remains opt-in through
+`provider_boundary_stabilization=soft_support_v1`; the default remains OFF.
+
+The next matched hardware run is therefore an application validation, not
+another promotion-by-pre-high-proxy experiment. Acceptance still requires
+decoded-media inspection of the cabinet/curtains and other static scene content
+at the boundary.
