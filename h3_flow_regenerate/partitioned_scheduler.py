@@ -148,11 +148,19 @@ FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
 FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS = 0.125
 FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT = 0.25
 FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
+# The rigid estimator itself resolves translations on a 1/16-cell fine grid.
+# Boundary-motion phase estimates can therefore move by less than one estimator
+# quantum even when the held-out prefix registration is coherent. Treat at most
+# one fine-search quantum as measurement-floor degradation, never as evidence
+# strong enough to veto an otherwise strongly supported transaction.
+FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
         "boundary_upper45_not_improved",
         "boundary_full_not_improved",
+        "boundary_upper45_degraded_over_bound",
+        "boundary_full_degraded_over_bound",
         "boundary_upper45_insufficient_improvement",
         "boundary_full_insufficient_improvement",
         "boundary_no_informative_roi_strong_improvement",
@@ -1422,11 +1430,12 @@ def _frame_gauge_boundary_motion_check(
     prefix introduces a boundary-motion error relative to the provider's own
     native transition in each corresponding coordinate domain, and whether the
     proposed suffix translation removes a substantial fraction of that error
-    in at least one informative ROI while remaining non-degrading in every ROI.
-    The full-frame and upper-region witnesses intentionally have symmetric veto
-    power but no longer both need to clear the same strong-improvement threshold:
-    local object motion can make one crop a poor magnitude proxy for a coherent
-    frame-wide gauge offset.
+    in at least one informative ROI. Every ROI still has veto power for a
+    material regression, but a degradation no larger than one 1/16-cell
+    frame-gauge fine-search quantum is treated as phase-estimator resolution
+    noise rather than as an exact zero-tolerance cliff. The full-frame and
+    upper-region witnesses therefore remain symmetric safety checks without
+    requiring both crops to clear the same strong-improvement threshold.
     """
 
     if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
@@ -1489,6 +1498,7 @@ def _frame_gauge_boundary_motion_check(
             candidate["dy"] - transformed_native["dy"],
         )
         improvement = (before_error - after_error) / max(before_error, 1e-12)
+        error_delta = after_error - before_error
         checks[name] = {
             "roi_fraction": roi_fraction,
             "native": native,
@@ -1498,15 +1508,21 @@ def _frame_gauge_boundary_motion_check(
             "before_error_cells": before_error,
             "after_error_cells": after_error,
             "error_improvement_ratio": improvement,
+            "error_delta_cells": error_delta,
+            "within_degradation_bound": bool(
+                error_delta <= FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12
+            ),
             "informative": bool(before_error >= FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS),
         }
 
     fields: dict[str, Any] = {
-        "policy": "native_boundary_motion_consensus_v3",
+        "policy": "native_boundary_motion_consensus_v4",
         "min_error_cells": FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS,
         "min_improvement_ratio": FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT,
         "min_response": FRAME_GAUGE_BOUNDARY_MIN_RESPONSE,
-        "acceptance_rule": "all_rois_nondegrading_and_any_informative_roi_strong_v1",
+        "max_degradation_cells": FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS,
+        "degradation_bound_basis": "frame_gauge_fine_search_quantum_1_over_16_cell",
+        "acceptance_rule": "all_rois_within_one_fine_search_tick_and_any_informative_roi_strong_v1",
         "checks": checks,
     }
 
@@ -1520,13 +1536,17 @@ def _frame_gauge_boundary_motion_check(
                 fields["status"] = "rejected"
                 fields["reason"] = f"boundary_{name}_{variant}_ambiguous"
                 return False, fields, str(fields["reason"])
-        # Every ROI remains a strict non-degradation veto.  Strong improvement
-        # is a consensus property of the transaction, not an independent 25%
-        # requirement on every crop: local object motion can dominate one crop
-        # even when the global camera-gauge estimate is coherent.
-        if check["after_error_cells"] > check["before_error_cells"]:
+        # Every ROI remains a material-degradation veto. The phase-estimator
+        # boundary witness is continuous-valued while the authoritative rigid
+        # registration is selected on a 1/16-cell fine grid, so an error increase
+        # no larger than one fine-search quantum is treated as measurement-floor
+        # disagreement. Anything larger still fails closed.
+        if (
+            check["after_error_cells"] - check["before_error_cells"]
+            > FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12
+        ):
             fields["status"] = "rejected"
-            fields["reason"] = f"boundary_{name}_not_improved"
+            fields["reason"] = f"boundary_{name}_degraded_over_bound"
             return False, fields, str(fields["reason"])
         if check["informative"]:
             informative_rois.append(name)
