@@ -670,3 +670,149 @@ and adds no H3 NFE, provider call, VAE call, sampler lifetime, or history
 boundary. No final-domain content correction is promoted until this temporal
 support is measured on hardware and decoded media is inspected.
 
+## 00683 rigid-geometry validation
+
+00683 is the first matched hardware/media run in this series where
+`native_boundary_motion_consensus_v3` accepted the coherent rigid
+registration instead of rejecting it because every informative crop did not
+independently clear the 25% improvement threshold.
+
+The transaction applied the spatial warp and independently registered guidance
+reference, and did not use the exact-overlap fallback. Direct decoded-media
+inspection supplied the decisive result: the large whole-frame/camera shift at
+the Continuum boundary disappeared.
+
+The remaining defect was narrower and visually different. Static scene content
+inside the frame still changed appearance and shape at the boundary, including
+the cabinet and background curtains in the matched scene. The dominant
+model-internal region remained `r2c0`. Target-high reduced rather than created
+that local anomaly, so the remaining defect was already present at the
+provider/exact-prefix handoff.
+
+00683 also measured the existing discarded three-token temporal-support shadow.
+The fixed `[1.0, 0.75, 0.25]` fade reduced the selected incoming structural
+residual without reproducing the much larger first-successor relocation seen
+with the one-token final-domain candidate. This was useful diagnostic evidence,
+but it did not establish perceptual content continuity.
+
+## 00684 post-high production failure and withdrawal
+
+00684 enabled a production implementation of the 00683 three-token shadow. The
+implementation itself executed exactly as designed:
+
+- policy:
+  `partitioned_provider_boundary_temporal_support_production_v1`;
+- `applied=true`, `reason=applied`;
+- corrected suffix tokens: 3;
+- temporal weights: `[1.0, 0.75, 0.25]`;
+- selected held-out tile: `r2c0`;
+- internal-clean/caller video identity check passed before commit;
+- the repacked committed region reproduced the measured shadow candidate
+  exactly;
+- the authoritative prefix, audio, and suffix outside the three-token horizon
+  remained unchanged;
+- no H3 NFE, provider call, VAE call, sampler lifetime, or history boundary was
+  added.
+
+Its same-run structural gate also passed comfortably. The selected incoming
+`r2c0` transition improved to about `0.8186x` centered-low-pass RMS and
+`0.9101x` gradient RMS with NCC `+0.01664`. The worst measured downstream
+tile collateral remained about 2.20% centered-low-pass, 0.57% gradient, and
+0.00309 NCC loss, below the candidate's absolute caps.
+
+Decoded low-level motion telemetry moved in the intended direction as well. In
+the upper-45% PT212 receipt, the first-three post-boundary median vertical
+motion fell substantially relative to 00683.
+
+The user-visible scene-content defect nevertheless remained. This invalidates
+the production criterion, not the transaction plumbing: the correction really
+was committed and improved the metrics it was designed to improve, but those
+metrics did not represent cabinet/curtain semantic and shape continuity closely
+enough to serve as a production acceptance gate.
+
+The three-token production mutation is therefore withdrawn. The runtime returns
+to the 00683 fail-closed behavior: `soft_support_v1` may measure the post-high
+shadow, but it must not modify provider, sampler, post-high, or caller-visible
+state. Frame-gauge consensus v3 remains independently validated by 00683 and is
+not reverted.
+
+### Newly exposed context mismatch
+
+00684 also makes an older execution choice relevant to the remaining defect.
+The workflow-level diagnostic controls requested
+`prefix_transformer_context=exact_target_partitioned`, but the active
+`low_probe_execution_source=source_carrier_uniform_only` path deliberately
+overrides the actual low/probe transformer lifetime to
+`source_carrier_uniform`.
+
+The receipts prove that this was the path that executed:
+
+- the exact-partitioned main low/probe pair was skipped;
+- the source-uniform pair was the only low/probe execution;
+- six source-uniform transformer calls and zero exact-partitioned transformer
+  calls were observed;
+- `exact_target_prefix_injected_into_transformer=false`;
+- `heterogeneous_partition_contract_published=false`;
+- `prefix_target_grid_rows_injected=false`;
+- the exact target prefix remained externally authoritative and was restored at
+  the handoff/output boundary, but it was not the physical target-grid prefix
+  context seen by low/probe H3.
+
+That distinction matters for the current failure. The exact-prefix architecture
+requires protected target-prefix hidden rows to propagate through the
+transformer because their deeper K/V state can influence generated suffix
+queries. A post-hoc one- or three-token correction can reduce latent boundary
+norms after generation, but it cannot recreate suffix content that would have
+been generated under a different prefix representation.
+
+This is now the next causal discriminator. It is not yet a root-cause claim.
+
+### Next matched discriminator: exact-main low/probe context
+
+The next run must keep the 00684 prompt, seed, references, model stack,
+resolution, schedule, frame-gauge settings, high stage, and audio overlap fixed,
+while changing only the low/probe execution source back to the exact main
+partitioned path:
+
+```text
+low_probe_execution_source = main_then_shadow
+prefix_transformer_context = exact_target_partitioned
+vdn_linear_diagnostic = normal
+audio_position_domain = source_carrier
+audio_handoff_source = main_partitioned
+av_handoff_source = main_partitioned
+guidance_trajectory_source = main_exact_partitioned
+audio_guided_overlap_mode = sampler_mask
+audio_guided_overlap_ticks = 16
+
+frame_gauge_repair = true
+frame_gauge_residual_mode = off
+provider_boundary_stabilization = soft_support_v1
+```
+
+With all handoff/shadow selectors left on `main_*`, this is not the historical
+duplicated main+shadow experiment. It should execute the requested
+exact-partitioned low/probe pair and the ordinary target-high stage without a
+source-uniform AV shadow lifetime. `soft_support_v1` is shadow-only again on
+this branch and is retained only to measure the same final-domain evidence.
+
+The run is structurally valid only if the receipts show:
+
+- `prefix_transformer_context=exact_target_partitioned`;
+- `prefix_target_grid_rows_injected=true`;
+- `prefix_exact_latent_resized_for_transformer=false`;
+- one or more `partitioned_exact_prefix_transformer` events;
+- exact-partitioned transformer call count greater than zero;
+- no source-uniform low/probe execution unless an explicit shadow selector was
+  requested;
+- the same accepted frame-gauge v3 transaction class;
+- no provider-boundary production mutation.
+
+Decoded media remains the acceptance gate. If exact-main low/probe materially
+reduces the cabinet/curtain boundary change while the 00683 frame-shift repair
+remains intact, the source-uniform low/probe approximation is implicated and
+the engineering task becomes recovering exact heterogeneous-prefix semantics
+without the historical performance cost. If the defect is unchanged, this
+prefix-context hypothesis is falsified and the investigation must remain
+upstream of any post-hoc seam correction.
+
