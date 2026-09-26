@@ -406,7 +406,11 @@ def measure_exact_prefix_splice(
     if upscaled_clean_video.shape[-2:] != exact_prefix.shape[-2:]:
         raise ValueError("exact-prefix splice spatial geometry differs")
     if corrected_clean_video is not None:
-        if corrected_clean_video.ndim != 5 or corrected_clean_video.shape != upscaled_clean_video.shape:
+        if (
+            corrected_clean_video.ndim != 5
+            or corrected_clean_video.shape[:2] != upscaled_clean_video.shape[:2]
+            or corrected_clean_video.shape[-2:] != upscaled_clean_video.shape[-2:]
+        ):
             raise ValueError("corrected exact-prefix splice tensor geometry differs")
         if not corrected_clean_video.is_floating_point():
             raise TypeError("corrected exact-prefix splice tensor must be floating-point")
@@ -416,6 +420,8 @@ def measure_exact_prefix_splice(
     temporal = int(upscaled_clean_video.shape[2])
     if prefix_t < 1 or prefix_t >= temporal:
         raise ValueError("exact-prefix splice requires a non-empty prefix shorter than the video")
+    if corrected_clean_video is not None and corrected_clean_video.shape[2] <= prefix_t:
+        raise ValueError("corrected exact-prefix splice tensor must retain the first suffix frame")
 
     lowpass_kernel = _effective_lowpass_kernel(upscaled_clean_video, requested_lowpass_kernel)
     upscaled_prefix = upscaled_clean_video[:, :, :prefix_t]
