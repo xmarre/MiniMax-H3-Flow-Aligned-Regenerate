@@ -312,24 +312,17 @@ def _compare_pair_candidate(
     def compare_region(before_region: dict[str, Any], after_region: dict[str, Any]) -> dict[str, float]:
         return {
             "raw_rms_after_over_before": _safe_ratio(after_region["raw_rms"], before_region["raw_rms"]),
-            "lowpass_rms_after_over_before": _safe_ratio(
-                after_region["lowpass_rms"], before_region["lowpass_rms"]
-            ),
+            "lowpass_rms_after_over_before": _safe_ratio(after_region["lowpass_rms"], before_region["lowpass_rms"]),
             "centered_lowpass_rms_after_over_before": _safe_ratio(
                 after_region["centered_lowpass_rms"], before_region["centered_lowpass_rms"]
             ),
-            "gradient_rms_after_over_before": _safe_ratio(
-                after_region["gradient_rms"], before_region["gradient_rms"]
-            ),
+            "gradient_rms_after_over_before": _safe_ratio(after_region["gradient_rms"], before_region["gradient_rms"]),
             "ncc_after_minus_before": float(after_region["ncc"]) - float(before_region["ncc"]),
         }
 
     if set(before.get("tiles", {})) != set(after.get("tiles", {})):
         raise ValueError("discarded candidate pair tile geometry drifted")
-    tiles = {
-        tile_id: compare_region(before["tiles"][tile_id], after["tiles"][tile_id])
-        for tile_id in before["tiles"]
-    }
+    tiles = {tile_id: compare_region(before["tiles"][tile_id], after["tiles"][tile_id]) for tile_id in before["tiles"]}
     ranked = sorted(
         tiles,
         key=lambda tile_id: float(tiles[tile_id]["centered_lowpass_rms_after_over_before"]),
