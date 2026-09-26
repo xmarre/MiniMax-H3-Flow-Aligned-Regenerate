@@ -352,3 +352,80 @@ zero correction, requires both predicted post-clamp ratios to be no greater
 than the historical maxima for eligible tiles, and requires
 `production_applied=false`, `output_mutated=false`, and zero extra
 model/provider/VAE/sampler/history work.
+
+
+## 00679 hard-shadow result
+
+00679 is matched to the 00678 provider-native state. The exact-prefix hash,
+rigid-v2 rejection, exact-overlap fallback, held-out calibration and selected
+provider region all reproduce. The hard stabilization shadow selects exactly
+one tile, `r2c0`, with the predicted residual scale
+`0.6781307988`.
+
+The measured hard-shadow result is favorable inside that selected region:
+
+- centered low-pass boundary RMS falls from about `0.302924` to
+  `0.238555`, a ratio of about **0.7875**;
+- gradient RMS falls from about `0.096559` to `0.085084`, a ratio of about
+  **0.8812**;
+- NCC rises from about `0.93250` to `0.94877`, a gain of about
+  **+0.01627**;
+- the nominal dispersion-normalized predictor error is returned exactly to the
+  held-out maximum while the absolute error is predicted to fall inside it.
+
+The whole-frame response is small but also favorable: centered low-pass RMS is
+about `0.9887x` provider-native, gradient RMS about `0.9929x`, and NCC
+improves by about `+0.00136`.
+
+The shadow remains non-mutating and observation-only. The correction RMS over
+the full frame is about `0.02447`, correction absolute maximum about
+`0.57936`, all extra-work counters remain zero, and only `r2c0` receives a
+direct correction.
+
+Several neighboring tile *measurements* move slightly even though their direct
+correction is zero. That is expected because the 5x5 low-pass measurement
+kernel crosses fixed-tile boundaries. It must not be misread as direct
+mutation of those ineligible regions.
+
+00679 therefore supports the residual-amplitude hypothesis, but it still does
+not justify shipping the hard fixed-tile support. The current per-tile gradient
+metric is computed after low-pass filtering inside each tile and does not
+directly measure the raw correction jump across the selected/ineligible tile
+frontier. A hard support boundary could therefore hide a spatial edge cost.
+
+### Soft-support shadow
+
+The next diagnostic layer is
+`partitioned_provider_boundary_soft_support_shadow_v1`.
+
+It inherits the exact same held-out eligibility and residual scale from the
+hard shadow. It changes only spatial support on a discarded clone. Selected
+tiles use an inside-only raised-cosine taper across each frontier with an
+ineligible neighboring tile. Shared borders between selected tiles are not
+tapered, and image-frame borders are not tapered.
+
+The taper width is derived from the measurement support rather than selected
+from 00679:
+
+`feather_width = lowpass_kernel // 2 + 1`
+
+which is 3 cells for the fixed 5x5 low-pass kernel.
+
+The soft shadow publishes both the hard and soft direct-correction jump across
+selected/ineligible tile frontiers, plus the soft candidate's:
+
+- per-tile and global centered low-pass boundary ratios;
+- per-tile and global gradient ratios;
+- NCC deltas;
+- recalibrated held-out-max predictor-error ratios;
+- support statistics and correction magnitude.
+
+The soft candidate remains diagnostic-only. It is constructed on a clone,
+measured, and discarded. It cannot alter the provider output, exact-prefix
+owner, frame-gauge transaction, exact-overlap fallback, guidance registration,
+or high-stage state.
+
+The purpose of the next matched hardware run is to determine whether the
+localized 00679 benefit survives a spatially continuous support function and
+whether the direct frontier jump is materially reduced. A production
+stabilizer remains unimplemented until that comparison is measured.
