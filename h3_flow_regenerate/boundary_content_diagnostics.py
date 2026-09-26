@@ -17,6 +17,11 @@ PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_s
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
 PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
 PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_temporal_support_shadow_v1"
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY = "partitioned_provider_boundary_temporal_support_production_v1"
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_COLLATERAL_BUDGET_FRACTION = 0.5
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_STRUCTURAL_DEGRADATION = 0.05
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_NCC_LOSS = 0.01
+PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_ELIGIBLE_TILES = 1
 PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
@@ -1644,6 +1649,341 @@ def apply_provider_boundary_soft_support_stabilization(
         "soft_centered_lowpass_rms_ratio": float(soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]),
         "soft_gradient_rms_ratio": float(soft_shadow_receipt["global"]["soft_gradient_rms_ratio"]),
         "soft_ncc_delta": float(soft_shadow_receipt["global"]["soft_ncc_delta"]),
+    }
+
+
+
+def evaluate_provider_boundary_temporal_support_production(
+    temporal_support_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail-closed production gate for the measured post-high temporal-support candidate.
+
+    Promotion is intentionally stricter than "the first seam got smaller".  The
+    selected tile must improve on all three structural witnesses at the incoming
+    exact-prefix boundary, global evidence must move in the same direction, and
+    downstream collateral is bounded both absolutely and relative to the measured
+    incoming benefit.  The initial production policy is additionally restricted to
+    one held-out-calibrated tile and the already-measured three-token fade.
+    """
+
+    if temporal_support_receipt.get("policy") != PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY:
+        raise ValueError("temporal-support production gate shadow policy mismatch")
+    if temporal_support_receipt.get("diagnostic_only") is not True:
+        raise ValueError("temporal-support production gate requires diagnostic evidence")
+    if temporal_support_receipt.get("output_mutated") is not False:
+        raise ValueError("temporal-support production gate requires an unmodified shadow source")
+
+    corrected_tokens = int(temporal_support_receipt.get("corrected_tokens", -1))
+    temporal_span = int(temporal_support_receipt.get("temporal_span", -1))
+    weights = temporal_support_receipt.get("weights")
+    expected_weights = [1.0, 0.75, 0.25]
+    transition_order = temporal_support_receipt.get("transition_order")
+    transitions = temporal_support_receipt.get("transitions")
+    eligible_tiles = temporal_support_receipt.get("eligible_tiles")
+    if (
+        temporal_span != 3
+        or corrected_tokens != 3
+        or not isinstance(weights, list)
+        or len(weights) != 3
+        or any(
+            not math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-12)
+            for actual, expected in zip(weights, expected_weights, strict=True)
+        )
+    ):
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "temporal_support_geometry_not_validated",
+        }
+    expected_order = [
+        "prefix_to_suffix0",
+        "suffix0_to_suffix1",
+        "suffix1_to_suffix2",
+        "suffix2_to_suffix3",
+    ]
+    if not isinstance(transitions, dict) or transition_order != expected_order or list(transitions) != expected_order:
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "temporal_support_transition_coverage_incomplete",
+        }
+    if (
+        not isinstance(eligible_tiles, list)
+        or len(eligible_tiles) < 1
+        or len(eligible_tiles) > PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_ELIGIBLE_TILES
+    ):
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "eligible_tile_count_out_of_bounds",
+            "eligible_tile_count": len(eligible_tiles) if isinstance(eligible_tiles, list) else -1,
+            "max_eligible_tiles": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_ELIGIBLE_TILES,
+        }
+
+    incoming = transitions["prefix_to_suffix0"]
+    incoming_tiles = incoming.get("tiles")
+    incoming_global = incoming.get("global")
+    if not isinstance(incoming_tiles, dict) or not isinstance(incoming_global, dict):
+        raise ValueError("temporal-support production gate incoming receipt is malformed")
+
+    selected_incoming: dict[str, dict[str, float]] = {}
+    selected_centered_benefit = 0.0
+    selected_gradient_benefit = 0.0
+    selected_ncc_benefit = 0.0
+    for tile_id in eligible_tiles:
+        tile = incoming_tiles.get(tile_id)
+        if not isinstance(tile, dict):
+            raise ValueError(f"temporal-support production gate missing selected tile {tile_id}")
+        centered = float(tile["centered_lowpass_rms_after_over_before"])
+        gradient = float(tile["gradient_rms_after_over_before"])
+        ncc = float(tile["ncc_after_minus_before"])
+        if not all(math.isfinite(value) for value in (centered, gradient, ncc)):
+            raise ValueError("temporal-support production gate received non-finite incoming evidence")
+        selected_incoming[tile_id] = {
+            "centered_lowpass_rms_after_over_before": centered,
+            "gradient_rms_after_over_before": gradient,
+            "ncc_after_minus_before": ncc,
+        }
+        selected_centered_benefit += max(0.0, 1.0 - centered)
+        selected_gradient_benefit += max(0.0, 1.0 - gradient)
+        selected_ncc_benefit += max(0.0, ncc)
+        if not (centered < 1.0 and gradient < 1.0 and ncc > 0.0):
+            return {
+                "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+                "accepted": False,
+                "reason": "selected_incoming_boundary_not_strictly_improved",
+                "eligible_tiles": list(eligible_tiles),
+                "selected_incoming": selected_incoming,
+            }
+
+    global_centered = float(incoming_global["centered_lowpass_rms_after_over_before"])
+    global_gradient = float(incoming_global["gradient_rms_after_over_before"])
+    global_ncc = float(incoming_global["ncc_after_minus_before"])
+    if not all(math.isfinite(value) for value in (global_centered, global_gradient, global_ncc)):
+        raise ValueError("temporal-support production gate received non-finite global evidence")
+    if not (global_centered <= 1.0 and global_gradient <= 1.0 and global_ncc >= 0.0):
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "global_incoming_boundary_degraded",
+            "eligible_tiles": list(eligible_tiles),
+        }
+
+    selected_centered_collateral = 0.0
+    selected_gradient_collateral = 0.0
+    selected_ncc_collateral = 0.0
+    global_centered_collateral = 0.0
+    global_gradient_collateral = 0.0
+    global_ncc_collateral = 0.0
+    max_tile_centered_degradation = 0.0
+    max_tile_gradient_degradation = 0.0
+    max_tile_ncc_loss = 0.0
+
+    for label in expected_order[1:]:
+        comparison = transitions[label]
+        tile_fields = comparison.get("tiles")
+        global_fields = comparison.get("global")
+        if not isinstance(tile_fields, dict) or not isinstance(global_fields, dict):
+            raise ValueError(f"temporal-support production gate transition {label} is malformed")
+        for tile_id, tile in tile_fields.items():
+            if not isinstance(tile, dict):
+                raise ValueError(f"temporal-support production gate tile {label}/{tile_id} is malformed")
+            centered = float(tile["centered_lowpass_rms_after_over_before"])
+            gradient = float(tile["gradient_rms_after_over_before"])
+            ncc = float(tile["ncc_after_minus_before"])
+            if not all(math.isfinite(value) for value in (centered, gradient, ncc)):
+                raise ValueError("temporal-support production gate received non-finite downstream evidence")
+            centered_excess = max(0.0, centered - 1.0)
+            gradient_excess = max(0.0, gradient - 1.0)
+            ncc_loss = max(0.0, -ncc)
+            max_tile_centered_degradation = max(max_tile_centered_degradation, centered_excess)
+            max_tile_gradient_degradation = max(max_tile_gradient_degradation, gradient_excess)
+            max_tile_ncc_loss = max(max_tile_ncc_loss, ncc_loss)
+            if tile_id in eligible_tiles:
+                selected_centered_collateral += centered_excess
+                selected_gradient_collateral += gradient_excess
+                selected_ncc_collateral += ncc_loss
+
+        global_centered_ratio = float(global_fields["centered_lowpass_rms_after_over_before"])
+        global_gradient_ratio = float(global_fields["gradient_rms_after_over_before"])
+        global_ncc_delta = float(global_fields["ncc_after_minus_before"])
+        if not all(
+            math.isfinite(value)
+            for value in (global_centered_ratio, global_gradient_ratio, global_ncc_delta)
+        ):
+            raise ValueError("temporal-support production gate received non-finite global downstream evidence")
+        global_centered_collateral += max(0.0, global_centered_ratio - 1.0)
+        global_gradient_collateral += max(0.0, global_gradient_ratio - 1.0)
+        global_ncc_collateral += max(0.0, -global_ncc_delta)
+
+    if (
+        max_tile_centered_degradation > PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_STRUCTURAL_DEGRADATION
+        or max_tile_gradient_degradation > PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_STRUCTURAL_DEGRADATION
+        or max_tile_ncc_loss > PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_NCC_LOSS
+    ):
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "downstream_tile_degradation_exceeds_absolute_cap",
+            "eligible_tiles": list(eligible_tiles),
+            "max_tile_centered_degradation": max_tile_centered_degradation,
+            "max_tile_gradient_degradation": max_tile_gradient_degradation,
+            "max_tile_ncc_loss": max_tile_ncc_loss,
+            "max_structural_degradation": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_STRUCTURAL_DEGRADATION,
+            "max_ncc_loss": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_NCC_LOSS,
+        }
+
+    def collateral_ratio(collateral: float, benefit: float) -> float:
+        if benefit <= _EPS:
+            return float("inf") if collateral > _EPS else 0.0
+        return collateral / benefit
+
+    selected_centered_ratio = collateral_ratio(selected_centered_collateral, selected_centered_benefit)
+    selected_gradient_ratio = collateral_ratio(selected_gradient_collateral, selected_gradient_benefit)
+    selected_ncc_ratio = collateral_ratio(selected_ncc_collateral, selected_ncc_benefit)
+    global_centered_ratio = collateral_ratio(global_centered_collateral, max(0.0, 1.0 - global_centered))
+    global_gradient_ratio = collateral_ratio(global_gradient_collateral, max(0.0, 1.0 - global_gradient))
+    global_ncc_ratio = collateral_ratio(global_ncc_collateral, max(0.0, global_ncc))
+    collateral_ratios = (
+        selected_centered_ratio,
+        selected_gradient_ratio,
+        selected_ncc_ratio,
+        global_centered_ratio,
+        global_gradient_ratio,
+        global_ncc_ratio,
+    )
+    if any(
+        (not math.isfinite(value)) or value > PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_COLLATERAL_BUDGET_FRACTION
+        for value in collateral_ratios
+    ):
+        return {
+            "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+            "accepted": False,
+            "reason": "downstream_collateral_exceeds_incoming_benefit_budget",
+            "eligible_tiles": list(eligible_tiles),
+            "selected_collateral_over_benefit": {
+                "centered_lowpass": selected_centered_ratio,
+                "gradient": selected_gradient_ratio,
+                "ncc": selected_ncc_ratio,
+            },
+            "global_collateral_over_benefit": {
+                "centered_lowpass": global_centered_ratio,
+                "gradient": global_gradient_ratio,
+                "ncc": global_ncc_ratio,
+            },
+            "collateral_budget_fraction": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_COLLATERAL_BUDGET_FRACTION,
+        }
+
+    return {
+        "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+        "accepted": True,
+        "reason": "accepted",
+        "gate_rule": "strict_incoming_improvement_and_bounded_downstream_collateral_v1",
+        "eligible_tiles": list(eligible_tiles),
+        "eligible_tile_count": len(eligible_tiles),
+        "max_eligible_tiles": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_ELIGIBLE_TILES,
+        "corrected_tokens": corrected_tokens,
+        "weights": [float(value) for value in weights],
+        "selected_incoming": selected_incoming,
+        "selected_collateral_over_benefit": {
+            "centered_lowpass": selected_centered_ratio,
+            "gradient": selected_gradient_ratio,
+            "ncc": selected_ncc_ratio,
+        },
+        "global_incoming": {
+            "centered_lowpass_rms_after_over_before": global_centered,
+            "gradient_rms_after_over_before": global_gradient,
+            "ncc_after_minus_before": global_ncc,
+        },
+        "global_collateral_over_benefit": {
+            "centered_lowpass": global_centered_ratio,
+            "gradient": global_gradient_ratio,
+            "ncc": global_ncc_ratio,
+        },
+        "max_tile_centered_degradation": max_tile_centered_degradation,
+        "max_tile_gradient_degradation": max_tile_gradient_degradation,
+        "max_tile_ncc_loss": max_tile_ncc_loss,
+        "collateral_budget_fraction": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_COLLATERAL_BUDGET_FRACTION,
+        "max_structural_degradation": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_STRUCTURAL_DEGRADATION,
+        "max_ncc_loss": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_MAX_NCC_LOSS,
+    }
+
+
+def reconstruct_provider_boundary_temporal_support_candidate(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    soft_shadow_receipt: dict[str, Any],
+    temporal_support_receipt: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Reconstruct exactly the measured three-token final-domain candidate."""
+
+    if temporal_support_receipt.get("policy") != PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY:
+        raise ValueError("temporal-support production candidate shadow policy mismatch")
+    if temporal_support_receipt.get("candidate") != "post_high_soft_support_raised_cosine_temporal_fade_v1":
+        raise ValueError("temporal-support production candidate identity drifted")
+    prefix_t = int(prefix_t)
+    if prefix_t != int(soft_shadow_receipt.get("prefix_t", -1)):
+        raise ValueError("temporal-support production candidate soft prefix drifted")
+    if int(temporal_support_receipt.get("corrected_tokens", -1)) != 3:
+        raise ValueError("temporal-support production candidate requires the complete three-token horizon")
+
+    one_token_candidate, one_token_receipt = apply_provider_boundary_soft_support_stabilization(
+        video,
+        prefix_t,
+        soft_shadow_receipt=soft_shadow_receipt,
+    )
+    spatial_correction = video[:, :, prefix_t].float() - one_token_candidate[:, :, prefix_t].float()
+    correction_rms = _rms(spatial_correction)
+    correction_abs_max = _finite(spatial_correction.abs().max()) if spatial_correction.numel() else 0.0
+    if not math.isclose(
+        correction_rms,
+        float(temporal_support_receipt.get("spatial_correction_rms", float("nan"))),
+        rel_tol=1e-6,
+        abs_tol=1e-8,
+    ) or not math.isclose(
+        correction_abs_max,
+        float(temporal_support_receipt.get("spatial_correction_abs_max", float("nan"))),
+        rel_tol=1e-6,
+        abs_tol=1e-8,
+    ):
+        raise RuntimeError("temporal-support production candidate correction drifted from measured shadow")
+
+    weights = [float(value) for value in temporal_support_receipt.get("weights", [])]
+    if len(weights) != 3 or any(
+        not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12)
+        for actual, expected in zip(weights, (1.0, 0.75, 0.25), strict=True)
+    ):
+        raise RuntimeError("temporal-support production candidate weights drifted")
+
+    candidate = video.clone()
+    for offset, weight in enumerate(weights):
+        candidate[:, :, prefix_t + offset] = (
+            candidate[:, :, prefix_t + offset].float() - weight * spatial_correction
+        ).to(candidate)
+    if not torch.equal(candidate[:, :, :prefix_t], video[:, :, :prefix_t]):
+        raise RuntimeError("temporal-support production candidate modified the authoritative prefix")
+    if prefix_t + len(weights) < int(video.shape[2]) and not torch.equal(
+        candidate[:, :, prefix_t + len(weights) :],
+        video[:, :, prefix_t + len(weights) :],
+    ):
+        raise RuntimeError("temporal-support production candidate modified suffix outside its fixed horizon")
+
+    return candidate, {
+        "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+        "source_shadow_policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+        "source_soft_shadow_policy": PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "source_one_token_policy": one_token_receipt.get("policy"),
+        "prefix_t": prefix_t,
+        "eligible_tiles": list(temporal_support_receipt.get("eligible_tiles", [])),
+        "eligible_tile_count": int(temporal_support_receipt.get("eligible_tile_count", 0)),
+        "corrected_tokens": len(weights),
+        "weights": weights,
+        "correction_rms": correction_rms,
+        "correction_abs_max": correction_abs_max,
+        "authoritative_prefix_modified": False,
+        "later_suffix_outside_horizon_modified": False,
+        "candidate_constructed": True,
     }
 
 
