@@ -1276,20 +1276,16 @@ def measure_provider_boundary_temporal_support_shadow(
         raise RuntimeError("temporal-support source candidate modified the authoritative prefix")
     spatial_correction = video[:, :, prefix_t].float() - one_token_candidate[:, :, prefix_t].float()
     spatial_correction_rms = _rms(spatial_correction)
-    spatial_correction_abs_max = (
-        _finite(spatial_correction.abs().max()) if spatial_correction.numel() else 0.0
-    )
+    spatial_correction_abs_max = _finite(spatial_correction.abs().max()) if spatial_correction.numel() else 0.0
 
     corrected_tokens = min(temporal_span, temporal - prefix_t)
     weights = [
-        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span)))
-        for offset in range(corrected_tokens)
+        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span))) for offset in range(corrected_tokens)
     ]
     candidate = video.clone()
     for offset, weight in enumerate(weights):
         candidate[:, :, prefix_t + offset] = (
-            candidate[:, :, prefix_t + offset].float()
-            - float(weight) * spatial_correction
+            candidate[:, :, prefix_t + offset].float() - float(weight) * spatial_correction
         ).to(candidate)
     if not torch.equal(candidate[:, :, :prefix_t], video[:, :, :prefix_t]):
         raise RuntimeError("temporal-support shadow modified the authoritative prefix")
@@ -1347,10 +1343,8 @@ def measure_provider_boundary_temporal_support_shadow(
             right_index=right_index,
             left_weight=float(left_weight),
             right_weight=float(right_weight),
-            direct_correction_jump_rms=abs(float(right_weight) - float(left_weight))
-            * spatial_correction_rms,
-            direct_correction_jump_abs_max=abs(float(right_weight) - float(left_weight))
-            * spatial_correction_abs_max,
+            direct_correction_jump_rms=abs(float(right_weight) - float(left_weight)) * spatial_correction_rms,
+            direct_correction_jump_abs_max=abs(float(right_weight) - float(left_weight)) * spatial_correction_abs_max,
         )
         transition_order.append(label)
         transition_comparisons[label] = comparison
@@ -1389,12 +1383,8 @@ def measure_provider_boundary_temporal_support_shadow(
         "selected_tile_max_centered_lowpass_ratio": (
             max(selected_centered_ratios) if selected_centered_ratios else 1.0
         ),
-        "selected_tile_max_gradient_ratio": (
-            max(selected_gradient_ratios) if selected_gradient_ratios else 1.0
-        ),
-        "selected_tile_min_ncc_delta": (
-            min(selected_ncc_deltas) if selected_ncc_deltas else 0.0
-        ),
+        "selected_tile_max_gradient_ratio": (max(selected_gradient_ratios) if selected_gradient_ratios else 1.0),
+        "selected_tile_min_ncc_delta": (min(selected_ncc_deltas) if selected_ncc_deltas else 0.0),
     }
 
 
