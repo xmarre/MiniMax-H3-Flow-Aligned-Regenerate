@@ -323,9 +323,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
                 "tooltip": (
-                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
+                    "source_carrier_uniform_only is the fast single-path default: one source-uniform low/probe "
                     "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
-                    "remains available for historical diagnostics."
+                    "keeps the requested exact-target partitioned low/probe path and runs shadow lifetimes "
+                    "only when a shadow handoff selector is explicitly enabled."
                 ),
             },
         )
@@ -376,8 +377,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
-        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
+        "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
+        "Sol-H3/VDN-H3-Plus stack. Defaults to the fast source-carrier uniform low/probe path, "
+        "learned 3D transfer, "
         "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
