@@ -20,6 +20,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .boundary_content_diagnostics import (
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_temporal_predictor,
 )
 from .contracts import H3FlowTrajectory
 from .frame_gauge import (
@@ -3357,6 +3358,24 @@ def run_partitioned_progressive(
                 extra_provider_calls=0,
                 extra_vae_calls=0,
                 **provider_receipt,
+            )
+            predictor_started = time.perf_counter()
+            provider_predictor_receipt = measure_provider_boundary_temporal_predictor(
+                learned_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_predictor",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - predictor_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_predictor_receipt,
             )
             boundary_content_started = time.perf_counter()
             boundary_content_pre_high_receipt = measure_boundary_content_continuity(
