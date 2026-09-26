@@ -482,63 +482,22 @@ about `0.99244x` provider-native, gradient RMS about `0.99478x`, and NCC
 improves by about `+0.00085`. The shadow remains non-mutating and adds no H3
 NFE, provider call, VAE call, sampler lifetime, or history boundary.
 
-### Opt-in production candidate
+### 00680 promotion decision (historical; superseded by 00681)
 
-00680 closes the specific evidence gap that blocked a bounded production
-experiment: the calibrated local residual correction remains beneficial after
-introducing continuous spatial support, and the measured fixed-tile frontier
-cost is removed.
+00680 established that the held-out-calibrated soft-support correction improved
+the provider-native first-suffix boundary on a discarded shadow clone while
+eliminating the measured hard tile frontier. That was sufficient to justify one
+explicitly opt-in hardware trial, but not to establish complete-path safety.
 
-The next implementation therefore promotes **only the measured soft-support
-candidate** to an explicit opt-in hardware-validation mode:
+The trial used `provider_boundary_stabilization=soft_support_v1` and the policy
+`partitioned_provider_boundary_soft_support_production_v1`. It modified exactly
+the first generated suffix token in provider-native clean space before the
+existing exact-overlap mapping, left the authoritative prefix and later suffix
+tokens unchanged, and added no model/provider/VAE/sampler/history work.
 
-`provider_boundary_stabilization=soft_support_v1`
-
-The default remains `off`. No existing workflow or production default is
-silently changed.
-
-The production policy is
-`partitioned_provider_boundary_soft_support_production_v1`. It is eligible
-only when all of the following already-measured conditions hold:
-
-1. the user explicitly selects `soft_support_v1`;
-2. rigid-v2 is rejected;
-3. the rejection belongs to the existing exact-overlap-eligible
-   boundary-motion veto class;
-4. actual provider boundary provenance is available;
-5. the held-out calibration, hard shadow, and soft shadow recomputed from that
-   native provider state reproduce a nonempty eligible region.
-
-The implementation applies the same soft correction to **exactly the first
-generated suffix token in provider-native clean space**, before the existing
-exact-overlap bridge. It does not alter the learned/provider prefix and does
-not extrapolate into later suffix tokens. The conditional sampler state is
-updated through the existing affine clean-to-conditional mapping; no new noise
-draw or sampler/model execution is introduced.
-
-Applying the stabilization before exact-overlap is deliberate. The overlap
-bridge then performs its existing exact-prefix representation reconciliation
-against the already-stabilized provider state, so the exact-prefix boundary
-inherits the stabilized provider-native transition rather than reconstructing
-the original overshoot.
-
-The rejected rigid transaction remains rejected. The production candidate does
-not publish a registered guidance reference and cannot combine with a rejected
-spatial warp. Accepted rigid-v2 transactions and non-overlap-eligible rejection
-classes fail closed without applying provider stabilization.
-
-At runtime the candidate recomputes the same bounded shadow evidence from the
-actual provider-native boundary and requires the reconstructed soft correction
-magnitude to match the measured shadow. The runtime validator additionally
-requires exactly one corrected suffix token, unchanged authoritative-prefix
-ownership, no later-suffix extrapolation, exact-overlap fallback selection, and
-zero extra H3/provider/VAE/sampler/history work.
-
-This is **not yet a default promotion**. The first mutating hardware run must
-verify that the expected clean-domain improvement survives exact-overlap and
-target-high sampling and, critically, that the decoded video improves at the
-visible boundary without introducing a new local artifact.
-
+00681 subsequently disproved the promotion criterion. The current runtime
+therefore does not apply this mutation; the historical details below are kept
+only to document how the failed candidate was derived.
 
 ## 00680 soft-support result
 
@@ -585,47 +544,71 @@ used to establish that the original boundary was anomalous and to derive the
 bounded residual scale. Once spatial support is tapered, forcing every supported
 cell back to the same scalar envelope would require a new amplification rule
 chosen after observing 00680. That would overfit this boundary and could undo
-the edge-safety evidence. The first production candidate therefore uses the
-measured soft candidate exactly as tested.
+the edge-safety evidence. The 00680 promotion decision therefore used the measured soft candidate exactly as tested.
 
 Globally the soft candidate remains small and favorable: centered low-pass RMS
 is about `0.99244x`, gradient RMS about `0.99478x`, and NCC improves by about
 `+0.00085`. The candidate remains a one-token, local provider-native
 correction.
 
-### Opt-in production candidate
+## 00681 production validation failure and current fail-closed contract
 
-The next hardware step promotes the measured soft candidate into an explicitly
-opt-in production arm, not a new default.
+00681 was the first run that actually enabled the 00680 soft-support mutation.
+The pre-mutation provider state, rigid-v2 transaction, predictor calibration,
+hard shadow, and soft-support shadow reproduced the 00680 evidence. The runtime
+applied one correction to `r2c0` with RMS `0.0183653` and maximum absolute
+magnitude `0.352940`, then continued through the existing exact-overlap and
+target-high stages.
 
-The user-facing partitioned node now exposes
-`provider_boundary_stabilization` with:
+The mutation improved the selected tile before target-high:
 
-- `off` — default and exact historical behavior;
-- `soft_support_v1` — bounded production candidate.
+- `r2c0` centered low-pass boundary RMS: `0.302924` -> `0.257208`;
+- `r2c0` gradient RMS: `0.096559` -> `0.087962`;
+- exact-restored `r2c0` NCC: `0.916876` -> `0.930873`.
 
-`soft_support_v1` is eligible only inside the same rejected rigid-v2 arm that
-already qualifies for the exact-overlap fallback. It recomputes the held-out
-calibration, hard shadow, and soft shadow from the actual provider-native clean
-boundary in the current run. It then requires the production correction to
-numerically reproduce the measured soft-shadow correction before mutation.
+That local pre-high result did **not** survive the complete continuation. From
+the corrected pre-high state to the existing post-high clean state, `r2c0`
+changed by:
 
-When applied, it:
+- centered low-pass RMS ratio: `1.143122`;
+- gradient RMS ratio: `1.103335`;
+- NCC delta: `-0.021323`.
 
-1. modifies only the provider-native first suffix token;
-2. leaves the provider prefix unchanged;
-3. leaves every later suffix token unchanged;
-4. maps that clean-domain delta through the existing conditional re-noise affine
-   mapping;
-5. then runs the existing exact-overlap bridge against the stabilized provider
-   boundary, so authoritative exact-prefix restoration preserves the stabilized
-   provider transition rather than reconstructing the original anomalous one.
+In the matched 00680 shadow-only run the same stage ratios were `0.973768`,
+`1.006299`, and `-0.007935`, respectively. `r2c0` also moved from outside the
+largest structural-amplification tiles to the second-ranked tile in 00681.
+The final `r2c0` centered low-pass RMS (`0.294021`) was consequently close to
+the 00680 shadow-only final value (`0.294978`): target-high largely erased the
+local pre-high improvement rather than preserving it.
 
-It adds no H3 NFE, provider call, VAE call, sampler lifetime, random draw, or
-history boundary. Rigid-v2 remains rejected, no registered guidance reference is
-created from that rejected transaction, and the exact-overlap bridge remains the
-owner of exact-prefix/provider representation reconciliation.
+Decoded-media validation failed as well: the visible frame shift returned and
+the background still changed at the boundary. The decoded trajectory classifier
+continued to label the boundary as clean, so that classifier is not an
+acceptance gate for this defect.
 
-The production candidate remains default-off until a matched decoded-media run
-shows that the measured internal improvement survives the complete high-stage
-and VAE path without creating a new local artifact.
+The violated invariant is therefore clear: **a provider-native/pre-high shadow
+improvement is not evidence that the corresponding mutation is stable through
+target-high denoising and decoding.** The 00680 promotion gate tested the wrong
+lifetime boundary.
+
+Current behavior is fail-closed:
+
+- `provider_boundary_stabilization=off` remains unchanged;
+- the serialized `soft_support_v1` value remains accepted for workflow
+  compatibility, but it no longer mutates provider or sampler state;
+- an eligible `soft_support_v1` run records
+  `reason=disabled_after_00681_post_high_regression`;
+- the existing exact-overlap path receives the original provider state;
+- after target-high, the runtime re-runs the same held-out calibration and
+  hard/soft-support hypotheses on the already-existing
+  `post_high_internal_clean` tensor and emits
+  `partitioned_provider_boundary_post_high_shadow_v1`;
+- that post-high path is diagnostic-only, cannot become a production gate, and
+  adds zero H3 NFE, provider calls, VAE calls, sampler lifetimes, or history
+  boundaries.
+
+No replacement production correction is promoted by this change. A later
+candidate must first demonstrate, on the final high-stage state, both that the
+visible defect is represented by the measured signal and that correcting the
+first boundary does not merely move discontinuity into the next suffix
+transition.
