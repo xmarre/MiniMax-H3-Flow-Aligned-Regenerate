@@ -1305,8 +1305,7 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     available = bool(successor.get("available"))
     if available:
         _require(
-            int(successor.get("left_index", -1)) == prefix_t
-            and int(successor.get("right_index", -1)) == prefix_t + 1,
+            int(successor.get("left_index", -1)) == prefix_t and int(successor.get("right_index", -1)) == prefix_t + 1,
             "post-high provider-boundary successor indices drifted",
         )
         global_successor = successor.get("global")
