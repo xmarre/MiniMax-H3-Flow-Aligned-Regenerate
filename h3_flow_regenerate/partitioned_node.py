@@ -367,8 +367,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "off preserves the current provider boundary exactly. soft_support_v1 is retained "
                     "for saved-workflow compatibility but is now fail-closed and diagnostic-only: hardware "
                     "validation showed its pre-high correction was amplified by target-high. When selected, "
-                    "the runtime leaves sampler state unchanged and emits a bounded post-high shadow "
-                    "for the next hardware gate."
+                    "the runtime leaves sampler state unchanged and emits a bounded post-high shadow, "
+                    "including first-to-second-suffix spillover, for the next hardware gate."
                 ),
             },
         )
