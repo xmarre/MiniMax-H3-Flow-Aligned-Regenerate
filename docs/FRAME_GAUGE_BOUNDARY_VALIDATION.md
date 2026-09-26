@@ -816,3 +816,88 @@ without the historical performance cost. If the defect is unchanged, this
 prefix-context hypothesis is falsified and the investigation must remain
 upstream of any post-hoc seam correction.
 
+## 00686 exact-main discriminator: background continuity recovered, rigid gate false-negative, speed regression
+
+00686 executes the exact-main low/probe discriminator requested after 00684. The
+structural ownership proof passes:
+
+- `prefix_transformer_context=exact_target_partitioned`;
+- `prefix_target_grid_rows_injected=true`;
+- `prefix_exact_latent_resized_for_transformer=false`;
+- five `partitioned_exact_prefix_transformer` calls are observed;
+- `partitioned_transformer_calls=5`;
+- the source-uniform low/probe shortcut is absent.
+
+Direct media inspection gives the important causal result: the cabinet/curtain
+background-state discontinuity that remained under
+`source_carrier_uniform_only` is now visually consistent. The source-uniform
+low/probe approximation is therefore implicated in the static-content mismatch,
+and exact target-grid prefix transformer context must remain authoritative for
+this scene class.
+
+The frame shift returned for a separate reason. The rigid estimator still
+recovered the same coherent prefix registration,
+`dx=-0.4375, dy=-0.375`, and all held-out frame/region/parity checks support
+that registration. The v3 boundary-motion gate nevertheless rejected the
+transaction because the full-frame phase witness changed from
+`0.99693 -> 1.03919` cells, a degradation of only about `0.04227` cell,
+while the upper-45% witness improved strongly from
+`0.49949 -> 0.08513` cells, about **82.96%**.
+
+That rejection disabled both the spatial warp and registered guidance reference
+and forced the exact-overlap fallback, which is consistent with the user's
+report that the frame shift returned. This is a different failure from 00681:
+the frame-gauge correction did not execute.
+
+### Consensus v4
+
+The zero-tolerance v3 veto is too strict for this exact-main realization. The
+paired-prefix rigid estimator itself selects translations on a 1/16-cell fine
+grid. A boundary phase witness moving by less than one such fine-search quantum
+cannot be treated as stronger contradictory geometry than:
+
+- the accepted held-out prefix registration;
+- the independent frame, region and H3-parity agreement;
+- an 82.96% improvement in the other informative ROI.
+
+The next policy is therefore
+`native_boundary_motion_consensus_v4`. It keeps the unchanged 25% strong
+improvement requirement in at least one informative ROI and all existing
+response/clipping/registration/conflict gates. The only change is that every
+ROI is now allowed at most one fine-search quantum, `0.0625` target latent
+cell, of boundary-witness degradation. Anything larger still vetoes the
+transaction. The bound is derived from the existing estimator resolution; it is
+not fitted to the 00686 value.
+
+For 00686, the full-frame degradation is about `0.04227` cell and therefore
+inside the bound, while upper45 remains a strong-improvement ROI. The v4
+transaction is expected to accept the already-estimated
+`(-0.4375, -0.375)` registration. This remains a hardware/media expectation
+until rerun; structural replay alone is not a visual pass.
+
+### 00686 continuation cost
+
+The speed regression is real and localized to exact-main low/probe execution.
+Against the matched 00684 source-uniform continuation:
+
+- continuation sampler wall: `194.27 s -> 225.23 s` (**+30.96 s, +15.9%**);
+- low-stage wall: `91.07 s -> 131.90 s` (**+40.83 s, +44.8%**);
+- exact probe wall: `14.72 s -> 25.37 s` (**+10.65 s, +72.3%**);
+- high stage: `72.61 s -> 59.16 s` (**-13.45 s, -18.5%**).
+
+The expensive portion is therefore not target-high or the frame-gauge
+diagnostic. It is the heterogeneous exact-prefix low/probe transformer path.
+For this 62-frame continuation, the exact-main sequence has 43,214 total rows
+versus a 36,734-row source-grid-native sequence because the 12 protected prefix
+frames retain 1,024 target-grid rows/frame while the 50 generated suffix frames
+use 484 source-grid rows/frame. The extra exact-prefix rows and variable-grid VDN
+linear/attention work are the performance axis to optimize.
+
+No speed workaround is promoted by 00686. Falling back to
+`source_carrier_uniform_only` would recover speed by reintroducing the
+background-content failure that this run just isolated. Correctness and
+performance must therefore be addressed separately: v4 restores the rigid
+transaction on the exact-main path; exact-prefix low/probe acceleration remains
+a follow-up implementation problem rather than a reason to discard exact
+transformer context.
+
