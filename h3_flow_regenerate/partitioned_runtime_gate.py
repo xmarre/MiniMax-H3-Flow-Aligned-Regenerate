@@ -524,14 +524,10 @@ def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None
     """Validate optional observation-only content-continuity receipts."""
 
     receipts = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_boundary_content_continuity"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_boundary_content_continuity"
     ]
     deltas = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_boundary_content_stage_delta"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_boundary_content_stage_delta"
     ]
     if not receipts and not deltas:
         return
@@ -625,8 +621,7 @@ def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None
     _require(delta.get("diagnostic_only") is True, "boundary-content stage delta is not diagnostic-only")
     _require(delta.get("production_gate") is False, "boundary-content stage delta became a production gate")
     _require(
-        delta.get("pre_stage") == "pre_high_exact_restored"
-        and delta.get("post_stage") == "post_high_internal_clean",
+        delta.get("pre_stage") == "pre_high_exact_restored" and delta.get("post_stage") == "post_high_internal_clean",
         "boundary-content stage-delta ownership drifted",
     )
     _require(delta.get("extra_h3_nfe") == 0, "boundary-content stage delta added H3 NFE")
