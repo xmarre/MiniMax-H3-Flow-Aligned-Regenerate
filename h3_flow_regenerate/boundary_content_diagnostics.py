@@ -1191,7 +1191,6 @@ def measure_provider_boundary_soft_support_shadow(
     }
 
 
-
 def measure_provider_boundary_post_high_shadow(
     video: torch.Tensor,
     prefix_t: int,
