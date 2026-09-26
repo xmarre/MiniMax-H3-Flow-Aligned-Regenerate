@@ -730,7 +730,7 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
         "provider-boundary stabilization shadow candidate drifted",
     )
     _require(
-        receipt.get("eligibility_rule") == "absolute_and_dispersion_normalized_error_exceed_heldout_max",
+        receipt.get("eligibility_rule") == "finite_signal_and_absolute_and_dispersion_error_exceed_heldout_max",
         "provider-boundary stabilization shadow eligibility drifted",
     )
     _require(
@@ -772,6 +772,9 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
     )
 
     tile_metric_fields = {
+        "boundary_prediction_error_rms",
+        "historical_prediction_error_rms_max",
+        "min_signal_rms",
         "boundary_error_over_historical_max",
         "boundary_dispersion_ratio_over_historical_max",
         "residual_scale",
@@ -810,8 +813,20 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
         )
         error_ratio = _finite_number(tile.get("boundary_error_over_historical_max"))
         dispersion_ratio = _finite_number(tile.get("boundary_dispersion_ratio_over_historical_max"))
+        boundary_error_rms = _finite_number(tile.get("boundary_prediction_error_rms"))
+        historical_error_max = _finite_number(tile.get("historical_prediction_error_rms_max"))
+        min_signal_rms = _finite_number(tile.get("min_signal_rms"))
+        _require(
+            math.isclose(min_signal_rms, 1e-6, rel_tol=0.0, abs_tol=0.0),
+            f"provider-boundary stabilization shadow tile {tile_id} signal floor drifted",
+        )
         residual_scale = _finite_number(tile.get("residual_scale"))
-        expected_eligible = error_ratio > 1.0 and dispersion_ratio > 1.0
+        expected_eligible = (
+            boundary_error_rms > min_signal_rms
+            and historical_error_max > min_signal_rms
+            and error_ratio > 1.0
+            and dispersion_ratio > 1.0
+        )
         _require(
             eligible is expected_eligible,
             f"provider-boundary stabilization shadow tile {tile_id} does not replay eligibility",
@@ -863,6 +878,10 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
                 f"provider-boundary stabilization shadow tile {tile_id} corrected an ineligible tile",
             )
 
+    _require(
+        math.isclose(_finite_number(receipt.get("min_signal_rms")), 1e-6, rel_tol=0.0, abs_tol=0.0),
+        "provider-boundary stabilization shadow signal floor drifted",
+    )
     for field in ("correction_rms", "correction_abs_max"):
         _finite_number(receipt.get(field))
     global_fields = receipt.get("global")
