@@ -3227,9 +3227,7 @@ def run_partitioned_progressive(
                         "requested": True,
                         "mode": provider_boundary_stabilization,
                         "reason": (
-                            "applied"
-                            if bool(stabilization_fields.get("applied"))
-                            else "no_eligible_provider_region"
+                            "applied" if bool(stabilization_fields.get("applied")) else "no_eligible_provider_region"
                         ),
                         "exact_overlap_fallback_required": True,
                         "exact_overlap_fallback_trigger": str(exact_overlap_fallback_trigger),
