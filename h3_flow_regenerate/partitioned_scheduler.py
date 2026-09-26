@@ -3124,7 +3124,11 @@ def run_partitioned_progressive(
             "requested": provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
             "mode": provider_boundary_stabilization,
             "applied": False,
-            "reason": "off" if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF else "not_evaluated",
+            "reason": (
+                "off"
+                if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+                else "not_evaluated"
+            ),
             "authoritative_prefix_modified": False,
             "later_suffix_extrapolated": False,
             "corrected_tokens": 0,
@@ -3222,7 +3226,11 @@ def run_partitioned_progressive(
                     provider_boundary_stabilization_receipt = {
                         "requested": True,
                         "mode": provider_boundary_stabilization,
-                        "reason": "applied" if bool(stabilization_fields.get("applied")) else "no_eligible_provider_region",
+                        "reason": (
+                            "applied"
+                            if bool(stabilization_fields.get("applied"))
+                            else "no_eligible_provider_region"
+                        ),
                         "exact_overlap_fallback_required": True,
                         "exact_overlap_fallback_trigger": str(exact_overlap_fallback_trigger),
                         "shadow_recomputed_from_native_provider": True,
