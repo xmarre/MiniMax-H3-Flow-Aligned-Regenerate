@@ -1337,10 +1337,7 @@ def measure_provider_boundary_post_high_shadow(
             "ncc_non_degraded": ncc_non_degraded,
         }
         boundary_non_degrading = (
-            boundary_non_degrading
-            and centered_improved
-            and gradient_non_degraded
-            and ncc_non_degraded
+            boundary_non_degrading and centered_improved and gradient_non_degraded and ncc_non_degraded
         )
 
     suffix_gauge_shadow = {
@@ -1565,9 +1562,7 @@ def apply_provider_boundary_post_high_suffix_gauge(
         raise RuntimeError("post-high suffix gauge no longer reproduces the measured soft-support correction")
 
     stabilized = video.clone()
-    stabilized[:, :, prefix_t:] = (
-        video[:, :, prefix_t:] - correction.unsqueeze(2).to(video)
-    )
+    stabilized[:, :, prefix_t:] = video[:, :, prefix_t:] - correction.unsqueeze(2).to(video)
     if not torch.equal(stabilized[:, :, :prefix_t], video[:, :, :prefix_t]):
         raise RuntimeError("post-high suffix gauge modified the authoritative prefix")
 
@@ -1587,9 +1582,7 @@ def apply_provider_boundary_post_high_suffix_gauge(
     drift_tolerance = 8.0 * dtype_eps * max(1.0, suffix_abs_max, correction_abs_max)
     temporal_preserved = drift_abs_max <= drift_tolerance
     if not temporal_preserved:
-        raise RuntimeError(
-            "post-high suffix gauge changed suffix temporal first differences beyond dtype roundoff"
-        )
+        raise RuntimeError("post-high suffix gauge changed suffix temporal first differences beyond dtype roundoff")
 
     return stabilized, {
         "policy": PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,

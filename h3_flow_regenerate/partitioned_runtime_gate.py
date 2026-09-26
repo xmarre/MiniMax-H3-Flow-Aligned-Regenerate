@@ -1406,9 +1406,7 @@ def _validate_provider_boundary_post_high_suffix_gauge(window: list[dict[str, An
         and stabilization[0].get("requested")
         and stabilization[0].get("mode") == "post_high_suffix_gauge_v1"
     )
-    has_boundary_diagnostics = any(
-        _event_kind(event) == "partitioned_boundary_content_continuity" for event in window
-    )
+    has_boundary_diagnostics = any(_event_kind(event) == "partitioned_boundary_content_continuity" for event in window)
     events = [
         _event_fields(event)
         for event in window
@@ -1440,7 +1438,8 @@ def _validate_provider_boundary_post_high_suffix_gauge(window: list[dict[str, An
     reason = str(receipt.get("reason", ""))
     if not applied:
         _require(
-            reason in {
+            reason
+            in {
                 "no_eligible_tiles",
                 "boundary_non_degradation_failed",
                 "suffix_temporal_invariant_failed",

@@ -4005,9 +4005,7 @@ def run_partitioned_progressive(
                         "suffix_temporal_first_difference_preserved": bool(
                             gauge_shadow.get("suffix_temporal_first_difference_preserved", False)
                         ),
-                        "suffix_transition_drift_rms": float(
-                            gauge_shadow.get("suffix_transition_drift_rms", 0.0)
-                        ),
+                        "suffix_transition_drift_rms": float(gauge_shadow.get("suffix_transition_drift_rms", 0.0)),
                         "suffix_transition_drift_abs_max": float(
                             gauge_shadow.get("suffix_transition_drift_abs_max", 0.0)
                         ),
@@ -4092,9 +4090,7 @@ def run_partitioned_progressive(
                             ),
                         )
                         roundtrip_tolerance = (
-                            8.0
-                            * float(torch.finfo(corrected_internal_video.dtype).eps)
-                            * roundtrip_scale
+                            8.0 * float(torch.finfo(corrected_internal_video.dtype).eps) * roundtrip_scale
                         )
                         if roundtrip_abs_max > roundtrip_tolerance:
                             raise RuntimeError(
