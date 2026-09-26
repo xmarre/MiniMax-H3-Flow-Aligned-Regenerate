@@ -1189,7 +1189,6 @@ def measure_provider_boundary_soft_support_shadow(
         "tiles_by_soft_centered_lowpass_ratio": ranked,
     }
 
-
 def apply_provider_boundary_soft_support_stabilization(
     video: torch.Tensor,
     prefix_t: int,
