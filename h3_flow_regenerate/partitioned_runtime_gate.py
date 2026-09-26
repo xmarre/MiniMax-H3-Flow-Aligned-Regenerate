@@ -1315,7 +1315,10 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         _require(isinstance(global_successor, dict), "post-high successor global comparison is missing")
         for value in global_successor.values():
             _finite_number(value)
-        expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+        tile_rows = int(soft.get("tile_rows", -1))
+        tile_cols = int(soft.get("tile_cols", -1))
+        _require(tile_rows > 0 and tile_cols > 0, "post-high successor tile geometry is invalid")
+        expected_tiles = {f"r{row}c{col}" for row in range(tile_rows) for col in range(tile_cols)}
         _require(
             isinstance(tile_successor, dict) and set(tile_successor) == expected_tiles,
             "post-high successor tile comparison is malformed",
