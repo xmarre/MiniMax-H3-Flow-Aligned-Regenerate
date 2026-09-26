@@ -267,3 +267,84 @@ evidence. When present, it requires one calibration receipt, the fixed
 three-transition predictor, five requested held-out targets, fixed 4x4
 geometry and low-pass kernel, complete finite global/tile metrics, complete
 rankings, diagnostic-only ownership, and zero extra work.
+
+
+## 00678 held-out calibration result
+
+00678 reproduces the same rejected rigid-v2 / exact-overlap state as 00676 and
+00677. The exact-prefix hash remains
+`36ea0b7b0578642f895a7a2e2fdfab16f23755e509d8f2e84d248d585c425b7a`,
+rigid-v2 again rejects on
+`boundary_upper45_insufficient_improvement`, and the exact-overlap bridge
+again reconstructs the provider-native immediate clean-domain boundary.
+
+The held-out calibration materially narrows the provider-native hypothesis.
+Five prefix-internal targets (transition indices 6 through 10) provide the
+recent out-of-sample predictor envelope. Globally the first-suffix boundary is
+inside that envelope: its absolute predictor error is about 0.678 times the
+largest held-out error, while its dispersion-normalized error is about 0.718
+times the held-out maximum.
+
+Only one fixed 4x4 region exceeds **both** held-out maxima: `r2c0`.
+
+For `r2c0`:
+
+- boundary prediction-error RMS / held-out maximum is about **1.271**;
+- dispersion-normalized boundary error / held-out maximum is about **1.475**;
+- the corresponding ratios to the held-out medians are about **1.538** and
+  **1.806**;
+- actual-vs-predictor cosine is about **+0.133**, versus a historical median of
+  about **+0.035**;
+- projection gain is about **+0.455**, versus a historical median of about
+  **+0.056**.
+
+This changes the interpretation of 00677. The other prominent
+provider-content regions are unusual relative to recent medians, but they do
+not exceed the recent held-out maxima on both error measures. In particular,
+`r2c1`, `r2c2`, `r1c1`, and `r3c1` remain inside at least one held-out
+maximum. They are therefore not justified targets for a production clamp from
+this evidence.
+
+`r2c0` is different. Its first-suffix prediction residual exceeds both
+independent recent envelopes, but its motion direction is not reversed relative
+to historical behavior. The evidence is therefore more consistent with a
+**localized residual-amplitude overshoot** than with a wrong-direction
+transition. A directional replacement or broad temporal smoothing would be
+poorly matched to the measured failure.
+
+### Provider-boundary stabilization shadow
+
+Before mutating production state, the next layer is
+`partitioned_provider_boundary_stabilization_shadow_v1`.
+
+The shadow candidate is deliberately observation-only. A tile is eligible only
+when both:
+
+1. `boundary_error_over_historical_max > 1`; and
+2. `boundary_dispersion_ratio_over_historical_max > 1`.
+
+For an eligible tile the shadow policy leaves the recent median predictor
+unchanged and scales only the first-suffix prediction residual by the tighter
+of the two factors required to return both ratios to the held-out envelope:
+
+`scale = min(1, 1 / absolute_ratio, 1 / dispersion_ratio)`.
+
+For the measured 00678 `r2c0` values this predicts a residual scale of about
+`0.678`, i.e. a bounded reduction of roughly 32% in the excess prediction
+residual. It does not reverse the residual or replace it with the predictor.
+
+The implementation builds this candidate on a cloned provider-clean tensor and
+measures its resulting boundary-content metrics. It never returns the clone to
+the sampler. The production provider output, exact-prefix owner, frame-gauge
+transaction, exact-overlap bridge, guidance reference, and high-stage state all
+remain unchanged. The first implementation intentionally uses hard fixed-tile
+support **only in the shadow clone** so that no unmeasured spatial blending
+policy is silently introduced. Its edge behavior and local structural effect
+must be measured before any production spatial support is designed.
+
+The runtime validator requires the shadow receipt to replay tile eligibility and
+the residual scale from the held-out ratios, requires ineligible tiles to have
+zero correction, requires both predicted post-clamp ratios to be no greater
+than the historical maxima for eligible tiles, and requires
+`production_applied=false`, `output_mutated=false`, and zero extra
+model/provider/VAE/sampler/history work.
