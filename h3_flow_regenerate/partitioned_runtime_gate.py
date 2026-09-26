@@ -730,8 +730,7 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
         "provider-boundary stabilization shadow candidate drifted",
     )
     _require(
-        receipt.get("eligibility_rule")
-        == "absolute_and_dispersion_normalized_error_exceed_heldout_max",
+        receipt.get("eligibility_rule") == "absolute_and_dispersion_normalized_error_exceed_heldout_max",
         "provider-boundary stabilization shadow eligibility drifted",
     )
     _require(
