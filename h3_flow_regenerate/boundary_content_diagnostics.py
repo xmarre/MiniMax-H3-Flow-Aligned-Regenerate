@@ -676,7 +676,6 @@ def measure_provider_boundary_temporal_calibration(
     }
 
 
-
 def measure_provider_boundary_stabilization_shadow(
     video: torch.Tensor,
     prefix_t: int,
