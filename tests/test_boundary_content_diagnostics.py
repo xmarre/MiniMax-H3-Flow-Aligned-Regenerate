@@ -558,6 +558,7 @@ def test_runtime_gate_rejects_applied_provider_boundary_stabilization_after_post
 
 def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_domain():
     video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat([video, video[:, :, -1:].clone()], dim=2)
     torch.manual_seed(7012)
     video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
     content = measure_boundary_content_continuity(video, 5)
@@ -579,10 +580,17 @@ def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_dom
     assert receipt["hard_shadow"]["output_mutated"] is False
     assert receipt["soft_shadow"]["output_mutated"] is False
     assert receipt["eligible_tiles"] == receipt["soft_shadow"]["eligible_tiles"]
+    successor = receipt["successor_transition"]
+    assert successor["available"] is True
+    assert successor["left_index"] == 5
+    assert successor["right_index"] == 6
+    assert successor["candidate_output_discarded"] is True
+    assert set(successor["tiles"]) == {f"r{row}c{col}" for row in range(4) for col in range(4)}
 
 
 def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
     video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat([video, video[:, :, -1:].clone()], dim=2)
     torch.manual_seed(7013)
     video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
     content = measure_boundary_content_continuity(video, 5)
