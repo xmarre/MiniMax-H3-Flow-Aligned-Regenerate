@@ -338,7 +338,13 @@ def test_provider_boundary_soft_support_shadow_reduces_frontier_jump_without_mut
     assert receipt["feather_width"] == 3
     assert receipt["soft_frontier_edge_jump_rms"] <= receipt["hard_frontier_edge_jump_rms"] + 1e-9
     assert receipt["soft_frontier_edge_jump_abs_max"] <= receipt["hard_frontier_edge_jump_abs_max"] + 1e-9
-    changed = receipt["tiles"][receipt["eligible_tiles"][0]]
+    frontier_tiles = [
+        receipt["tiles"][tile_id]
+        for tile_id in receipt["eligible_tiles"]
+        if receipt["tiles"][tile_id]["support_min"] < 1.0
+    ]
+    assert frontier_tiles
+    changed = frontier_tiles[0]
     assert changed["support_min"] == pytest.approx(0.0, abs=1e-8)
     assert 0.0 < changed["support_mean"] < 1.0
     assert changed["support_max"] == pytest.approx(1.0)
