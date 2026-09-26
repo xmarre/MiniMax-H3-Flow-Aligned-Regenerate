@@ -1281,26 +1281,30 @@ def measure_provider_boundary_post_high_shadow(
             prefix_t,
             soft_shadow_receipt=soft_shadow,
         )
-        if not torch.equal(video, video):
-            raise RuntimeError("post-high provider-boundary shadow source changed unexpectedly")
         height, width = map(int, video.shape[-2:])
-        tiles = _tile_bounds(height, width, 4, 4)
+        tile_rows = int(post_high_content_receipt["tile_rows"])
+        tile_cols = int(post_high_content_receipt["tile_cols"])
+        lowpass_kernel = int(post_high_content_receipt["lowpass_kernel"])
+        correspondence_radius = int(post_high_content_receipt["correspondence_radius"])
+        min_similarity = float(post_high_content_receipt["min_similarity"])
+        min_margin = float(post_high_content_receipt["min_margin"])
+        tiles = _tile_bounds(height, width, tile_rows, tile_cols)
         before_pair = _pair_metrics(
             video[:, :, prefix_t],
             video[:, :, prefix_t + 1],
-            lowpass_kernel=5,
-            radius=3,
-            min_similarity=0.35,
-            min_margin=0.02,
+            lowpass_kernel=lowpass_kernel,
+            radius=correspondence_radius,
+            min_similarity=min_similarity,
+            min_margin=min_margin,
             tiles=tiles,
         )
         after_pair = _pair_metrics(
             candidate[:, :, prefix_t],
             candidate[:, :, prefix_t + 1],
-            lowpass_kernel=5,
-            radius=3,
-            min_similarity=0.35,
-            min_margin=0.02,
+            lowpass_kernel=lowpass_kernel,
+            radius=correspondence_radius,
+            min_similarity=min_similarity,
+            min_margin=min_margin,
             tiles=tiles,
         )
         successor_transition = {
