@@ -19,6 +19,7 @@ from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+    PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
 )
 from .frame_gauge import (
@@ -908,6 +909,210 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
     _require(
         isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
         "provider-boundary stabilization shadow ranking drifted",
+    )
+
+
+def _validate_provider_boundary_soft_support_shadow(window: list[dict[str, Any]]) -> None:
+    """Validate optional observation-only soft-support shadow evidence."""
+
+    receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_soft_support_shadow"
+    ]
+    if not receipts:
+        return
+    _require(len(receipts) == 1, "provider-boundary soft-support shadow must emit exactly one receipt")
+    receipt = receipts[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "provider-boundary soft-support shadow policy drifted",
+    )
+    _require(receipt.get("diagnostic_only") is True, "provider-boundary soft-support shadow became production")
+    _require(receipt.get("production_gate") is False, "provider-boundary soft-support shadow became a gate")
+    _require(
+        receipt.get("production_applied") is False,
+        "provider-boundary soft-support shadow claims a production mutation",
+    )
+    _require(
+        receipt.get("output_mutated") is False,
+        "provider-boundary soft-support shadow mutated the provider output",
+    )
+    _require(
+        receipt.get("candidate") == "heldout_max_prediction_residual_shrink_v1",
+        "provider-boundary soft-support shadow candidate drifted",
+    )
+    _require(
+        receipt.get("eligibility_rule") == "inherit_hard_shadow_heldout_max_selection_v1",
+        "provider-boundary soft-support shadow eligibility drifted",
+    )
+    _require(
+        receipt.get("support") == "inside_raised_cosine_selected_frontier_v1",
+        "provider-boundary soft-support shadow support drifted",
+    )
+    _require(
+        receipt.get("support_owner") == "diagnostic_shadow_clone_only",
+        "provider-boundary soft-support shadow ownership drifted",
+    )
+    _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary soft-support history depth drifted")
+    _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary soft-support tile-row count drifted")
+    _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary soft-support tile-column count drifted")
+    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary soft-support kernel drifted")
+    _require(int(receipt.get("feather_width", 0)) == 3, "provider-boundary soft-support feather width drifted")
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(receipt.get(field) == 0, f"provider-boundary soft-support shadow added work: {field}")
+
+    hard_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_stabilization_shadow"
+    ]
+    _require(
+        len(hard_receipts) == 1,
+        "provider-boundary soft-support shadow requires exactly one hard-shadow receipt",
+    )
+    hard = hard_receipts[0]
+    eligible_tiles = receipt.get("eligible_tiles")
+    _require(
+        isinstance(eligible_tiles, list)
+        and len(eligible_tiles) == int(receipt.get("eligible_tile_count", -1))
+        and len(set(eligible_tiles)) == len(eligible_tiles),
+        "provider-boundary soft-support eligible tile set is malformed",
+    )
+    _require(
+        eligible_tiles == sorted(hard.get("eligible_tiles", [])),
+        "provider-boundary soft-support eligibility diverged from the hard shadow",
+    )
+
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+    _require(set(eligible_tiles) <= expected_tiles, "provider-boundary soft-support selected an unknown tile")
+    tiles = receipt.get("tiles")
+    _require(
+        isinstance(tiles, dict) and set(tiles) == expected_tiles,
+        "provider-boundary soft-support tile set drifted",
+    )
+    metric_fields = {
+        "residual_scale",
+        "support_min",
+        "support_mean",
+        "support_max",
+        "support_nonzero_fraction",
+        "hard_direct_correction_rms",
+        "soft_direct_correction_rms",
+        "provider_centered_lowpass_rms_before",
+        "soft_centered_lowpass_rms_after",
+        "soft_centered_lowpass_rms_ratio",
+        "provider_gradient_rms_before",
+        "soft_gradient_rms_after",
+        "soft_gradient_rms_ratio",
+        "provider_ncc_before",
+        "soft_ncc_after",
+        "soft_ncc_delta",
+        "soft_boundary_error_over_historical_max_after",
+        "soft_boundary_dispersion_ratio_over_historical_max_after",
+    }
+    for tile_id, tile in tiles.items():
+        _require(isinstance(tile, dict), f"provider-boundary soft-support tile {tile_id} is malformed")
+        _require(metric_fields <= set(tile), f"provider-boundary soft-support tile {tile_id} fields are incomplete")
+        bounds = tile.get("bounds")
+        _require(
+            isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
+            f"provider-boundary soft-support tile {tile_id} bounds are malformed",
+        )
+        for field in metric_fields:
+            _finite_number(tile.get(field))
+        selected = tile_id in eligible_tiles
+        _require(
+            bool(tile.get("eligible")) is selected,
+            f"provider-boundary soft-support tile {tile_id} eligibility drifted",
+        )
+        support_min = _finite_number(tile.get("support_min"))
+        support_mean = _finite_number(tile.get("support_mean"))
+        support_max = _finite_number(tile.get("support_max"))
+        support_nonzero = _finite_number(tile.get("support_nonzero_fraction"))
+        _require(
+            0.0 <= support_min <= support_mean <= support_max <= 1.0,
+            f"provider-boundary soft-support tile {tile_id} support weights are invalid",
+        )
+        _require(
+            0.0 <= support_nonzero <= 1.0,
+            f"provider-boundary soft-support tile {tile_id} support fraction is invalid",
+        )
+        if selected:
+            _require(
+                _finite_number(tile.get("soft_direct_correction_rms"))
+                <= _finite_number(tile.get("hard_direct_correction_rms")) + 1e-9,
+                f"provider-boundary soft-support tile {tile_id} exceeded hard correction energy",
+            )
+        else:
+            _require(
+                _finite_number(tile.get("hard_direct_correction_rms")) == 0.0
+                and _finite_number(tile.get("soft_direct_correction_rms")) == 0.0
+                and support_max == 0.0,
+                f"provider-boundary soft-support tile {tile_id} directly corrected an ineligible tile",
+            )
+
+    for field in (
+        "hard_frontier_edge_jump_rms",
+        "hard_frontier_edge_jump_abs_max",
+        "soft_frontier_edge_jump_rms",
+        "soft_frontier_edge_jump_abs_max",
+        "soft_over_hard_frontier_edge_jump_rms",
+        "soft_over_hard_frontier_edge_jump_abs_max",
+        "support_union_mean",
+        "support_union_nonzero_fraction",
+        "soft_correction_rms",
+        "soft_correction_abs_max",
+    ):
+        _finite_number(receipt.get(field))
+    _require(
+        _finite_number(receipt.get("soft_frontier_edge_jump_rms"))
+        <= _finite_number(receipt.get("hard_frontier_edge_jump_rms")) + 1e-9,
+        "provider-boundary soft-support increased frontier RMS jump",
+    )
+    _require(
+        _finite_number(receipt.get("soft_frontier_edge_jump_abs_max"))
+        <= _finite_number(receipt.get("hard_frontier_edge_jump_abs_max")) + 1e-9,
+        "provider-boundary soft-support increased frontier max jump",
+    )
+    _require(
+        0.0 <= _finite_number(receipt.get("support_union_mean")) <= 1.0
+        and 0.0 <= _finite_number(receipt.get("support_union_nonzero_fraction")) <= 1.0,
+        "provider-boundary soft-support union weights are invalid",
+    )
+
+    global_fields = receipt.get("global")
+    _require(isinstance(global_fields, dict), "provider-boundary soft-support global receipt is missing")
+    global_metric_fields = {
+        "provider_centered_lowpass_rms_before",
+        "soft_centered_lowpass_rms_after",
+        "soft_centered_lowpass_rms_ratio",
+        "provider_gradient_rms_before",
+        "soft_gradient_rms_after",
+        "soft_gradient_rms_ratio",
+        "provider_ncc_before",
+        "soft_ncc_after",
+        "soft_ncc_delta",
+        "soft_boundary_error_over_historical_max_after",
+        "soft_boundary_dispersion_ratio_over_historical_max_after",
+    }
+    _require(
+        global_metric_fields <= set(global_fields),
+        "provider-boundary soft-support global fields are incomplete",
+    )
+    for field in global_metric_fields:
+        _finite_number(global_fields.get(field))
+
+    ranking = receipt.get("tiles_by_soft_centered_lowpass_ratio")
+    _require(
+        isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
+        "provider-boundary soft-support ranking drifted",
     )
 
 
@@ -2212,6 +2417,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_predictor(window)
     _validate_provider_boundary_predictor_calibration(window)
     _validate_provider_boundary_stabilization_shadow(window)
+    _validate_provider_boundary_soft_support_shadow(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
