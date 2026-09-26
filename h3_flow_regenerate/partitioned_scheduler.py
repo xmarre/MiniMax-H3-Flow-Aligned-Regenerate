@@ -18,9 +18,9 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
-    apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
@@ -3186,61 +3186,18 @@ def run_partitioned_progressive(
                 provider_native_clean = learned_clean
 
                 if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
-                    stabilization_started = time.perf_counter()
-                    production_provider_receipt = measure_boundary_content_continuity(
-                        provider_native_clean,
-                        stage_plan.prefix_t,
+                    # 00681 disproved the pre-high-only promotion gate: the exact same
+                    # provider/shadow state improved before target-high, then target-high
+                    # amplified the selected tile and the decoded frame shift returned.
+                    # Preserve the serialized selector for old workflows but fail closed.
+                    # The same requested run now emits a post-high shadow below instead.
+                    provider_boundary_stabilization_receipt.update(
+                        reason="disabled_after_00681_post_high_regression",
+                        exact_overlap_fallback_required=True,
+                        historical_candidate_policy="partitioned_provider_boundary_soft_support_production_v1",
+                        historical_candidate_mutation_disabled=True,
+                        production_mutation_allowed=False,
                     )
-                    production_calibration_receipt = measure_provider_boundary_temporal_calibration(
-                        provider_native_clean,
-                        stage_plan.prefix_t,
-                    )
-                    production_hard_shadow_receipt = measure_provider_boundary_stabilization_shadow(
-                        provider_native_clean,
-                        stage_plan.prefix_t,
-                        calibration_receipt=production_calibration_receipt,
-                        provider_content_receipt=production_provider_receipt,
-                    )
-                    production_soft_shadow_receipt = measure_provider_boundary_soft_support_shadow(
-                        provider_native_clean,
-                        stage_plan.prefix_t,
-                        calibration_receipt=production_calibration_receipt,
-                        provider_content_receipt=production_provider_receipt,
-                        hard_shadow_receipt=production_hard_shadow_receipt,
-                    )
-                    stabilized_clean, stabilization_fields = apply_provider_boundary_soft_support_stabilization(
-                        provider_native_clean,
-                        stage_plan.prefix_t,
-                        soft_shadow_receipt=production_soft_shadow_receipt,
-                    )
-                    if bool(stabilization_fields.get("applied")):
-                        target_video = map_clean_bridge_to_conditional_state(
-                            target_video,
-                            provider_native_clean,
-                            stabilized_clean,
-                            sigma=float(sigma),
-                            prefix_t=stage_plan.prefix_t,
-                            corrected_tokens=int(stabilization_fields["corrected_tokens"]),
-                        )
-                        learned_clean = stabilized_clean
-                    provider_boundary_stabilization_receipt = {
-                        "requested": True,
-                        "mode": provider_boundary_stabilization,
-                        "reason": (
-                            "applied" if bool(stabilization_fields.get("applied")) else "no_eligible_provider_region"
-                        ),
-                        "exact_overlap_fallback_required": True,
-                        "shadow_recomputed_from_native_provider": True,
-                        "local_compute_elapsed_ms": (time.perf_counter() - stabilization_started) * 1000.0,
-                        "extra_h3_nfe": 0,
-                        "extra_sampler_lifetimes": 0,
-                        "extra_history_boundaries": 0,
-                        "extra_provider_calls": 0,
-                        "extra_vae_calls": 0,
-                        **stabilization_fields,
-                    }
-                elif provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
-                    raise RuntimeError("unsupported provider-boundary stabilization mode")
 
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
                     _apply_partitioned_exact_overlap_bridge(
@@ -3997,6 +3954,29 @@ def run_partitioned_progressive(
                     post_high_receipt,
                 ),
             )
+
+            if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
+                post_high_shadow_started = time.perf_counter()
+                post_high_shadow = measure_provider_boundary_post_high_shadow(
+                    post_high_diagnostic_video,
+                    stage_plan.prefix_t,
+                    post_high_content_receipt=post_high_receipt,
+                )
+                binding.metrics.event(
+                    "partitioned_provider_boundary_post_high_shadow",
+                    mode=provider_boundary_stabilization,
+                    domain="model_internal_clean",
+                    owner_before="authoritative_exact_prefix",
+                    owner_after="post_high_generated_suffix",
+                    legacy_pre_high_mutation_disabled=True,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_provider_calls=0,
+                    extra_vae_calls=0,
+                    elapsed_ms=(time.perf_counter() - post_high_shadow_started) * 1000.0,
+                    **post_high_shadow,
+                )
 
         if diagnostic_audio_control:
             if final_internal is None or final_internal_audio is None:
