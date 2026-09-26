@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from .boundary_content_diagnostics import BOUNDARY_CONTENT_DIAGNOSTIC_POLICY
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
     GUIDANCE_REFERENCE_POLICY,
@@ -517,6 +518,137 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 observed_reason = f"boundary_{name}_insufficient_improvement"
 
     _require(observed_reason == reason, "exact-overlap fallback does not reproduce the recorded boundary veto")
+
+
+def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
+    """Validate optional observation-only content-continuity receipts."""
+
+    receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_boundary_content_continuity"
+    ]
+    deltas = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_boundary_content_stage_delta"
+    ]
+    if not receipts and not deltas:
+        return
+
+    expected_stages = {
+        "provider_native",
+        "pre_high_exact_restored",
+        "post_high_internal_clean",
+    }
+    _require(len(receipts) == 3, "boundary-content diagnostic must emit exactly three stage receipts")
+    _require(
+        {str(receipt.get("stage", "")) for receipt in receipts} == expected_stages,
+        "boundary-content diagnostic stage set drifted",
+    )
+
+    core_fields = {
+        "raw_rms",
+        "lowpass_rms",
+        "centered_lowpass_rms",
+        "gradient_rms",
+        "spatial_mean_rms",
+        "ncc",
+        "high_similarity_fraction",
+        "unique_fraction",
+        "cycle_consistent_fraction",
+        "cycle_support_fraction",
+        "ambiguity_fraction",
+        "similarity_mean",
+        "margin_mean",
+        "flow_magnitude_mean",
+        "flow_magnitude_max",
+    }
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+
+    for receipt in receipts:
+        _require(
+            receipt.get("policy") == BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+            "boundary-content diagnostic policy drifted",
+        )
+        _require(receipt.get("diagnostic_only") is True, "boundary-content diagnostic mutated into a production path")
+        _require(receipt.get("production_gate") is False, "boundary-content diagnostic became a production gate")
+        _require(int(receipt.get("tile_rows", 0)) == 4, "boundary-content diagnostic tile-row count drifted")
+        _require(int(receipt.get("tile_cols", 0)) == 4, "boundary-content diagnostic tile-column count drifted")
+        _require(int(receipt.get("pre_steps", 0)) == 3, "boundary-content diagnostic prefix baseline drifted")
+        _require(int(receipt.get("correspondence_radius", 0)) == 3, "boundary-content diagnostic radius drifted")
+        _require(_finite_number(receipt.get("min_similarity")) == 0.35, "boundary-content similarity gate drifted")
+        _require(_finite_number(receipt.get("min_margin")) == 0.02, "boundary-content margin gate drifted")
+        _require(receipt.get("extra_h3_nfe") == 0, "boundary-content diagnostic added H3 NFE")
+        _require(receipt.get("extra_sampler_lifetimes") == 0, "boundary-content diagnostic added a sampler lifetime")
+        _require(receipt.get("extra_history_boundaries") == 0, "boundary-content diagnostic added a history boundary")
+        _require(receipt.get("extra_provider_calls") == 0, "boundary-content diagnostic added a provider call")
+        _require(receipt.get("extra_vae_calls") == 0, "boundary-content diagnostic added a VAE call")
+
+        global_boundary = receipt.get("global_boundary")
+        global_prefix = receipt.get("global_prefix_median")
+        global_compare = receipt.get("global_boundary_vs_prefix")
+        _require(isinstance(global_boundary, dict), "boundary-content global boundary receipt is missing")
+        _require(isinstance(global_prefix, dict), "boundary-content prefix baseline receipt is missing")
+        _require(isinstance(global_compare, dict), "boundary-content comparison receipt is missing")
+        _require(core_fields <= set(global_boundary), "boundary-content global boundary fields are incomplete")
+        _require(core_fields <= set(global_prefix), "boundary-content prefix baseline fields are incomplete")
+        for field in core_fields:
+            _finite_number(global_boundary.get(field))
+            _finite_number(global_prefix.get(field))
+        for value in global_compare.values():
+            _finite_number(value)
+
+        tiles = receipt.get("tiles")
+        ranked = receipt.get("tiles_by_centered_structural_change")
+        _require(isinstance(tiles, dict) and set(tiles) == expected_tiles, "boundary-content tile set drifted")
+        _require(
+            isinstance(ranked, list) and len(ranked) == 16 and set(ranked) == expected_tiles,
+            "boundary-content ranked tile identity drifted",
+        )
+        for tile_id, tile in tiles.items():
+            _require(isinstance(tile, dict), f"boundary-content tile {tile_id} is malformed")
+            bounds = tile.get("bounds")
+            _require(
+                isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
+                f"boundary-content tile {tile_id} bounds are malformed",
+            )
+            for section in ("boundary", "prefix_median", "boundary_vs_prefix"):
+                fields = tile.get(section)
+                _require(isinstance(fields, dict), f"boundary-content tile {tile_id} {section} is missing")
+                for value in fields.values():
+                    _finite_number(value)
+
+    _require(len(deltas) == 1, "boundary-content diagnostic must emit exactly one stage-delta receipt")
+    delta = deltas[0]
+    _require(delta.get("policy") == BOUNDARY_CONTENT_DIAGNOSTIC_POLICY, "boundary-content delta policy drifted")
+    _require(delta.get("diagnostic_only") is True, "boundary-content stage delta is not diagnostic-only")
+    _require(delta.get("production_gate") is False, "boundary-content stage delta became a production gate")
+    _require(
+        delta.get("pre_stage") == "pre_high_exact_restored"
+        and delta.get("post_stage") == "post_high_internal_clean",
+        "boundary-content stage-delta ownership drifted",
+    )
+    _require(delta.get("extra_h3_nfe") == 0, "boundary-content stage delta added H3 NFE")
+    _require(delta.get("extra_sampler_lifetimes") == 0, "boundary-content stage delta added a sampler lifetime")
+    _require(delta.get("extra_history_boundaries") == 0, "boundary-content stage delta added a history boundary")
+    _require(delta.get("extra_provider_calls") == 0, "boundary-content stage delta added a provider call")
+    _require(delta.get("extra_vae_calls") == 0, "boundary-content stage delta added a VAE call")
+    global_delta = delta.get("global")
+    tile_delta = delta.get("tiles")
+    ranked_delta = delta.get("tiles_by_post_high_structural_amplification")
+    _require(isinstance(global_delta, dict), "boundary-content stage delta global receipt is missing")
+    for value in global_delta.values():
+        _finite_number(value)
+    _require(isinstance(tile_delta, dict) and set(tile_delta) == expected_tiles, "boundary-content delta tile set drifted")
+    for fields in tile_delta.values():
+        _require(isinstance(fields, dict), "boundary-content delta tile receipt is malformed")
+        for value in fields.values():
+            _finite_number(value)
+    _require(
+        isinstance(ranked_delta, list) and len(ranked_delta) == 16 and set(ranked_delta) == expected_tiles,
+        "boundary-content stage-delta ranked tile identity drifted",
+    )
 
 
 def _validate_frame_gauge_transfer(
@@ -1687,6 +1819,7 @@ def validate_partitioned_runtime_evidence(
         expected_mode=expected_residual_mode,
         expected_result=expected_residual_result,
     )
+    _validate_boundary_content_diagnostics(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
