@@ -17,6 +17,7 @@ from typing import Any
 
 from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
 )
 from .frame_gauge import (
@@ -589,6 +590,105 @@ def _validate_provider_boundary_predictor(window: list[dict[str, Any]]) -> None:
         _require(
             isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
             f"provider-boundary predictor {ranking_name} identity drifted",
+        )
+
+
+def _validate_provider_boundary_predictor_calibration(window: list[dict[str, Any]]) -> None:
+    """Validate optional held-out provider predictor calibration evidence."""
+
+    receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_predictor_calibration"
+    ]
+    if not receipts:
+        return
+    _require(len(receipts) == 1, "provider-boundary calibration must emit exactly one receipt")
+    receipt = receipts[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_CALIBRATION_POLICY,
+        "provider-boundary calibration policy drifted",
+    )
+    _require(receipt.get("diagnostic_only") is True, "provider-boundary calibration mutated into a production path")
+    _require(receipt.get("production_gate") is False, "provider-boundary calibration became a production gate")
+    _require(
+        receipt.get("predictor") == "elementwise_median_centered_lowpass_delta_v1",
+        "provider-boundary calibration predictor drifted",
+    )
+    _require(
+        receipt.get("calibration") == "rolling_held_out_prefix_transitions_v1",
+        "provider-boundary calibration method drifted",
+    )
+    _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary calibration history depth drifted")
+    _require(
+        int(receipt.get("requested_calibration_targets", 0)) == 5,
+        "provider-boundary calibration requested target count drifted",
+    )
+    target_indices = receipt.get("calibration_target_indices")
+    _require(
+        isinstance(target_indices, list)
+        and len(target_indices) == int(receipt.get("calibration_target_count", 0))
+        and len(target_indices) >= 1
+        and all(isinstance(value, int) for value in target_indices),
+        "provider-boundary calibration target indices are malformed",
+    )
+    _require(target_indices == sorted(target_indices), "provider-boundary calibration target order drifted")
+    _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary calibration tile-row count drifted")
+    _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary calibration tile-column count drifted")
+    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary calibration low-pass kernel drifted")
+    _require(receipt.get("extra_h3_nfe") == 0, "provider-boundary calibration added H3 NFE")
+    _require(receipt.get("extra_sampler_lifetimes") == 0, "provider-boundary calibration added a sampler lifetime")
+    _require(receipt.get("extra_history_boundaries") == 0, "provider-boundary calibration added a history boundary")
+    _require(receipt.get("extra_provider_calls") == 0, "provider-boundary calibration added a provider call")
+    _require(receipt.get("extra_vae_calls") == 0, "provider-boundary calibration added a VAE call")
+
+    metric_fields = {
+        "boundary_prediction_error_rms",
+        "historical_prediction_error_rms_median",
+        "historical_prediction_error_rms_max",
+        "boundary_error_over_historical_median",
+        "boundary_error_over_historical_max",
+        "boundary_prediction_error_over_prefix_dispersion",
+        "historical_error_over_prefix_dispersion_median",
+        "historical_error_over_prefix_dispersion_max",
+        "boundary_dispersion_ratio_over_historical_median",
+        "boundary_dispersion_ratio_over_historical_max",
+        "boundary_actual_vs_predictor_cosine",
+        "historical_actual_vs_predictor_cosine_median",
+        "historical_actual_vs_predictor_cosine_min",
+        "boundary_cosine_minus_historical_median",
+        "boundary_projection_gain_on_predictor",
+        "historical_projection_gain_median",
+        "boundary_projection_gain_minus_historical_median",
+    }
+    global_fields = receipt.get("global")
+    _require(isinstance(global_fields, dict), "provider-boundary calibration global receipt is missing")
+    _require(metric_fields <= set(global_fields), "provider-boundary calibration global fields are incomplete")
+    for field in metric_fields:
+        _finite_number(global_fields.get(field))
+
+    expected_tiles = {f"r{row}c{col}" for row in range(4) for col in range(4)}
+    tiles = receipt.get("tiles")
+    _require(isinstance(tiles, dict) and set(tiles) == expected_tiles, "provider-boundary calibration tile set drifted")
+    for tile_id, tile in tiles.items():
+        _require(isinstance(tile, dict), f"provider-boundary calibration tile {tile_id} is malformed")
+        bounds = tile.get("bounds")
+        _require(
+            isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
+            f"provider-boundary calibration tile {tile_id} bounds are malformed",
+        )
+        _require(metric_fields <= set(tile), f"provider-boundary calibration tile {tile_id} fields are incomplete")
+        for field in metric_fields:
+            _finite_number(tile.get(field))
+
+    for ranking_name in (
+        "tiles_by_boundary_error_over_historical_max",
+        "tiles_by_boundary_dispersion_ratio_over_historical_max",
+    ):
+        ranking = receipt.get(ranking_name)
+        _require(
+            isinstance(ranking, list) and len(ranking) == 16 and set(ranking) == expected_tiles,
+            f"provider-boundary calibration {ranking_name} identity drifted",
         )
 
 
@@ -1891,6 +1991,7 @@ def validate_partitioned_runtime_evidence(
     )
     _validate_boundary_content_diagnostics(window)
     _validate_provider_boundary_predictor(window)
+    _validate_provider_boundary_predictor_calibration(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
