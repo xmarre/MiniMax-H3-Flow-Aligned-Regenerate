@@ -536,7 +536,8 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     _require(isinstance(fields, dict), "exact-overlap fallback is missing boundary-motion evidence")
     policy = fields.get("policy")
     _require(
-        policy in (
+        policy
+        in (
             "native_boundary_motion_preservation_v2",
             "native_boundary_motion_consensus_v3",
             "native_boundary_motion_consensus_v4",
@@ -621,8 +622,7 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 f"exact-overlap fallback {name} error-delta summary drifted",
             )
             _require(
-                check.get("within_degradation_bound")
-                is bool(expected_delta <= max_degradation + 1e-12),
+                check.get("within_degradation_bound") is bool(expected_delta <= max_degradation + 1e-12),
                 f"exact-overlap fallback {name} degradation-bound summary drifted",
             )
 
