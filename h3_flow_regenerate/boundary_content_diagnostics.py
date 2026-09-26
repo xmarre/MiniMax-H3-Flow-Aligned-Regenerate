@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import Any
 
 import torch
@@ -496,7 +497,7 @@ def measure_provider_boundary_temporal_predictor(
     height, width = map(int, video.shape[-2:])
     tiles = _tile_bounds(height, width, int(tile_rows), int(tile_cols))
     low = [_lowpass(video[:, :, index], int(lowpass_kernel)) for index in range(prefix_t - pre_steps - 1, prefix_t + 1)]
-    baseline_deltas = [right - left for left, right in zip(low[:pre_steps], low[1 : pre_steps + 1], strict=True)]
+    baseline_deltas = [right - left for left, right in pairwise(low[: pre_steps + 1])]
     actual_delta = low[-1] - low[-2]
 
     global_fields = _predictor_region(
