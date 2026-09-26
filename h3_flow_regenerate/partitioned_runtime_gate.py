@@ -1389,6 +1389,186 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         )
 
 
+    temporal = receipt.get("temporal_support_shadow")
+    _require(isinstance(temporal, dict), "post-high temporal-support shadow is missing")
+    _require(
+        temporal.get("policy") == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+        "post-high temporal-support shadow policy drifted",
+    )
+    _require(temporal.get("diagnostic_only") is True, "post-high temporal-support shadow is not diagnostic-only")
+    _require(temporal.get("production_gate") is False, "post-high temporal-support shadow became a production gate")
+    _require(
+        temporal.get("production_application_permitted") is False,
+        "post-high temporal-support shadow unexpectedly permits production application",
+    )
+    _require(temporal.get("output_mutated") is False, "post-high temporal-support shadow mutated output")
+    _require(
+        temporal.get("candidate_output_discarded") is True,
+        "post-high temporal-support candidate was not discarded",
+    )
+    _require(
+        temporal.get("candidate") == "post_high_soft_support_raised_cosine_temporal_fade_v1",
+        "post-high temporal-support candidate drifted",
+    )
+    _require(
+        temporal.get("temporal_support") == "raised_cosine_fade_to_zero_v1",
+        "post-high temporal-support envelope drifted",
+    )
+    temporal_span = int(temporal.get("temporal_span", -1))
+    _require(temporal_span == 3, "post-high temporal-support span drifted")
+    _require(
+        temporal.get("temporal_span_source") == "provider_predictor_pre_steps",
+        "post-high temporal-support horizon provenance drifted",
+    )
+    corrected_tokens = int(temporal.get("corrected_tokens", -1))
+    _require(0 < corrected_tokens <= temporal_span, "post-high temporal-support corrected-token count is invalid")
+    weights = temporal.get("weights")
+    _require(
+        isinstance(weights, list) and len(weights) == corrected_tokens,
+        "post-high temporal-support weights are malformed",
+    )
+    expected_weights = [
+        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span)))
+        for offset in range(corrected_tokens)
+    ]
+    for actual, expected in zip(weights, expected_weights, strict=True):
+        _require(
+            math.isclose(_finite_number(actual), expected, rel_tol=1e-12, abs_tol=1e-12),
+            "post-high temporal-support weight drifted",
+        )
+    _require(
+        temporal.get("eligible_tiles") == eligible
+        and int(temporal.get("eligible_tile_count", -1)) == len(eligible),
+        "post-high temporal-support eligibility drifted",
+    )
+    temporal_correction_rms = _finite_number(temporal.get("spatial_correction_rms"))
+    temporal_correction_max = _finite_number(temporal.get("spatial_correction_abs_max"))
+    _require(
+        math.isclose(temporal_correction_rms, correction_rms, rel_tol=1e-6, abs_tol=1e-8)
+        and math.isclose(temporal_correction_max, correction_max, rel_tol=1e-6, abs_tol=1e-8),
+        "post-high temporal-support spatial correction no longer matches the measured soft candidate",
+    )
+    transition_order = temporal.get("transition_order")
+    transitions = temporal.get("transitions")
+    _require(
+        isinstance(transition_order, list)
+        and transition_order
+        and transition_order[0] == "prefix_to_suffix0"
+        and isinstance(transitions, dict)
+        and transition_order == list(transitions),
+        "post-high temporal-support transition order is malformed",
+    )
+    _require(
+        len(transition_order) in {corrected_tokens, corrected_tokens + 1},
+        "post-high temporal-support transition coverage drifted",
+    )
+    expected_tiles = {
+        f"r{row}c{col}"
+        for row in range(int(soft.get("tile_rows", -1)))
+        for col in range(int(soft.get("tile_cols", -1)))
+    }
+    selected_centered: list[float] = []
+    selected_gradient: list[float] = []
+    selected_ncc: list[float] = []
+    for index, label in enumerate(transition_order):
+        comparison = transitions.get(label)
+        _require(isinstance(comparison, dict), f"post-high temporal-support transition {label} is missing")
+        expected_left = prefix_t - 1 + index
+        _require(
+            int(comparison.get("left_index", -1)) == expected_left
+            and int(comparison.get("right_index", -1)) == expected_left + 1,
+            f"post-high temporal-support transition {label} indices drifted",
+        )
+        if index == 0:
+            left_weight = 0.0
+            right_weight = expected_weights[0]
+        else:
+            left_weight = expected_weights[index - 1]
+            right_weight = expected_weights[index] if index < corrected_tokens else 0.0
+        _require(
+            math.isclose(_finite_number(comparison.get("left_weight")), left_weight, rel_tol=1e-12, abs_tol=1e-12)
+            and math.isclose(
+                _finite_number(comparison.get("right_weight")),
+                right_weight,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ),
+            f"post-high temporal-support transition {label} weight metadata drifted",
+        )
+        jump_scale = abs(right_weight - left_weight)
+        _require(
+            math.isclose(
+                _finite_number(comparison.get("direct_correction_jump_rms")),
+                jump_scale * temporal_correction_rms,
+                rel_tol=1e-6,
+                abs_tol=1e-8,
+            ),
+            f"post-high temporal-support transition {label} RMS jump drifted",
+        )
+        _require(
+            math.isclose(
+                _finite_number(comparison.get("direct_correction_jump_abs_max")),
+                jump_scale * temporal_correction_max,
+                rel_tol=1e-6,
+                abs_tol=1e-8,
+            ),
+            f"post-high temporal-support transition {label} max jump drifted",
+        )
+        global_fields = comparison.get("global")
+        tile_fields = comparison.get("tiles")
+        ranked = comparison.get("tiles_by_centered_structural_amplification")
+        _require(isinstance(global_fields, dict), f"post-high temporal-support transition {label} global receipt missing")
+        for value in global_fields.values():
+            _finite_number(value)
+        _require(
+            isinstance(tile_fields, dict) and set(tile_fields) == expected_tiles,
+            f"post-high temporal-support transition {label} tile geometry drifted",
+        )
+        for tile_id, fields in tile_fields.items():
+            _require(isinstance(fields, dict), f"post-high temporal-support transition {label}/{tile_id} malformed")
+            for value in fields.values():
+                _finite_number(value)
+            if tile_id in eligible:
+                selected_centered.append(_finite_number(fields["centered_lowpass_rms_after_over_before"]))
+                selected_gradient.append(_finite_number(fields["gradient_rms_after_over_before"]))
+                selected_ncc.append(_finite_number(fields["ncc_after_minus_before"]))
+        _require(
+            isinstance(ranked, list) and len(ranked) == len(expected_tiles) and set(ranked) == expected_tiles,
+            f"post-high temporal-support transition {label} ranking drifted",
+        )
+
+    expected_max_centered = max(selected_centered) if selected_centered else 1.0
+    expected_max_gradient = max(selected_gradient) if selected_gradient else 1.0
+    expected_min_ncc = min(selected_ncc) if selected_ncc else 0.0
+    _require(
+        math.isclose(
+            _finite_number(temporal.get("selected_tile_max_centered_lowpass_ratio")),
+            expected_max_centered,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ),
+        "post-high temporal-support selected-tile centered summary drifted",
+    )
+    _require(
+        math.isclose(
+            _finite_number(temporal.get("selected_tile_max_gradient_ratio")),
+            expected_max_gradient,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ),
+        "post-high temporal-support selected-tile gradient summary drifted",
+    )
+    _require(
+        math.isclose(
+            _finite_number(temporal.get("selected_tile_min_ncc_delta")),
+            expected_min_ncc,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ),
+        "post-high temporal-support selected-tile NCC summary drifted",
+    )
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
