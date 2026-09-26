@@ -224,7 +224,7 @@ def test_boundary_motion_gate_uses_transformed_native_for_competing_motion():
     accepted, fields, reason = _frame_gauge_boundary_motion_check(learned, exact, aligned, prefix_t=4)
 
     assert accepted, reason
-    assert fields["policy"] == "native_boundary_motion_preservation_v2"
+    assert fields["policy"] == "native_boundary_motion_consensus_v3"
     _validate_boundary_motion_receipt(fields)
     for check in fields["checks"].values():
         assert check["candidate"] == check["transformed_native"]
@@ -257,6 +257,93 @@ def test_boundary_motion_v2_validator_rejects_inconsistent_receipts(mutation):
         check["transformed_native"]["response"] = 2.0
     with pytest.raises(RuntimeGateError):
         _validate_boundary_motion_receipt(fields)
+
+
+def _mock_boundary_measurement_sequence(monkeypatch, *, upper_after: float, full_after: float) -> None:
+    values = iter(
+        (
+            # upper45: native, transformed-native, exact-restored, candidate
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (upper_after, 0.0),
+            # full: native, transformed-native, exact-restored, candidate
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (full_after, 0.0),
+        )
+    )
+
+    def fake_measure(*args, **kwargs):
+        del args, kwargs
+        dx, dy = next(values)
+        return {
+            "pairwise_dx": [dx],
+            "pairwise_dy": [dy],
+            "pairwise_response": [10.0],
+            "pairwise_clipped": [False],
+        }
+
+    monkeypatch.setattr(partitioned_scheduler, "measure_translation_trajectory", fake_measure)
+
+
+def test_boundary_motion_consensus_accepts_one_strong_roi_when_all_rois_nondegrade(monkeypatch):
+    _mock_boundary_measurement_sequence(monkeypatch, upper_after=1.8, full_after=0.5)
+    learned = _rigid_textured_video()
+    exact = learned[:, :, :4].clone()
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact,
+        learned.clone(),
+        prefix_t=4,
+    )
+
+    assert accepted, fields
+    assert reason == "accepted"
+    assert fields["policy"] == "native_boundary_motion_consensus_v3"
+    assert fields["acceptance_rule"] == "all_rois_nondegrading_and_any_informative_roi_strong_v1"
+    assert fields["informative_rois"] == ["upper45", "full"]
+    assert fields["strong_improvement_rois"] == ["full"]
+    assert fields["checks"]["upper45"]["error_improvement_ratio"] == pytest.approx(0.1)
+    assert fields["checks"]["full"]["error_improvement_ratio"] == pytest.approx(0.5)
+    _validate_boundary_motion_receipt(fields)
+
+
+def test_boundary_motion_consensus_rejects_when_no_informative_roi_is_strong(monkeypatch):
+    _mock_boundary_measurement_sequence(monkeypatch, upper_after=1.8, full_after=0.8)
+    learned = _rigid_textured_video()
+    exact = learned[:, :, :4].clone()
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact,
+        learned.clone(),
+        prefix_t=4,
+    )
+
+    assert not accepted
+    assert fields["policy"] == "native_boundary_motion_consensus_v3"
+    assert fields["informative_rois"] == ["upper45", "full"]
+    assert fields["strong_improvement_rois"] == []
+    assert reason == "boundary_no_informative_roi_strong_improvement"
+
+
+def test_boundary_motion_consensus_keeps_every_roi_as_nondegradation_veto(monkeypatch):
+    _mock_boundary_measurement_sequence(monkeypatch, upper_after=2.1, full_after=0.5)
+    learned = _rigid_textured_video()
+    exact = learned[:, :, :4].clone()
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact,
+        learned.clone(),
+        prefix_t=4,
+    )
+
+    assert not accepted
+    assert reason == "boundary_upper45_not_improved"
 
 
 def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():
