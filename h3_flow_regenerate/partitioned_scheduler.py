@@ -3129,7 +3129,7 @@ def run_partitioned_progressive(
         exact_overlap_fallback_requested, exact_overlap_fallback_trigger = (
             _partitioned_exact_overlap_fallback_eligibility(frame_gauge_transaction)
             if config.frame_gauge_repair and not frame_gauge_accepted
-            else (False, "rigid_v2_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled")
+            else (False, "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled")
         )
         representation_metrics = disabled_suffix_representation_bridge_metrics(
             prefix_t=stage_plan.prefix_t,
@@ -3167,7 +3167,7 @@ def run_partitioned_progressive(
             learned_clean = frame_gauge_witnesses["learned_native"]
             provider_native_clean = learned_clean
             if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
-                provider_boundary_stabilization_receipt["reason"] = "rigid_v2_selected"
+                provider_boundary_stabilization_receipt["reason"] = "frame_gauge_selected"
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
             corrected_clean = frame_gauge_witnesses["corrected_clean"]
             dc_metrics = frame_gauge_transaction.get("dc_metrics")
