@@ -1201,8 +1201,8 @@ def measure_provider_boundary_post_high_shadow(
     """Re-evaluate the bounded provider hypothesis on the existing post-high clean state.
 
     This diagnostic deliberately performs no sampler/model/provider/VAE work and never returns
-    a mutated tensor.  It exists because 00681 demonstrated that a pre-high shadow improvement
-    is not sufficient evidence that the same perturbation remains beneficial after target-high.
+    a mutated tensor. Hardware validation demonstrated that a pre-high shadow improvement is
+    not sufficient evidence that the same perturbation remains beneficial after target-high.
     """
 
     if video.ndim != 5 or not video.is_floating_point():
@@ -1243,7 +1243,7 @@ def measure_provider_boundary_post_high_shadow(
         "production_gate": False,
         "production_application_permitted": False,
         "output_mutated": False,
-        "reason": "00681_requires_post_high_validation_before_any_provider_boundary_mutation",
+        "reason": "post_high_validation_required_before_any_provider_boundary_mutation",
         "source_stage": "post_high_internal_clean",
         "prefix_t": prefix_t,
         "calibration": calibration,
