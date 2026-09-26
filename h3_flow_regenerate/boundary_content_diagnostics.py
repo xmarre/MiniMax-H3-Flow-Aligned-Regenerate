@@ -13,6 +13,7 @@ _EPS = 1e-12
 BOUNDARY_CONTENT_DIAGNOSTIC_POLICY = "partitioned_boundary_content_continuity_v1"
 PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_predictor_v1"
 PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
+PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -672,6 +673,188 @@ def measure_provider_boundary_temporal_calibration(
         "tiles": tile_fields,
         "tiles_by_boundary_error_over_historical_max": by_max_error,
         "tiles_by_boundary_dispersion_ratio_over_historical_max": by_max_dispersion,
+    }
+
+
+
+def measure_provider_boundary_stabilization_shadow(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    calibration_receipt: dict[str, Any],
+    provider_content_receipt: dict[str, Any],
+    pre_steps: int = 3,
+    tile_rows: int = 4,
+    tile_cols: int = 4,
+    lowpass_kernel: int = 5,
+) -> dict[str, Any]:
+    """Measure a non-mutating first-suffix residual-envelope clamp candidate.
+
+    The shadow candidate is deliberately not a production correction. A tile is
+    eligible only when both its absolute predictor error and its
+    dispersion-normalized predictor error exceed their respective recent
+    held-out maxima. The candidate then shrinks only the prediction residual
+    enough to return both ratios to the tighter historical envelope.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("provider-boundary shadow expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("provider-boundary shadow input contains NaN or Inf")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    if prefix_t < int(pre_steps) + 1 or prefix_t >= temporal:
+        raise ValueError("provider-boundary shadow lacks prefix history or a first suffix frame")
+    if calibration_receipt.get("policy") != PROVIDER_BOUNDARY_CALIBRATION_POLICY:
+        raise ValueError("provider-boundary shadow calibration policy mismatch")
+    if provider_content_receipt.get("policy") != BOUNDARY_CONTENT_DIAGNOSTIC_POLICY:
+        raise ValueError("provider-boundary shadow content policy mismatch")
+    if int(calibration_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("provider-boundary shadow calibration prefix drifted")
+    if int(provider_content_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("provider-boundary shadow content prefix drifted")
+    if int(calibration_receipt.get("pre_steps", -1)) != int(pre_steps):
+        raise ValueError("provider-boundary shadow predictor history drifted")
+    if int(calibration_receipt.get("tile_rows", -1)) != int(tile_rows):
+        raise ValueError("provider-boundary shadow tile-row geometry drifted")
+    if int(calibration_receipt.get("tile_cols", -1)) != int(tile_cols):
+        raise ValueError("provider-boundary shadow tile-column geometry drifted")
+    if int(calibration_receipt.get("lowpass_kernel", -1)) != int(lowpass_kernel):
+        raise ValueError("provider-boundary shadow low-pass kernel drifted")
+
+    height, width = map(int, video.shape[-2:])
+    tiles = _tile_bounds(height, width, int(tile_rows), int(tile_cols))
+    calibration_tiles = calibration_receipt.get("tiles")
+    content_tiles = provider_content_receipt.get("tiles")
+    if not isinstance(calibration_tiles, dict) or set(calibration_tiles) != set(tiles):
+        raise ValueError("provider-boundary shadow calibration tile set drifted")
+    if not isinstance(content_tiles, dict) or set(content_tiles) != set(tiles):
+        raise ValueError("provider-boundary shadow content tile set drifted")
+
+    low = [_lowpass(video[:, :, index], int(lowpass_kernel)) for index in range(prefix_t + 1)]
+    deltas = [right - left for left, right in pairwise(low)]
+    boundary_index = prefix_t - 1
+    boundary_history = deltas[boundary_index - int(pre_steps) : boundary_index]
+    boundary_actual = deltas[boundary_index]
+
+    candidate = video.clone()
+    correction = torch.zeros_like(candidate[:, :, prefix_t], dtype=torch.float32)
+    tile_fields: dict[str, Any] = {}
+    eligible_tiles: list[str] = []
+
+    for tile_id, bounds in tiles.items():
+        y0, y1, x0, x1 = bounds
+        calibration = calibration_tiles[tile_id]
+        error_ratio = float(calibration["boundary_error_over_historical_max"])
+        dispersion_ratio = float(calibration["boundary_dispersion_ratio_over_historical_max"])
+        eligible = error_ratio > 1.0 and dispersion_ratio > 1.0
+        residual_scale = (
+            min(
+                1.0,
+                1.0 / max(error_ratio, _EPS),
+                1.0 / max(dispersion_ratio, _EPS),
+            )
+            if eligible
+            else 1.0
+        )
+
+        baseline = [_centered_region(delta[..., y0:y1, x0:x1]) for delta in boundary_history]
+        actual = _centered_region(boundary_actual[..., y0:y1, x0:x1])
+        predictor = torch.stack(baseline, dim=0).median(dim=0).values
+        prediction_residual = actual - predictor
+        tile_correction = prediction_residual * (1.0 - residual_scale)
+        if eligible:
+            eligible_tiles.append(tile_id)
+            correction[..., y0:y1, x0:x1] = tile_correction
+
+        tile_fields[tile_id] = {
+            "bounds": list(bounds),
+            "eligible": bool(eligible),
+            "boundary_error_over_historical_max": error_ratio,
+            "boundary_dispersion_ratio_over_historical_max": dispersion_ratio,
+            "residual_scale": float(residual_scale),
+            "predicted_error_over_historical_max_after": error_ratio * residual_scale,
+            "predicted_dispersion_ratio_over_historical_max_after": dispersion_ratio * residual_scale,
+            "prediction_residual_rms": _rms(prediction_residual),
+            "shadow_correction_rms": _rms(tile_correction) if eligible else 0.0,
+            "shadow_correction_abs_max": (
+                _finite(tile_correction.abs().max()) if eligible and tile_correction.numel() else 0.0
+            ),
+        }
+
+    candidate[:, :, prefix_t] = candidate[:, :, prefix_t] - correction.to(candidate)
+    candidate_content = measure_boundary_content_continuity(
+        candidate,
+        prefix_t,
+        pre_steps=int(pre_steps),
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+        lowpass_kernel=int(lowpass_kernel),
+    )
+
+    for tile_id in tiles:
+        before = content_tiles[tile_id]["boundary"]
+        after = candidate_content["tiles"][tile_id]["boundary"]
+        tile_fields[tile_id].update(
+            {
+                "provider_centered_lowpass_rms_before": float(before["centered_lowpass_rms"]),
+                "shadow_centered_lowpass_rms_after": float(after["centered_lowpass_rms"]),
+                "shadow_centered_lowpass_rms_ratio": _safe_ratio(
+                    after["centered_lowpass_rms"],
+                    before["centered_lowpass_rms"],
+                ),
+                "provider_gradient_rms_before": float(before["gradient_rms"]),
+                "shadow_gradient_rms_after": float(after["gradient_rms"]),
+                "shadow_gradient_rms_ratio": _safe_ratio(after["gradient_rms"], before["gradient_rms"]),
+                "provider_ncc_before": float(before["ncc"]),
+                "shadow_ncc_after": float(after["ncc"]),
+                "shadow_ncc_delta": float(after["ncc"]) - float(before["ncc"]),
+            }
+        )
+
+    provider_global = provider_content_receipt["global_boundary"]
+    candidate_global = candidate_content["global_boundary"]
+    ranked = sorted(
+        tile_fields,
+        key=lambda tile_id: float(tile_fields[tile_id]["shadow_centered_lowpass_rms_ratio"]),
+    )
+    return {
+        "policy": PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "production_applied": False,
+        "output_mutated": False,
+        "candidate": "heldout_max_prediction_residual_shrink_v1",
+        "eligibility_rule": "absolute_and_dispersion_normalized_error_exceed_heldout_max",
+        "support": "hard_fixed_tile_shadow_only_v1",
+        "prefix_t": prefix_t,
+        "pre_steps": int(pre_steps),
+        "tile_rows": int(tile_rows),
+        "tile_cols": int(tile_cols),
+        "lowpass_kernel": int(lowpass_kernel),
+        "eligible_tiles": eligible_tiles,
+        "eligible_tile_count": len(eligible_tiles),
+        "correction_rms": _rms(correction),
+        "correction_abs_max": _finite(correction.abs().max()) if correction.numel() else 0.0,
+        "global": {
+            "provider_centered_lowpass_rms_before": float(provider_global["centered_lowpass_rms"]),
+            "shadow_centered_lowpass_rms_after": float(candidate_global["centered_lowpass_rms"]),
+            "shadow_centered_lowpass_rms_ratio": _safe_ratio(
+                candidate_global["centered_lowpass_rms"],
+                provider_global["centered_lowpass_rms"],
+            ),
+            "provider_gradient_rms_before": float(provider_global["gradient_rms"]),
+            "shadow_gradient_rms_after": float(candidate_global["gradient_rms"]),
+            "shadow_gradient_rms_ratio": _safe_ratio(
+                candidate_global["gradient_rms"],
+                provider_global["gradient_rms"],
+            ),
+            "provider_ncc_before": float(provider_global["ncc"]),
+            "shadow_ncc_after": float(candidate_global["ncc"]),
+            "shadow_ncc_delta": float(candidate_global["ncc"]) - float(provider_global["ncc"]),
+        },
+        "tiles": tile_fields,
+        "tiles_by_shadow_centered_lowpass_ratio": ranked,
     }
 
 
