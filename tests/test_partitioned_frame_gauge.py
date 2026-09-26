@@ -335,7 +335,7 @@ def test_boundary_motion_consensus_keeps_every_roi_as_nondegradation_veto(monkey
     learned = _rigid_textured_video()
     exact = learned[:, :, :4].clone()
 
-    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+    accepted, _fields, reason = _frame_gauge_boundary_motion_check(
         learned,
         exact,
         learned.clone(),
