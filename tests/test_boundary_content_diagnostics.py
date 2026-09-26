@@ -9,6 +9,7 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -586,6 +587,28 @@ def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_dom
     assert successor["right_index"] == 6
     assert successor["candidate_output_discarded"] is True
     assert set(successor["tiles"]) == {f"r{row}c{col}" for row in range(4) for col in range(4)}
+
+    temporal = receipt["temporal_support_shadow"]
+    assert temporal["policy"] == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY
+    assert temporal["diagnostic_only"] is True
+    assert temporal["production_application_permitted"] is False
+    assert temporal["output_mutated"] is False
+    assert temporal["candidate_output_discarded"] is True
+    assert temporal["temporal_span"] == 3
+    assert temporal["temporal_span_source"] == "provider_predictor_pre_steps"
+    assert temporal["corrected_tokens"] == 2
+    assert temporal["weights"] == pytest.approx([1.0, 0.75])
+    first_successor = temporal["transitions"]["suffix0_to_suffix1"]
+    assert first_successor["direct_correction_jump_rms"] == pytest.approx(
+        0.25 * temporal["spatial_correction_rms"],
+        rel=1e-6,
+        abs=1e-8,
+    )
+    assert first_successor["direct_correction_jump_abs_max"] == pytest.approx(
+        0.25 * temporal["spatial_correction_abs_max"],
+        rel=1e-6,
+        abs=1e-8,
+    )
 
 
 def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
