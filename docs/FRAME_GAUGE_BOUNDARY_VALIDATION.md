@@ -603,12 +603,15 @@ Current behavior is fail-closed:
   hard/soft-support hypotheses on the already-existing
   `post_high_internal_clean` tensor and emits
   `partitioned_provider_boundary_post_high_shadow_v1`;
+- on the discarded post-high candidate, it also measures the adjacent
+  first-suffix -> second-suffix transition before versus after correction, with
+  global and 4x4-tile structural ratios and a ranked amplification list;
 - that post-high path is diagnostic-only, cannot become a production gate, and
   adds zero H3 NFE, provider calls, VAE calls, sampler lifetimes, or history
   boundaries.
 
 No replacement production correction is promoted by this change. A later
 candidate must first demonstrate, on the final high-stage state, both that the
-visible defect is represented by the measured signal and that correcting the
-first boundary does not merely move discontinuity into the next suffix
-transition.
+visible defect is represented by the measured signal and that reducing the
+incoming boundary does not merely move or amplify discontinuity on the
+first-suffix -> second-suffix transition.
