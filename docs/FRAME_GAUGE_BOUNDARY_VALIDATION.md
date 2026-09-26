@@ -429,3 +429,112 @@ The purpose of the next matched hardware run is to determine whether the
 localized 00679 benefit survives a spatially continuous support function and
 whether the direct frontier jump is materially reduced. A production
 stabilizer remains unimplemented until that comparison is measured.
+
+
+## 00680 soft-support shadow result
+
+00680 reproduces the same rejected rigid-v2 and exact-overlap state as the
+previous matched runs. The authoritative exact-prefix hash is unchanged,
+rigid-v2 again rejects on
+`boundary_upper45_insufficient_improvement`, no spatial warp or registered
+guidance reference is published, and the exact-overlap fallback applies from
+the actual provider boundary pair.
+
+The hard stabilization shadow also reproduces 00679: `r2c0` is the only
+eligible 4x4 region and its residual scale remains
+`0.6781307988`.
+
+The new soft-support shadow provides the missing spatial-support evidence. Its
+inside-only raised-cosine taper reduces the measured direct selected/ineligible
+frontier jump from:
+
+- RMS `0.1223239` to **0.0**; and
+- absolute maximum `0.5793642` to **0.0**.
+
+This is not achieved by discarding the correction. The soft candidate retains
+a full-frame correction RMS of about `0.01837` and maximum magnitude about
+`0.35294`. Within `r2c0`, support has mean `0.7363`, maximum `1.0`,
+minimum `0.0`, and nonzero coverage of about `82.0%`.
+
+The tapered candidate retains most of the hard-shadow local benefit:
+
+- centered low-pass boundary RMS changes from `0.302924` provider-native to
+  `0.257208`, a ratio of **0.8491x**;
+- gradient RMS changes from `0.096559` to `0.087962`, a ratio of
+  **0.9110x**;
+- NCC changes from `0.93250` to `0.94441`, a gain of about
+  **+0.01191**.
+
+Relative to the hard-shadow improvement, that is roughly 71% of the centered
+low-pass reduction, 75% of the gradient reduction, and 73% of the NCC gain,
+while the direct measured frontier discontinuity is eliminated.
+
+The taper intentionally does not force the complete tile aggregate back inside
+both held-out maxima. After tapering, `r2c0` has absolute prediction error
+about `1.077x` the held-out maximum and dispersion-normalized error about
+`1.249x` the held-out maximum. This is expected from an inside-only support
+function: edge pixels are attenuated to preserve spatial continuity. Those
+post-taper ratios are therefore observations, not a second threshold that the
+production candidate is allowed to defeat by increasing correction strength.
+
+Globally the soft candidate remains conservative: centered low-pass RMS is
+about `0.99244x` provider-native, gradient RMS about `0.99478x`, and NCC
+improves by about `+0.00085`. The shadow remains non-mutating and adds no H3
+NFE, provider call, VAE call, sampler lifetime, or history boundary.
+
+### Opt-in production candidate
+
+00680 closes the specific evidence gap that blocked a bounded production
+experiment: the calibrated local residual correction remains beneficial after
+introducing continuous spatial support, and the measured fixed-tile frontier
+cost is removed.
+
+The next implementation therefore promotes **only the measured soft-support
+candidate** to an explicit opt-in hardware-validation mode:
+
+`provider_boundary_stabilization=soft_support_v1`
+
+The default remains `off`. No existing workflow or production default is
+silently changed.
+
+The production policy is
+`partitioned_provider_boundary_soft_support_production_v1`. It is eligible
+only when all of the following already-measured conditions hold:
+
+1. the user explicitly selects `soft_support_v1`;
+2. rigid-v2 is rejected;
+3. the rejection belongs to the existing exact-overlap-eligible
+   boundary-motion veto class;
+4. actual provider boundary provenance is available;
+5. the held-out calibration, hard shadow, and soft shadow recomputed from that
+   native provider state reproduce a nonempty eligible region.
+
+The implementation applies the same soft correction to **exactly the first
+generated suffix token in provider-native clean space**, before the existing
+exact-overlap bridge. It does not alter the learned/provider prefix and does
+not extrapolate into later suffix tokens. The conditional sampler state is
+updated through the existing affine clean-to-conditional mapping; no new noise
+draw or sampler/model execution is introduced.
+
+Applying the stabilization before exact-overlap is deliberate. The overlap
+bridge then performs its existing exact-prefix representation reconciliation
+against the already-stabilized provider state, so the exact-prefix boundary
+inherits the stabilized provider-native transition rather than reconstructing
+the original overshoot.
+
+The rejected rigid transaction remains rejected. The production candidate does
+not publish a registered guidance reference and cannot combine with a rejected
+spatial warp. Accepted rigid-v2 transactions and non-overlap-eligible rejection
+classes fail closed without applying provider stabilization.
+
+At runtime the candidate recomputes the same bounded shadow evidence from the
+actual provider-native boundary and requires the reconstructed soft correction
+magnitude to match the measured shadow. The runtime validator additionally
+requires exactly one corrected suffix token, unchanged authoritative-prefix
+ownership, no later-suffix extrapolation, exact-overlap fallback selection, and
+zero extra H3/provider/VAE/sampler/history work.
+
+This is **not yet a default promotion**. The first mutating hardware run must
+verify that the expected clean-domain improvement survives exact-overlap and
+target-high sampling and, critically, that the decoded video improves at the
+visible boundary without introducing a new local artifact.
