@@ -8,8 +8,8 @@ import torch
 from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
-    PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
@@ -25,11 +25,11 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
 from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
+    _validate_provider_boundary_post_high_shadow,
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
     _validate_provider_boundary_stabilization,
-    _validate_provider_boundary_post_high_shadow,
     _validate_provider_boundary_stabilization_shadow,
 )
 
