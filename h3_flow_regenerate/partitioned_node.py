@@ -357,16 +357,16 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             },
         )
         # Append after all prior controls so saved workflow widget positions stay
-        # stable. The historical soft_support_v1 value remains loadable, but 00681
-        # invalidated its pre-high production application; it is now diagnostic-only.
+        # stable. The historical soft_support_v1 value remains loadable, but hardware
+        # validation invalidated its pre-high application; it is now diagnostic-only.
         spec["required"]["provider_boundary_stabilization"] = (
             list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS),
             {
                 "default": PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
                 "tooltip": (
                     "off preserves the current provider boundary exactly. soft_support_v1 is retained "
-                    "for saved-workflow compatibility but is now fail-closed and diagnostic-only: 00681 "
-                    "showed that its pre-high correction was amplified by target-high. When selected, "
+                    "for saved-workflow compatibility but is now fail-closed and diagnostic-only: hardware "
+                    "validation showed its pre-high correction was amplified by target-high. When selected, "
                     "the runtime leaves sampler state unchanged and emits a bounded post-high shadow "
                     "for the next hardware gate."
                 ),
