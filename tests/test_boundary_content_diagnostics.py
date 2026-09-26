@@ -581,7 +581,7 @@ def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_dom
     assert receipt["eligible_tiles"] == receipt["soft_shadow"]["eligible_tiles"]
 
 
-def test_runtime_gate_accepts_fail_closed_00681_receipt_and_post_high_shadow():
+def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
     video = _video_with_local_boundary_change(scale=4.0)
     torch.manual_seed(7013)
     video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
