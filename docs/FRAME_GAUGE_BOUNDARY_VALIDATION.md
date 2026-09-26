@@ -597,7 +597,7 @@ Current behavior is fail-closed:
 - the serialized `soft_support_v1` value remains accepted for workflow
   compatibility, but it no longer mutates provider or sampler state;
 - an eligible `soft_support_v1` run records
-  `reason=disabled_after_00681_post_high_regression`;
+  `reason=disabled_pending_post_high_validation`;
 - the existing exact-overlap path receives the original provider state;
 - after target-high, the runtime re-runs the same held-out calibration and
   hard/soft-support hypotheses on the already-existing
