@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 _EPS = 1e-12
 BOUNDARY_CONTENT_DIAGNOSTIC_POLICY = "partitioned_boundary_content_continuity_v1"
+PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_predictor_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -416,6 +417,124 @@ def measure_boundary_content_continuity(
         "global_boundary_vs_prefix": _comparison(global_boundary, global_baseline),
         "tiles": tile_fields,
         "tiles_by_centered_structural_change": ranked,
+    }
+
+
+
+def _centered_region(value: torch.Tensor) -> torch.Tensor:
+    return value.float() - value.float().mean(dim=(-2, -1), keepdim=True)
+
+
+def _cosine(left: torch.Tensor, right: torch.Tensor) -> float:
+    left_flat = left.float().reshape(-1)
+    right_flat = right.float().reshape(-1)
+    denominator = left_flat.square().sum().sqrt() * right_flat.square().sum().sqrt()
+    if float(denominator.detach().to(device="cpu").item()) <= _EPS:
+        return 1.0 if _rms(left_flat - right_flat) <= _EPS else 0.0
+    return _finite(torch.dot(left_flat, right_flat) / denominator)
+
+
+def _predictor_region(
+    baseline_deltas: list[torch.Tensor],
+    actual_delta: torch.Tensor,
+    bounds: tuple[int, int, int, int],
+) -> dict[str, float]:
+    y0, y1, x0, x1 = bounds
+    baseline = [_centered_region(delta[..., y0:y1, x0:x1]) for delta in baseline_deltas]
+    actual = _centered_region(actual_delta[..., y0:y1, x0:x1])
+    median_delta = torch.stack(baseline, dim=0).median(dim=0).values
+    prediction_error = actual - median_delta
+    baseline_rms = [_rms(delta) for delta in baseline]
+    baseline_dispersion = _median([_rms(delta - median_delta) for delta in baseline])
+    actual_rms = _rms(actual)
+    median_rms = _rms(median_delta)
+    prediction_error_rms = _rms(prediction_error)
+    denominator = median_delta.float().square().sum()
+    projection_gain = (
+        _finite((actual.float() * median_delta.float()).sum() / denominator)
+        if float(denominator.detach().to(device="cpu").item()) > _EPS
+        else 0.0
+    )
+    return {
+        "actual_centered_lowpass_delta_rms": actual_rms,
+        "prefix_median_centered_lowpass_delta_rms": _median(baseline_rms),
+        "predictor_centered_lowpass_delta_rms": median_rms,
+        "prediction_error_rms": prediction_error_rms,
+        "prediction_error_over_prefix_dispersion": _safe_ratio(prediction_error_rms, baseline_dispersion),
+        "prediction_error_over_actual_delta": _safe_ratio(prediction_error_rms, actual_rms),
+        "prefix_dispersion_rms": baseline_dispersion,
+        "actual_vs_predictor_cosine": _cosine(actual, median_delta),
+        "actual_projection_gain_on_predictor": projection_gain,
+    }
+
+
+def measure_provider_boundary_temporal_predictor(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    pre_steps: int = 3,
+    tile_rows: int = 4,
+    tile_cols: int = 4,
+    lowpass_kernel: int = 5,
+) -> dict[str, Any]:
+    """Measure whether the provider's first suffix delta follows recent prefix dynamics."""
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("provider-boundary predictor expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("provider-boundary predictor input contains NaN or Inf")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    pre_steps = int(pre_steps)
+    if pre_steps < 2:
+        raise ValueError("provider-boundary predictor requires at least two baseline transitions")
+    if prefix_t < pre_steps + 1 or prefix_t >= temporal:
+        raise ValueError("provider-boundary predictor lacks prefix history or a first suffix frame")
+    if lowpass_kernel < 1 or lowpass_kernel % 2 == 0:
+        raise ValueError("provider-boundary predictor low-pass kernel must be a positive odd integer")
+
+    height, width = map(int, video.shape[-2:])
+    tiles = _tile_bounds(height, width, int(tile_rows), int(tile_cols))
+    low = [_lowpass(video[:, :, index], int(lowpass_kernel)) for index in range(prefix_t - pre_steps - 1, prefix_t + 1)]
+    baseline_deltas = [right - left for left, right in zip(low[:pre_steps], low[1 : pre_steps + 1], strict=True)]
+    actual_delta = low[-1] - low[-2]
+
+    global_fields = _predictor_region(
+        baseline_deltas,
+        actual_delta,
+        (0, height, 0, width),
+    )
+    tile_fields = {
+        tile_id: {
+            "bounds": list(bounds),
+            **_predictor_region(baseline_deltas, actual_delta, bounds),
+        }
+        for tile_id, bounds in tiles.items()
+    }
+    by_error_ratio = sorted(
+        tile_fields,
+        key=lambda tile_id: float(tile_fields[tile_id]["prediction_error_over_prefix_dispersion"]),
+        reverse=True,
+    )
+    by_error_rms = sorted(
+        tile_fields,
+        key=lambda tile_id: float(tile_fields[tile_id]["prediction_error_rms"]),
+        reverse=True,
+    )
+    return {
+        "policy": PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "predictor": "elementwise_median_centered_lowpass_delta_v1",
+        "prefix_t": prefix_t,
+        "pre_steps": pre_steps,
+        "tile_rows": int(tile_rows),
+        "tile_cols": int(tile_cols),
+        "lowpass_kernel": int(lowpass_kernel),
+        "global": global_fields,
+        "tiles": tile_fields,
+        "tiles_by_prediction_error_ratio": by_error_ratio,
+        "tiles_by_prediction_error_rms": by_error_rms,
     }
 
 
