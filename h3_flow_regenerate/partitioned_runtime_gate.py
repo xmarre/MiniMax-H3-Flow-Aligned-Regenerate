@@ -394,6 +394,7 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
             "native_boundary_motion_preservation_v1",
             "native_boundary_motion_preservation_v2",
             "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
         ),
         "frame-gauge boundary-motion policy drifted",
     )
@@ -403,6 +404,14 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
     _require(min_error == 0.125, "frame-gauge boundary-motion error threshold drifted")
     _require(min_improvement == 0.25, "frame-gauge boundary-motion improvement threshold drifted")
     _require(min_response == 3.0, "frame-gauge boundary-motion response threshold drifted")
+    max_degradation = 0.0
+    if policy == "native_boundary_motion_consensus_v4":
+        max_degradation = _finite_number(fields.get("max_degradation_cells"))
+        _require(max_degradation == 0.0625, "frame-gauge boundary-motion degradation bound drifted")
+        _require(
+            fields.get("degradation_bound_basis") == "frame_gauge_fine_search_quantum_1_over_16_cell",
+            "frame-gauge boundary-motion degradation-bound basis drifted",
+        )
 
     checks = fields.get("checks")
     _require(isinstance(checks, dict), "frame-gauge boundary-motion ROI receipts are missing")
@@ -416,10 +425,29 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
         after_error = _finite_number(check.get("after_error_cells"))
         improvement = _finite_number(check.get("error_improvement_ratio"))
         _require(before_error >= 0.0 and after_error >= 0.0, f"frame-gauge boundary-motion {name} error is negative")
-        _require(
-            after_error <= before_error,
-            f"frame-gauge boundary-motion {name} candidate did not improve",
-        )
+        if policy == "native_boundary_motion_consensus_v4":
+            _require(
+                after_error - before_error <= max_degradation + 1e-12,
+                f"frame-gauge boundary-motion {name} candidate exceeded degradation bound",
+            )
+            _require(
+                math.isclose(
+                    _finite_number(check.get("error_delta_cells")),
+                    after_error - before_error,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                ),
+                f"frame-gauge boundary-motion {name} error-delta summary drifted",
+            )
+            _require(
+                check.get("within_degradation_bound") is True,
+                f"frame-gauge boundary-motion {name} degradation-bound summary drifted",
+            )
+        else:
+            _require(
+                after_error <= before_error,
+                f"frame-gauge boundary-motion {name} candidate did not improve",
+            )
         expected_informative = before_error >= min_error
         _require(
             check.get("informative") is expected_informative,
@@ -429,13 +457,17 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
             informative_rois.append(name)
             if improvement >= min_improvement:
                 strong_rois.append(name)
-            if policy != "native_boundary_motion_consensus_v3":
+            if policy not in ("native_boundary_motion_consensus_v3", "native_boundary_motion_consensus_v4"):
                 _require(
                     improvement >= min_improvement,
                     f"frame-gauge boundary-motion {name} improvement gate failed",
                 )
         variants = ("native", "exact_restored", "candidate")
-        if policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"):
+        if policy in (
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
+        ):
             variants += ("transformed_native",)
         for variant in variants:
             receipt = check.get(variant)
@@ -448,7 +480,11 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                 response >= min_response,
                 f"frame-gauge boundary-motion {name}/{variant} response gate failed",
             )
-        if policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"):
+        if policy in (
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
+        ):
             # Replay the coordinate-domain comparisons rather than trusting
             # summary errors.
             def distance(left, right):
@@ -470,9 +506,14 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                     f"frame-gauge boundary-motion {name} {label} does not reproduce",
                 )
 
-    if policy == "native_boundary_motion_consensus_v3":
+    if policy in ("native_boundary_motion_consensus_v3", "native_boundary_motion_consensus_v4"):
+        expected_rule = (
+            "all_rois_within_one_fine_search_tick_and_any_informative_roi_strong_v1"
+            if policy == "native_boundary_motion_consensus_v4"
+            else "all_rois_nondegrading_and_any_informative_roi_strong_v1"
+        )
         _require(
-            fields.get("acceptance_rule") == "all_rois_nondegrading_and_any_informative_roi_strong_v1",
+            fields.get("acceptance_rule") == expected_rule,
             "frame-gauge consensus acceptance rule drifted",
         )
         _require(
@@ -495,7 +536,11 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     _require(isinstance(fields, dict), "exact-overlap fallback is missing boundary-motion evidence")
     policy = fields.get("policy")
     _require(
-        policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"),
+        policy in (
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
+        ),
         "exact-overlap fallback requires a transformed-native rigid boundary policy",
     )
     _require(fields.get("status") == "rejected", "exact-overlap fallback boundary gate was not rejected")
@@ -508,6 +553,14 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     _require(min_error == 0.125, "exact-overlap fallback boundary error threshold drifted")
     _require(min_improvement == 0.25, "exact-overlap fallback boundary improvement threshold drifted")
     _require(min_response == 3.0, "exact-overlap fallback boundary response threshold drifted")
+    max_degradation = 0.0
+    if policy == "native_boundary_motion_consensus_v4":
+        max_degradation = _finite_number(fields.get("max_degradation_cells"))
+        _require(max_degradation == 0.0625, "exact-overlap fallback degradation bound drifted")
+        _require(
+            fields.get("degradation_bound_basis") == "frame_gauge_fine_search_quantum_1_over_16_cell",
+            "exact-overlap fallback degradation-bound basis drifted",
+        )
 
     checks = fields.get("checks")
     _require(isinstance(checks, dict) and set(checks) == {"upper45", "full"}, "exact-overlap fallback ROI set drifted")
@@ -557,9 +610,13 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 f"exact-overlap fallback {name} {label} does not reproduce",
             )
 
-        if observed_reason is None and after_error > before_error:
-            observed_reason = f"boundary_{name}_not_improved"
-        elif (
+        if observed_reason is None:
+            if policy == "native_boundary_motion_consensus_v4":
+                if after_error - before_error > max_degradation + 1e-12:
+                    observed_reason = f"boundary_{name}_degraded_over_bound"
+            elif after_error > before_error:
+                observed_reason = f"boundary_{name}_not_improved"
+        if (
             observed_reason is None
             and policy == "native_boundary_motion_preservation_v2"
             and informative
@@ -567,9 +624,14 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
         ):
             observed_reason = f"boundary_{name}_insufficient_improvement"
 
-    if policy == "native_boundary_motion_consensus_v3":
+    if policy in ("native_boundary_motion_consensus_v3", "native_boundary_motion_consensus_v4"):
+        expected_rule = (
+            "all_rois_within_one_fine_search_tick_and_any_informative_roi_strong_v1"
+            if policy == "native_boundary_motion_consensus_v4"
+            else "all_rois_nondegrading_and_any_informative_roi_strong_v1"
+        )
         _require(
-            fields.get("acceptance_rule") == "all_rois_nondegrading_and_any_informative_roi_strong_v1",
+            fields.get("acceptance_rule") == expected_rule,
             "exact-overlap consensus acceptance rule drifted",
         )
         if observed_reason is None and informative_rois and not strong_rois:
