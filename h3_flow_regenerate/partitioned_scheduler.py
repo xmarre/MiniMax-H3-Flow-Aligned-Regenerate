@@ -3230,7 +3230,6 @@ def run_partitioned_progressive(
                             "applied" if bool(stabilization_fields.get("applied")) else "no_eligible_provider_region"
                         ),
                         "exact_overlap_fallback_required": True,
-                        "exact_overlap_fallback_trigger": str(exact_overlap_fallback_trigger),
                         "shadow_recomputed_from_native_provider": True,
                         "local_compute_elapsed_ms": (time.perf_counter() - stabilization_started) * 1000.0,
                         "extra_h3_nfe": 0,
@@ -3741,6 +3740,7 @@ def run_partitioned_progressive(
                 "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
             ),
             suffix_dc_bridge_policy="one_token_spatial_mean_v1",
+            provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
             partitioned_exact_overlap_bridge={
                 "policy": PARTITIONED_EXACT_OVERLAP_POLICY,
                 "requested": bool(exact_overlap_fallback_requested),
@@ -3841,6 +3841,7 @@ def run_partitioned_progressive(
         del restored_clean
         del corrected_clean
         del learned_clean
+        del provider_native_clean
         if aligned_witness is not None:
             del aligned_witness
         frame_gauge_witnesses.clear()
