@@ -1011,7 +1011,7 @@ def _partitioned_exact_overlap_fallback_eligibility(
 ) -> tuple[bool, str]:
     """Authorize structural overlap repair only after an unambiguous rigid boundary veto.
 
-    The rigid-v2 transaction remains authoritative.  This fallback is not a
+    The rigid transaction remains authoritative.  This fallback is not a
     weaker registration threshold: it is eligible only when video registration
     accepted, all four boundary-motion witnesses were measurable in both ROIs,
     and the proposed rigid translation was rejected solely because it did not
@@ -1032,7 +1032,10 @@ def _partitioned_exact_overlap_fallback_eligibility(
         not isinstance(boundary, dict)
         or boundary.get("status") != "rejected"
         or str(boundary.get("reason", "")) != reason
-        or boundary.get("policy") != "native_boundary_motion_preservation_v2"
+        or boundary.get("policy") not in {
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+        }
     ):
         return False, "boundary_receipt_inconsistent"
     checks = boundary.get("checks")
