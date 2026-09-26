@@ -611,6 +611,53 @@ def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_dom
     )
 
 
+def test_post_high_temporal_support_shadow_covers_full_fade_and_terminal_return():
+    video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat(
+        [
+            video,
+            video[:, :, -1:].clone(),
+            video[:, :, -1:].clone(),
+            video[:, :, -1:].clone(),
+        ],
+        dim=2,
+    )
+    torch.manual_seed(7014)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    content = measure_boundary_content_continuity(video, 5)
+    before = video.clone()
+
+    receipt = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+
+    assert torch.equal(video, before)
+    temporal = receipt["temporal_support_shadow"]
+    assert temporal["corrected_tokens"] == 3
+    assert temporal["weights"] == pytest.approx([1.0, 0.75, 0.25])
+    assert temporal["transition_order"] == [
+        "prefix_to_suffix0",
+        "suffix0_to_suffix1",
+        "suffix1_to_suffix2",
+        "suffix2_to_suffix3",
+    ]
+    expected_jump_scales = [1.0, 0.25, 0.5, 0.25]
+    for label, scale in zip(temporal["transition_order"], expected_jump_scales, strict=True):
+        transition = temporal["transitions"][label]
+        assert transition["direct_correction_jump_rms"] == pytest.approx(
+            scale * temporal["spatial_correction_rms"],
+            rel=1e-6,
+            abs=1e-8,
+        )
+        assert transition["direct_correction_jump_abs_max"] == pytest.approx(
+            scale * temporal["spatial_correction_abs_max"],
+            rel=1e-6,
+            abs=1e-8,
+        )
+
+
 def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
     video = _video_with_local_boundary_change(scale=4.0)
     video = torch.cat([video, video[:, :, -1:].clone()], dim=2)
