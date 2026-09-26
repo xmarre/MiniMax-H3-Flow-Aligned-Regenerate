@@ -4051,7 +4051,9 @@ def run_partitioned_progressive(
                             )
                         )
                         if not suffix_outside_horizon_preserved:
-                            raise RuntimeError("post-high content stabilization modified suffix outside its fixed horizon")
+                            raise RuntimeError(
+                                "post-high content stabilization modified suffix outside its fixed horizon"
+                            )
 
                         committed_result, committed_shapes = pack_streams((committed_video, final_audio))
                         if committed_shapes != target_shapes:
