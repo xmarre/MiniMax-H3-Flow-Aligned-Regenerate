@@ -19,11 +19,11 @@ from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
-    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
 )
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
@@ -1517,7 +1517,10 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         global_fields = comparison.get("global")
         tile_fields = comparison.get("tiles")
         ranked = comparison.get("tiles_by_centered_structural_amplification")
-        _require(isinstance(global_fields, dict), f"post-high temporal-support transition {label} global receipt missing")
+        _require(
+            isinstance(global_fields, dict),
+            f"post-high temporal-support transition {label} global receipt missing",
+        )
         for value in global_fields.values():
             _finite_number(value)
         _require(
