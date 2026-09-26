@@ -35,10 +35,10 @@ each ROI as a veto while avoiding a false rejection when local object motion
 makes one crop a poor magnitude proxy for a coherent frame-wide gauge offset.
 Video registration and independent guidance registration remain mandatory.
 
-When frame-gauge repair is enabled and rigid-v2 rejects solely because an
-otherwise unambiguous candidate fails one of the native-boundary improvement
-requirements, partitioned exact-prefix continuation has a separate bounded
-fallback. It does **not** convert the rigid transaction into an acceptance:
+When frame-gauge repair is enabled and consensus-v3 rejects solely because an
+otherwise unambiguous candidate fails the native-boundary non-degradation or
+consensus-improvement requirements, partitioned exact-prefix continuation has a
+separate bounded fallback. It does **not** convert the rigid transaction into an acceptance:
 `spatial_warp_applied` remains false and no registered Flow guidance reference
 is published.
 
@@ -52,7 +52,8 @@ provider's immediate native clean-domain transition algebraically:
 `(S + D) - E = S - P`.
 
 Eligibility is fail-closed. The video registration must have accepted, the
-rigid-v2 receipt must contain both `upper45` and `full` checks, and
+current transformed-native receipt must contain both `upper45` and `full`
+checks, and
 `native`, `transformed_native`, `exact_restored`, and `candidate` must
 all be finite, unclipped, and have response at least 3. Ambiguous registration,
 invalid-area, guidance, or other rejection classes keep the existing baseline
