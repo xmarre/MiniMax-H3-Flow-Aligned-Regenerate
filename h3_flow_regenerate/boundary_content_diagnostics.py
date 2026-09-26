@@ -870,7 +870,6 @@ def measure_provider_boundary_stabilization_shadow(
     }
 
 
-
 def _raised_cosine_frontier_support(
     height: int,
     width: int,
@@ -1039,7 +1038,8 @@ def measure_provider_boundary_soft_support_shadow(
                 device=video.device,
             )
             soft_correction += torch.zeros_like(soft_correction).add(
-                support.view(1, 1, height, width) * torch.nn.functional.pad(
+                support.view(1, 1, height, width)
+                * torch.nn.functional.pad(
                     tile_correction,
                     (x0, width - x1, y0, height - y1),
                 )
@@ -1058,9 +1058,7 @@ def measure_provider_boundary_soft_support_shadow(
                 _finite((local_support > 0).float().mean()) if selected and local_support.numel() else 0.0
             ),
             "hard_direct_correction_rms": _rms(tile_correction) if selected else 0.0,
-            "soft_direct_correction_rms": (
-                _rms(soft_correction[..., y0:y1, x0:x1]) if selected else 0.0
-            ),
+            "soft_direct_correction_rms": (_rms(soft_correction[..., y0:y1, x0:x1]) if selected else 0.0),
         }
 
     hard_frontier = _selected_frontier_jump(
