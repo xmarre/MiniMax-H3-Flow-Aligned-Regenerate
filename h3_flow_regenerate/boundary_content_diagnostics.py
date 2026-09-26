@@ -334,6 +334,7 @@ def _compare_pair_candidate(
         "tiles_by_centered_structural_amplification": ranked,
     }
 
+
 def _median(values: list[float]) -> float:
     if not values:
         return 0.0
