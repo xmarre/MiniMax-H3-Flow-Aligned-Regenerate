@@ -305,10 +305,7 @@ def _median(values: list[float]) -> float:
 
 
 def _baseline_summary(pairs: list[dict[str, Any]], *, tile_id: str | None = None) -> dict[str, float]:
-    if tile_id is None:
-        rows = [pair["global"] for pair in pairs]
-    else:
-        rows = [pair["tiles"][tile_id] for pair in pairs]
+    rows = [pair["global"] for pair in pairs] if tile_id is None else [pair["tiles"][tile_id] for pair in pairs]
     keys = [key for key, value in rows[0].items() if key != "bounds" and isinstance(value, (int, float))]
     return {key: _median([float(row[key]) for row in rows]) for key in keys}
 
