@@ -741,10 +741,19 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
     _require(int(receipt.get("pre_steps", 0)) == 3, "provider-boundary stabilization shadow history depth drifted")
     _require(int(receipt.get("tile_rows", 0)) == 4, "provider-boundary stabilization shadow tile-row count drifted")
     _require(int(receipt.get("tile_cols", 0)) == 4, "provider-boundary stabilization shadow tile-column count drifted")
-    _require(int(receipt.get("lowpass_kernel", 0)) == 5, "provider-boundary stabilization shadow low-pass kernel drifted")
+    _require(
+        int(receipt.get("lowpass_kernel", 0)) == 5,
+        "provider-boundary stabilization shadow low-pass kernel drifted",
+    )
     _require(receipt.get("extra_h3_nfe") == 0, "provider-boundary stabilization shadow added H3 NFE")
-    _require(receipt.get("extra_sampler_lifetimes") == 0, "provider-boundary stabilization shadow added a sampler lifetime")
-    _require(receipt.get("extra_history_boundaries") == 0, "provider-boundary stabilization shadow added a history boundary")
+    _require(
+        receipt.get("extra_sampler_lifetimes") == 0,
+        "provider-boundary stabilization shadow added a sampler lifetime",
+    )
+    _require(
+        receipt.get("extra_history_boundaries") == 0,
+        "provider-boundary stabilization shadow added a history boundary",
+    )
     _require(receipt.get("extra_provider_calls") == 0, "provider-boundary stabilization shadow added a provider call")
     _require(receipt.get("extra_vae_calls") == 0, "provider-boundary stabilization shadow added a VAE call")
 
@@ -789,7 +798,10 @@ def _validate_provider_boundary_stabilization_shadow(window: list[dict[str, Any]
             isinstance(bounds, list) and len(bounds) == 4 and all(isinstance(value, int) for value in bounds),
             f"provider-boundary stabilization shadow tile {tile_id} bounds are malformed",
         )
-        _require(tile_metric_fields <= set(tile), f"provider-boundary stabilization shadow tile {tile_id} fields are incomplete")
+        _require(
+            tile_metric_fields <= set(tile),
+            f"provider-boundary stabilization shadow tile {tile_id} fields are incomplete",
+        )
         for field in tile_metric_fields:
             _finite_number(tile.get(field))
         eligible = bool(tile.get("eligible"))
