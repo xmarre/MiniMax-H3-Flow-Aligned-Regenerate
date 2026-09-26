@@ -1292,7 +1292,10 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
     correction_rms = _finite_number(receipt.get("soft_correction_rms"))
     correction_max = _finite_number(receipt.get("soft_correction_abs_max"))
-    _require(\n        correction_rms >= 0.0 and correction_max >= 0.0,\n        "post-high provider-boundary correction summary is invalid",\n    )
+    _require(
+        correction_rms >= 0.0 and correction_max >= 0.0,
+        "post-high provider-boundary correction summary is invalid",
+    )
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
