@@ -7,15 +7,18 @@ import torch
 
 from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_temporal_calibration,
     measure_provider_boundary_temporal_predictor,
 )
 from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
     _validate_provider_boundary_predictor,
+    _validate_provider_boundary_predictor_calibration,
 )
 
 
@@ -164,6 +167,77 @@ def test_runtime_gate_rejects_provider_boundary_predictor_that_claims_production
 
     with pytest.raises(RuntimeGateError, match="production gate"):
         _validate_provider_boundary_predictor([bad])
+
+
+def test_provider_boundary_calibration_matches_smooth_temporal_trend():
+    video = _video_with_local_boundary_change(scale=0.0)
+    before = video.clone()
+
+    receipt = measure_provider_boundary_temporal_calibration(
+        video,
+        5,
+        calibration_targets=1,
+    )
+
+    assert torch.equal(video, before)
+    assert receipt["policy"] == PROVIDER_BOUNDARY_CALIBRATION_POLICY
+    assert receipt["diagnostic_only"] is True
+    assert receipt["production_gate"] is False
+    assert receipt["calibration"] == "rolling_held_out_prefix_transitions_v1"
+    assert receipt["calibration_target_count"] == 1
+    assert receipt["global"]["boundary_prediction_error_rms"] == pytest.approx(0.0, abs=1e-6)
+    assert receipt["global"]["boundary_error_over_historical_max"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_provider_boundary_calibration_localizes_held_out_boundary_surprise():
+    receipt = measure_provider_boundary_temporal_calibration(
+        _video_with_local_boundary_change(scale=2.0),
+        5,
+        calibration_targets=1,
+    )
+
+    assert receipt["tiles_by_boundary_error_over_historical_max"][0] == "r0c0"
+    changed = receipt["tiles"]["r0c0"]
+    quiet = receipt["tiles"]["r3c3"]
+    assert changed["boundary_prediction_error_rms"] > quiet["boundary_prediction_error_rms"]
+    assert changed["boundary_error_over_historical_max"] > quiet["boundary_error_over_historical_max"]
+
+
+def _calibration_event(receipt: dict) -> dict:
+    return {
+        "kind": "partitioned_provider_boundary_predictor_calibration",
+        "fields": {
+            "domain": "model_internal_clean",
+            "owner_before": "learned_provider_prefix",
+            "owner_after": "learned_provider_suffix",
+            "elapsed_ms": 1.0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            **receipt,
+        },
+    }
+
+
+def test_runtime_gate_accepts_provider_boundary_calibration_receipt():
+    torch.manual_seed(7003)
+    video = torch.randn(1, 24, 10, 32, 32, dtype=torch.float32)
+    receipt = measure_provider_boundary_temporal_calibration(video, 9)
+
+    _validate_provider_boundary_predictor_calibration([_calibration_event(receipt)])
+
+
+def test_runtime_gate_rejects_provider_boundary_calibration_that_claims_production_control():
+    torch.manual_seed(7004)
+    video = torch.randn(1, 24, 10, 32, 32, dtype=torch.float32)
+    receipt = measure_provider_boundary_temporal_calibration(video, 9)
+    bad = _calibration_event(copy.deepcopy(receipt))
+    bad["fields"]["production_gate"] = True
+
+    with pytest.raises(RuntimeGateError, match="production gate"):
+        _validate_provider_boundary_predictor_calibration([bad])
 
 
 def _event(stage: str, receipt: dict) -> dict:
