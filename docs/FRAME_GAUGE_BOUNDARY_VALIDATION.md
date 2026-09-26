@@ -10,7 +10,7 @@ provider's transition. Let `P` and `S` be the provider's last prefix and first
 suffix frames, `E` the authoritative last prefix frame, `W` the proposed spatial
 translation, and `M(A, B)` the bounded phase-correlation motion estimate.
 
-Policy `native_boundary_motion_preservation_v2` measures:
+Policy `native_boundary_motion_consensus_v3` measures:
 
 - Before repair: `||M(E, S) - M(P, S)||`.
 - After repair: `||M(E, W(S)) - M(W(P), W(S))||`.
@@ -25,10 +25,14 @@ peak, especially when several motions compete. Comparing the corrected splice
 against `M(P, S)` would count this estimator change as splice error. In particular,
 when `E = W(P)`, the after-repair replacement error must be zero.
 
-The upper-45% and full-frame checks retain the same requirements: unclipped
-estimates with response at least 3, non-increasing replacement error, and at least
-25% improvement when the before-repair error is at least 0.125 target latent
-cells. The transformed-native estimate must also pass the ambiguity checks.
+The upper-45% and full-frame checks retain the same ambiguity and
+non-degradation requirements: every estimate must be unclipped with response at
+least 3, and no ROI may increase replacement error. For informative errors
+(at least 0.125 target latent cells), v3 requires at least one ROI to improve by
+25% or more rather than requiring both crops to clear the same 25% threshold.
+The transformed-native estimate must also pass the ambiguity checks. This keeps
+each ROI as a veto while avoiding a false rejection when local object motion
+makes one crop a poor magnitude proxy for a coherent frame-wide gauge offset.
 Video registration and independent guidance registration remain mandatory.
 
 When frame-gauge repair is enabled and rigid-v2 rejects solely because an
@@ -58,7 +62,7 @@ model evaluation, provider call, VAE decode, random draw, or sampler lifetime.
 
 Receipts report this path separately as
 `partitioned_exact_overlap_structural_plus_dc_v1`. The offline runtime gate
-replays the rigid-v2 boundary arithmetic and requires the recorded fallback
+replays the transformed-native boundary arithmetic and requires the recorded fallback
 trigger to be exactly the rejection that the receipt reproduces.
 
 The gate reuses the already-transformed two-frame witness and adds two bounded
@@ -66,9 +70,10 @@ motion estimates. It adds no model evaluation, provider call, VAE decode, random
 draw, or sampler lifetime. Repair disabled preserves the existing path.
 
 Runtime receipts include `native`, `transformed_native`, `exact_restored`, and
-`candidate` measurements for each region. The offline validator recomputes v2
-errors and improvement from those measurements. Historical v1 receipts retain
-their original interpretation; they cannot establish a v2 acceptance result.
+`candidate` measurements for each region. The offline validator recomputes the
+errors and improvement from those measurements and, for v3, also verifies the
+reported informative and strongly improved ROI sets. Historical v1/v2 receipts
+retain their original interpretation; they cannot establish a v3 acceptance result.
 
 This gate validates geometric replacement consistency. It does not establish
 semantic continuity or decoded-video quality. A successful structural test or
@@ -615,3 +620,52 @@ candidate must first demonstrate, on the final high-stage state, both that the
 visible defect is represented by the measured signal and that reducing the
 incoming boundary does not merely move or amplify discontinuity on the
 first-suffix -> second-suffix transition.
+
+## 00682 final-domain evidence and next bounded candidates
+
+00682 reran the same matched boundary after disabling the failed 00681 pre-high
+production mutation. The serialized `soft_support_v1` selector correctly failed
+closed: no provider or sampler state was mutated, no suffix token was corrected,
+and the exact-overlap fallback received the original provider state. The visible
+frame shift and background-state change nevertheless remained, so the 00681
+mutation was not the cause of either baseline defect.
+
+The rigid estimator again found a coherent target-latent translation near
+`(-0.4375, -0.375)`. The full-frame transformed-native boundary error improved
+from about `1.1988` to `0.7126` cells (about `40.6%`), while the upper-45%
+error improved from about `2.1454` to `1.9967` cells (about `6.9%`). Both
+ROIs were measurable and neither degraded, but v2 rejected because it required
+each informative crop independently to exceed 25%. The decoded boundary still
+showed a large upper-region first-pair displacement. This is the failure mode
+that motivates `native_boundary_motion_consensus_v3`: all ROIs remain strict
+non-degradation/ambiguity vetoes, while a coherent transaction may proceed when
+at least one informative ROI clears the unchanged 25% strong-improvement
+threshold. This changes the aggregation rule, not the threshold.
+
+The final high-stage content evidence also resolves the lifetime question from
+00681. With the failed pre-high mutation disabled, the dominant `r2c0` anomaly
+is already present before target-high and is not materially amplified by the
+high stage: its centered-low-pass post/pre ratio is about `0.974`, gradient
+ratio about `1.006`, and NCC delta about `-0.0079`.
+
+Re-evaluating the same held-out-calibrated soft-support hypothesis directly on
+the final high-stage state again selects only `r2c0`. A discarded one-token
+candidate improves that tile's boundary centered-low-pass RMS by about 16.6%,
+gradient RMS by about 8.5%, and NCC by about +0.014. However, it worsens the
+adjacent first-suffix -> second-suffix transition in the selected tile by about
+9.6% in centered-low-pass RMS. A one-token final-domain correction is therefore
+not production-safe: it reduces the incoming discontinuity by relocating part
+of it to the next temporal boundary.
+
+The follow-up diagnostic keeps exactly the same measured spatial correction and
+4x4 support, but applies it only on a discarded clone with a fixed temporal
+raised-cosine fade. The fade horizon is the existing three-step provider
+predictor history, not a value fitted to 00682. For a complete three-token
+suffix horizon the weights are `[1.0, 0.75, 0.25]`, followed by zero. This
+reduces the direct correction jump on the first successor transition to 25% of
+the one-token jump and exposes every affected adjacent transition, including the
+terminal return to the uncorrected suffix. The diagnostic remains non-mutating
+and adds no H3 NFE, provider call, VAE call, sampler lifetime, or history
+boundary. No final-domain content correction is promoted until this temporal
+support is measured on hardware and decoded media is inspected.
+
