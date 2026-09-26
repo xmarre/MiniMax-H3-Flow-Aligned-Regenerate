@@ -1216,6 +1216,7 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
             "disabled_pending_post_high_validation",
             "exact_overlap_fallback_not_selected",
             "rigid_v2_selected",
+            "frame_gauge_selected",
         },
         "provider-boundary stabilization failed closed for an unknown reason",
     )
