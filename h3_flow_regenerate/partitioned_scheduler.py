@@ -4043,12 +4043,9 @@ def run_partitioned_progressive(
                             final_video[:, :, : stage_plan.prefix_t],
                         ):
                             raise RuntimeError("post-high content stabilization modified the caller-owned exact prefix")
-                        suffix_outside_horizon_preserved = (
-                            correction_stop >= int(final_video.shape[2])
-                            or torch.equal(
-                                committed_video[:, :, correction_stop:],
-                                final_video[:, :, correction_stop:],
-                            )
+                        suffix_outside_horizon_preserved = correction_stop >= int(final_video.shape[2]) or torch.equal(
+                            committed_video[:, :, correction_stop:],
+                            final_video[:, :, correction_stop:],
                         )
                         if not suffix_outside_horizon_preserved:
                             raise RuntimeError(
