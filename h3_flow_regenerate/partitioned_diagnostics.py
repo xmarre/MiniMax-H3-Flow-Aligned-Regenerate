@@ -85,6 +85,15 @@ PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS = (
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
 )
+
+PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY = "h3_flow_partitioned_provider_boundary_stabilization_v1"
+PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF = "off"
+PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT = "soft_support_v1"
+PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS = (
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+)
+
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 
@@ -179,6 +188,16 @@ def normalize_low_probe_execution_source(value: str) -> str:
     return value
 
 
+def normalize_provider_boundary_stabilization(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS:
+        raise ValueError(
+            "provider-boundary stabilization must be one of "
+            f"{PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
 def resolve_partitioned_audio_guided_overlap_mode(model_options: dict[str, Any]) -> tuple[str, str]:
     if PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY not in model_options:
         return PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER, "default_sampler_mask"
@@ -213,6 +232,7 @@ def apply_partitioned_diagnostic_controls(
     av_handoff_source: str = PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
     guidance_trajectory_source: str = PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     low_probe_execution_source: str = PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+    provider_boundary_stabilization: str = PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -228,6 +248,7 @@ def apply_partitioned_diagnostic_controls(
     av_handoff = normalize_av_handoff_source(av_handoff_source)
     guidance_source = normalize_guidance_trajectory_source(guidance_trajectory_source)
     execution_source = normalize_low_probe_execution_source(low_probe_execution_source)
+    boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -255,6 +276,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY, None)
     else:
         transformer_options[PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY] = execution_source
+    if boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+        transformer_options.pop(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY, None)
+    else:
+        transformer_options[PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY] = boundary_stabilization
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -280,6 +305,8 @@ def apply_partitioned_diagnostic_controls(
             fields["guidance_trajectory_source"] = guidance_source
         if execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
             fields["low_probe_execution_source"] = execution_source
+        if boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+            fields["provider_boundary_stabilization"] = boundary_stabilization
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -316,6 +343,10 @@ __all__ = [
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS",
     "PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE",
+    "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY",
+    "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF",
+    "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS",
+    "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -331,6 +362,7 @@ __all__ = [
     "normalize_av_handoff_source",
     "normalize_guidance_trajectory_source",
     "normalize_low_probe_execution_source",
+    "normalize_provider_boundary_stabilization",
     "normalize_prefix_transformer_context",
     "normalize_vdn_linear_diagnostic",
     "resolve_partitioned_audio_guided_overlap_mode",
