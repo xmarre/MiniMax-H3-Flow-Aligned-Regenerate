@@ -1032,7 +1032,8 @@ def _partitioned_exact_overlap_fallback_eligibility(
         not isinstance(boundary, dict)
         or boundary.get("status") != "rejected"
         or str(boundary.get("reason", "")) != reason
-        or boundary.get("policy") not in {
+        or boundary.get("policy")
+        not in {
             "native_boundary_motion_preservation_v2",
             "native_boundary_motion_consensus_v3",
         }
