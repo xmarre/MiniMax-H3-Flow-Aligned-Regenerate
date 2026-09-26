@@ -36,6 +36,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -48,6 +52,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_guidance_trajectory_source,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
+    normalize_provider_boundary_stabilization,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -57,18 +62,25 @@ from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixHandoff,
 )
 from h3_flow_regenerate.partitioned_outer import (
+    _claim_frame_gauge_invocation,
+    _release_frame_gauge_invocation,
     _source_has_audio_velocity_mask_contract,
     partitioned_outer_wrapper,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
+    _prepare_registered_guidance_reference,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
     _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
-from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
+from h3_flow_regenerate.runtime import (
+    FLOW_BINDING_KEY,
+    FlowBinding,
+    flow_model_clone_callback,
+)
 
 
 class _Metrics:
@@ -100,6 +112,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "av_handoff_source" not in ordinary
     assert "guidance_trajectory_source" not in ordinary
     assert "low_probe_execution_source" not in ordinary
+    assert "frame_gauge_repair" not in ordinary
+    assert "provider_boundary_stabilization" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -132,6 +146,12 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
+    assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["provider_boundary_stabilization"][0] == list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS)
+    assert (
+        diagnostic["provider_boundary_stabilization"][1]["default"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+    )
     assert diagnostic["source_mode"][1]["default"] == "scale"
     assert diagnostic["source_scale"][1]["default"] == 0.70
     assert diagnostic["source_width"][1]["default"] == 864
@@ -159,6 +179,9 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("audio_handoff_source") < keys.index("av_handoff_source")
     assert keys.index("av_handoff_source") < keys.index("guidance_trajectory_source")
     assert keys.index("guidance_trajectory_source") < keys.index("low_probe_execution_source")
+    assert keys.index("low_probe_execution_source") < keys.index("frame_gauge_repair")
+    assert keys.index("frame_gauge_repair") < keys.index("frame_gauge_residual_mode")
+    assert keys.index("frame_gauge_residual_mode") < keys.index("provider_boundary_stabilization")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -204,6 +227,54 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
             },
         )
     ]
+
+
+def test_provider_boundary_stabilization_control_is_model_local_and_opt_in():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    )
+
+    assert (
+        model.model_options["transformer_options"][PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY]
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+    )
+    assert metrics.events[-1][1]["provider_boundary_stabilization"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+
+    model = SimpleNamespace(
+        model_options={
+            "transformer_options": {
+                PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY: PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+            }
+        }
+    )
+    apply_partitioned_diagnostic_controls(
+        model,
+        _Metrics(),
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    )
+    assert PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY not in model.model_options["transformer_options"]
+
+
+def test_provider_boundary_stabilization_normalization_is_bounded():
+    assert (
+        normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF)
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+    )
+    assert (
+        normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT)
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+    )
+    with pytest.raises(ValueError, match="provider-boundary stabilization"):
+        normalize_provider_boundary_stabilization("invented")
 
 
 def test_prefix_transformer_context_normalization_is_bounded():
@@ -937,3 +1008,46 @@ def test_low_probe_execution_source_is_bounded_and_model_local():
         candidate_metrics.events[-1][1]["low_probe_execution_source"]
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     )
+
+
+def test_frame_gauge_invocation_guard_rejects_nesting_and_is_clone_local():
+    binding = FlowBinding()
+    assert _claim_frame_gauge_invocation(binding, enabled=False) is False
+    assert binding.frame_gauge_invocation_active is False
+
+    claimed = _claim_frame_gauge_invocation(binding, enabled=True)
+    assert claimed is True
+    assert binding.frame_gauge_invocation_active is True
+    with pytest.raises(RuntimeError, match="nested partitioned frame-gauge"):
+        _claim_frame_gauge_invocation(binding, enabled=True)
+
+    source = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
+    clone = SimpleNamespace(model_options={})
+    flow_model_clone_callback(source, clone)
+    cloned_binding = clone.model_options[FLOW_BINDING_KEY]
+    assert cloned_binding is not binding
+    assert cloned_binding.frame_gauge_invocation_active is False
+    assert cloned_binding.registered_guidance_reference is None
+
+    _release_frame_gauge_invocation(binding, claimed=claimed)
+    assert binding.frame_gauge_invocation_active is False
+
+
+def test_frame_gauge_guidance_rejects_unaudited_sampler_before_registration():
+    registered, fields, reason = _prepare_registered_guidance_reference(
+        run=SimpleNamespace(sampler="sample_euler"),
+        guidance=SimpleNamespace(mode="direction"),
+        exact_prefix=torch.zeros(1, 24, 4, 26, 26),
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=0.25,
+        high_sigmas=torch.tensor([0.5, 0.0]),
+        video_shift=12.0,
+    )
+
+    assert registered is None
+    assert reason == "unsupported_sampler_contract"
+    assert fields["status"] == "rejected"
+    assert fields["sampler"] == "sample_euler"
+    assert fields["supported_samplers"] == ("sample_res_multistep",)
