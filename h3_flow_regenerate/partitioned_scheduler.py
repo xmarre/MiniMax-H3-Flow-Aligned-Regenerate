@@ -18,13 +18,16 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
     compare_boundary_content_stages,
+    evaluate_provider_boundary_temporal_support_production,
     measure_boundary_content_continuity,
     measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
     measure_provider_boundary_temporal_predictor,
+    reconstruct_provider_boundary_temporal_support_candidate,
 )
 from .contracts import H3FlowTrajectory
 from .frame_gauge import (
@@ -3994,6 +3997,118 @@ def run_partitioned_progressive(
                     extra_vae_calls=0,
                     elapsed_ms=(time.perf_counter() - post_high_shadow_started) * 1000.0,
                     **post_high_shadow,
+                )
+
+                temporal_support = post_high_shadow["temporal_support_shadow"]
+                production_gate = evaluate_provider_boundary_temporal_support_production(temporal_support)
+                internal_caller_video_identity_exact = (
+                    final_internal_video.shape == final_video.shape
+                    and final_internal_video.dtype == final_video.dtype
+                    and torch.equal(final_internal_video, final_video.to(device=final_internal_video.device))
+                )
+                production_applied = False
+                production_reason = str(production_gate.get("reason", "temporal_support_gate_rejected"))
+                candidate_receipt: dict[str, Any] | None = None
+                shadow_candidate_commit_exact = False
+                corrected_tokens = 0
+                production_weights: list[float] = []
+                suffix_outside_horizon_preserved = True
+
+                if bool(production_gate.get("accepted")):
+                    if not frame_gauge_accepted:
+                        production_reason = "frame_gauge_not_accepted"
+                    elif residual_mode != "off":
+                        production_reason = "residual_geometry_mode_not_off"
+                    elif not internal_caller_video_identity_exact:
+                        production_reason = "internal_caller_video_identity_not_exact"
+                    else:
+                        candidate_internal_video, candidate_receipt = (
+                            reconstruct_provider_boundary_temporal_support_candidate(
+                                post_high_diagnostic_video,
+                                stage_plan.prefix_t,
+                                soft_shadow_receipt=post_high_shadow["soft_shadow"],
+                                temporal_support_receipt=temporal_support,
+                            )
+                        )
+                        corrected_tokens = int(candidate_receipt["corrected_tokens"])
+                        production_weights = [float(value) for value in candidate_receipt["weights"]]
+                        correction_stop = stage_plan.prefix_t + corrected_tokens
+                        committed_video = final_video.clone()
+                        committed_video[:, :, stage_plan.prefix_t : correction_stop] = candidate_internal_video[
+                            :, :, stage_plan.prefix_t : correction_stop
+                        ].to(committed_video)
+
+                        if not torch.equal(
+                            committed_video[:, :, : stage_plan.prefix_t],
+                            final_video[:, :, : stage_plan.prefix_t],
+                        ):
+                            raise RuntimeError("post-high content stabilization modified the caller-owned exact prefix")
+                        suffix_outside_horizon_preserved = (
+                            correction_stop >= int(final_video.shape[2])
+                            or torch.equal(
+                                committed_video[:, :, correction_stop:],
+                                final_video[:, :, correction_stop:],
+                            )
+                        )
+                        if not suffix_outside_horizon_preserved:
+                            raise RuntimeError("post-high content stabilization modified suffix outside its fixed horizon")
+
+                        committed_result, committed_shapes = pack_streams((committed_video, final_audio))
+                        if committed_shapes != target_shapes:
+                            raise RuntimeError("post-high content stabilization changed caller-visible AV geometry")
+                        committed_internal = _process_latent_in(base_model, committed_result, target_shapes)
+                        committed_internal_video, committed_internal_audio = unpack_streams(
+                            committed_internal,
+                            target_shapes,
+                        )
+                        shadow_candidate_commit_exact = torch.equal(
+                            committed_internal_video[:, :, stage_plan.prefix_t : correction_stop],
+                            candidate_internal_video[:, :, stage_plan.prefix_t : correction_stop].to(
+                                committed_internal_video
+                            ),
+                        )
+                        audio_preserved = torch.equal(committed_internal_audio, final_internal_audio)
+                        if shadow_candidate_commit_exact and audio_preserved:
+                            result = committed_result
+                            final_video = committed_video
+                            final_internal = committed_internal
+                            final_internal_video = committed_internal_video
+                            final_internal_audio = committed_internal_audio
+                            production_applied = True
+                            production_reason = "applied"
+                        elif not shadow_candidate_commit_exact:
+                            production_reason = "caller_domain_commit_not_exact"
+                        else:
+                            production_reason = "audio_roundtrip_not_exact"
+
+                binding.metrics.event(
+                    "partitioned_provider_boundary_post_high_stabilization",
+                    policy=PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+                    requested=True,
+                    mode=provider_boundary_stabilization,
+                    source_stage="post_high_internal_clean",
+                    source_shadow_policy=temporal_support.get("policy"),
+                    applied=production_applied,
+                    reason=production_reason,
+                    production_default_changed=False,
+                    gate=production_gate,
+                    candidate=candidate_receipt,
+                    eligible_tiles=list(temporal_support.get("eligible_tiles", [])),
+                    eligible_tile_count=int(temporal_support.get("eligible_tile_count", 0)),
+                    corrected_tokens=corrected_tokens if production_applied else 0,
+                    weights=production_weights if production_applied else [],
+                    correction_rms=float(temporal_support.get("spatial_correction_rms", 0.0)),
+                    correction_abs_max=float(temporal_support.get("spatial_correction_abs_max", 0.0)),
+                    internal_caller_video_identity_exact=internal_caller_video_identity_exact,
+                    shadow_candidate_commit_exact=shadow_candidate_commit_exact,
+                    authoritative_prefix_modified=False,
+                    later_suffix_outside_horizon_modified=not suffix_outside_horizon_preserved,
+                    audio_modified=False,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_provider_calls=0,
+                    extra_vae_calls=0,
                 )
 
         if diagnostic_audio_control:
