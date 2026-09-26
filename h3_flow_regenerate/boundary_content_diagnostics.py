@@ -303,6 +303,44 @@ def _pair_metrics(
     }
 
 
+def _compare_pair_candidate(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare the same adjacent transition before and after a discarded candidate."""
+
+    def compare_region(before_region: dict[str, Any], after_region: dict[str, Any]) -> dict[str, float]:
+        return {
+            "raw_rms_after_over_before": _safe_ratio(after_region["raw_rms"], before_region["raw_rms"]),
+            "lowpass_rms_after_over_before": _safe_ratio(
+                after_region["lowpass_rms"], before_region["lowpass_rms"]
+            ),
+            "centered_lowpass_rms_after_over_before": _safe_ratio(
+                after_region["centered_lowpass_rms"], before_region["centered_lowpass_rms"]
+            ),
+            "gradient_rms_after_over_before": _safe_ratio(
+                after_region["gradient_rms"], before_region["gradient_rms"]
+            ),
+            "ncc_after_minus_before": float(after_region["ncc"]) - float(before_region["ncc"]),
+        }
+
+    if set(before.get("tiles", {})) != set(after.get("tiles", {})):
+        raise ValueError("discarded candidate pair tile geometry drifted")
+    tiles = {
+        tile_id: compare_region(before["tiles"][tile_id], after["tiles"][tile_id])
+        for tile_id in before["tiles"]
+    }
+    ranked = sorted(
+        tiles,
+        key=lambda tile_id: float(tiles[tile_id]["centered_lowpass_rms_after_over_before"]),
+        reverse=True,
+    )
+    return {
+        "global": compare_region(before["global"], after["global"]),
+        "tiles": tiles,
+        "tiles_by_centered_structural_amplification": ranked,
+    }
+
 def _median(values: list[float]) -> float:
     if not values:
         return 0.0
@@ -1236,6 +1274,49 @@ def measure_provider_boundary_post_high_shadow(
     if hard_shadow.get("eligible_tiles") != soft_shadow.get("eligible_tiles"):
         raise RuntimeError("post-high provider-boundary shadow eligibility drifted")
 
+    successor_transition: dict[str, Any]
+    if prefix_t + 1 < temporal:
+        candidate, _candidate_receipt = apply_provider_boundary_soft_support_stabilization(
+            video,
+            prefix_t,
+            soft_shadow_receipt=soft_shadow,
+        )
+        if not torch.equal(video, video):
+            raise RuntimeError("post-high provider-boundary shadow source changed unexpectedly")
+        height, width = map(int, video.shape[-2:])
+        tiles = _tile_bounds(height, width, 4, 4)
+        before_pair = _pair_metrics(
+            video[:, :, prefix_t],
+            video[:, :, prefix_t + 1],
+            lowpass_kernel=5,
+            radius=3,
+            min_similarity=0.35,
+            min_margin=0.02,
+            tiles=tiles,
+        )
+        after_pair = _pair_metrics(
+            candidate[:, :, prefix_t],
+            candidate[:, :, prefix_t + 1],
+            lowpass_kernel=5,
+            radius=3,
+            min_similarity=0.35,
+            min_margin=0.02,
+            tiles=tiles,
+        )
+        successor_transition = {
+            "available": True,
+            "left_index": prefix_t,
+            "right_index": prefix_t + 1,
+            "candidate_output_discarded": True,
+            **_compare_pair_candidate(before_pair, after_pair),
+        }
+    else:
+        successor_transition = {
+            "available": False,
+            "reason": "no_second_suffix_token",
+            "candidate_output_discarded": True,
+        }
+
     return {
         "policy": PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
         "diagnostic_only": True,
@@ -1252,6 +1333,7 @@ def measure_provider_boundary_post_high_shadow(
         "eligible_tile_count": int(soft_shadow.get("eligible_tile_count", 0)),
         "soft_correction_rms": float(soft_shadow.get("soft_correction_rms", 0.0)),
         "soft_correction_abs_max": float(soft_shadow.get("soft_correction_abs_max", 0.0)),
+        "successor_transition": successor_transition,
     }
 
 
