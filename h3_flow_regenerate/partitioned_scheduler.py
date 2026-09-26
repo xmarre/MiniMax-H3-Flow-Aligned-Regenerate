@@ -78,6 +78,10 @@ from .partitioned_diagnostics import (
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
+from .boundary_content_diagnostics import (
+    compare_boundary_content_stages,
+    measure_boundary_content_continuity,
+)
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStageRuntime,
@@ -2964,6 +2968,8 @@ def run_partitioned_progressive(
 
         split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
+        boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
+        boundary_content_pre_high_receipt: dict[str, Any] | None = None
         pending_registered_reference = None
         frame_gauge_witnesses: dict[str, torch.Tensor] = {}
         residual_evidence_tensors: dict[str, torch.Tensor] = {}
@@ -3331,6 +3337,48 @@ def run_partitioned_progressive(
 
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
+
+        if boundary_content_diagnostic_enabled:
+            boundary_content_started = time.perf_counter()
+            provider_receipt = measure_boundary_content_continuity(
+                learned_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="provider_native",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_receipt,
+            )
+            boundary_content_started = time.perf_counter()
+            boundary_content_pre_high_receipt = measure_boundary_content_continuity(
+                restored_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="pre_high_exact_restored",
+                domain="model_internal_clean",
+                owner_before="authoritative_exact_prefix",
+                owner_after="corrected_learned_suffix",
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **boundary_content_pre_high_receipt,
+            )
+            binding.metrics.increment("partitioned_boundary_content_diagnostic_runs")
+
         if residual_mode == "measure" and frame_gauge_accepted:
             evidence_start = max(0, stage_plan.prefix_t - 6)
             evidence_stop = min(int(learned_clean.shape[2]), stage_plan.prefix_t + 4)
@@ -3653,7 +3701,11 @@ def run_partitioned_progressive(
         final_internal = None
         final_internal_video = None
         final_internal_audio = None
-        if diagnostic_audio_control or (residual_mode == "measure" and frame_gauge_accepted):
+        if (
+            diagnostic_audio_control
+            or (residual_mode == "measure" and frame_gauge_accepted)
+            or boundary_content_diagnostic_enabled
+        ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
         if residual_mode == "measure" and frame_gauge_accepted:
@@ -3708,6 +3760,59 @@ def run_partitioned_progressive(
                     provenance="existing_post_high_output",
                 )
             )
+        if boundary_content_diagnostic_enabled:
+            if final_internal_video is None or boundary_content_pre_high_receipt is None:
+                raise RuntimeError("boundary-content diagnostic lost its common-domain operands")
+            post_high_diagnostic_video = final_internal_video
+            final_internal_prefix = post_high_diagnostic_video[:, :, : stage_plan.prefix_t]
+            prefix_recanonicalized = not (
+                final_internal_prefix.shape == exact_prefix.shape
+                and final_internal_prefix.dtype == exact_prefix.dtype
+                and torch.equal(
+                    final_internal_prefix,
+                    exact_prefix.to(device=final_internal_prefix.device),
+                )
+            )
+            if prefix_recanonicalized:
+                post_high_diagnostic_video = post_high_diagnostic_video.clone()
+                post_high_diagnostic_video[:, :, : stage_plan.prefix_t] = exact_prefix.to(
+                    post_high_diagnostic_video
+                )
+            boundary_content_started = time.perf_counter()
+            post_high_receipt = measure_boundary_content_continuity(
+                post_high_diagnostic_video,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="post_high_internal_clean",
+                domain="model_internal_clean",
+                owner_before="authoritative_exact_prefix",
+                owner_after="post_high_generated_suffix",
+                prefix_recanonicalized_for_diagnostic=prefix_recanonicalized,
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **post_high_receipt,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_stage_delta",
+                pre_stage="pre_high_exact_restored",
+                post_stage="post_high_internal_clean",
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **compare_boundary_content_stages(
+                    boundary_content_pre_high_receipt,
+                    post_high_receipt,
+                ),
+            )
+
         if diagnostic_audio_control:
             if final_internal is None or final_internal_audio is None:
                 raise RuntimeError("audio diagnostics lost the converted final sampler state")
