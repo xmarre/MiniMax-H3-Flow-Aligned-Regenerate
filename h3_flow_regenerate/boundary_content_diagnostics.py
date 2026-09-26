@@ -12,6 +12,7 @@ import torch.nn.functional as F
 _EPS = 1e-12
 BOUNDARY_CONTENT_DIAGNOSTIC_POLICY = "partitioned_boundary_content_continuity_v1"
 PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_predictor_v1"
+PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -535,6 +536,150 @@ def measure_provider_boundary_temporal_predictor(
         "tiles": tile_fields,
         "tiles_by_prediction_error_ratio": by_error_ratio,
         "tiles_by_prediction_error_rms": by_error_rms,
+    }
+
+
+
+def _calibration_region_summary(
+    history_rows: list[dict[str, float]],
+    boundary: dict[str, float],
+) -> dict[str, float]:
+    if not history_rows:
+        raise ValueError("provider-boundary calibration requires historical predictor rows")
+    historical_errors = [row["prediction_error_rms"] for row in history_rows]
+    historical_error_ratios = [row["prediction_error_over_prefix_dispersion"] for row in history_rows]
+    historical_cosines = [row["actual_vs_predictor_cosine"] for row in history_rows]
+    historical_gains = [row["actual_projection_gain_on_predictor"] for row in history_rows]
+    error_median = _median(historical_errors)
+    error_max = max(historical_errors)
+    ratio_median = _median(historical_error_ratios)
+    ratio_max = max(historical_error_ratios)
+    cosine_median = _median(historical_cosines)
+    cosine_min = min(historical_cosines)
+    gain_median = _median(historical_gains)
+    return {
+        "boundary_prediction_error_rms": float(boundary["prediction_error_rms"]),
+        "historical_prediction_error_rms_median": error_median,
+        "historical_prediction_error_rms_max": error_max,
+        "boundary_error_over_historical_median": _safe_ratio(boundary["prediction_error_rms"], error_median),
+        "boundary_error_over_historical_max": _safe_ratio(boundary["prediction_error_rms"], error_max),
+        "boundary_prediction_error_over_prefix_dispersion": float(
+            boundary["prediction_error_over_prefix_dispersion"]
+        ),
+        "historical_error_over_prefix_dispersion_median": ratio_median,
+        "historical_error_over_prefix_dispersion_max": ratio_max,
+        "boundary_dispersion_ratio_over_historical_median": _safe_ratio(
+            boundary["prediction_error_over_prefix_dispersion"],
+            ratio_median,
+        ),
+        "boundary_dispersion_ratio_over_historical_max": _safe_ratio(
+            boundary["prediction_error_over_prefix_dispersion"],
+            ratio_max,
+        ),
+        "boundary_actual_vs_predictor_cosine": float(boundary["actual_vs_predictor_cosine"]),
+        "historical_actual_vs_predictor_cosine_median": cosine_median,
+        "historical_actual_vs_predictor_cosine_min": cosine_min,
+        "boundary_cosine_minus_historical_median": float(boundary["actual_vs_predictor_cosine"])
+        - cosine_median,
+        "boundary_projection_gain_on_predictor": float(boundary["actual_projection_gain_on_predictor"]),
+        "historical_projection_gain_median": gain_median,
+        "boundary_projection_gain_minus_historical_median": float(
+            boundary["actual_projection_gain_on_predictor"]
+        )
+        - gain_median,
+    }
+
+
+def measure_provider_boundary_temporal_calibration(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    pre_steps: int = 3,
+    calibration_targets: int = 5,
+    tile_rows: int = 4,
+    tile_cols: int = 4,
+    lowpass_kernel: int = 5,
+) -> dict[str, Any]:
+    """Calibrate the first-suffix predictor against recent held-out prefix transitions."""
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("provider-boundary calibration expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("provider-boundary calibration input contains NaN or Inf")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    pre_steps = int(pre_steps)
+    calibration_targets = int(calibration_targets)
+    if pre_steps < 2:
+        raise ValueError("provider-boundary calibration requires at least two predictor history transitions")
+    if calibration_targets < 1:
+        raise ValueError("provider-boundary calibration requires at least one historical target")
+    if prefix_t < pre_steps + 2 or prefix_t >= temporal:
+        raise ValueError("provider-boundary calibration lacks prefix history or a first suffix frame")
+    if lowpass_kernel < 1 or lowpass_kernel % 2 == 0:
+        raise ValueError("provider-boundary calibration low-pass kernel must be a positive odd integer")
+
+    height, width = map(int, video.shape[-2:])
+    tiles = _tile_bounds(height, width, int(tile_rows), int(tile_cols))
+    low = [_lowpass(video[:, :, index], int(lowpass_kernel)) for index in range(prefix_t + 1)]
+    deltas = [right - left for left, right in pairwise(low)]
+    boundary_index = prefix_t - 1
+    boundary_history = deltas[boundary_index - pre_steps : boundary_index]
+    boundary_actual = deltas[boundary_index]
+
+    first_target = max(pre_steps, boundary_index - calibration_targets)
+    target_indices = list(range(first_target, boundary_index))
+    if not target_indices:
+        raise ValueError("provider-boundary calibration found no held-out prefix transitions")
+
+    bounds_by_id: dict[str, tuple[int, int, int, int]] = {"global": (0, height, 0, width), **tiles}
+    regions: dict[str, Any] = {}
+    for region_id, bounds in bounds_by_id.items():
+        boundary_row = _predictor_region(boundary_history, boundary_actual, bounds)
+        historical_rows = [
+            _predictor_region(
+                deltas[target_index - pre_steps : target_index],
+                deltas[target_index],
+                bounds,
+            )
+            for target_index in target_indices
+        ]
+        fields = _calibration_region_summary(historical_rows, boundary_row)
+        if region_id != "global":
+            fields = {"bounds": list(bounds), **fields}
+        regions[region_id] = fields
+
+    tile_fields = {tile_id: regions[tile_id] for tile_id in tiles}
+    by_max_error = sorted(
+        tile_fields,
+        key=lambda tile_id: float(tile_fields[tile_id]["boundary_error_over_historical_max"]),
+        reverse=True,
+    )
+    by_max_dispersion = sorted(
+        tile_fields,
+        key=lambda tile_id: float(
+            tile_fields[tile_id]["boundary_dispersion_ratio_over_historical_max"]
+        ),
+        reverse=True,
+    )
+    return {
+        "policy": PROVIDER_BOUNDARY_CALIBRATION_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "predictor": "elementwise_median_centered_lowpass_delta_v1",
+        "calibration": "rolling_held_out_prefix_transitions_v1",
+        "prefix_t": prefix_t,
+        "pre_steps": pre_steps,
+        "requested_calibration_targets": calibration_targets,
+        "calibration_target_indices": target_indices,
+        "calibration_target_count": len(target_indices),
+        "tile_rows": int(tile_rows),
+        "tile_cols": int(tile_cols),
+        "lowpass_kernel": int(lowpass_kernel),
+        "global": regions["global"],
+        "tiles": tile_fields,
+        "tiles_by_boundary_error_over_historical_max": by_max_error,
+        "tiles_by_boundary_dispersion_ratio_over_historical_max": by_max_dispersion,
     }
 
 
