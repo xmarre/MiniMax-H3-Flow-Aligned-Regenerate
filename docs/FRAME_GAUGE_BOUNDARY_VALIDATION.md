@@ -131,3 +131,81 @@ evidence, but when they are present it requires all three stages, exactly one
 pre/post stage delta, the fixed diagnostic policy/geometry, finite metrics, and
 zero extra model/provider/VAE/sampler/history work. It also requires
 `diagnostic_only=true` and `production_gate=false`.
+
+
+## 00676 fallback validation and provider-native localization
+
+00676 reproduces the original 00674 exact-prefix realization byte-for-byte at
+the authoritative prefix hash and therefore exercises the rejected rigid-v2 arm
+that selected the exact-overlap fallback.
+
+The rigid transaction rejects for the same
+`boundary_upper45_insufficient_improvement` reason. The exact-overlap fallback
+then applies from the actual provider boundary pair, modifies exactly one suffix
+token, leaves the authoritative prefix and later suffix untouched, and adds no
+model/provider/VAE/sampler/history work. On the clean transfer receipt the
+corrected boundary returns to the provider-native seam exactly for raw RMS and
+low-pass RMS, with the spatial-mean ratio equal to numerical precision. This is
+the expected algebraic result of preserving `S - P` after replacing `P` with
+`E`.
+
+The content-continuity diagnostic localizes the remaining problem one layer
+earlier than the exact-prefix replacement. Globally, the provider-native
+boundary is not unusually large relative to the previous three provider-prefix
+transitions, but the fixed regional grid exposes strong local outliers. In
+00676, tile `r2c0` has a centered low-pass boundary residual about 2.16 times
+its recent local prefix median; `r1c1`, `r2c2`, `r2c1`, and `r3c1` are
+also elevated.
+
+Crucially, the pre-high exact-restored boundary has the same raw, low-pass and
+centered-low-pass boundary magnitudes as the provider-native transition to
+floating-point precision, and it preserves the same leading anomalous regions.
+The exact-overlap bridge is therefore faithfully carrying the learned
+provider's immediate transition rather than creating the localized structural
+change.
+
+The high stage does not explain the dominant anomaly either. The global
+centered-low-pass boundary residual decreases slightly from pre-high to
+post-high, while the dominant `r2c0` region also decreases modestly. The high
+stage amplifies several other regions by smaller amounts, so it can modulate the
+boundary, but 00676 does not support treating it as the origin of the principal
+localized discontinuity.
+
+The local correspondence branch is not suitable as a production transport
+signal in this evidence. More than 98% of candidate positions are ambiguous in
+the boundary-content receipts and cycle-supported unique correspondence is
+near zero. These fields remain useful as negative evidence against broad
+cross-prefix transport; they are not used to move content.
+
+### Provider-native temporal predictor
+
+The next diagnostic layer is
+`partitioned_provider_boundary_temporal_predictor_v1`. It remains
+observation-only and runs on the learned provider's native clean trajectory
+before exact-prefix replacement.
+
+For each global region and fixed 4x4 tile, it forms the previous three
+low-pass provider deltas, removes per-channel spatial DC inside that region,
+and takes their elementwise median as a conservative recent-motion predictor.
+The actual first-suffix delta is then compared with that predictor. Receipts
+report:
+
+- actual and predicted centered low-pass delta RMS;
+- prediction-error RMS;
+- prediction error relative to recent prefix-delta dispersion and to the actual
+  boundary delta;
+- cosine similarity between the actual and predicted delta directions;
+- projection gain of the actual delta on the predicted direction;
+- tile rankings by absolute prediction error and by error relative to recent
+  temporal dispersion.
+
+This predictor does not create a correction or candidate output. Its purpose is
+to distinguish a legitimate continuation of recent provider dynamics from a
+first-suffix state change that is both locally large and inconsistent in
+direction with the immediately preceding provider trajectory. Only after that
+evidence exists should a bounded provider-native stabilization be designed.
+
+The runtime gate treats predictor receipts as optional for historical evidence.
+When present, it requires one receipt, the fixed predictor policy and geometry,
+finite global/tile metrics, complete 4x4 rankings, diagnostic-only ownership,
+and zero extra H3 NFE/provider/VAE/sampler/history work.
