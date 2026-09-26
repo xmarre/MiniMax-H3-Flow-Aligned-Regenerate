@@ -1348,11 +1348,12 @@ def apply_provider_boundary_soft_support_stabilization(
     *,
     soft_shadow_receipt: dict[str, Any],
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Apply exactly the measured soft-support candidate to the first suffix token.
+    """Reconstruct exactly the measured soft-support candidate on a cloned tensor.
 
-    This is a bounded opt-in production candidate. Eligibility, residual scale,
-    geometry, and support are inherited byte-for-byte from the preceding shadow
-    receipt; no additional threshold is introduced here.
+    Eligibility, residual scale, geometry, and support are inherited byte-for-byte
+    from the preceding shadow receipt. The scheduler no longer uses this helper to
+    mutate production state; it remains available for bounded shadow reconstruction
+    and historical contract tests.
     """
 
     if video.ndim != 5 or not video.is_floating_point():
