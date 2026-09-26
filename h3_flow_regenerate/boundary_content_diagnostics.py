@@ -746,7 +746,15 @@ def measure_provider_boundary_stabilization_shadow(
         calibration = calibration_tiles[tile_id]
         error_ratio = float(calibration["boundary_error_over_historical_max"])
         dispersion_ratio = float(calibration["boundary_dispersion_ratio_over_historical_max"])
-        eligible = error_ratio > 1.0 and dispersion_ratio > 1.0
+        boundary_error_rms = float(calibration["boundary_prediction_error_rms"])
+        historical_error_max = float(calibration["historical_prediction_error_rms_max"])
+        min_signal_rms = 1e-6
+        eligible = (
+            boundary_error_rms > min_signal_rms
+            and historical_error_max > min_signal_rms
+            and error_ratio > 1.0
+            and dispersion_ratio > 1.0
+        )
         residual_scale = (
             min(
                 1.0,
@@ -769,6 +777,9 @@ def measure_provider_boundary_stabilization_shadow(
         tile_fields[tile_id] = {
             "bounds": list(bounds),
             "eligible": bool(eligible),
+            "boundary_prediction_error_rms": boundary_error_rms,
+            "historical_prediction_error_rms_max": historical_error_max,
+            "min_signal_rms": min_signal_rms,
             "boundary_error_over_historical_max": error_ratio,
             "boundary_dispersion_ratio_over_historical_max": dispersion_ratio,
             "residual_scale": float(residual_scale),
@@ -824,7 +835,8 @@ def measure_provider_boundary_stabilization_shadow(
         "production_applied": False,
         "output_mutated": False,
         "candidate": "heldout_max_prediction_residual_shrink_v1",
-        "eligibility_rule": "absolute_and_dispersion_normalized_error_exceed_heldout_max",
+        "eligibility_rule": "finite_signal_and_absolute_and_dispersion_error_exceed_heldout_max",
+        "min_signal_rms": 1e-6,
         "support": "hard_fixed_tile_shadow_only_v1",
         "prefix_t": prefix_t,
         "pre_steps": int(pre_steps),
