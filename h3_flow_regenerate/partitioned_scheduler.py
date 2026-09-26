@@ -3775,9 +3775,7 @@ def run_partitioned_progressive(
             )
             if prefix_recanonicalized:
                 post_high_diagnostic_video = post_high_diagnostic_video.clone()
-                post_high_diagnostic_video[:, :, : stage_plan.prefix_t] = exact_prefix.to(
-                    post_high_diagnostic_video
-                )
+                post_high_diagnostic_video[:, :, : stage_plan.prefix_t] = exact_prefix.to(post_high_diagnostic_video)
             boundary_content_started = time.perf_counter()
             post_high_receipt = measure_boundary_content_continuity(
                 post_high_diagnostic_video,
