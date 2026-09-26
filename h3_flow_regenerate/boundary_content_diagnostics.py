@@ -1652,7 +1652,6 @@ def apply_provider_boundary_soft_support_stabilization(
     }
 
 
-
 def evaluate_provider_boundary_temporal_support_production(
     temporal_support_receipt: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1807,10 +1806,7 @@ def evaluate_provider_boundary_temporal_support_production(
         global_centered_ratio = float(global_fields["centered_lowpass_rms_after_over_before"])
         global_gradient_ratio = float(global_fields["gradient_rms_after_over_before"])
         global_ncc_delta = float(global_fields["ncc_after_minus_before"])
-        if not all(
-            math.isfinite(value)
-            for value in (global_centered_ratio, global_gradient_ratio, global_ncc_delta)
-        ):
+        if not all(math.isfinite(value) for value in (global_centered_ratio, global_gradient_ratio, global_ncc_delta)):
             raise ValueError("temporal-support production gate received non-finite global downstream evidence")
         global_centered_collateral += max(0.0, global_centered_ratio - 1.0)
         global_gradient_collateral += max(0.0, global_gradient_ratio - 1.0)
