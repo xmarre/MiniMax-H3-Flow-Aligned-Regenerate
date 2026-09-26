@@ -3119,6 +3119,21 @@ def run_partitioned_progressive(
         )
         splice_started = time.perf_counter()
         aligned_witness = None
+        provider_native_clean: torch.Tensor | None = None
+        provider_boundary_stabilization_receipt: dict[str, Any] = {
+            "requested": provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+            "mode": provider_boundary_stabilization,
+            "applied": False,
+            "reason": "off" if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF else "not_evaluated",
+            "authoritative_prefix_modified": False,
+            "later_suffix_extrapolated": False,
+            "corrected_tokens": 0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
         if frame_gauge_accepted:
             required_witnesses = {
                 "learned_native",
@@ -3128,6 +3143,9 @@ def run_partitioned_progressive(
             if not required_witnesses.issubset(frame_gauge_witnesses):
                 raise RuntimeError("accepted frame-gauge transaction lost required clean-domain witnesses")
             learned_clean = frame_gauge_witnesses["learned_native"]
+            provider_native_clean = learned_clean
+            if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                provider_boundary_stabilization_receipt["reason"] = "rigid_v2_selected"
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
             corrected_clean = frame_gauge_witnesses["corrected_clean"]
             dc_metrics = frame_gauge_transaction.get("dc_metrics")
@@ -3143,6 +3161,7 @@ def run_partitioned_progressive(
                 sigma=sigma,
                 seed=diagnostic_seed,
             )
+            provider_native_clean = learned_clean
             if exact_overlap_fallback_requested:
                 learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
                 if learned_boundary_pair is None:
@@ -3160,6 +3179,64 @@ def run_partitioned_progressive(
                 learned_clean[:, :, stage_plan.prefix_t - 1 : stage_plan.prefix_t + 1] = learned_boundary_pair.to(
                     learned_clean
                 )
+                provider_native_clean = learned_clean
+
+                if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
+                    stabilization_started = time.perf_counter()
+                    production_provider_receipt = measure_boundary_content_continuity(
+                        provider_native_clean,
+                        stage_plan.prefix_t,
+                    )
+                    production_calibration_receipt = measure_provider_boundary_temporal_calibration(
+                        provider_native_clean,
+                        stage_plan.prefix_t,
+                    )
+                    production_hard_shadow_receipt = measure_provider_boundary_stabilization_shadow(
+                        provider_native_clean,
+                        stage_plan.prefix_t,
+                        calibration_receipt=production_calibration_receipt,
+                        provider_content_receipt=production_provider_receipt,
+                    )
+                    production_soft_shadow_receipt = measure_provider_boundary_soft_support_shadow(
+                        provider_native_clean,
+                        stage_plan.prefix_t,
+                        calibration_receipt=production_calibration_receipt,
+                        provider_content_receipt=production_provider_receipt,
+                        hard_shadow_receipt=production_hard_shadow_receipt,
+                    )
+                    stabilized_clean, stabilization_fields = apply_provider_boundary_soft_support_stabilization(
+                        provider_native_clean,
+                        stage_plan.prefix_t,
+                        soft_shadow_receipt=production_soft_shadow_receipt,
+                    )
+                    if bool(stabilization_fields.get("applied")):
+                        target_video = map_clean_bridge_to_conditional_state(
+                            target_video,
+                            provider_native_clean,
+                            stabilized_clean,
+                            sigma=float(sigma),
+                            prefix_t=stage_plan.prefix_t,
+                            corrected_tokens=int(stabilization_fields["corrected_tokens"]),
+                        )
+                        learned_clean = stabilized_clean
+                    provider_boundary_stabilization_receipt = {
+                        "requested": True,
+                        "mode": provider_boundary_stabilization,
+                        "reason": "applied" if bool(stabilization_fields.get("applied")) else "no_eligible_provider_region",
+                        "exact_overlap_fallback_required": True,
+                        "exact_overlap_fallback_trigger": str(exact_overlap_fallback_trigger),
+                        "shadow_recomputed_from_native_provider": True,
+                        "local_compute_elapsed_ms": (time.perf_counter() - stabilization_started) * 1000.0,
+                        "extra_h3_nfe": 0,
+                        "extra_sampler_lifetimes": 0,
+                        "extra_history_boundaries": 0,
+                        "extra_provider_calls": 0,
+                        "extra_vae_calls": 0,
+                        **stabilization_fields,
+                    }
+                elif provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                    raise RuntimeError("unsupported provider-boundary stabilization mode")
+
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
                     _apply_partitioned_exact_overlap_bridge(
                         target_video,
@@ -3169,6 +3246,8 @@ def run_partitioned_progressive(
                     )
                 )
             else:
+                if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                    provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
                 target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
                     target_video,
                     learned_clean,
@@ -3181,6 +3260,15 @@ def run_partitioned_progressive(
                 if exact_overlap_fallback_requested
                 else "inverse_conditional_renoise"
             )
+
+        if provider_native_clean is None:
+            raise RuntimeError("partitioned provider-native clean witness was not established")
+        binding.metrics.event(
+            "partitioned_provider_boundary_stabilization",
+            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+            exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
+            **provider_boundary_stabilization_receipt,
+        )
 
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
@@ -3356,7 +3444,7 @@ def run_partitioned_progressive(
         if boundary_content_diagnostic_enabled:
             boundary_content_started = time.perf_counter()
             provider_receipt = measure_boundary_content_continuity(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
             )
             binding.metrics.event(
@@ -3375,7 +3463,7 @@ def run_partitioned_progressive(
             )
             predictor_started = time.perf_counter()
             provider_predictor_receipt = measure_provider_boundary_temporal_predictor(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
             )
             binding.metrics.event(
@@ -3393,7 +3481,7 @@ def run_partitioned_progressive(
             )
             calibration_started = time.perf_counter()
             provider_calibration_receipt = measure_provider_boundary_temporal_calibration(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
             )
             binding.metrics.event(
@@ -3411,7 +3499,7 @@ def run_partitioned_progressive(
             )
             stabilization_shadow_started = time.perf_counter()
             provider_stabilization_shadow_receipt = measure_provider_boundary_stabilization_shadow(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
                 calibration_receipt=provider_calibration_receipt,
                 provider_content_receipt=provider_receipt,
@@ -3431,7 +3519,7 @@ def run_partitioned_progressive(
             )
             soft_support_shadow_started = time.perf_counter()
             provider_soft_support_shadow_receipt = measure_provider_boundary_soft_support_shadow(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
                 calibration_receipt=provider_calibration_receipt,
                 provider_content_receipt=provider_receipt,
@@ -3579,7 +3667,7 @@ def run_partitioned_progressive(
             ("full", 1.0),
         ):
             native_trajectory = measure_translation_trajectory(
-                learned_clean,
+                provider_native_clean,
                 stage_plan.prefix_t,
                 forward_steps=4,
                 backward_steps=3,
