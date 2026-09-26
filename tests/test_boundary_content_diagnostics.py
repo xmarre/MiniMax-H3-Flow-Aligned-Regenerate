@@ -13,20 +13,24 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
     PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
     apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
+    evaluate_provider_boundary_temporal_support_production,
     measure_boundary_content_continuity,
     measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
     measure_provider_boundary_temporal_predictor,
+    reconstruct_provider_boundary_temporal_support_candidate,
 )
 from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
     _validate_provider_boundary_post_high_shadow,
+    _validate_provider_boundary_post_high_stabilization,
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
@@ -656,6 +660,253 @@ def test_post_high_temporal_support_shadow_covers_full_fade_and_terminal_return(
             rel=1e-6,
             abs=1e-8,
         )
+
+
+
+def _production_temporal_receipt(
+    *,
+    first_successor_centered: float = 1.02,
+    first_successor_gradient: float = 1.003,
+    first_successor_ncc: float = -0.003,
+    eligible_tiles: list[str] | None = None,
+) -> dict:
+    eligible = ["r0c0"] if eligible_tiles is None else list(eligible_tiles)
+    tile_ids = [f"r{row}c{col}" for row in range(4) for col in range(4)]
+
+    def tiles(centered: float, gradient: float, ncc: float) -> dict:
+        result = {
+            tile_id: {
+                "centered_lowpass_rms_after_over_before": 1.0,
+                "gradient_rms_after_over_before": 1.0,
+                "lowpass_rms_after_over_before": 1.0,
+                "ncc_after_minus_before": 0.0,
+                "raw_rms_after_over_before": 1.0,
+            }
+            for tile_id in tile_ids
+        }
+        for tile_id in eligible:
+            result[tile_id] = {
+                "centered_lowpass_rms_after_over_before": centered,
+                "gradient_rms_after_over_before": gradient,
+                "lowpass_rms_after_over_before": centered,
+                "ncc_after_minus_before": ncc,
+                "raw_rms_after_over_before": min(1.0, centered),
+            }
+        return result
+
+    def transition(
+        centered: float,
+        gradient: float,
+        ncc: float,
+        *,
+        global_centered: float,
+        global_gradient: float,
+        global_ncc: float,
+    ) -> dict:
+        return {
+            "global": {
+                "centered_lowpass_rms_after_over_before": global_centered,
+                "gradient_rms_after_over_before": global_gradient,
+                "lowpass_rms_after_over_before": global_centered,
+                "ncc_after_minus_before": global_ncc,
+                "raw_rms_after_over_before": min(1.0, global_centered),
+            },
+            "tiles": tiles(centered, gradient, ncc),
+        }
+
+    return {
+        "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+        "diagnostic_only": True,
+        "output_mutated": False,
+        "candidate": "post_high_soft_support_raised_cosine_temporal_fade_v1",
+        "temporal_span": 3,
+        "corrected_tokens": 3,
+        "weights": [1.0, 0.75, 0.25],
+        "eligible_tiles": eligible,
+        "eligible_tile_count": len(eligible),
+        "spatial_correction_rms": 0.02,
+        "spatial_correction_abs_max": 0.4,
+        "transition_order": [
+            "prefix_to_suffix0",
+            "suffix0_to_suffix1",
+            "suffix1_to_suffix2",
+            "suffix2_to_suffix3",
+        ],
+        "transitions": {
+            "prefix_to_suffix0": transition(
+                0.82,
+                0.91,
+                0.018,
+                global_centered=0.99,
+                global_gradient=0.995,
+                global_ncc=0.0015,
+            ),
+            "suffix0_to_suffix1": transition(
+                first_successor_centered,
+                first_successor_gradient,
+                first_successor_ncc,
+                global_centered=1.001,
+                global_gradient=1.0005,
+                global_ncc=-0.0002,
+            ),
+            "suffix1_to_suffix2": transition(
+                0.98,
+                1.0,
+                0.0004,
+                global_centered=0.999,
+                global_gradient=1.0,
+                global_ncc=0.00002,
+            ),
+            "suffix2_to_suffix3": transition(
+                0.99,
+                0.999,
+                -0.0002,
+                global_centered=0.9995,
+                global_gradient=0.9995,
+                global_ncc=-0.00005,
+            ),
+        },
+    }
+
+
+def test_temporal_support_production_gate_accepts_strict_net_benefit():
+    receipt = _production_temporal_receipt()
+
+    gate = evaluate_provider_boundary_temporal_support_production(receipt)
+
+    assert gate["policy"] == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY
+    assert gate["accepted"] is True
+    assert gate["reason"] == "accepted"
+    assert gate["eligible_tiles"] == ["r0c0"]
+    assert gate["max_tile_centered_degradation"] == pytest.approx(0.02)
+    assert gate["selected_collateral_over_benefit"]["centered_lowpass"] < 0.5
+    assert gate["selected_collateral_over_benefit"]["gradient"] < 0.5
+    assert gate["selected_collateral_over_benefit"]["ncc"] < 0.5
+
+
+def test_temporal_support_production_gate_rejects_material_downstream_degradation():
+    receipt = _production_temporal_receipt(first_successor_centered=1.08)
+
+    gate = evaluate_provider_boundary_temporal_support_production(receipt)
+
+    assert gate["accepted"] is False
+    assert gate["reason"] == "downstream_tile_degradation_exceeds_absolute_cap"
+
+
+def test_temporal_support_production_gate_rejects_unvalidated_multi_tile_application():
+    receipt = _production_temporal_receipt(eligible_tiles=["r0c0", "r0c1"])
+
+    gate = evaluate_provider_boundary_temporal_support_production(receipt)
+
+    assert gate["accepted"] is False
+    assert gate["reason"] == "eligible_tile_count_out_of_bounds"
+
+
+def test_temporal_support_production_candidate_preserves_prefix_and_fixed_horizon():
+    video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat(
+        [
+            video,
+            video[:, :, -1:].clone(),
+            video[:, :, -1:].clone(),
+            video[:, :, -1:].clone(),
+        ],
+        dim=2,
+    )
+    torch.manual_seed(7015)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    content = measure_boundary_content_continuity(video, 5)
+    shadow = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+
+    candidate, receipt = reconstruct_provider_boundary_temporal_support_candidate(
+        video,
+        5,
+        soft_shadow_receipt=shadow["soft_shadow"],
+        temporal_support_receipt=shadow["temporal_support_shadow"],
+    )
+
+    assert receipt["policy"] == PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY
+    assert receipt["candidate_constructed"] is True
+    assert receipt["corrected_tokens"] == 3
+    assert receipt["weights"] == pytest.approx([1.0, 0.75, 0.25])
+    assert torch.equal(candidate[:, :, :5], video[:, :, :5])
+    assert torch.equal(candidate[:, :, 8:], video[:, :, 8:])
+    first_delta = video[:, :, 5].float() - candidate[:, :, 5].float()
+    second_delta = video[:, :, 6].float() - candidate[:, :, 6].float()
+    third_delta = video[:, :, 7].float() - candidate[:, :, 7].float()
+    assert torch.allclose(second_delta, 0.75 * first_delta, rtol=1e-5, atol=1e-6)
+    assert torch.allclose(third_delta, 0.25 * first_delta, rtol=1e-5, atol=1e-6)
+
+
+def test_runtime_gate_accepts_applied_post_high_temporal_support_production():
+    temporal = _production_temporal_receipt()
+    gate = evaluate_provider_boundary_temporal_support_production(temporal)
+    window = [
+        {
+            "kind": "partitioned_provider_boundary_stabilization",
+            "fields": {
+                "requested": True,
+                "mode": "soft_support_v1",
+            },
+        },
+        {
+            "kind": "partitioned_boundary_content_continuity",
+            "fields": {"stage": "post_high_internal_clean"},
+        },
+        {
+            "kind": "partitioned_frame_gauge",
+            "fields": {
+                "result": "accepted",
+                "residual_geometry": {"requested_mode": "off"},
+            },
+        },
+        {
+            "kind": "partitioned_provider_boundary_post_high_shadow",
+            "fields": {"temporal_support_shadow": temporal},
+        },
+        {
+            "kind": "partitioned_provider_boundary_post_high_stabilization",
+            "fields": {
+                "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+                "requested": True,
+                "mode": "soft_support_v1",
+                "source_stage": "post_high_internal_clean",
+                "source_shadow_policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
+                "applied": True,
+                "reason": "applied",
+                "production_default_changed": False,
+                "gate": gate,
+                "candidate": {
+                    "policy": PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_PRODUCTION_POLICY,
+                    "candidate_constructed": True,
+                    "eligible_tiles": ["r0c0"],
+                    "corrected_tokens": 3,
+                },
+                "eligible_tiles": ["r0c0"],
+                "eligible_tile_count": 1,
+                "corrected_tokens": 3,
+                "weights": [1.0, 0.75, 0.25],
+                "correction_rms": 0.02,
+                "correction_abs_max": 0.4,
+                "internal_caller_video_identity_exact": True,
+                "shadow_candidate_commit_exact": True,
+                "authoritative_prefix_modified": False,
+                "later_suffix_outside_horizon_modified": False,
+                "audio_modified": False,
+                "extra_h3_nfe": 0,
+                "extra_sampler_lifetimes": 0,
+                "extra_history_boundaries": 0,
+                "extra_provider_calls": 0,
+                "extra_vae_calls": 0,
+            },
+        },
+    ]
+
+    _validate_provider_boundary_post_high_stabilization(window)
 
 
 def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
