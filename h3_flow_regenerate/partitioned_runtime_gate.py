@@ -19,6 +19,7 @@ from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -51,6 +52,7 @@ FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
         "boundary_full_not_improved",
         "boundary_upper45_insufficient_improvement",
         "boundary_full_insufficient_improvement",
+        "boundary_no_informative_roi_strong_improvement",
     }
 )
 _SOL_PREFIX = "Sol-H3 "
@@ -387,7 +389,12 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
     _require(fields.get("status") == "accepted", "accepted frame-gauge boundary-motion gate did not accept")
     policy = fields.get("policy")
     _require(
-        policy in ("native_boundary_motion_preservation_v1", "native_boundary_motion_preservation_v2"),
+        policy
+        in (
+            "native_boundary_motion_preservation_v1",
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+        ),
         "frame-gauge boundary-motion policy drifted",
     )
     min_error = _finite_number(fields.get("min_error_cells"))
@@ -400,6 +407,8 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
     checks = fields.get("checks")
     _require(isinstance(checks, dict), "frame-gauge boundary-motion ROI receipts are missing")
     _require(set(checks) == {"upper45", "full"}, "frame-gauge boundary-motion ROI set drifted")
+    informative_rois: list[str] = []
+    strong_rois: list[str] = []
     for name in ("upper45", "full"):
         check = checks[name]
         _require(isinstance(check, dict), f"frame-gauge boundary-motion {name} receipt is malformed")
@@ -417,12 +426,16 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
             f"frame-gauge boundary-motion {name} informative classification drifted",
         )
         if expected_informative:
-            _require(
-                improvement >= min_improvement,
-                f"frame-gauge boundary-motion {name} improvement gate failed",
-            )
+            informative_rois.append(name)
+            if improvement >= min_improvement:
+                strong_rois.append(name)
+            if policy != "native_boundary_motion_consensus_v3":
+                _require(
+                    improvement >= min_improvement,
+                    f"frame-gauge boundary-motion {name} improvement gate failed",
+                )
         variants = ("native", "exact_restored", "candidate")
-        if policy == "native_boundary_motion_preservation_v2":
+        if policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"):
             variants += ("transformed_native",)
         for variant in variants:
             receipt = check.get(variant)
@@ -435,9 +448,9 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                 response >= min_response,
                 f"frame-gauge boundary-motion {name}/{variant} response gate failed",
             )
-        if policy == "native_boundary_motion_preservation_v2":
+        if policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"):
             # Replay the coordinate-domain comparisons rather than trusting
-            # summary errors that could have been computed against native v1.
+            # summary errors.
             def distance(left, right):
                 return math.hypot(
                     _finite_number(left["dx"]) - _finite_number(right["dx"]),
@@ -457,14 +470,33 @@ def _validate_boundary_motion_receipt(fields: Any) -> None:
                     f"frame-gauge boundary-motion {name} {label} does not reproduce",
                 )
 
+    if policy == "native_boundary_motion_consensus_v3":
+        _require(
+            fields.get("acceptance_rule") == "all_rois_nondegrading_and_any_informative_roi_strong_v1",
+            "frame-gauge consensus acceptance rule drifted",
+        )
+        _require(
+            fields.get("informative_rois") == informative_rois,
+            "frame-gauge consensus informative ROI summary drifted",
+        )
+        _require(
+            fields.get("strong_improvement_rois") == strong_rois,
+            "frame-gauge consensus strong ROI summary drifted",
+        )
+        _require(
+            not informative_rois or bool(strong_rois),
+            "frame-gauge consensus accepted without a strongly improved informative ROI",
+        )
+
 
 def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
-    """Replay the rejected rigid-v2 boundary gate before authorizing fallback."""
+    """Replay a rejected rigid boundary gate before authorizing fallback."""
 
     _require(isinstance(fields, dict), "exact-overlap fallback is missing boundary-motion evidence")
+    policy = fields.get("policy")
     _require(
-        fields.get("policy") == "native_boundary_motion_preservation_v2",
-        "exact-overlap fallback requires rigid-v2",
+        policy in ("native_boundary_motion_preservation_v2", "native_boundary_motion_consensus_v3"),
+        "exact-overlap fallback requires a transformed-native rigid boundary policy",
     )
     _require(fields.get("status") == "rejected", "exact-overlap fallback boundary gate was not rejected")
     _require(str(fields.get("reason", "")) == reason, "exact-overlap fallback boundary reason drifted")
@@ -481,6 +513,8 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     _require(isinstance(checks, dict) and set(checks) == {"upper45", "full"}, "exact-overlap fallback ROI set drifted")
 
     observed_reason = None
+    informative_rois: list[str] = []
+    strong_rois: list[str] = []
     for name in ("upper45", "full"):
         check = checks[name]
         _require(isinstance(check, dict), f"exact-overlap fallback {name} receipt is malformed")
@@ -490,6 +524,10 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
         _require(before_error >= 0.0 and after_error >= 0.0, f"exact-overlap fallback {name} error is negative")
         informative = before_error >= min_error
         _require(check.get("informative") is informative, f"exact-overlap fallback {name} informative flag drifted")
+        if informative:
+            informative_rois.append(name)
+            if improvement >= min_improvement:
+                strong_rois.append(name)
 
         for variant in ("native", "transformed_native", "exact_restored", "candidate"):
             receipt = check.get(variant)
@@ -519,11 +557,23 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
                 f"exact-overlap fallback {name} {label} does not reproduce",
             )
 
-        if observed_reason is None:
-            if after_error > before_error:
-                observed_reason = f"boundary_{name}_not_improved"
-            elif informative and improvement < min_improvement:
-                observed_reason = f"boundary_{name}_insufficient_improvement"
+        if observed_reason is None and after_error > before_error:
+            observed_reason = f"boundary_{name}_not_improved"
+        elif (
+            observed_reason is None
+            and policy == "native_boundary_motion_preservation_v2"
+            and informative
+            and improvement < min_improvement
+        ):
+            observed_reason = f"boundary_{name}_insufficient_improvement"
+
+    if policy == "native_boundary_motion_consensus_v3":
+        _require(
+            fields.get("acceptance_rule") == "all_rois_nondegrading_and_any_informative_roi_strong_v1",
+            "exact-overlap consensus acceptance rule drifted",
+        )
+        if observed_reason is None and informative_rois and not strong_rois:
+            observed_reason = "boundary_no_informative_roi_strong_improvement"
 
     _require(observed_reason == reason, "exact-overlap fallback does not reproduce the recorded boundary veto")
 
