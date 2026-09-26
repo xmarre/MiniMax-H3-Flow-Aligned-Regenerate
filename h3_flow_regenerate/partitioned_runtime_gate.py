@@ -640,7 +640,10 @@ def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None
     _require(isinstance(global_delta, dict), "boundary-content stage delta global receipt is missing")
     for value in global_delta.values():
         _finite_number(value)
-    _require(isinstance(tile_delta, dict) and set(tile_delta) == expected_tiles, "boundary-content delta tile set drifted")
+    _require(
+        isinstance(tile_delta, dict) and set(tile_delta) == expected_tiles,
+        "boundary-content delta tile set drifted",
+    )
     for fields in tile_delta.values():
         _require(isinstance(fields, dict), "boundary-content delta tile receipt is malformed")
         for value in fields.values():
