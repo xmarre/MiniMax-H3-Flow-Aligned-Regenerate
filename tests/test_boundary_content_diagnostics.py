@@ -9,8 +9,10 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
+    PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
     measure_provider_boundary_temporal_predictor,
 )
@@ -19,6 +21,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     _validate_boundary_content_diagnostics,
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
+    _validate_provider_boundary_stabilization_shadow,
 )
 
 
@@ -238,6 +241,90 @@ def test_runtime_gate_rejects_provider_boundary_calibration_that_claims_producti
 
     with pytest.raises(RuntimeGateError, match="production gate"):
         _validate_provider_boundary_predictor_calibration([bad])
+
+
+def _shadow_receipt(video: torch.Tensor, prefix_t: int, *, calibration_targets: int = 1) -> dict:
+    provider = measure_boundary_content_continuity(video, prefix_t)
+    calibration = measure_provider_boundary_temporal_calibration(
+        video,
+        prefix_t,
+        calibration_targets=calibration_targets,
+    )
+    return measure_provider_boundary_stabilization_shadow(
+        video,
+        prefix_t,
+        calibration_receipt=calibration,
+        provider_content_receipt=provider,
+    )
+
+
+def test_provider_boundary_stabilization_shadow_is_non_mutating_and_localized():
+    video = _video_with_local_boundary_change(scale=2.0)
+    before = video.clone()
+
+    receipt = _shadow_receipt(video, 5)
+
+    assert torch.equal(video, before)
+    assert receipt["policy"] == PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY
+    assert receipt["diagnostic_only"] is True
+    assert receipt["production_gate"] is False
+    assert receipt["production_applied"] is False
+    assert receipt["output_mutated"] is False
+    assert "r0c0" in receipt["eligible_tiles"]
+    changed = receipt["tiles"]["r0c0"]
+    assert changed["eligible"] is True
+    assert 0.0 < changed["residual_scale"] < 1.0
+    assert changed["predicted_error_over_historical_max_after"] <= 1.0 + 1e-9
+    assert changed["predicted_dispersion_ratio_over_historical_max_after"] <= 1.0 + 1e-9
+    assert changed["shadow_correction_rms"] > 0.0
+
+
+def test_provider_boundary_stabilization_shadow_leaves_smooth_trend_unselected():
+    video = _video_with_local_boundary_change(scale=0.0)
+
+    receipt = _shadow_receipt(video, 5)
+
+    assert receipt["eligible_tile_count"] == 0
+    assert receipt["eligible_tiles"] == []
+    assert receipt["correction_rms"] == pytest.approx(0.0, abs=1e-8)
+    assert receipt["correction_abs_max"] == pytest.approx(0.0, abs=1e-8)
+    for tile in receipt["tiles"].values():
+        assert tile["eligible"] is False
+        assert tile["residual_scale"] == pytest.approx(1.0)
+        assert tile["shadow_correction_rms"] == pytest.approx(0.0, abs=1e-8)
+
+
+def _shadow_event(receipt: dict) -> dict:
+    return {
+        "kind": "partitioned_provider_boundary_stabilization_shadow",
+        "fields": {
+            "domain": "model_internal_clean",
+            "owner_before": "learned_provider_prefix",
+            "owner_after": "learned_provider_suffix",
+            "elapsed_ms": 1.0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            **receipt,
+        },
+    }
+
+
+def test_runtime_gate_accepts_provider_boundary_stabilization_shadow():
+    receipt = _shadow_receipt(_video_with_local_boundary_change(scale=2.0), 5)
+
+    _validate_provider_boundary_stabilization_shadow([_shadow_event(receipt)])
+
+
+def test_runtime_gate_rejects_provider_boundary_stabilization_shadow_production_mutation():
+    receipt = _shadow_receipt(_video_with_local_boundary_change(scale=2.0), 5)
+    bad = _shadow_event(copy.deepcopy(receipt))
+    bad["fields"]["production_applied"] = True
+
+    with pytest.raises(RuntimeGateError, match="production mutation"):
+        _validate_provider_boundary_stabilization_shadow([bad])
 
 
 def _event(stage: str, receipt: dict) -> dict:
