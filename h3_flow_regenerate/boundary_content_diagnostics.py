@@ -15,6 +15,7 @@ PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_pre
 PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
+PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -1186,6 +1187,146 @@ def measure_provider_boundary_soft_support_shadow(
         },
         "tiles": tile_fields,
         "tiles_by_soft_centered_lowpass_ratio": ranked,
+    }
+
+
+
+def apply_provider_boundary_soft_support_stabilization(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    soft_shadow_receipt: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Apply exactly the measured soft-support candidate to the first suffix token.
+
+    This is a bounded opt-in production candidate. Eligibility, residual scale,
+    geometry, and support are inherited byte-for-byte from the preceding shadow
+    receipt; no additional threshold is introduced here.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("provider-boundary stabilization expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("provider-boundary stabilization input contains NaN or Inf")
+    if soft_shadow_receipt.get("policy") != PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY:
+        raise ValueError("provider-boundary stabilization shadow policy mismatch")
+    if soft_shadow_receipt.get("diagnostic_only") is not True:
+        raise ValueError("provider-boundary stabilization requires diagnostic shadow evidence")
+    if soft_shadow_receipt.get("production_applied") is not False:
+        raise ValueError("provider-boundary stabilization shadow already claims production mutation")
+    if soft_shadow_receipt.get("output_mutated") is not False:
+        raise ValueError("provider-boundary stabilization shadow mutated its input")
+
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    pre_steps = int(soft_shadow_receipt.get("pre_steps", 0))
+    tile_rows = int(soft_shadow_receipt.get("tile_rows", 0))
+    tile_cols = int(soft_shadow_receipt.get("tile_cols", 0))
+    lowpass_kernel = int(soft_shadow_receipt.get("lowpass_kernel", 0))
+    feather_width = int(soft_shadow_receipt.get("feather_width", 0))
+    if prefix_t != int(soft_shadow_receipt.get("prefix_t", -1)):
+        raise ValueError("provider-boundary stabilization prefix drifted")
+    if prefix_t < pre_steps + 1 or prefix_t >= temporal:
+        raise ValueError("provider-boundary stabilization lacks prefix history or first suffix")
+    if pre_steps != 3 or tile_rows != 4 or tile_cols != 4 or lowpass_kernel != 5 or feather_width != 3:
+        raise ValueError("provider-boundary stabilization measured geometry drifted")
+
+    height, width = map(int, video.shape[-2:])
+    tiles = _tile_bounds(height, width, tile_rows, tile_cols)
+    soft_tiles = soft_shadow_receipt.get("tiles")
+    if not isinstance(soft_tiles, dict) or set(soft_tiles) != set(tiles):
+        raise ValueError("provider-boundary stabilization shadow tile set drifted")
+    eligible_tiles = set(soft_shadow_receipt.get("eligible_tiles", []))
+    if not eligible_tiles <= set(tiles):
+        raise ValueError("provider-boundary stabilization eligible tile set drifted")
+
+    low = [_lowpass(video[:, :, index], lowpass_kernel) for index in range(prefix_t + 1)]
+    deltas = [right - left for left, right in pairwise(low)]
+    boundary_index = prefix_t - 1
+    boundary_history = deltas[boundary_index - pre_steps : boundary_index]
+    boundary_actual = deltas[boundary_index]
+
+    correction = torch.zeros_like(video[:, :, prefix_t], dtype=torch.float32)
+    for tile_id in sorted(eligible_tiles):
+        y0, y1, x0, x1 = tiles[tile_id]
+        tile = soft_tiles[tile_id]
+        if tile.get("eligible") is not True:
+            raise ValueError(f"provider-boundary stabilization tile {tile_id} eligibility drifted")
+        residual_scale = float(tile["residual_scale"])
+        if not 0.0 <= residual_scale <= 1.0:
+            raise ValueError(f"provider-boundary stabilization tile {tile_id} residual scale is invalid")
+        baseline = [_centered_region(delta[..., y0:y1, x0:x1]) for delta in boundary_history]
+        actual = _centered_region(boundary_actual[..., y0:y1, x0:x1])
+        predictor = torch.stack(baseline, dim=0).median(dim=0).values
+        prediction_residual = actual - predictor
+        tile_correction = prediction_residual * (1.0 - residual_scale)
+        support = _raised_cosine_frontier_support(
+            height,
+            width,
+            bounds=tiles[tile_id],
+            tile_id=tile_id,
+            eligible_tiles=eligible_tiles,
+            tile_rows=tile_rows,
+            tile_cols=tile_cols,
+            feather_width=feather_width,
+            device=video.device,
+        )
+        correction += support.view(1, 1, height, width) * torch.nn.functional.pad(
+            tile_correction,
+            (x0, width - x1, y0, height - y1),
+        )
+
+    measured_rms = _rms(correction)
+    measured_abs_max = _finite(correction.abs().max()) if correction.numel() else 0.0
+    expected_rms = float(soft_shadow_receipt.get("soft_correction_rms", float("nan")))
+    expected_abs_max = float(soft_shadow_receipt.get("soft_correction_abs_max", float("nan")))
+    if not (
+        math.isfinite(expected_rms)
+        and math.isfinite(expected_abs_max)
+        and math.isclose(measured_rms, expected_rms, rel_tol=1e-6, abs_tol=1e-8)
+        and math.isclose(measured_abs_max, expected_abs_max, rel_tol=1e-6, abs_tol=1e-8)
+    ):
+        raise RuntimeError("provider-boundary stabilization no longer reproduces its measured shadow")
+
+    stabilized = video.clone()
+    stabilized[:, :, prefix_t] = stabilized[:, :, prefix_t] - correction.to(stabilized)
+    if not torch.equal(stabilized[:, :, :prefix_t], video[:, :, :prefix_t]):
+        raise RuntimeError("provider-boundary stabilization modified provider prefix")
+    if prefix_t + 1 < temporal and not torch.equal(
+        stabilized[:, :, prefix_t + 1 :],
+        video[:, :, prefix_t + 1 :],
+    ):
+        raise RuntimeError("provider-boundary stabilization extrapolated into later suffix tokens")
+
+    return stabilized, {
+        "policy": PROVIDER_BOUNDARY_STABILIZATION_POLICY,
+        "source_shadow_policy": PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "source_shadow_candidate": str(soft_shadow_receipt.get("candidate", "")),
+        "support": str(soft_shadow_receipt.get("support", "")),
+        "support_owner": "production_first_suffix_only",
+        "prefix_t": prefix_t,
+        "pre_steps": pre_steps,
+        "tile_rows": tile_rows,
+        "tile_cols": tile_cols,
+        "lowpass_kernel": lowpass_kernel,
+        "feather_width": feather_width,
+        "eligible_tiles": sorted(eligible_tiles),
+        "eligible_tile_count": len(eligible_tiles),
+        "applied": bool(eligible_tiles and measured_rms > 0.0),
+        "corrected_tokens": 1 if eligible_tiles and measured_rms > 0.0 else 0,
+        "authoritative_prefix_modified": False,
+        "later_suffix_extrapolated": False,
+        "correction_rms": measured_rms,
+        "correction_abs_max": measured_abs_max,
+        "hard_frontier_edge_jump_rms": float(soft_shadow_receipt["hard_frontier_edge_jump_rms"]),
+        "hard_frontier_edge_jump_abs_max": float(soft_shadow_receipt["hard_frontier_edge_jump_abs_max"]),
+        "soft_frontier_edge_jump_rms": float(soft_shadow_receipt["soft_frontier_edge_jump_rms"]),
+        "soft_frontier_edge_jump_abs_max": float(soft_shadow_receipt["soft_frontier_edge_jump_abs_max"]),
+        "soft_centered_lowpass_rms_ratio": float(
+            soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]
+        ),
+        "soft_gradient_rms_ratio": float(soft_shadow_receipt["global"]["soft_gradient_rms_ratio"]),
+        "soft_ncc_delta": float(soft_shadow_receipt["global"]["soft_ncc_delta"]),
     }
 
 
