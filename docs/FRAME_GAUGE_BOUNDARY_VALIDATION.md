@@ -318,10 +318,14 @@ Before mutating production state, the next layer is
 `partitioned_provider_boundary_stabilization_shadow_v1`.
 
 The shadow candidate is deliberately observation-only. A tile is eligible only
-when both:
+when both measured error signals exceed a numerical floor of `1e-6` and both:
 
 1. `boundary_error_over_historical_max > 1`; and
 2. `boundary_dispersion_ratio_over_historical_max > 1`.
+
+The `1e-6` floor is only a fail-closed floating-point stability guard. It
+prevents ratios of near-zero predictor residuals from selecting tiles; it is
+not a content-quality threshold.
 
 For an eligible tile the shadow policy leaves the recent median predictor
 unchanged and scales only the first-suffix prediction residual by the tighter
