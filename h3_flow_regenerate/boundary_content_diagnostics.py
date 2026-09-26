@@ -14,6 +14,7 @@ BOUNDARY_CONTENT_DIAGNOSTIC_POLICY = "partitioned_boundary_content_continuity_v1
 PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_predictor_v1"
 PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
+PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -866,6 +867,327 @@ def measure_provider_boundary_stabilization_shadow(
         },
         "tiles": tile_fields,
         "tiles_by_shadow_centered_lowpass_ratio": ranked,
+    }
+
+
+
+def _raised_cosine_frontier_support(
+    height: int,
+    width: int,
+    *,
+    bounds: tuple[int, int, int, int],
+    tile_id: str,
+    eligible_tiles: set[str],
+    tile_rows: int,
+    tile_cols: int,
+    feather_width: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Build an inside-only smooth support mask for one selected tile."""
+
+    y0, y1, x0, x1 = bounds
+    local_h = y1 - y0
+    local_w = x1 - x0
+    support = torch.ones((local_h, local_w), dtype=torch.float32, device=device)
+    row_text, col_text = tile_id[1:].split("c", 1)
+    row = int(row_text)
+    col = int(col_text)
+
+    def ramp(length: int) -> torch.Tensor:
+        if length <= 1:
+            return torch.zeros((length,), dtype=torch.float32, device=device)
+        coordinate = torch.linspace(0.0, 1.0, length, dtype=torch.float32, device=device)
+        return 0.5 - 0.5 * torch.cos(math.pi * coordinate)
+
+    feather_y = min(int(feather_width), local_h)
+    feather_x = min(int(feather_width), local_w)
+    if row > 0 and f"r{row - 1}c{col}" not in eligible_tiles:
+        support[:feather_y] *= ramp(feather_y).view(feather_y, 1)
+    if row + 1 < int(tile_rows) and f"r{row + 1}c{col}" not in eligible_tiles:
+        support[-feather_y:] *= ramp(feather_y).flip(0).view(feather_y, 1)
+    if col > 0 and f"r{row}c{col - 1}" not in eligible_tiles:
+        support[:, :feather_x] *= ramp(feather_x).view(1, feather_x)
+    if col + 1 < int(tile_cols) and f"r{row}c{col + 1}" not in eligible_tiles:
+        support[:, -feather_x:] *= ramp(feather_x).flip(0).view(1, feather_x)
+
+    mask = torch.zeros((height, width), dtype=torch.float32, device=device)
+    mask[y0:y1, x0:x1] = support
+    return mask
+
+
+def _selected_frontier_jump(
+    correction: torch.Tensor,
+    *,
+    tiles: dict[str, tuple[int, int, int, int]],
+    eligible_tiles: set[str],
+    tile_rows: int,
+    tile_cols: int,
+) -> dict[str, float]:
+    """Measure direct correction jumps across selected/ineligible tile frontiers."""
+
+    samples: list[torch.Tensor] = []
+    for tile_id in sorted(eligible_tiles):
+        y0, y1, x0, x1 = tiles[tile_id]
+        row_text, col_text = tile_id[1:].split("c", 1)
+        row = int(row_text)
+        col = int(col_text)
+        if row > 0 and f"r{row - 1}c{col}" not in eligible_tiles:
+            samples.append(correction[..., y0, x0:x1] - correction[..., y0 - 1, x0:x1])
+        if row + 1 < int(tile_rows) and f"r{row + 1}c{col}" not in eligible_tiles:
+            samples.append(correction[..., y1 - 1, x0:x1] - correction[..., y1, x0:x1])
+        if col > 0 and f"r{row}c{col - 1}" not in eligible_tiles:
+            samples.append(correction[..., y0:y1, x0] - correction[..., y0:y1, x0 - 1])
+        if col + 1 < int(tile_cols) and f"r{row}c{col + 1}" not in eligible_tiles:
+            samples.append(correction[..., y0:y1, x1 - 1] - correction[..., y0:y1, x1])
+    if not samples:
+        return {"rms": 0.0, "abs_max": 0.0}
+    flattened = torch.cat([sample.float().reshape(-1) for sample in samples], dim=0)
+    return {
+        "rms": _rms(flattened),
+        "abs_max": _finite(flattened.abs().max()) if flattened.numel() else 0.0,
+    }
+
+
+def measure_provider_boundary_soft_support_shadow(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    calibration_receipt: dict[str, Any],
+    provider_content_receipt: dict[str, Any],
+    hard_shadow_receipt: dict[str, Any],
+    pre_steps: int = 3,
+    tile_rows: int = 4,
+    tile_cols: int = 4,
+    lowpass_kernel: int = 5,
+) -> dict[str, Any]:
+    """Compare the hard shadow with an inside-only raised-cosine support shadow."""
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("provider-boundary soft-support shadow expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("provider-boundary soft-support shadow input contains NaN or Inf")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    if prefix_t < int(pre_steps) + 1 or prefix_t >= temporal:
+        raise ValueError("provider-boundary soft-support shadow lacks prefix history or a first suffix frame")
+    if calibration_receipt.get("policy") != PROVIDER_BOUNDARY_CALIBRATION_POLICY:
+        raise ValueError("provider-boundary soft-support calibration policy mismatch")
+    if provider_content_receipt.get("policy") != BOUNDARY_CONTENT_DIAGNOSTIC_POLICY:
+        raise ValueError("provider-boundary soft-support content policy mismatch")
+    if hard_shadow_receipt.get("policy") != PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY:
+        raise ValueError("provider-boundary soft-support hard-shadow policy mismatch")
+    if hard_shadow_receipt.get("output_mutated") is not False:
+        raise ValueError("provider-boundary soft-support requires a non-mutating hard shadow")
+    if int(calibration_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("provider-boundary soft-support calibration prefix drifted")
+    if int(provider_content_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("provider-boundary soft-support content prefix drifted")
+    if int(hard_shadow_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("provider-boundary soft-support hard-shadow prefix drifted")
+
+    height, width = map(int, video.shape[-2:])
+    tiles = _tile_bounds(height, width, int(tile_rows), int(tile_cols))
+    calibration_tiles = calibration_receipt.get("tiles")
+    content_tiles = provider_content_receipt.get("tiles")
+    hard_tiles = hard_shadow_receipt.get("tiles")
+    if not isinstance(calibration_tiles, dict) or set(calibration_tiles) != set(tiles):
+        raise ValueError("provider-boundary soft-support calibration tile set drifted")
+    if not isinstance(content_tiles, dict) or set(content_tiles) != set(tiles):
+        raise ValueError("provider-boundary soft-support content tile set drifted")
+    if not isinstance(hard_tiles, dict) or set(hard_tiles) != set(tiles):
+        raise ValueError("provider-boundary soft-support hard-shadow tile set drifted")
+
+    eligible_tiles = set(hard_shadow_receipt.get("eligible_tiles", []))
+    if not eligible_tiles <= set(tiles):
+        raise ValueError("provider-boundary soft-support eligible tile set drifted")
+    feather_width = int(lowpass_kernel) // 2 + 1
+
+    low = [_lowpass(video[:, :, index], int(lowpass_kernel)) for index in range(prefix_t + 1)]
+    deltas = [right - left for left, right in pairwise(low)]
+    boundary_index = prefix_t - 1
+    boundary_history = deltas[boundary_index - int(pre_steps) : boundary_index]
+    boundary_actual = deltas[boundary_index]
+
+    hard_correction = torch.zeros_like(video[:, :, prefix_t], dtype=torch.float32)
+    soft_correction = torch.zeros_like(hard_correction)
+    support_union = torch.zeros((height, width), dtype=torch.float32, device=video.device)
+    tile_fields: dict[str, Any] = {}
+
+    for tile_id, bounds in tiles.items():
+        y0, y1, x0, x1 = bounds
+        hard_tile = hard_tiles[tile_id]
+        selected = tile_id in eligible_tiles
+        residual_scale = float(hard_tile["residual_scale"])
+        baseline = [_centered_region(delta[..., y0:y1, x0:x1]) for delta in boundary_history]
+        actual = _centered_region(boundary_actual[..., y0:y1, x0:x1])
+        predictor = torch.stack(baseline, dim=0).median(dim=0).values
+        prediction_residual = actual - predictor
+        tile_correction = prediction_residual * (1.0 - residual_scale)
+
+        support = torch.zeros((height, width), dtype=torch.float32, device=video.device)
+        if selected:
+            hard_correction[..., y0:y1, x0:x1] = tile_correction
+            support = _raised_cosine_frontier_support(
+                height,
+                width,
+                bounds=bounds,
+                tile_id=tile_id,
+                eligible_tiles=eligible_tiles,
+                tile_rows=int(tile_rows),
+                tile_cols=int(tile_cols),
+                feather_width=feather_width,
+                device=video.device,
+            )
+            soft_correction += torch.zeros_like(soft_correction).add(
+                support.view(1, 1, height, width) * torch.nn.functional.pad(
+                    tile_correction,
+                    (x0, width - x1, y0, height - y1),
+                )
+            )
+            support_union = torch.maximum(support_union, support)
+
+        local_support = support[y0:y1, x0:x1]
+        tile_fields[tile_id] = {
+            "bounds": list(bounds),
+            "eligible": bool(selected),
+            "residual_scale": residual_scale,
+            "support_min": _finite(local_support.min()) if selected and local_support.numel() else 0.0,
+            "support_mean": _finite(local_support.mean()) if selected and local_support.numel() else 0.0,
+            "support_max": _finite(local_support.max()) if selected and local_support.numel() else 0.0,
+            "support_nonzero_fraction": (
+                _finite((local_support > 0).float().mean()) if selected and local_support.numel() else 0.0
+            ),
+            "hard_direct_correction_rms": _rms(tile_correction) if selected else 0.0,
+            "soft_direct_correction_rms": (
+                _rms(soft_correction[..., y0:y1, x0:x1]) if selected else 0.0
+            ),
+        }
+
+    hard_frontier = _selected_frontier_jump(
+        hard_correction,
+        tiles=tiles,
+        eligible_tiles=eligible_tiles,
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+    )
+    soft_frontier = _selected_frontier_jump(
+        soft_correction,
+        tiles=tiles,
+        eligible_tiles=eligible_tiles,
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+    )
+
+    candidate = video.clone()
+    candidate[:, :, prefix_t] = candidate[:, :, prefix_t] - soft_correction.to(candidate)
+    candidate_content = measure_boundary_content_continuity(
+        candidate,
+        prefix_t,
+        pre_steps=int(pre_steps),
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+        lowpass_kernel=int(lowpass_kernel),
+    )
+    candidate_calibration = measure_provider_boundary_temporal_calibration(
+        candidate,
+        prefix_t,
+        pre_steps=int(pre_steps),
+        calibration_targets=int(calibration_receipt.get("requested_calibration_targets", 5)),
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+        lowpass_kernel=int(lowpass_kernel),
+    )
+
+    for tile_id in tiles:
+        before = content_tiles[tile_id]["boundary"]
+        after = candidate_content["tiles"][tile_id]["boundary"]
+        calibrated_after = candidate_calibration["tiles"][tile_id]
+        tile_fields[tile_id].update(
+            {
+                "provider_centered_lowpass_rms_before": float(before["centered_lowpass_rms"]),
+                "soft_centered_lowpass_rms_after": float(after["centered_lowpass_rms"]),
+                "soft_centered_lowpass_rms_ratio": _safe_ratio(
+                    after["centered_lowpass_rms"],
+                    before["centered_lowpass_rms"],
+                ),
+                "provider_gradient_rms_before": float(before["gradient_rms"]),
+                "soft_gradient_rms_after": float(after["gradient_rms"]),
+                "soft_gradient_rms_ratio": _safe_ratio(after["gradient_rms"], before["gradient_rms"]),
+                "provider_ncc_before": float(before["ncc"]),
+                "soft_ncc_after": float(after["ncc"]),
+                "soft_ncc_delta": float(after["ncc"]) - float(before["ncc"]),
+                "soft_boundary_error_over_historical_max_after": float(
+                    calibrated_after["boundary_error_over_historical_max"]
+                ),
+                "soft_boundary_dispersion_ratio_over_historical_max_after": float(
+                    calibrated_after["boundary_dispersion_ratio_over_historical_max"]
+                ),
+            }
+        )
+
+    provider_global = provider_content_receipt["global_boundary"]
+    candidate_global = candidate_content["global_boundary"]
+    calibrated_global = candidate_calibration["global"]
+    ranked = sorted(
+        tile_fields,
+        key=lambda tile_id: float(tile_fields[tile_id]["soft_centered_lowpass_rms_ratio"]),
+    )
+    return {
+        "policy": PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "production_applied": False,
+        "output_mutated": False,
+        "candidate": "heldout_max_prediction_residual_shrink_v1",
+        "eligibility_rule": "inherit_hard_shadow_heldout_max_selection_v1",
+        "support": "inside_raised_cosine_selected_frontier_v1",
+        "support_owner": "diagnostic_shadow_clone_only",
+        "prefix_t": prefix_t,
+        "pre_steps": int(pre_steps),
+        "tile_rows": int(tile_rows),
+        "tile_cols": int(tile_cols),
+        "lowpass_kernel": int(lowpass_kernel),
+        "feather_width": feather_width,
+        "eligible_tiles": sorted(eligible_tiles),
+        "eligible_tile_count": len(eligible_tiles),
+        "hard_frontier_edge_jump_rms": hard_frontier["rms"],
+        "hard_frontier_edge_jump_abs_max": hard_frontier["abs_max"],
+        "soft_frontier_edge_jump_rms": soft_frontier["rms"],
+        "soft_frontier_edge_jump_abs_max": soft_frontier["abs_max"],
+        "soft_over_hard_frontier_edge_jump_rms": _safe_ratio(soft_frontier["rms"], hard_frontier["rms"]),
+        "soft_over_hard_frontier_edge_jump_abs_max": _safe_ratio(
+            soft_frontier["abs_max"],
+            hard_frontier["abs_max"],
+        ),
+        "support_union_mean": _finite(support_union.mean()),
+        "support_union_nonzero_fraction": _finite((support_union > 0).float().mean()),
+        "soft_correction_rms": _rms(soft_correction),
+        "soft_correction_abs_max": _finite(soft_correction.abs().max()) if soft_correction.numel() else 0.0,
+        "global": {
+            "provider_centered_lowpass_rms_before": float(provider_global["centered_lowpass_rms"]),
+            "soft_centered_lowpass_rms_after": float(candidate_global["centered_lowpass_rms"]),
+            "soft_centered_lowpass_rms_ratio": _safe_ratio(
+                candidate_global["centered_lowpass_rms"],
+                provider_global["centered_lowpass_rms"],
+            ),
+            "provider_gradient_rms_before": float(provider_global["gradient_rms"]),
+            "soft_gradient_rms_after": float(candidate_global["gradient_rms"]),
+            "soft_gradient_rms_ratio": _safe_ratio(
+                candidate_global["gradient_rms"],
+                provider_global["gradient_rms"],
+            ),
+            "provider_ncc_before": float(provider_global["ncc"]),
+            "soft_ncc_after": float(candidate_global["ncc"]),
+            "soft_ncc_delta": float(candidate_global["ncc"]) - float(provider_global["ncc"]),
+            "soft_boundary_error_over_historical_max_after": float(
+                calibrated_global["boundary_error_over_historical_max"]
+            ),
+            "soft_boundary_dispersion_ratio_over_historical_max_after": float(
+                calibrated_global["boundary_dispersion_ratio_over_historical_max"]
+            ),
+        },
+        "tiles": tile_fields,
+        "tiles_by_soft_centered_lowpass_ratio": ranked,
     }
 
 
