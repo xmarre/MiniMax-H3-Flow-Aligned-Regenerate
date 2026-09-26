@@ -15,6 +15,7 @@ PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_pre
 PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
+PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
 PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
@@ -1187,6 +1188,71 @@ def measure_provider_boundary_soft_support_shadow(
         },
         "tiles": tile_fields,
         "tiles_by_soft_centered_lowpass_ratio": ranked,
+    }
+
+
+
+def measure_provider_boundary_post_high_shadow(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    post_high_content_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-evaluate the bounded provider hypothesis on the existing post-high clean state.
+
+    This diagnostic deliberately performs no sampler/model/provider/VAE work and never returns
+    a mutated tensor.  It exists because 00681 demonstrated that a pre-high shadow improvement
+    is not sufficient evidence that the same perturbation remains beneficial after target-high.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("post-high provider-boundary shadow expects floating BxCxTxHxW video")
+    if not bool(torch.isfinite(video).all().item()):
+        raise RuntimeError("post-high provider-boundary shadow input contains NaN or Inf")
+    prefix_t = int(prefix_t)
+    if post_high_content_receipt.get("policy") != BOUNDARY_CONTENT_DIAGNOSTIC_POLICY:
+        raise ValueError("post-high provider-boundary shadow content policy mismatch")
+    if int(post_high_content_receipt.get("prefix_t", -1)) != prefix_t:
+        raise ValueError("post-high provider-boundary shadow prefix drifted")
+    if post_high_content_receipt.get("diagnostic_only") is not True:
+        raise ValueError("post-high provider-boundary shadow requires diagnostic content evidence")
+
+    calibration = measure_provider_boundary_temporal_calibration(video, prefix_t)
+    hard_shadow = measure_provider_boundary_stabilization_shadow(
+        video,
+        prefix_t,
+        calibration_receipt=calibration,
+        provider_content_receipt=post_high_content_receipt,
+    )
+    soft_shadow = measure_provider_boundary_soft_support_shadow(
+        video,
+        prefix_t,
+        calibration_receipt=calibration,
+        provider_content_receipt=post_high_content_receipt,
+        hard_shadow_receipt=hard_shadow,
+    )
+
+    if hard_shadow.get("output_mutated") is not False or soft_shadow.get("output_mutated") is not False:
+        raise RuntimeError("post-high provider-boundary shadow attempted to mutate output")
+    if hard_shadow.get("eligible_tiles") != soft_shadow.get("eligible_tiles"):
+        raise RuntimeError("post-high provider-boundary shadow eligibility drifted")
+
+    return {
+        "policy": PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "production_application_permitted": False,
+        "output_mutated": False,
+        "reason": "00681_requires_post_high_validation_before_any_provider_boundary_mutation",
+        "source_stage": "post_high_internal_clean",
+        "prefix_t": prefix_t,
+        "calibration": calibration,
+        "hard_shadow": hard_shadow,
+        "soft_shadow": soft_shadow,
+        "eligible_tiles": list(soft_shadow.get("eligible_tiles", [])),
+        "eligible_tile_count": int(soft_shadow.get("eligible_tile_count", 0)),
+        "soft_correction_rms": float(soft_shadow.get("soft_correction_rms", 0.0)),
+        "soft_correction_abs_max": float(soft_shadow.get("soft_correction_abs_max", 0.0)),
     }
 
 
