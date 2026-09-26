@@ -9,10 +9,12 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
+    apply_provider_boundary_post_high_suffix_gauge,
     apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
@@ -816,3 +818,80 @@ def test_runtime_gate_rejects_boundary_content_receipt_that_claims_production_co
 
     with pytest.raises(RuntimeGateError, match="production gate"):
         _validate_boundary_content_diagnostics(bad)
+
+
+def test_post_high_suffix_gauge_preserves_all_suffix_first_differences():
+    video = _video_with_local_boundary_change(scale=4.0)
+    torch.manual_seed(7091)
+    suffix = video[:, :, -1:].repeat(1, 1, 3, 1, 1)
+    suffix = suffix + 0.03 * torch.randn_like(suffix)
+    video = torch.cat([video, suffix], dim=2)
+    prefix_t = 5
+    content = measure_boundary_content_continuity(video, prefix_t)
+    calibration = measure_provider_boundary_temporal_calibration(video, prefix_t)
+    hard = measure_provider_boundary_stabilization_shadow(
+        video,
+        prefix_t,
+        calibration_receipt=calibration,
+        provider_content_receipt=content,
+    )
+    soft = measure_provider_boundary_soft_support_shadow(
+        video,
+        prefix_t,
+        calibration_receipt=calibration,
+        provider_content_receipt=content,
+        hard_shadow_receipt=hard,
+    )
+    candidate, receipt = apply_provider_boundary_post_high_suffix_gauge(
+        video,
+        prefix_t,
+        soft_shadow_receipt=soft,
+    )
+
+    assert receipt["policy"] == PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY
+    assert torch.equal(candidate[:, :, :prefix_t], video[:, :, :prefix_t])
+    assert receipt["suffix_temporal_first_difference_preserved"] is True
+    assert receipt["suffix_transition_drift_abs_max"] <= receipt["suffix_transition_drift_tolerance"]
+    before = video[:, :, prefix_t + 1 :].float() - video[:, :, prefix_t:-1].float()
+    after = candidate[:, :, prefix_t + 1 :].float() - candidate[:, :, prefix_t:-1].float()
+    assert torch.allclose(
+        before,
+        after,
+        rtol=0.0,
+        atol=receipt["suffix_transition_drift_tolerance"],
+    )
+    if receipt["applied"]:
+        first_delta = video[:, :, prefix_t] - candidate[:, :, prefix_t]
+        for index in range(prefix_t + 1, video.shape[2]):
+            assert torch.allclose(
+                video[:, :, index] - candidate[:, :, index],
+                first_delta,
+                rtol=0.0,
+                atol=receipt["suffix_transition_drift_tolerance"],
+            )
+
+
+def test_post_high_shadow_reports_bounded_suffix_gauge_candidate():
+    video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat([video, video[:, :, -1:].clone()], dim=2)
+    content = measure_boundary_content_continuity(video, 5)
+    receipt = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+
+    gauge = receipt["suffix_gauge_shadow"]
+    assert gauge["policy"] == PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY
+    assert gauge["diagnostic_only"] is True
+    assert gauge["production_applied"] is False
+    assert gauge["output_mutated"] is False
+    assert gauge["candidate_output_discarded"] is True
+    assert gauge["suffix_temporal_first_difference_preserved"] is True
+    assert gauge["suffix_transition_drift_abs_max"] <= gauge["suffix_transition_drift_tolerance"]
+    assert gauge["gate_reason"] in {
+        "supported",
+        "no_eligible_tiles",
+        "boundary_non_degradation_failed",
+        "suffix_temporal_invariant_failed",
+    }

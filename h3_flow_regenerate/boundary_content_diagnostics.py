@@ -16,6 +16,7 @@ PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_c
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
 PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
+PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY = "partitioned_provider_boundary_post_high_suffix_gauge_v1"
 PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
@@ -1316,6 +1317,51 @@ def measure_provider_boundary_post_high_shadow(
             "candidate_output_discarded": True,
         }
 
+    suffix_gauge_candidate, suffix_gauge_receipt = apply_provider_boundary_post_high_suffix_gauge(
+        video,
+        prefix_t,
+        soft_shadow_receipt=soft_shadow,
+    )
+    del suffix_gauge_candidate
+    eligible_tiles = list(soft_shadow.get("eligible_tiles", []))
+    tile_gate: dict[str, Any] = {}
+    boundary_non_degrading = bool(eligible_tiles)
+    for tile_id in eligible_tiles:
+        tile = soft_shadow["tiles"][tile_id]
+        centered_improved = float(tile["soft_centered_lowpass_rms_ratio"]) < 1.0
+        gradient_non_degraded = float(tile["soft_gradient_rms_ratio"]) <= 1.0
+        ncc_non_degraded = float(tile["soft_ncc_delta"]) >= 0.0
+        tile_gate[tile_id] = {
+            "centered_lowpass_improved": centered_improved,
+            "gradient_non_degraded": gradient_non_degraded,
+            "ncc_non_degraded": ncc_non_degraded,
+        }
+        boundary_non_degrading = boundary_non_degrading and centered_improved and gradient_non_degraded and ncc_non_degraded
+
+    suffix_gauge_shadow = {
+        **suffix_gauge_receipt,
+        "diagnostic_only": True,
+        "production_applied": False,
+        "output_mutated": False,
+        "candidate_output_discarded": True,
+        "boundary_gate": tile_gate,
+        "boundary_non_degrading": boundary_non_degrading,
+        "production_candidate_supported": bool(
+            boundary_non_degrading
+            and suffix_gauge_receipt["suffix_temporal_first_difference_preserved"]
+            and suffix_gauge_receipt["applied"]
+        ),
+    }
+    suffix_gauge_shadow["gate_reason"] = (
+        "supported"
+        if suffix_gauge_shadow["production_candidate_supported"]
+        else "no_eligible_tiles"
+        if not eligible_tiles
+        else "boundary_non_degradation_failed"
+        if not boundary_non_degrading
+        else "suffix_temporal_invariant_failed"
+    )
+
     return {
         "policy": PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
         "diagnostic_only": True,
@@ -1328,7 +1374,8 @@ def measure_provider_boundary_post_high_shadow(
         "calibration": calibration,
         "hard_shadow": hard_shadow,
         "soft_shadow": soft_shadow,
-        "eligible_tiles": list(soft_shadow.get("eligible_tiles", [])),
+        "suffix_gauge_shadow": suffix_gauge_shadow,
+        "eligible_tiles": eligible_tiles,
         "eligible_tile_count": int(soft_shadow.get("eligible_tile_count", 0)),
         "soft_correction_rms": float(soft_shadow.get("soft_correction_rms", 0.0)),
         "soft_correction_abs_max": float(soft_shadow.get("soft_correction_abs_max", 0.0)),
@@ -1471,6 +1518,93 @@ def apply_provider_boundary_soft_support_stabilization(
         "soft_centered_lowpass_rms_ratio": float(soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]),
         "soft_gradient_rms_ratio": float(soft_shadow_receipt["global"]["soft_gradient_rms_ratio"]),
         "soft_ncc_delta": float(soft_shadow_receipt["global"]["soft_ncc_delta"]),
+    }
+
+
+def apply_provider_boundary_post_high_suffix_gauge(
+    video: torch.Tensor,
+    prefix_t: int,
+    *,
+    soft_shadow_receipt: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Apply one final-domain spatial gauge uniformly to every generated suffix token.
+
+    The correction field is the already measured soft-support boundary candidate. Applying
+    exactly the same field to every suffix token changes only the prefix->suffix gauge; all
+    suffix->suffix temporal first differences must remain unchanged up to dtype roundoff.
+    """
+
+    if video.ndim != 5 or not video.is_floating_point():
+        raise ValueError("post-high suffix gauge expects floating BxCxTxHxW video")
+    prefix_t = int(prefix_t)
+    temporal = int(video.shape[2])
+    if prefix_t < 1 or prefix_t >= temporal:
+        raise ValueError("post-high suffix gauge requires a non-empty prefix and suffix")
+
+    one_token, historical = apply_provider_boundary_soft_support_stabilization(
+        video,
+        prefix_t,
+        soft_shadow_receipt=soft_shadow_receipt,
+    )
+    correction = video[:, :, prefix_t] - one_token[:, :, prefix_t]
+    correction_rms = _rms(correction)
+    correction_abs_max = _finite(correction.float().abs().max()) if correction.numel() else 0.0
+    expected_rms = float(soft_shadow_receipt.get("soft_correction_rms", float("nan")))
+    expected_abs_max = float(soft_shadow_receipt.get("soft_correction_abs_max", float("nan")))
+    if not (
+        math.isfinite(expected_rms)
+        and math.isfinite(expected_abs_max)
+        and math.isclose(correction_rms, expected_rms, rel_tol=2e-6, abs_tol=2e-8)
+        and math.isclose(correction_abs_max, expected_abs_max, rel_tol=2e-6, abs_tol=2e-8)
+    ):
+        raise RuntimeError("post-high suffix gauge no longer reproduces the measured soft-support correction")
+
+    stabilized = video.clone()
+    stabilized[:, :, prefix_t:] = (
+        video[:, :, prefix_t:] - correction.unsqueeze(2).to(video)
+    )
+    if not torch.equal(stabilized[:, :, :prefix_t], video[:, :, :prefix_t]):
+        raise RuntimeError("post-high suffix gauge modified the authoritative prefix")
+
+    suffix_count = temporal - prefix_t
+    if suffix_count > 1:
+        before_delta = video[:, :, prefix_t + 1 :].float() - video[:, :, prefix_t:-1].float()
+        after_delta = stabilized[:, :, prefix_t + 1 :].float() - stabilized[:, :, prefix_t:-1].float()
+        drift = after_delta - before_delta
+        drift_rms = _rms(drift)
+        drift_abs_max = _finite(drift.abs().max()) if drift.numel() else 0.0
+    else:
+        drift_rms = 0.0
+        drift_abs_max = 0.0
+
+    suffix_abs_max = _finite(video[:, :, prefix_t:].float().abs().max())
+    dtype_eps = float(torch.finfo(video.dtype).eps)
+    drift_tolerance = 8.0 * dtype_eps * max(1.0, suffix_abs_max, correction_abs_max)
+    temporal_preserved = drift_abs_max <= drift_tolerance
+    if not temporal_preserved:
+        raise RuntimeError(
+            "post-high suffix gauge changed suffix temporal first differences beyond dtype roundoff"
+        )
+
+    return stabilized, {
+        "policy": PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
+        "source_shadow_policy": PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
+        "source_historical_policy": str(historical.get("policy", "")),
+        "support": str(soft_shadow_receipt.get("support", "")),
+        "support_owner": "post_high_all_generated_suffix_tokens",
+        "prefix_t": prefix_t,
+        "eligible_tiles": list(soft_shadow_receipt.get("eligible_tiles", [])),
+        "eligible_tile_count": int(soft_shadow_receipt.get("eligible_tile_count", 0)),
+        "applied": bool(correction_rms > 0.0 and soft_shadow_receipt.get("eligible_tiles")),
+        "corrected_tokens": suffix_count if correction_rms > 0.0 and soft_shadow_receipt.get("eligible_tiles") else 0,
+        "authoritative_prefix_modified": False,
+        "later_suffix_modified": bool(suffix_count > 1 and correction_rms > 0.0),
+        "correction_rms": correction_rms,
+        "correction_abs_max": correction_abs_max,
+        "suffix_temporal_first_difference_preserved": temporal_preserved,
+        "suffix_transition_drift_rms": drift_rms,
+        "suffix_transition_drift_abs_max": drift_abs_max,
+        "suffix_transition_drift_tolerance": drift_tolerance,
     }
 
 

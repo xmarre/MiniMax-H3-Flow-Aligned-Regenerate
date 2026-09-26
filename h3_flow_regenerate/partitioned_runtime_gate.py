@@ -19,6 +19,7 @@ from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -1154,21 +1155,24 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         _require(receipt.get("reason") == "off", "disabled provider-boundary stabilization reason drifted")
         return
 
-    _require(mode == "soft_support_v1", "provider-boundary stabilization requested unknown mode")
+    _require(
+        mode in {"soft_support_v1", "post_high_suffix_gauge_v1"},
+        "provider-boundary stabilization requested unknown mode",
+    )
     _require(
         not applied and corrected_tokens == 0,
-        "pre-high-only provider stabilization is invalidated; production mutation must stay disabled",
+        "pre-high provider stabilization must stay non-mutating",
     )
     reason = str(receipt.get("reason", ""))
-    _require(
-        reason
-        in {
-            "disabled_pending_post_high_validation",
-            "exact_overlap_fallback_not_selected",
-            "rigid_v2_selected",
-        },
-        "provider-boundary stabilization failed closed for an unknown reason",
-    )
+    allowed_reasons = {
+        "exact_overlap_fallback_not_selected",
+        "rigid_v2_selected",
+    }
+    if mode == "soft_support_v1":
+        allowed_reasons.add("disabled_pending_post_high_validation")
+    else:
+        allowed_reasons.add("deferred_to_post_high_suffix_gauge")
+    _require(reason in allowed_reasons, "provider-boundary stabilization failed closed for an unknown reason")
     if reason == "disabled_pending_post_high_validation":
         _require(
             receipt.get("historical_candidate_policy") == PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -1196,7 +1200,9 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         _event_fields(event) for event in window if _event_kind(event) == "partitioned_provider_boundary_stabilization"
     ]
     requested_soft = bool(
-        stabilization and stabilization[0].get("requested") and stabilization[0].get("mode") == "soft_support_v1"
+        stabilization
+        and stabilization[0].get("requested")
+        and stabilization[0].get("mode") in {"soft_support_v1", "post_high_suffix_gauge_v1"}
     )
     has_boundary_diagnostics = any(_event_kind(event) == "partitioned_boundary_content_continuity" for event in window)
     events = [
@@ -1337,6 +1343,105 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
             successor.get("reason") == "no_second_suffix_token",
             "unavailable post-high successor receipt has an unknown reason",
         )
+
+    gauge = receipt.get("suffix_gauge_shadow")
+    _require(isinstance(gauge, dict), "post-high suffix-gauge shadow is missing")
+    _require(
+        gauge.get("policy") == PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
+        "post-high suffix-gauge shadow policy drifted",
+    )
+    _require(gauge.get("diagnostic_only") is True, "post-high suffix-gauge shadow is not diagnostic-only")
+    _require(gauge.get("production_applied") is False, "post-high suffix-gauge shadow claims production application")
+    _require(gauge.get("output_mutated") is False, "post-high suffix-gauge shadow mutated output")
+    _require(
+        gauge.get("candidate_output_discarded") is True,
+        "post-high suffix-gauge shadow candidate was not discarded",
+    )
+    drift = _finite_number(gauge.get("suffix_transition_drift_abs_max"))
+    tolerance = _finite_number(gauge.get("suffix_transition_drift_tolerance"))
+    _require(tolerance >= 0.0 and drift <= tolerance, "post-high suffix gauge violated suffix temporal invariance")
+    _require(
+        gauge.get("suffix_temporal_first_difference_preserved") is True,
+        "post-high suffix gauge did not preserve suffix temporal first differences",
+    )
+    _require(
+        gauge.get("gate_reason")
+        in {
+            "supported",
+            "no_eligible_tiles",
+            "boundary_non_degradation_failed",
+            "suffix_temporal_invariant_failed",
+        },
+        "post-high suffix-gauge shadow gate reason drifted",
+    )
+
+
+def _validate_provider_boundary_post_high_suffix_gauge(window: list[dict[str, Any]]) -> None:
+    stabilization = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_provider_boundary_stabilization"
+    ]
+    requested = bool(
+        stabilization
+        and stabilization[0].get("requested")
+        and stabilization[0].get("mode") == "post_high_suffix_gauge_v1"
+    )
+    events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_post_high_suffix_gauge"
+    ]
+    if not requested:
+        _require(not events, "unexpected post-high suffix-gauge production receipt")
+        return
+
+    _require(len(events) == 1, "post-high suffix gauge must emit exactly one production receipt")
+    receipt = events[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
+        "post-high suffix-gauge production policy drifted",
+    )
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(receipt.get(field) == 0, f"post-high suffix gauge added work: {field}")
+    _require(receipt.get("authoritative_prefix_modified") is False, "post-high suffix gauge modified prefix")
+    _require(receipt.get("caller_prefix_preserved") is True, "post-high suffix gauge changed caller prefix")
+    _require(receipt.get("caller_audio_preserved") is True, "post-high suffix gauge changed caller audio")
+
+    applied = bool(receipt.get("applied"))
+    reason = str(receipt.get("reason", ""))
+    if not applied:
+        _require(
+            reason in {
+                "no_eligible_tiles",
+                "boundary_non_degradation_failed",
+                "suffix_temporal_invariant_failed",
+                "post_high_prefix_not_exact",
+                "shadow_gate_rejected",
+                "zero_correction",
+            },
+            "post-high suffix gauge failed closed for an unknown reason",
+        )
+        _require(int(receipt.get("corrected_tokens", 0)) == 0, "rejected post-high suffix gauge corrected tokens")
+        return
+
+    _require(reason == "applied", "applied post-high suffix gauge reason drifted")
+    _require(int(receipt.get("corrected_tokens", 0)) > 0, "applied post-high suffix gauge corrected no tokens")
+    _require(
+        receipt.get("suffix_temporal_first_difference_preserved") is True,
+        "applied post-high suffix gauge changed suffix temporal first differences",
+    )
+    drift = _finite_number(receipt.get("suffix_transition_drift_abs_max"))
+    tolerance = _finite_number(receipt.get("suffix_transition_drift_tolerance"))
+    _require(drift <= tolerance, "applied post-high suffix gauge exceeded temporal drift bound")
+    roundtrip = _finite_number(receipt.get("roundtrip_suffix_abs_max"))
+    roundtrip_tolerance = _finite_number(receipt.get("roundtrip_tolerance"))
+    _require(roundtrip <= roundtrip_tolerance, "post-high suffix gauge roundtrip exceeded dtype bound")
+    _require(_finite_number(receipt.get("correction_rms")) > 0.0, "applied post-high suffix gauge has zero correction")
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
@@ -2643,6 +2748,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_soft_support_shadow(window)
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
+    _validate_provider_boundary_post_high_suffix_gauge(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)

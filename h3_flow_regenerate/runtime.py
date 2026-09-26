@@ -712,6 +712,15 @@ def _process_latent_in(base_model: Any, value: torch.Tensor, shapes: list[tuple[
         base_model.latent_shapes = previous
 
 
+def _process_latent_out(base_model: Any, value: torch.Tensor, shapes: list[tuple[int, ...]]) -> torch.Tensor:
+    previous = getattr(base_model, "latent_shapes", None)
+    try:
+        base_model.latent_shapes = shapes
+        return base_model.process_latent_out(value)
+    finally:
+        base_model.latent_shapes = previous
+
+
 def _noise_argument(
     base_model: Any,
     state: torch.Tensor,

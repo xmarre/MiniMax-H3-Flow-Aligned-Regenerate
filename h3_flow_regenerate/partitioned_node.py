@@ -26,6 +26,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -365,10 +366,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
                 "tooltip": (
                     "off preserves the current provider boundary exactly. soft_support_v1 is retained "
-                    "for saved-workflow compatibility but is now fail-closed and diagnostic-only: hardware "
-                    "validation showed its pre-high correction was amplified by target-high. When selected, "
-                    "the runtime leaves sampler state unchanged and emits a bounded post-high shadow, "
-                    "including first-to-second-suffix spillover, for the next hardware gate."
+                    "for saved-workflow compatibility but remains fail-closed and diagnostic-only. "
+                    "post_high_suffix_gauge_v1 is an explicit hardware candidate derived from final-domain "
+                    "evidence: after target-high it applies the measured spatial correction uniformly to "
+                    "every generated suffix token, preserving suffix-to-suffix first differences while "
+                    "changing only the exact-prefix to generated-suffix representation gauge."
                 ),
             },
         )

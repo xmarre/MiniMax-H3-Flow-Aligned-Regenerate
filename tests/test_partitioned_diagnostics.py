@@ -40,6 +40,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -272,6 +273,10 @@ def test_provider_boundary_stabilization_normalization_is_bounded():
     assert (
         normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT)
         == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
+    )
+    assert (
+        normalize_provider_boundary_stabilization(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE)
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE
     )
     with pytest.raises(ValueError, match="provider-boundary stabilization"):
         normalize_provider_boundary_stabilization("invented")
@@ -1051,3 +1056,23 @@ def test_frame_gauge_guidance_rejects_unaudited_sampler_before_registration():
     assert fields["status"] == "rejected"
     assert fields["sampler"] == "sample_euler"
     assert fields["supported_samplers"] == ("sample_res_multistep",)
+
+
+def test_post_high_suffix_gauge_control_is_model_local_and_opt_in():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE,
+    )
+    assert (
+        model.model_options["transformer_options"][PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY]
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE
+    )
+    assert (
+        metrics.events[-1][1]["provider_boundary_stabilization"]
+        == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE
+    )

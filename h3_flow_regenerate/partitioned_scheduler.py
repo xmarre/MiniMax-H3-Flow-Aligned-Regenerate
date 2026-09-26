@@ -18,6 +18,7 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
+    apply_provider_boundary_post_high_suffix_gauge,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
     measure_provider_boundary_post_high_shadow,
@@ -74,6 +75,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -122,6 +124,7 @@ from .runtime import (
     _merge_preserved_noise,
     _noise_argument,
     _process_latent_in,
+    _process_latent_out,
     _raw_sampler_state,
     _reset_guider_conds,
     _resize_packed_latent_image,
@@ -3186,15 +3189,20 @@ def run_partitioned_progressive(
                 provider_native_clean = learned_clean
 
                 if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
-                    # Hardware validation disproved the pre-high-only promotion gate: the same
-                    # provider/shadow state improved before target-high, then target-high
-                    # amplified the selected tile and decoded-media validation regressed.
-                    # Preserve the serialized selector for old workflows but fail closed.
-                    # The same requested run now emits a post-high shadow below instead.
+                    # 00681 disproved the historical pre-high mutation. Keep it loadable but fail closed.
                     provider_boundary_stabilization_receipt.update(
                         reason="disabled_pending_post_high_validation",
                         exact_overlap_fallback_required=True,
                         historical_candidate_policy="partitioned_provider_boundary_soft_support_production_v1",
+                        historical_candidate_mutation_disabled=True,
+                        production_mutation_allowed=False,
+                    )
+                elif provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE:
+                    # The 00682 candidate is deliberately deferred until target-high is complete.
+                    # No pre-high provider/sampler state is mutated.
+                    provider_boundary_stabilization_receipt.update(
+                        reason="deferred_to_post_high_suffix_gauge",
+                        exact_overlap_fallback_required=True,
                         historical_candidate_mutation_disabled=True,
                         production_mutation_allowed=False,
                     )
@@ -3955,7 +3963,10 @@ def run_partitioned_progressive(
                 ),
             )
 
-            if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
+            if provider_boundary_stabilization in {
+                PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+                PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE,
+            }:
                 post_high_shadow_started = time.perf_counter()
                 post_high_shadow = measure_provider_boundary_post_high_shadow(
                     post_high_diagnostic_video,
@@ -3977,6 +3988,129 @@ def run_partitioned_progressive(
                     elapsed_ms=(time.perf_counter() - post_high_shadow_started) * 1000.0,
                     **post_high_shadow,
                 )
+
+                if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SUFFIX_GAUGE:
+                    gauge_shadow = post_high_shadow["suffix_gauge_shadow"]
+                    gauge_supported = bool(gauge_shadow.get("production_candidate_supported"))
+                    gauge_event = {
+                        "policy": str(gauge_shadow.get("policy", "")),
+                        "mode": provider_boundary_stabilization,
+                        "applied": False,
+                        "reason": str(gauge_shadow.get("gate_reason", "shadow_gate_rejected")),
+                        "corrected_tokens": 0,
+                        "authoritative_prefix_modified": False,
+                        "later_suffix_modified": False,
+                        "caller_prefix_preserved": True,
+                        "caller_audio_preserved": True,
+                        "suffix_temporal_first_difference_preserved": bool(
+                            gauge_shadow.get("suffix_temporal_first_difference_preserved", False)
+                        ),
+                        "suffix_transition_drift_rms": float(
+                            gauge_shadow.get("suffix_transition_drift_rms", 0.0)
+                        ),
+                        "suffix_transition_drift_abs_max": float(
+                            gauge_shadow.get("suffix_transition_drift_abs_max", 0.0)
+                        ),
+                        "suffix_transition_drift_tolerance": float(
+                            gauge_shadow.get("suffix_transition_drift_tolerance", 0.0)
+                        ),
+                        "correction_rms": float(gauge_shadow.get("correction_rms", 0.0)),
+                        "correction_abs_max": float(gauge_shadow.get("correction_abs_max", 0.0)),
+                        "eligible_tiles": list(gauge_shadow.get("eligible_tiles", [])),
+                        "eligible_tile_count": int(gauge_shadow.get("eligible_tile_count", 0)),
+                        "roundtrip_suffix_abs_max": 0.0,
+                        "roundtrip_tolerance": 0.0,
+                        "extra_h3_nfe": 0,
+                        "extra_sampler_lifetimes": 0,
+                        "extra_history_boundaries": 0,
+                        "extra_provider_calls": 0,
+                        "extra_vae_calls": 0,
+                    }
+                    if prefix_recanonicalized:
+                        gauge_event["reason"] = "post_high_prefix_not_exact"
+                    elif gauge_supported:
+                        if final_internal_audio is None:
+                            raise RuntimeError("post-high suffix gauge lost the final internal audio state")
+                        corrected_internal_video, gauge_receipt = apply_provider_boundary_post_high_suffix_gauge(
+                            final_internal_video,
+                            stage_plan.prefix_t,
+                            soft_shadow_receipt=post_high_shadow["soft_shadow"],
+                        )
+                        corrected_internal, _ = pack_streams([corrected_internal_video, final_internal_audio])
+                        caller_candidate = _process_latent_out(base_model, corrected_internal, target_shapes)
+                        caller_candidate_video, _caller_candidate_audio = unpack_streams(
+                            caller_candidate,
+                            target_shapes,
+                        )
+                        corrected_caller_video = final_video.clone()
+                        corrected_caller_video[:, :, stage_plan.prefix_t :] = caller_candidate_video[
+                            :, :, stage_plan.prefix_t :
+                        ].to(corrected_caller_video)
+                        if not torch.equal(
+                            corrected_caller_video[:, :, : stage_plan.prefix_t],
+                            final_video[:, :, : stage_plan.prefix_t],
+                        ):
+                            raise RuntimeError("post-high suffix gauge modified the caller-owned exact prefix")
+
+                        result, _ = pack_streams([corrected_caller_video, final_audio])
+                        roundtrip_internal = _process_latent_in(base_model, result, target_shapes)
+                        roundtrip_video, roundtrip_audio = unpack_streams(roundtrip_internal, target_shapes)
+                        if not torch.equal(
+                            roundtrip_video[:, :, : stage_plan.prefix_t],
+                            final_internal_video[:, :, : stage_plan.prefix_t],
+                        ):
+                            raise RuntimeError("post-high suffix gauge roundtrip changed the internal exact prefix")
+                        if not torch.equal(roundtrip_audio, final_internal_audio):
+                            raise RuntimeError("post-high suffix gauge roundtrip changed internal audio")
+
+                        roundtrip_delta = (
+                            roundtrip_video[:, :, stage_plan.prefix_t :].float()
+                            - corrected_internal_video[:, :, stage_plan.prefix_t :].float()
+                        )
+                        roundtrip_abs_max = (
+                            float(roundtrip_delta.abs().max().detach().to(device="cpu").item())
+                            if roundtrip_delta.numel()
+                            else 0.0
+                        )
+                        roundtrip_scale = max(
+                            1.0,
+                            float(
+                                corrected_internal_video[:, :, stage_plan.prefix_t :]
+                                .float()
+                                .abs()
+                                .max()
+                                .detach()
+                                .to(device="cpu")
+                                .item()
+                            ),
+                        )
+                        roundtrip_tolerance = 8.0 * float(torch.finfo(corrected_internal_video.dtype).eps) * roundtrip_scale
+                        if roundtrip_abs_max > roundtrip_tolerance:
+                            raise RuntimeError("post-high suffix gauge caller/internal roundtrip drift exceeded dtype bound")
+
+                        final_video = corrected_caller_video
+                        final_internal = roundtrip_internal
+                        final_internal_video = roundtrip_video
+                        final_internal_audio = roundtrip_audio
+                        gauge_event.update(
+                            gauge_receipt,
+                            mode=provider_boundary_stabilization,
+                            applied=bool(gauge_receipt["applied"]),
+                            reason="applied" if gauge_receipt["applied"] else "zero_correction",
+                            caller_prefix_preserved=True,
+                            caller_audio_preserved=True,
+                            roundtrip_suffix_abs_max=roundtrip_abs_max,
+                            roundtrip_tolerance=roundtrip_tolerance,
+                            extra_h3_nfe=0,
+                            extra_sampler_lifetimes=0,
+                            extra_history_boundaries=0,
+                            extra_provider_calls=0,
+                            extra_vae_calls=0,
+                        )
+                    binding.metrics.event(
+                        "partitioned_provider_boundary_post_high_suffix_gauge",
+                        **gauge_event,
+                    )
 
         if diagnostic_audio_control:
             if final_internal is None or final_internal_audio is None:
