@@ -28,6 +28,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
     _validate_provider_boundary_post_high_shadow,
+    _validate_provider_boundary_post_high_suffix_gauge,
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
@@ -895,3 +896,91 @@ def test_post_high_shadow_reports_bounded_suffix_gauge_candidate():
         "boundary_non_degradation_failed",
         "suffix_temporal_invariant_failed",
     }
+
+
+def test_runtime_gate_accepts_applied_post_high_suffix_gauge():
+    video = _video_with_local_boundary_change(scale=4.0)
+    video = torch.cat([video, video[:, :, -1:].clone()], dim=2)
+    torch.manual_seed(7092)
+    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
+    content = measure_boundary_content_continuity(video, 5)
+    shadow = measure_provider_boundary_post_high_shadow(
+        video,
+        5,
+        post_high_content_receipt=content,
+    )
+    gauge_candidate, gauge_receipt = apply_provider_boundary_post_high_suffix_gauge(
+        video,
+        5,
+        soft_shadow_receipt=shadow["soft_shadow"],
+    )
+    del gauge_candidate
+    assert gauge_receipt["applied"] is True
+    assert shadow["suffix_gauge_shadow"]["production_candidate_supported"] is True
+
+    stabilization = {
+        "kind": "partitioned_provider_boundary_stabilization",
+        "fields": {
+            "requested": True,
+            "mode": "post_high_suffix_gauge_v1",
+            "applied": False,
+            "reason": "deferred_to_post_high_suffix_gauge",
+            "authoritative_prefix_modified": False,
+            "later_suffix_extrapolated": False,
+            "corrected_tokens": 0,
+            "exact_overlap_fallback_required": True,
+            "exact_overlap_fallback_requested": True,
+            "historical_candidate_mutation_disabled": True,
+            "production_mutation_allowed": False,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        },
+    }
+    post_event = {
+        "kind": "partitioned_provider_boundary_post_high_shadow",
+        "fields": {
+            "mode": "post_high_suffix_gauge_v1",
+            "domain": "model_internal_clean",
+            "owner_before": "authoritative_exact_prefix",
+            "owner_after": "post_high_generated_suffix",
+            "legacy_pre_high_mutation_disabled": True,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+            "elapsed_ms": 1.0,
+            **shadow,
+        },
+    }
+    production_event = {
+        "kind": "partitioned_provider_boundary_post_high_suffix_gauge",
+        "fields": {
+            **gauge_receipt,
+            "mode": "post_high_suffix_gauge_v1",
+            "applied": True,
+            "reason": "applied",
+            "caller_prefix_preserved": True,
+            "caller_audio_preserved": True,
+            "roundtrip_suffix_abs_max": 0.0,
+            "roundtrip_tolerance": 1.0e-6,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        },
+    }
+    window = [
+        stabilization,
+        _event("post_high_internal_clean", content),
+        post_event,
+        production_event,
+    ]
+
+    _validate_provider_boundary_stabilization(window)
+    _validate_provider_boundary_post_high_shadow(window)
+    _validate_provider_boundary_post_high_suffix_gauge(window)

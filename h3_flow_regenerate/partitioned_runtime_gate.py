@@ -1359,7 +1359,14 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
         )
 
     gauge = receipt.get("suffix_gauge_shadow")
-    _require(isinstance(gauge, dict), "post-high suffix-gauge shadow is missing")
+    stabilization_mode = str(stabilization[0].get("mode", "")) if stabilization else ""
+    if gauge is None:
+        _require(
+            stabilization_mode == "soft_support_v1",
+            "post-high suffix-gauge shadow is missing for the suffix-gauge production mode",
+        )
+        return
+    _require(isinstance(gauge, dict), "post-high suffix-gauge shadow is malformed")
     _require(
         gauge.get("policy") == PROVIDER_BOUNDARY_POST_HIGH_SUFFIX_GAUGE_POLICY,
         "post-high suffix-gauge shadow policy drifted",
