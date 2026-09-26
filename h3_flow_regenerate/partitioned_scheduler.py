@@ -20,6 +20,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .boundary_content_diagnostics import (
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
     measure_provider_boundary_temporal_calibration,
     measure_provider_boundary_temporal_predictor,
@@ -3416,6 +3417,27 @@ def run_partitioned_progressive(
                 extra_provider_calls=0,
                 extra_vae_calls=0,
                 **provider_stabilization_shadow_receipt,
+            )
+            soft_support_shadow_started = time.perf_counter()
+            provider_soft_support_shadow_receipt = measure_provider_boundary_soft_support_shadow(
+                learned_clean,
+                stage_plan.prefix_t,
+                calibration_receipt=provider_calibration_receipt,
+                provider_content_receipt=provider_receipt,
+                hard_shadow_receipt=provider_stabilization_shadow_receipt,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_soft_support_shadow",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - soft_support_shadow_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_soft_support_shadow_receipt,
             )
             boundary_content_started = time.perf_counter()
             boundary_content_pre_high_receipt = measure_boundary_content_continuity(
