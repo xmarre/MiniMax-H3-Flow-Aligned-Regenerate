@@ -36,6 +36,21 @@ from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
 LOG = logging.getLogger(__name__)
 
 
+def _claim_frame_gauge_invocation(binding: FlowBinding, *, enabled: bool) -> bool:
+    """Claim the transient frame-gauge transaction for one outer invocation."""
+    if not enabled:
+        return False
+    if binding.frame_gauge_invocation_active:
+        raise RuntimeError("nested partitioned frame-gauge invocation is unsupported")
+    binding.frame_gauge_invocation_active = True
+    return True
+
+
+def _release_frame_gauge_invocation(binding: FlowBinding, *, claimed: bool) -> None:
+    if claimed:
+        binding.frame_gauge_invocation_active = False
+
+
 def _source_has_audio_velocity_mask_contract(source: str) -> bool:
     execute_index = source.find(").execute(")
     mask_index = source.find("out[1] = out[1] * audio_denoise_mask")
@@ -212,8 +227,15 @@ def partitioned_outer_wrapper(
         context_installed = True
 
     outer_started = time.perf_counter()
+    if binding.registered_guidance_reference is not None:
+        raise RuntimeError("stale or nested partitioned frame-gauge guidance context is unsupported")
+    frame_gauge_claimed = _claim_frame_gauge_invocation(
+        binding,
+        enabled=bool(progressive.frame_gauge_repair),
+    )
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+    binding.registered_guidance_reference = None
     error = None
     fallback_reason = None
     result = None
@@ -248,6 +270,8 @@ def partitioned_outer_wrapper(
             transformer_options.pop(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY, None)
         binding.guidance_state.reset()
         binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
+        _release_frame_gauge_invocation(binding, claimed=frame_gauge_claimed)
         if fallback_reason is None:
             binding.metrics.event(
                 "sampler_wall",
