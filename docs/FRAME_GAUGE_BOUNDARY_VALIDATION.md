@@ -538,3 +538,94 @@ This is **not yet a default promotion**. The first mutating hardware run must
 verify that the expected clean-domain improvement survives exact-overlap and
 target-high sampling and, critically, that the decoded video improves at the
 visible boundary without introducing a new local artifact.
+
+
+## 00680 soft-support result
+
+00680 reproduces the same provider-native boundary state as 00679. The hard
+shadow again selects only `r2c0` with residual scale `0.6781307988`.
+The raised-cosine soft-support shadow therefore compares the same residual
+correction under a different spatial support policy rather than selecting a new
+content region or threshold.
+
+The direct selected/ineligible correction frontier is eliminated by the soft
+support in this realization:
+
+- hard frontier correction-jump RMS: about `0.122324`;
+- hard frontier correction-jump absolute maximum: about `0.579364`;
+- soft frontier correction-jump RMS: `0.0`;
+- soft frontier correction-jump absolute maximum: `0.0`.
+
+This is the intended effect of the inside-only taper: the correction reaches
+zero at every selected/ineligible boundary before entering the neighboring
+tile. The soft correction is correspondingly smaller overall, with full-frame
+RMS about `0.018365` versus `0.024470` for hard support and absolute maximum
+about `0.352940` versus `0.579364`.
+
+The selected `r2c0` region retains most of the hard-shadow benefit:
+
+- centered low-pass RMS ratio: `0.84908` soft versus `0.78751` hard;
+- gradient RMS ratio: `0.91096` soft versus `0.88116` hard;
+- NCC delta: `+0.01191` soft versus `+0.01627` hard.
+
+Relative to the hard-shadow improvement above provider-native, the soft support
+retains about 71% of the centered-lowpass reduction, 75% of the gradient
+reduction, and 73% of the NCC gain while eliminating the measured hard frontier
+jump.
+
+The taper does deliberately reduce the effective correction amplitude near the
+frontier. Consequently the recalibrated `r2c0` prediction error remains
+slightly outside the held-out maxima after the soft candidate:
+
+- absolute prediction error / held-out maximum: about `1.0770`;
+- dispersion-normalized prediction error / held-out maximum: about `1.2495`.
+
+This is not treated as a reason to amplify the taper. The held-out envelope was
+used to establish that the original boundary was anomalous and to derive the
+bounded residual scale. Once spatial support is tapered, forcing every supported
+cell back to the same scalar envelope would require a new amplification rule
+chosen after observing 00680. That would overfit this boundary and could undo
+the edge-safety evidence. The first production candidate therefore uses the
+measured soft candidate exactly as tested.
+
+Globally the soft candidate remains small and favorable: centered low-pass RMS
+is about `0.99244x`, gradient RMS about `0.99478x`, and NCC improves by about
+`+0.00085`. The candidate remains a one-token, local provider-native
+correction.
+
+### Opt-in production candidate
+
+The next hardware step promotes the measured soft candidate into an explicitly
+opt-in production arm, not a new default.
+
+The user-facing partitioned node now exposes
+`provider_boundary_stabilization` with:
+
+- `off` — default and exact historical behavior;
+- `soft_support_v1` — bounded production candidate.
+
+`soft_support_v1` is eligible only inside the same rejected rigid-v2 arm that
+already qualifies for the exact-overlap fallback. It recomputes the held-out
+calibration, hard shadow, and soft shadow from the actual provider-native clean
+boundary in the current run. It then requires the production correction to
+numerically reproduce the measured soft-shadow correction before mutation.
+
+When applied, it:
+
+1. modifies only the provider-native first suffix token;
+2. leaves the provider prefix unchanged;
+3. leaves every later suffix token unchanged;
+4. maps that clean-domain delta through the existing conditional re-noise affine
+   mapping;
+5. then runs the existing exact-overlap bridge against the stabilized provider
+   boundary, so authoritative exact-prefix restoration preserves the stabilized
+   provider transition rather than reconstructing the original anomalous one.
+
+It adds no H3 NFE, provider call, VAE call, sampler lifetime, random draw, or
+history boundary. Rigid-v2 remains rejected, no registered guidance reference is
+created from that rejected transaction, and the exact-overlap bridge remains the
+owner of exact-prefix/provider representation reconciliation.
+
+The production candidate remains default-off until a matched decoded-media run
+shows that the measured internal improvement survives the complete high-stage
+and VAE path without creating a new local artifact.
