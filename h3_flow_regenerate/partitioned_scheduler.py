@@ -1509,9 +1509,7 @@ def _frame_gauge_boundary_motion_check(
             "after_error_cells": after_error,
             "error_improvement_ratio": improvement,
             "error_delta_cells": error_delta,
-            "within_degradation_bound": bool(
-                error_delta <= FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12
-            ),
+            "within_degradation_bound": bool(error_delta <= FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12),
             "informative": bool(before_error >= FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS),
         }
 
