@@ -224,7 +224,7 @@ def test_boundary_motion_gate_uses_transformed_native_for_competing_motion():
     accepted, fields, reason = _frame_gauge_boundary_motion_check(learned, exact, aligned, prefix_t=4)
 
     assert accepted, reason
-    assert fields["policy"] == "native_boundary_motion_consensus_v3"
+    assert fields["policy"] == "native_boundary_motion_consensus_v4"
     _validate_boundary_motion_receipt(fields)
     for check in fields["checks"].values():
         assert check["candidate"] == check["transformed_native"]
@@ -302,12 +302,40 @@ def test_boundary_motion_consensus_accepts_one_strong_roi_when_all_rois_nondegra
 
     assert accepted, fields
     assert reason == "accepted"
-    assert fields["policy"] == "native_boundary_motion_consensus_v3"
-    assert fields["acceptance_rule"] == "all_rois_nondegrading_and_any_informative_roi_strong_v1"
+    assert fields["policy"] == "native_boundary_motion_consensus_v4"
+    assert fields["acceptance_rule"] == "all_rois_within_one_fine_search_tick_and_any_informative_roi_strong_v1"
     assert fields["informative_rois"] == ["upper45", "full"]
     assert fields["strong_improvement_rois"] == ["full"]
     assert fields["checks"]["upper45"]["error_improvement_ratio"] == pytest.approx(0.1)
     assert fields["checks"]["full"]["error_improvement_ratio"] == pytest.approx(0.5)
+    _validate_boundary_motion_receipt(fields)
+
+
+def test_boundary_motion_consensus_accepts_one_tick_bounded_roi_degradation(monkeypatch):
+    # Reproduces the 00686 geometry class without depending on run-specific
+    # tensors: upper45 is strongly improved while the full-frame witness moves
+    # only 0.04 cell in the wrong direction, below the 1/16-cell estimator
+    # fine-search quantum.
+    _mock_boundary_measurement_sequence(monkeypatch, upper_after=1.0, full_after=1.04)
+    learned = _rigid_textured_video()
+    exact = learned[:, :, :4].clone()
+
+    accepted, fields, reason = _frame_gauge_boundary_motion_check(
+        learned,
+        exact,
+        learned.clone(),
+        prefix_t=4,
+    )
+
+    assert accepted, fields
+    assert reason == "accepted"
+    assert fields["policy"] == "native_boundary_motion_consensus_v4"
+    assert fields["max_degradation_cells"] == pytest.approx(0.0625)
+    assert fields["degradation_bound_basis"] == "frame_gauge_fine_search_quantum_1_over_16_cell"
+    assert fields["strong_improvement_rois"] == ["upper45"]
+    assert fields["checks"]["upper45"]["error_improvement_ratio"] == pytest.approx(0.5)
+    assert fields["checks"]["full"]["error_delta_cells"] == pytest.approx(0.04)
+    assert fields["checks"]["full"]["within_degradation_bound"] is True
     _validate_boundary_motion_receipt(fields)
 
 
@@ -324,13 +352,13 @@ def test_boundary_motion_consensus_rejects_when_no_informative_roi_is_strong(mon
     )
 
     assert not accepted
-    assert fields["policy"] == "native_boundary_motion_consensus_v3"
+    assert fields["policy"] == "native_boundary_motion_consensus_v4"
     assert fields["informative_rois"] == ["upper45", "full"]
     assert fields["strong_improvement_rois"] == []
     assert reason == "boundary_no_informative_roi_strong_improvement"
 
 
-def test_boundary_motion_consensus_keeps_every_roi_as_nondegradation_veto(monkeypatch):
+def test_boundary_motion_consensus_rejects_roi_degradation_beyond_one_fine_tick(monkeypatch):
     _mock_boundary_measurement_sequence(monkeypatch, upper_after=2.1, full_after=0.5)
     learned = _rigid_textured_video()
     exact = learned[:, :, :4].clone()
@@ -343,7 +371,7 @@ def test_boundary_motion_consensus_keeps_every_roi_as_nondegradation_veto(monkey
     )
 
     assert not accepted
-    assert reason == "boundary_upper45_not_improved"
+    assert reason == "boundary_upper45_degraded_over_bound"
 
 
 def test_boundary_motion_gate_rejects_translation_that_moves_away_from_native_transition():
