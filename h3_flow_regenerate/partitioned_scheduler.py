@@ -18,6 +18,7 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
+    apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
     measure_provider_boundary_soft_support_shadow,
@@ -70,6 +71,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -82,6 +86,7 @@ from .partitioned_diagnostics import (
     normalize_guidance_trajectory_source,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
+    normalize_provider_boundary_stabilization,
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -2112,6 +2117,12 @@ def run_partitioned_progressive(
         initial_transformer.get(
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        )
+    )
+    provider_boundary_stabilization = normalize_provider_boundary_stabilization(
+        initial_transformer.get(
+            PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+            PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         )
     )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
