@@ -276,6 +276,46 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
     assert torch.allclose(mapped, expected, rtol=1e-6, atol=1e-6)
 
 
+def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual():
+    torch.manual_seed(78)
+    learned = torch.randn(1, 24, 8, 8, 10, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    yy = torch.linspace(-1.0, 1.0, 8).view(1, 1, 8, 1)
+    xx = torch.linspace(-1.0, 1.0, 10).view(1, 1, 1, 10)
+    exact[:, :, 1] += 0.15 + 0.09 * yy - 0.06 * xx
+    sigma = 0.4
+    noise = deterministic_video_noise(tuple(learned.shape), seed=992, device=learned.device, dtype=learned.dtype)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    weights = (1.0, 0.75, 0.5, 0.25)
+
+    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
+        state,
+        learned,
+        exact,
+        sigma=sigma,
+        weights=weights,
+    )
+
+    delta = exact[:, :, 1].float() - learned[:, :, 1].float()
+    native_boundary = learned[:, :, 2].float() - learned[:, :, 1].float()
+    restored_boundary = corrected[:, :, 2].float() - exact[:, :, 1].float()
+    torch.testing.assert_close(restored_boundary, native_boundary, rtol=0.0, atol=2e-6)
+    expected_step = -0.25 * delta
+    for offset in range(1, 4):
+        corrected_step = corrected[:, :, 2 + offset].float() - corrected[:, :, 1 + offset].float()
+        native_step = learned[:, :, 2 + offset].float() - learned[:, :, 1 + offset].float()
+        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=0.0, atol=2e-6)
+    exit_step = corrected[:, :, 6].float() - corrected[:, :, 5].float()
+    native_exit = learned[:, :, 6].float() - learned[:, :, 5].float()
+    torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=2e-6)
+
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 4
+    assert representation["suffix_representation_bridge_successor_safe"] is True
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
+    assert torch.equal(corrected[:, :, 6:], learned[:, :, 6:])
+    assert torch.equal(mapped[:, :, 6:], state[:, :, 6:])
+
+
 def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improvement"):
     receipt = {"dx": 0.0, "dy": 0.0, "response": 5.0, "clipped": False}
     checks = {
