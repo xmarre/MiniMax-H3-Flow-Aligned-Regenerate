@@ -123,6 +123,7 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
     assert torch.equal(postprocess.clean_video, learned)
     assert set(witnesses) == {
         "learned_native",
+        "learned_boundary_pair",
         "paired_prefix_aligned_witness",
         "candidate_corrected_clean",
     }
