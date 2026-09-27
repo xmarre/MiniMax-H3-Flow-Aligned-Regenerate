@@ -53,9 +53,7 @@ def exact_audio_prefix_ticks(exact_audio_mask: torch.Tensor) -> int:
     while prefix < temporal and bool(exact_zero[prefix].item()):
         prefix += 1
     if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
-        raise ValueError(
-            "post-high audio retention requires a contiguous exact prefix followed by generated suffix"
-        )
+        raise ValueError("post-high audio retention requires a contiguous exact prefix followed by generated suffix")
     return prefix
 
 
@@ -79,8 +77,7 @@ def _correction_report(
     adjacent = []
     if int(correction.shape[-1]) > 1:
         adjacent.extend(
-            _rms(correction[..., index] - correction[..., index - 1])
-            for index in range(1, int(correction.shape[-1]))
+            _rms(correction[..., index] - correction[..., index - 1]) for index in range(1, int(correction.shape[-1]))
         )
     adjacent.append(_rms(-correction[..., -1]))
     return {
@@ -207,20 +204,24 @@ def apply_post_high_boundary_retention(
         weights=audio_weights,
     )
 
-    return corrected_video, corrected_audio, {
-        "policy": "partitioned_post_high_boundary_retention_v1",
-        "applied": True,
-        "video": video_report,
-        "audio": audio_report,
-        "video_prefix_t": video_prefix_t,
-        "audio_prefix_ticks": audio_prefix_t,
-        "authoritative_video_prefix_modified": False,
-        "authoritative_audio_prefix_modified": False,
-        "video_outside_support_modified": False,
-        "audio_outside_support_modified": False,
-        "extra_h3_nfe": 0,
-        "extra_sampler_lifetimes": 0,
-        "extra_history_boundaries": 0,
-        "extra_provider_calls": 0,
-        "extra_vae_calls": 0,
-    }
+    return (
+        corrected_video,
+        corrected_audio,
+        {
+            "policy": "partitioned_post_high_boundary_retention_v1",
+            "applied": True,
+            "video": video_report,
+            "audio": audio_report,
+            "video_prefix_t": video_prefix_t,
+            "audio_prefix_ticks": audio_prefix_t,
+            "authoritative_video_prefix_modified": False,
+            "authoritative_audio_prefix_modified": False,
+            "video_outside_support_modified": False,
+            "audio_outside_support_modified": False,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        },
+    )
