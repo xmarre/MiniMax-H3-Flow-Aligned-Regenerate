@@ -51,6 +51,8 @@ _AUDIO_OVERLAP_RE = re.compile(
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
+PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = [1.0, 0.75, 0.5, 0.25]
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -1812,15 +1814,23 @@ def _validate_frame_gauge_transfer(
         transfer.get("deprecated_mixed_grid_repairs_applied") is False,
         "frame-gauge transfer activated deprecated mixed-grid repairs",
     )
-    _require(
-        transfer.get("suffix_dc_bridge_policy") == "one_token_spatial_mean_v1",
-        "frame-gauge transfer changed the existing one-token DC policy",
-    )
-    _require(
-        int(transfer.get("suffix_dc_bridge_corrected_tokens", 0)) == 1,
-        "frame-gauge transfer did not apply exactly one DC-corrected suffix token",
-    )
     overlap = transfer.get("partitioned_exact_overlap_bridge")
+    successor_safe_overlap = (
+        isinstance(overlap, dict)
+        and overlap.get("requested") is True
+        and overlap.get("applied") is True
+        and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+    )
+    expected_dc_policy = "successor_safe_linear_v2" if successor_safe_overlap else "one_token_spatial_mean_v1"
+    expected_dc_tokens = len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS) if successor_safe_overlap else 1
+    _require(
+        transfer.get("suffix_dc_bridge_policy") == expected_dc_policy,
+        "frame-gauge transfer DC policy does not match the selected exact-overlap arm",
+    )
+    _require(
+        int(transfer.get("suffix_dc_bridge_corrected_tokens", 0)) == expected_dc_tokens,
+        "frame-gauge transfer DC support does not match the selected exact-overlap arm",
+    )
     overlap_requested = isinstance(overlap, dict) and overlap.get("requested") is True
     expected_mapping = "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
     expected_clean_source = (
@@ -1850,7 +1860,8 @@ def _validate_frame_gauge_transfer(
     if overlap is not None:
         _require(isinstance(overlap, dict), "partitioned exact-overlap receipt is malformed")
         _require(
-            overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_POLICY,
+            overlap.get("policy")
+            in {PARTITIONED_EXACT_OVERLAP_POLICY, PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY},
             "partitioned exact-overlap policy version drifted",
         )
         requested = overlap.get("requested") is True
@@ -1890,10 +1901,31 @@ def _validate_frame_gauge_transfer(
                 and overlap.get("suffix_representation_bridge_enabled") is True,
                 "partitioned exact-overlap repair lacks an accepted structural-overlap receipt",
             )
-            _require(
-                int(overlap.get("suffix_representation_bridge_corrected_tokens", 0)) == 1,
-                "partitioned exact-overlap repair changed more than the first suffix token",
-            )
+            corrected_tokens = int(overlap.get("suffix_representation_bridge_corrected_tokens", 0))
+            if overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY:
+                _require(
+                    eligible_shadow,
+                    "successor-safe exact-overlap support is restricted to the hardware-invalidated shadow arm",
+                )
+                _require(
+                    corrected_tokens == len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS),
+                    "successor-safe exact-overlap support length drifted",
+                )
+                _require(
+                    overlap.get("suffix_representation_bridge_successor_safe") is True
+                    and overlap.get("suffix_representation_bridge_temporal_weights")
+                    == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS,
+                    "successor-safe exact-overlap weights drifted",
+                )
+                _require(
+                    _close_number(overlap.get("suffix_representation_bridge_max_weight_step"), 0.25, atol=1e-12),
+                    "successor-safe exact-overlap transition bound drifted",
+                )
+            else:
+                _require(
+                    corrected_tokens == 1,
+                    "historical exact-overlap repair changed more than the first suffix token",
+                )
             _require(
                 overlap.get("state_mapping") == "conditional_renoise_affine",
                 "partitioned exact-overlap repair used the wrong conditional-state mapping",
@@ -2032,7 +2064,8 @@ def _validate_frame_gauge(
     _validate_frame_gauge_transfer(window, mode=mode, result=result)
     if "exact_overlap_fallback_policy" in receipt:
         _require(
-            receipt.get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_POLICY,
+            receipt.get("exact_overlap_fallback_policy")
+            in {PARTITIONED_EXACT_OVERLAP_POLICY, PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY},
             "frame-gauge exact-overlap fallback policy version drifted",
         )
         fallback_requested = receipt.get("exact_overlap_fallback_requested") is True
@@ -2047,6 +2080,12 @@ def _validate_frame_gauge(
                 rejected_arm or shadow_arm,
                 "frame-gauge exact-overlap fallback was requested outside an eligible ON arm",
             )
+            fallback_policy = receipt.get("exact_overlap_fallback_policy")
+            if fallback_policy == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY:
+                _require(
+                    shadow_arm,
+                    "successor-safe exact-overlap policy is restricted to the hardware-invalidated shadow arm",
+                )
             if rejected_arm:
                 _require(
                     trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
