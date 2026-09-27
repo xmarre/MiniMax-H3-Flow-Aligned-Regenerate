@@ -1901,7 +1901,7 @@ def _validate_frame_gauge(
 ) -> tuple[str | None, str | None, bool, float | None, float | None, float | None, float | None]:
     if expected_mode is None:
         return None, None, False, None, None, None, None
-    allowed = {"off", "on-accepted", "on-rejected", "on-identity"}
+    allowed = {"off", "on-accepted", "on-rejected", "on-identity", "on-shadow_only"}
     _require(expected_mode in allowed, f"unsupported expected frame-gauge mode {expected_mode!r}")
     receipts = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
     _require(len(receipts) == 1, "partitioned run must emit exactly one frame-gauge receipt")
@@ -1936,6 +1936,24 @@ def _validate_frame_gauge(
                 receipt.get("registered_guidance_reference") is False,
                 "non-accepted frame-gauge transaction published a registered Flow reference",
             )
+            if expected_result == "shadow_only":
+                _require(
+                    receipt.get("candidate_accepted") is True,
+                    "rigid shadow-only transaction lacks an accepted numerical candidate",
+                )
+                _require(
+                    receipt.get("candidate_spatial_warp_computed") is True,
+                    "rigid shadow-only transaction did not compute its bounded candidate warp",
+                )
+                _require(
+                    receipt.get("production_mutation_allowed") is False,
+                    "rigid shadow-only transaction allowed a production mutation",
+                )
+                _require(
+                    receipt.get("hardware_invalidation")
+                    == "00687_visible_frame_shift_after_applied_rigid_v4",
+                    "rigid shadow-only transaction lost the 00687 hardware invalidation",
+                )
 
     _require(
         receipt.get("authoritative_prefix_modified") is False,
@@ -1965,7 +1983,7 @@ def _validate_frame_gauge(
             receipt.get("policy_version") == FRAME_GAUGE_POLICY_VERSION,
             "frame-gauge transaction policy version drifted",
         )
-        if result == "accepted":
+        if result in {"accepted", "shadow_only"}:
             _require(
                 _validate_registration_receipt(
                     receipt.get("video_registration"),
@@ -1973,7 +1991,7 @@ def _validate_frame_gauge(
                     policy=LEARNED_VIDEO_POLICY,
                 )
                 == "accepted",
-                "accepted transaction lacks an accepted video registration",
+                "accepted rigid candidate lacks an accepted video registration",
             )
             _validate_boundary_motion_receipt(receipt.get("boundary_motion"))
             if str(receipt.get("guidance_mode", "off")) != "off":
@@ -2045,7 +2063,7 @@ def _validate_frame_gauge(
     video_dy = _finite_number(receipt.get("video_dy", 0.0))
     guidance_dx = _finite_number(receipt.get("guidance_dx", 0.0))
     guidance_dy = _finite_number(receipt.get("guidance_dy", 0.0))
-    if mode == "on" and result == "accepted":
+    if mode == "on" and result in {"accepted", "shadow_only"}:
         video_registration = receipt.get("video_registration")
         _require(isinstance(video_registration, dict), "accepted transaction lacks video registration fields")
         _require(
@@ -2575,23 +2593,29 @@ def _validate_residual_geometry(
         return mode, "off", True, False, None
 
     frame_result = str(frame_receipt.get("result", ""))
-    if frame_result != "accepted":
+    if frame_result not in {"accepted", "shadow_only"}:
         _require(
             expected_result == "not-evaluated",
-            "residual measurement was expected despite rigid v2 not accepting",
+            "residual measurement was expected despite rigid candidate not accepting",
         )
         _require(receipt.get("measured") is False, "residual estimator ran before rigid-v2 acceptance")
         _require(receipt.get("measurement_status") == "not_evaluated", "residual not-evaluated status drifted")
         _require(not stage_events and not evidence_events, "not-evaluated residual arm emitted measurement evidence")
         return mode, "not-evaluated", True, False, None
 
-    _require(expected_result == "measured-only", "accepted rigid-v2 arm expected the wrong residual result")
+    _require(expected_result == "measured-only", "accepted rigid candidate expected the wrong residual result")
     _require(receipt.get("measured") is True, "residual measure arm did not run after rigid-v2 acceptance")
     _require(
         receipt.get("measurement_status") == "measured",
         "residual measure arm did not complete its bounded regional measurement",
     )
-    _require(receipt.get("final_path") == "rigid_v2", "residual measurement changed the final correction path")
+    expected_final_path = (
+        "production_baseline_rigid_shadow_only" if frame_result == "shadow_only" else "rigid_v2"
+    )
+    _require(
+        receipt.get("final_path") == expected_final_path,
+        "residual measurement changed the selected production/shadow path",
+    )
     video_eligible = _validate_residual_measurement_receipt(receipt.get("video"), label="video")
     guidance_mode = str(frame_receipt.get("guidance_mode", "off"))
     guidance_receipt = receipt.get("guidance")
@@ -2703,8 +2727,9 @@ def compare_residual_measurement_pair(
     measure_frame = one(measure, "partitioned_frame_gauge")
     _require(
         control_frame.get("mode") == measure_frame.get("mode") == "on"
-        and control_frame.get("result") == measure_frame.get("result") == "accepted",
-        "matched residual pair requires accepted rigid-v2 ON transactions in both arms",
+        and control_frame.get("result") == measure_frame.get("result")
+        and control_frame.get("result") in {"accepted", "shadow_only"},
+        "matched residual pair requires the same accepted rigid candidate state in both arms",
     )
     control_residual = control_frame.get("residual_geometry")
     measure_residual = measure_frame.get("residual_geometry")
@@ -2719,7 +2744,12 @@ def compare_residual_measurement_pair(
         and measure_residual.get("requested_mode") == "measure"
         and measure_residual.get("measured") is True
         and measure_residual.get("applied") is False
-        and measure_residual.get("final_path") == "rigid_v2",
+        and measure_residual.get("final_path")
+        == (
+            "production_baseline_rigid_shadow_only"
+            if measure_frame.get("result") == "shadow_only"
+            else "rigid_v2"
+        ),
         "matched candidate is not residual measurement-only",
     )
 
