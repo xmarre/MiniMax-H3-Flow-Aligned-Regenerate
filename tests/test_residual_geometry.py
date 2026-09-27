@@ -258,10 +258,12 @@ def test_measurement_only_frame_gauge_is_byte_identical_to_rigid_v2():
     )
 
     assert torch.equal(learned_full, learned_before)
-    assert rigid_txn["result"] == measured_txn["result"] == "accepted"
+    assert rigid_txn["result"] == measured_txn["result"] == "shadow_only"
     assert rigid_guidance is measured_guidance is None
     assert torch.equal(rigid.clean_video, measured.clean_video)
-    assert rigid_txn["dc_metrics"] == measured_txn["dc_metrics"]
+    assert rigid_txn["candidate_dc_metrics"] == measured_txn["candidate_dc_metrics"]
+    assert rigid_txn["production_mutation_allowed"] is False
+    assert measured_txn["production_mutation_allowed"] is False
     assert measured_txn["residual_geometry"]["decision"] == "not_evaluated"
     assert measured_txn["residual_geometry"]["applied"] is False
-    assert measured_txn["residual_geometry"]["final_path"] == "rigid_v2"
+    assert measured_txn["residual_geometry"]["final_path"] == "production_baseline_rigid_shadow_only"
