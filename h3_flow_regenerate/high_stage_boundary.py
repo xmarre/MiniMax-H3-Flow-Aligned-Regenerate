@@ -77,5 +77,14 @@ def high_boundary_contract(binding, exact_prefix, shapes, *, measure):
             binding.high_boundary_trace = HighStageBoundaryTrace(binding.metrics, exact_prefix, shapes)
         yield
     finally:
+        trace = binding.high_boundary_trace
         binding.high_boundary_trace = None
         binding.guidance_protected_prefix_t = 0
+        if trace is not None:
+            binding.metrics.event(
+                "partitioned_high_boundary_trace_complete",
+                prediction_calls=trace.calls,
+                observed_calls=min(trace.calls, trace.max_calls),
+                truncated=trace.calls > trace.max_calls,
+                max_calls=trace.max_calls,
+            )

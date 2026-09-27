@@ -860,3 +860,71 @@ def test_temporal_cache_rebuilds_when_prefix_ownership_changes():
     apply_guidance(video, run=trajectory, coordinate=0.5, config=config, state=state, protected_prefix_t=2)
     assert not state.last_temporal_cache_hit
     assert state.temporal_cache.prefix_t == 2
+
+
+def test_unregistered_acceleration_keeps_prefix_ownership_across_solver_calls():
+    high = torch.randn(1, 24, 5, 8, 8)
+    reference = torch.randn_like(high)
+    altered = reference.clone()
+    altered[:, :, :2] += 100
+    config = GuidanceConfig(mode="direction+acceleration", acceleration_weight=0.2)
+    states = [GuidanceState(), GuidanceState()]
+    results = []
+    for ref, state in zip((reference, altered), states, strict=True):
+        trajectory = run_video(ref, coords=(0.9, 0.6, 0.2))
+        for coordinate in (0.6, 0.4):
+            result = apply_guidance(
+                high,
+                run=trajectory,
+                coordinate=coordinate,
+                config=config,
+                state=state,
+                high_state=high + 0.5,
+                sigma=coordinate,
+                protected_prefix_t=2,
+            )
+            assert torch.equal(result[:, :, :2], high[:, :, :2])
+        assert state.last_acceleration_applied
+        results.append(result)
+    assert torch.equal(*results)
+
+
+def test_predict_wrapper_scopes_ownership_and_measurement_preserves_output():
+    from types import SimpleNamespace
+
+    from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+    from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
+    from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
+
+    video = torch.randn(1, 24, 5, 16, 16)
+    audio = torch.randn(1, 32, 2, 40)
+    packed, shapes = pack_streams((video, audio))
+    results = []
+    for measure in (False, True):
+        binding = FlowBinding(guidance=GuidanceConfig(mode="direction+temporal"))
+        binding.active_guidance_run = run_video(video + 0.3)
+        guider = SimpleNamespace(
+            model_options={FLOW_BINDING_KEY: binding}, inner_model=SimpleNamespace(latent_shapes=shapes)
+        )
+        calls = []
+
+        class Executor:
+            class_obj = guider
+
+            def __call__(self, *args, calls=calls):
+                calls.append(1)
+                return packed
+
+        with high_boundary_contract(binding, video[:, :, :2], shapes, measure=measure):
+            result = flow_predict_wrapper(
+                Executor(), packed, torch.tensor([0.5]), {"transformer_options": {FLOW_STAGE_KEY: "high"}}, 7
+            )
+        assert len(calls) == 1
+        assert torch.equal(unpack_streams(result, shapes)[0][:, :, :2], video[:, :, :2])
+        assert torch.equal(unpack_streams(result, shapes)[1], audio)
+        assert binding.guidance_protected_prefix_t == 0
+        assert binding.high_boundary_trace is None
+        receipts = [e for e in binding.metrics.events if e.kind == "partitioned_high_boundary_prediction"]
+        assert len(receipts) == (2 if measure else 0)
+        results.append(result)
+    assert torch.equal(*results)

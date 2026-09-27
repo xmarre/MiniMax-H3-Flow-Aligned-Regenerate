@@ -68,7 +68,12 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan):
             continue
         audio = audios[i]
         production = audio["waveform"]
-        if int(audio["sample_rate"]) != RATE or production.ndim != 3 or production.shape[-1] < (prefix + 20) * HOP:
+        if (
+            int(audio["sample_rate"]) != RATE
+            or production.ndim != 3
+            or tuple(production.shape[:2]) != (right.shape[0], 2)
+            or production.shape[-1] < (prefix + 20) * HOP
+        ):
             report.update(status="not_evaluated", reason="production_audio_geometry", extra_vae_calls=0)
             continue
         baseline_latent = right[..., : prefix + 52].detach().clone()
@@ -89,6 +94,9 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan):
         observed = production[..., prefix * HOP : prefix * HOP + window].detach().cpu()
         extended_suffix = decoded[..., cut : cut + window]
         baseline_suffix = baseline[..., prefix * HOP : prefix * HOP + window]
+        if not all(bool(torch.isfinite(x).all().item()) for x in (baseline, decoded, observed)):
+            report.update(status="not_evaluated", reason="nonfinite_audio", extra_vae_calls=2)
+            continue
         inactive = bool((production.float().std(dim=(1, 2)) < 0.2 - 1e-6).all().item())
         report.update(
             status="measured",
