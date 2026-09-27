@@ -889,6 +889,7 @@ def test_runtime_gate_rejects_boundary_content_receipt_that_claims_production_co
     with pytest.raises(RuntimeGateError, match="production gate"):
         _validate_boundary_content_diagnostics(bad)
 
+
 def test_learned_transfer_residual_diagnostic_is_zero_for_spatially_identical_provider():
     spatial = torch.zeros(1, 24, 6, 32, 32, dtype=torch.float32)
     learned = spatial.clone()
