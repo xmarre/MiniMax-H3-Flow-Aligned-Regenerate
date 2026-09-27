@@ -81,13 +81,11 @@ def build_authoritative_audio_boundary_reference(
         aligned = source + alignment_delta * float(weight)
         reference[..., prefix + offset] = aligned.to(dtype=reference.dtype)
 
-    source_edge = (
-        low_probe_clean_audio[..., prefix].detach().to(torch.float32)
-        - low_probe_clean_audio[..., prefix - 1].detach().to(torch.float32)
-    )
-    aligned_edge = (
-        reference[..., prefix].detach().to(torch.float32)
-        - reference[..., prefix - 1].detach().to(torch.float32)
+    source_edge = low_probe_clean_audio[..., prefix].detach().to(torch.float32) - low_probe_clean_audio[
+        ..., prefix - 1
+    ].detach().to(torch.float32)
+    aligned_edge = reference[..., prefix].detach().to(torch.float32) - reference[..., prefix - 1].detach().to(
+        torch.float32
     )
     edge_error = aligned_edge - source_edge
     return reference, {
