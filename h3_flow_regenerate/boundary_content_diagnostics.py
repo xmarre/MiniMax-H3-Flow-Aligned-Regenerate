@@ -19,7 +19,6 @@ PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_so
 PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
 PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_temporal_support_shadow_v1"
 PROVIDER_BOUNDARY_STABILIZATION_POLICY = "partitioned_provider_boundary_soft_support_production_v1"
-PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY = "partitioned_provider_boundary_post_high_temporal_production_v1"
 _RESIDUAL_FIELDS = (
     "raw_rms",
     "lowpass_rms",
@@ -1710,84 +1709,6 @@ def apply_provider_boundary_soft_support_stabilization(
         "soft_centered_lowpass_rms_ratio": float(soft_shadow_receipt["global"]["soft_centered_lowpass_rms_ratio"]),
         "soft_gradient_rms_ratio": float(soft_shadow_receipt["global"]["soft_gradient_rms_ratio"]),
         "soft_ncc_delta": float(soft_shadow_receipt["global"]["soft_ncc_delta"]),
-    }
-
-
-def apply_provider_boundary_post_high_temporal_stabilization(
-    video: torch.Tensor,
-    prefix_t: int,
-    *,
-    soft_shadow_receipt: dict[str, Any],
-    temporal_span: int = 3,
-) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Apply the measured spatial correction with fixed post-high temporal support.
-
-    This is the mutating counterpart of the temporal-support shadow. The spatial
-    correction is reconstructed from the already-versioned soft shadow; no
-    thresholds are refit. Its temporal horizon is fixed to the predictor history
-    depth and fades to zero with the same raised-cosine weights.
-    """
-
-    one_token_candidate, one_token_receipt = apply_provider_boundary_soft_support_stabilization(
-        video,
-        prefix_t,
-        soft_shadow_receipt=soft_shadow_receipt,
-    )
-    prefix_t = int(prefix_t)
-    temporal = int(video.shape[2])
-    temporal_span = int(temporal_span)
-    if temporal_span != int(soft_shadow_receipt.get("pre_steps", -1)) or temporal_span < 1:
-        raise ValueError("post-high temporal stabilization horizon must equal predictor history depth")
-    if prefix_t >= temporal:
-        raise ValueError("post-high temporal stabilization lacks a suffix")
-
-    spatial_correction = video[:, :, prefix_t].float() - one_token_candidate[:, :, prefix_t].float()
-    correction_rms = _rms(spatial_correction)
-    correction_abs_max = _finite(spatial_correction.abs().max()) if spatial_correction.numel() else 0.0
-    corrected_tokens = min(temporal_span, temporal - prefix_t)
-    weights = [
-        0.5 * (1.0 + math.cos(math.pi * float(offset) / float(temporal_span)))
-        for offset in range(corrected_tokens)
-    ]
-
-    stabilized = video.clone()
-    for offset, weight in enumerate(weights):
-        stabilized[:, :, prefix_t + offset] = (
-            stabilized[:, :, prefix_t + offset].float() - float(weight) * spatial_correction
-        ).to(stabilized)
-
-    if not torch.equal(stabilized[:, :, :prefix_t], video[:, :, :prefix_t]):
-        raise RuntimeError("post-high temporal stabilization modified authoritative prefix")
-    if prefix_t + corrected_tokens < temporal and not torch.equal(
-        stabilized[:, :, prefix_t + corrected_tokens :],
-        video[:, :, prefix_t + corrected_tokens :],
-    ):
-        raise RuntimeError("post-high temporal stabilization modified suffix outside fixed horizon")
-
-    eligible_tiles = sorted(map(str, soft_shadow_receipt.get("eligible_tiles", [])))
-    applied = bool(one_token_receipt.get("applied")) and correction_rms > 0.0
-    return stabilized, {
-        "policy": PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
-        "source_shadow_policy": PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
-        "source_one_token_policy": PROVIDER_BOUNDARY_STABILIZATION_POLICY,
-        "temporal_support": "raised_cosine_fade_to_zero_v1",
-        "temporal_span": temporal_span,
-        "temporal_span_source": "provider_predictor_pre_steps",
-        "weights": [float(weight) for weight in weights],
-        "prefix_t": prefix_t,
-        "eligible_tiles": eligible_tiles,
-        "eligible_tile_count": len(eligible_tiles),
-        "applied": applied,
-        "corrected_tokens": corrected_tokens if applied else 0,
-        "authoritative_prefix_modified": False,
-        "later_suffix_extrapolated": False,
-        "correction_rms": correction_rms,
-        "correction_abs_max": correction_abs_max,
-        "extra_h3_nfe": 0,
-        "extra_sampler_lifetimes": 0,
-        "extra_history_boundaries": 0,
-        "extra_provider_calls": 0,
-        "extra_vae_calls": 0,
     }
 
 
