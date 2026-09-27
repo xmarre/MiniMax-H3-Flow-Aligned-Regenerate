@@ -19,12 +19,92 @@ import torch
 from .geometry import unpack_streams
 from .seam_diagnostics import measure_translation_trajectory
 
-HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
-HIGH_BOUNDARY_REFERENCE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
+HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v2"
+HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
+
+# The production AudioVAE is a finite-receptive-field BigVGAN. The pinned
+# ComfyUI architecture needs fewer than 32 latent ticks of future context for
+# any decoded sample. Preserve a 500 ms (20 tick) seam window plus 32 ticks of
+# future decoder context so that the decoded boundary window is determined by
+# one coherent clean trajectory instead of a four-tick patch.
+HIGH_BOUNDARY_AUDIO_SEAM_TICKS = 20
+HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS = 32
+HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS = HIGH_BOUNDARY_AUDIO_SEAM_TICKS + HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS
+HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS = (1.0,) * HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+HIGH_BOUNDARY_AUDIO_ALIGNMENT_WEIGHTS = (1.0,) * HIGH_BOUNDARY_AUDIO_SEAM_TICKS + tuple(
+    (HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS - offset) / HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS
+    for offset in range(HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS)
+)
 
 
 def _rms(value: torch.Tensor) -> float:
     return float(value.to(torch.float32).square().mean().sqrt().item())
+
+
+def build_authoritative_audio_boundary_reference(
+    low_probe_clean_audio: torch.Tensor,
+    authoritative_audio: torch.Tensor,
+    exact_denoise_mask: torch.Tensor,
+    shapes,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Align the low/probe clean continuation to the caller-owned audio prefix.
+
+    The first seam window keeps the low/probe temporal relation exactly while
+    translating it onto the authoritative prefix tail. The translation then
+    decays over one bounded decoder-context window. The resulting generated
+    reference is held exactly by the high-stage model-output anchor.
+    """
+
+    if low_probe_clean_audio.ndim != 4 or int(low_probe_clean_audio.shape[2]) != 2:
+        raise ValueError("audio boundary reference requires native BxCx2xT low/probe audio")
+    if authoritative_audio.shape != low_probe_clean_audio.shape:
+        raise ValueError("audio boundary reference requires authoritative/reference geometry parity")
+    mask_audio = unpack_streams(exact_denoise_mask, shapes)[1]
+    if tuple(mask_audio.shape) != tuple(low_probe_clean_audio.shape):
+        raise ValueError("audio boundary reference mask geometry drifted")
+    prefix = _exact_audio_prefix_ticks(mask_audio)
+    temporal = int(low_probe_clean_audio.shape[-1])
+    support = min(HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS, temporal - prefix)
+    if support <= 0:
+        raise ValueError("audio boundary reference has no generated suffix support")
+
+    reference = low_probe_clean_audio.detach().clone()
+    authoritative = authoritative_audio.detach().to(device=reference.device, dtype=reference.dtype)
+    reference[..., :prefix] = authoritative[..., :prefix]
+
+    low_tail = low_probe_clean_audio[..., prefix - 1].detach().to(torch.float32)
+    authoritative_tail = authoritative[..., prefix - 1].detach().to(torch.float32)
+    alignment_delta = authoritative_tail - low_tail
+    alignment_weights = HIGH_BOUNDARY_AUDIO_ALIGNMENT_WEIGHTS[:support]
+    for offset, weight in enumerate(alignment_weights):
+        source = low_probe_clean_audio[..., prefix + offset].detach().to(torch.float32)
+        aligned = source + alignment_delta * float(weight)
+        reference[..., prefix + offset] = aligned.to(dtype=reference.dtype)
+
+    source_edge = (
+        low_probe_clean_audio[..., prefix].detach().to(torch.float32)
+        - low_probe_clean_audio[..., prefix - 1].detach().to(torch.float32)
+    )
+    aligned_edge = (
+        reference[..., prefix].detach().to(torch.float32)
+        - reference[..., prefix - 1].detach().to(torch.float32)
+    )
+    edge_error = aligned_edge - source_edge
+    return reference, {
+        "audio_prefix_ticks": prefix,
+        "audio_reference_support_ticks": support,
+        "audio_seam_ticks": min(HIGH_BOUNDARY_AUDIO_SEAM_TICKS, support),
+        "audio_decoder_context_ticks": min(
+            HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS,
+            max(0, support - HIGH_BOUNDARY_AUDIO_SEAM_TICKS),
+        ),
+        "audio_alignment_delta_rms": _rms(alignment_delta),
+        "audio_alignment_delta_max_abs": float(alignment_delta.abs().max().item()),
+        "audio_first_edge_relation_error_rms": _rms(edge_error),
+        "audio_alignment_weights": list(alignment_weights),
+        "authoritative_prefix_modified": False,
+        "reference_domain": "authoritative_prefix_aligned_low_probe_clean",
+    }
 
 
 def _exact_audio_prefix_ticks(mask_audio: torch.Tensor) -> int:
@@ -59,23 +139,26 @@ class HighStageBoundaryReferenceAnchor:
         video_reference_suffix: torch.Tensor | None,
         audio_reference: torch.Tensor | None,
         exact_denoise_mask: torch.Tensor | None,
-        weights: tuple[float, ...] = HIGH_BOUNDARY_REFERENCE_WEIGHTS,
+        video_weights: tuple[float, ...] = HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
+        audio_weights: tuple[float, ...] = HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS,
     ):
-        if not weights or any(not 0.0 < float(weight) <= 1.0 for weight in weights):
-            raise ValueError("high-boundary reference weights must be non-empty values in (0, 1]")
-        if any(float(left) < float(right) for left, right in itertools.pairwise(weights)):
-            raise ValueError("high-boundary reference weights must be monotonically non-increasing")
+        for name, weights in (("video", video_weights), ("audio", audio_weights)):
+            if not weights or any(not 0.0 < float(weight) <= 1.0 for weight in weights):
+                raise ValueError(f"high-boundary {name} reference weights must be non-empty values in (0, 1]")
+            if any(float(left) < float(right) for left, right in itertools.pairwise(weights)):
+                raise ValueError(f"high-boundary {name} reference weights must be monotonically non-increasing")
         self.metrics = metrics
         self.shapes = shapes
         self.video_prefix_t = int(video_prefix_t)
-        self.weights = tuple(float(weight) for weight in weights)
+        self.video_weights = tuple(float(weight) for weight in video_weights)
+        self.audio_weights = tuple(float(weight) for weight in audio_weights)
         self.calls = 0
 
         self.video_reference_suffix = None
         if video_reference_suffix is not None:
             if video_reference_suffix.ndim != 5:
                 raise ValueError("high-boundary video reference must be native BxCxTxHxW")
-            support = min(int(video_reference_suffix.shape[2]), len(self.weights))
+            support = min(int(video_reference_suffix.shape[2]), len(self.video_weights))
             if support <= 0:
                 raise ValueError("high-boundary video reference has no generated suffix support")
             self.video_reference_suffix = video_reference_suffix[:, :, :support].detach().clone()
@@ -91,7 +174,7 @@ class HighStageBoundaryReferenceAnchor:
             if tuple(mask_audio.shape) != tuple(audio_reference.shape):
                 raise ValueError("high-boundary audio reference/mask geometry drifted")
             prefix = _exact_audio_prefix_ticks(mask_audio)
-            support = min(int(audio_reference.shape[-1]) - prefix, len(self.weights))
+            support = min(int(audio_reference.shape[-1]) - prefix, len(self.audio_weights))
             if support <= 0:
                 raise ValueError("high-boundary audio reference has no generated suffix support")
             self.audio_prefix_ticks = prefix
@@ -144,7 +227,7 @@ class HighStageBoundaryReferenceAnchor:
                 raise RuntimeError("high-boundary video reference geometry drifted at model output")
             before = video[:, :, self.video_prefix_t : stop].detach().to(torch.float32).clone()
             reference = self.video_reference_suffix.to(device=video.device, dtype=video.dtype)
-            weights = self.weights[:support]
+            weights = self.video_weights[:support]
             for offset, weight in enumerate(weights):
                 target = reference[:, :, offset]
                 if weight == 1.0:
@@ -183,7 +266,7 @@ class HighStageBoundaryReferenceAnchor:
                 raise RuntimeError("high-boundary audio reference geometry drifted at model output")
             before = audio[..., self.audio_prefix_ticks : stop].detach().to(torch.float32).clone()
             reference = self.audio_reference_suffix.to(device=audio.device, dtype=audio.dtype)
-            weights = self.weights[:support]
+            weights = self.audio_weights[:support]
             for offset, weight in enumerate(weights):
                 target = reference[..., offset]
                 if weight == 1.0:
@@ -199,7 +282,7 @@ class HighStageBoundaryReferenceAnchor:
                 audio_prefix_ticks=self.audio_prefix_ticks,
                 audio_support_ticks=support,
                 audio_temporal_weights=list(weights),
-                audio_reference_domain="low_probe_clean",
+                audio_reference_domain="authoritative_prefix_aligned_low_probe_clean",
                 audio_prediction_delta_rms=_rms(before - reference.to(torch.float32)),
                 audio_correction_rms=_rms(after - before),
                 audio_first_reference_error_rms=_rms(first_error),
