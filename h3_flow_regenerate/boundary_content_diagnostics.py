@@ -713,7 +713,6 @@ def measure_provider_boundary_temporal_calibration(
     }
 
 
-
 def measure_learned_transfer_residual_diagnostic(
     learned_video: torch.Tensor,
     spatial_shadow: torch.Tensor,
@@ -771,9 +770,7 @@ def measure_learned_transfer_residual_diagnostic(
         "residual_rms": _rms(residual),
         "global": calibration["global"],
         "tiles": calibration["tiles"],
-        "tiles_by_boundary_error_over_historical_max": calibration[
-            "tiles_by_boundary_error_over_historical_max"
-        ],
+        "tiles_by_boundary_error_over_historical_max": calibration["tiles_by_boundary_error_over_historical_max"],
         "tiles_by_boundary_dispersion_ratio_over_historical_max": calibration[
             "tiles_by_boundary_dispersion_ratio_over_historical_max"
         ],
