@@ -1197,3 +1197,79 @@ target becomes the learned provider's temporal boundary contract. If the
 residual is temporally ordinary, the large provider-vs-bicubic difference is not
 itself sufficient to justify changing provider temporal behavior.
 
+## 00690: rigid-shadow control-flow gap and independent audio discontinuity
+
+00690 reproduces both externally visible defects on the exact-main partitioned
+path. The decoded first suffix frame still has a large motion impulse, while the
+decoded audio suffix starts at a materially different state even though the
+carried overlap itself decodes almost exactly.
+
+### Video: exact-overlap was incorrectly suppressed on the hardware-invalidated rigid arm
+
+The rigid estimator again produces a numerically accepted candidate, but that
+candidate is intentionally `shadow_only` because 00687 disproved the global
+rigid production warp on decoded hardware output.
+
+The structural exact-overlap bridge was nevertheless skipped. The scheduler
+conditioned eligibility on `not frame_gauge_candidate_accepted`. Therefore a
+numerically accepted but hardware-invalidated shadow candidate had:
+
+`candidate_accepted=true`, `frame_gauge_accepted=false`
+
+and never reached the independent structural-overlap eligibility function.
+
+That violates the ownership intended after 00687. Rejecting the global rigid
+warp must not also suppress a separate bridge whose only job is to preserve the
+actual provider prefix-to-suffix transition after the authoritative exact prefix
+is restored.
+
+The corrected policy evaluates structural-overlap eligibility whenever no rigid
+production warp was accepted. It retains the historical rejected-boundary arm
+and adds one narrowly defined second arm:
+
+- transaction result is `shadow_only`;
+- reason is exactly
+  `hardware_invalidated_global_rigid_application_00687`;
+- the rigid candidate was numerically accepted;
+- production rigid mutation remains disabled;
+- no spatial rigid warp was applied;
+- video registration is accepted;
+- upper45/full native, transformed-native, exact-restored and candidate boundary
+  receipts are complete, non-clipped and above the existing response floor.
+
+This does **not** re-enable the invalidated global translation. It only permits
+the pre-existing `partitioned_exact_overlap_structural_plus_dc_v1` bridge,
+using the actual provider boundary pair, while authoritative prefix ownership
+and later suffix tokens remain unchanged.
+
+00690 decoded evidence remains pre-assembly: the first upper-region pair is
+roughly `(+6.67,+14.24) px` and the full-frame pair roughly
+`(+6.81,+14.16) px`; the Continuum assembly patch reports no video mutation.
+
+### Audio: carried-overlap correctness is not generated-suffix correctness
+
+00690 also falsifies the interpretation that the remaining audio defect is an
+overlap-copy/seam-assembly problem. The decoded carried overlap remains nearly
+exact (about `-0.008 dB`, correlation about `0.9974`, exact interior gain),
+while the newly decoded suffix begins about `+12.06 dB` above the preceding
+500 ms and remains about `+11.86 dB` after seam handling.
+
+The latent boundary is much less extreme: low/probe clean is about `+0.56 dB`
+over 500 ms and `+1.22 dB` over 100 ms; final-high clean is about `+0.90 dB`
+and `+1.14 dB` respectively. The AudioVAE therefore amplifies a latent-state
+difference that the simple RMS boundary metric does not characterize.
+
+No audio production mutation is added by this change. Historical evidence for
+overlap width is topology-dependent: the four-tick
+`sampler_mask_exact_timestep` result that motivated the current default was
+measured on a source-uniform path, while a prior exact-partitioned run with
+`sampler_mask / 16` decoded near level continuity. That is sufficient for a
+matched hardware discriminator, not for silently changing the default.
+
+### Validation
+
+The structural-overlap fix is covered by tests that require the
+hardware-invalidated shadow transaction to stay fail-closed, reject clipped or
+ambiguous boundary evidence, and fail if rigid production mutation is
+re-enabled. Existing rejected-boundary behavior remains unchanged.
+
