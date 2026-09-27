@@ -20,6 +20,7 @@ from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_lat
 from .boundary_content_diagnostics import (
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_learned_transfer_residual_diagnostic,
     measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
@@ -1997,7 +1998,7 @@ def _emit_bicubic_transfer_shadow_trajectory(
     source_w: int,
     target_h: int,
     target_w: int,
-) -> None:
+) -> torch.Tensor:
     """Measure a spatial-only transfer shadow without changing production state."""
 
     shadow = resize_video(clean_video, target_h, target_w, mode="bicubic")
@@ -2032,6 +2033,7 @@ def _emit_bicubic_transfer_shadow_trajectory(
                 extra_history_boundaries=0,
                 **trajectory,
             )
+        return shadow
     finally:
         del shadow
 
@@ -3032,8 +3034,9 @@ def run_partitioned_progressive(
                 ),
             )
 
+        bicubic_transfer_shadow: torch.Tensor | None = None
         if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
-            _emit_bicubic_transfer_shadow_trajectory(
+            bicubic_transfer_shadow = _emit_bicubic_transfer_shadow_trajectory(
                 binding.metrics,
                 clean_video,
                 prefix_t=stage_plan.prefix_t,
@@ -3548,6 +3551,31 @@ def run_partitioned_progressive(
                 extra_vae_calls=0,
                 **provider_receipt,
             )
+            if residual_mode == "measure":
+                if bicubic_transfer_shadow is None:
+                    raise RuntimeError("residual measurement lost the bicubic transfer shadow")
+                learned_residual_started = time.perf_counter()
+                learned_residual_receipt = measure_learned_transfer_residual_diagnostic(
+                    provider_native_clean,
+                    bicubic_transfer_shadow,
+                    stage_plan.prefix_t,
+                )
+                binding.metrics.event(
+                    "partitioned_learned_transfer_residual",
+                    domain="model_internal_clean",
+                    owner_before="source_low_exact_context_bicubic_shadow",
+                    owner_after="learned_provider_native",
+                    elapsed_ms=(time.perf_counter() - learned_residual_started) * 1000.0,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_provider_calls=0,
+                    extra_vae_calls=0,
+                    **learned_residual_receipt,
+                )
+                del bicubic_transfer_shadow
+                bicubic_transfer_shadow = None
+
             predictor_started = time.perf_counter()
             provider_predictor_receipt = measure_provider_boundary_temporal_predictor(
                 provider_native_clean,
