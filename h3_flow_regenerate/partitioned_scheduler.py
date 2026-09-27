@@ -3889,6 +3889,8 @@ def run_partitioned_progressive(
         del learned_clean
         del provider_native_clean
         del provider_native_trajectory_source
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            del measurement_learned_native
         if aligned_witness is not None:
             del aligned_witness
         frame_gauge_witnesses.clear()
