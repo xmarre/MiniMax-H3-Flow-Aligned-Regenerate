@@ -51,6 +51,7 @@ _AUDIO_OVERLAP_RE = re.compile(
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
         "boundary_upper45_not_improved",
@@ -1867,17 +1868,20 @@ def _validate_frame_gauge_transfer(
                 overlap.get("source") == "actual_provider_boundary_pair",
                 "partitioned exact-overlap repair did not use the actual provider overlap witness",
             )
-            _require(
-                enabled and result == "rejected",
-                "partitioned exact-overlap repair was requested outside a rejected frame-gauge arm",
+            trigger = str(overlap.get("trigger", ""))
+            eligible_rejected = enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
+            eligible_shadow = (
+                enabled
+                and result == "shadow_only"
+                and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
             _require(
-                str(overlap.get("trigger", "")) in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
-                "partitioned exact-overlap repair used an ineligible frame-gauge rejection",
+                eligible_rejected or eligible_shadow,
+                "partitioned exact-overlap repair was requested outside an eligible frame-gauge arm",
             )
             _require(
-                transfer.get("frame_gauge_reason") == overlap.get("trigger"),
-                "partitioned exact-overlap trigger differs from the frame-gauge rejection",
+                transfer.get("frame_gauge_reason") == trigger,
+                "partitioned exact-overlap trigger differs from the frame-gauge transaction reason",
             )
         if applied:
             _require(requested, "partitioned exact-overlap repair applied without being requested")
@@ -2034,18 +2038,25 @@ def _validate_frame_gauge(
         fallback_requested = receipt.get("exact_overlap_fallback_requested") is True
         fallback_applied = receipt.get("exact_overlap_fallback_applied") is True
         if fallback_requested:
-            _require(
-                mode == "on" and result == "rejected",
-                "frame-gauge exact-overlap fallback was requested outside the rejected ON arm",
-            )
             trigger = str(receipt.get("exact_overlap_fallback_trigger", ""))
-            _require(
-                trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
-                "frame-gauge exact-overlap fallback trigger is not eligible",
+            rejected_arm = mode == "on" and result == "rejected"
+            shadow_arm = (
+                mode == "on"
+                and result == "shadow_only"
+                and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
+            _require(
+                rejected_arm or shadow_arm,
+                "frame-gauge exact-overlap fallback was requested outside an eligible ON arm",
+            )
+            if rejected_arm:
+                _require(
+                    trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+                    "frame-gauge exact-overlap fallback rejection trigger is not eligible",
+                )
             _require(
                 receipt.get("reason") == trigger,
-                "frame-gauge exact-overlap fallback trigger differs from the transaction rejection",
+                "frame-gauge exact-overlap fallback trigger differs from the transaction reason",
             )
             _require(
                 _validate_registration_receipt(
@@ -2056,7 +2067,16 @@ def _validate_frame_gauge(
                 == "accepted",
                 "frame-gauge exact-overlap fallback lacks an accepted video registration",
             )
-            _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
+            if rejected_arm:
+                _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
+            else:
+                _require(
+                    receipt.get("candidate_accepted") is True
+                    and receipt.get("production_mutation_allowed") is False
+                    and receipt.get("spatial_warp_applied") is False,
+                    "hardware-invalidated rigid shadow lost its fail-closed ownership",
+                )
+                _validate_boundary_motion_receipt(receipt.get("boundary_motion"))
             _require(
                 receipt.get("exact_overlap_fallback_source") == "actual_provider_boundary_pair",
                 "frame-gauge exact-overlap fallback did not use the actual provider overlap witness",
