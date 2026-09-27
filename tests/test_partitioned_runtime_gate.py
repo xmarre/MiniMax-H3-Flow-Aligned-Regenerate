@@ -1412,7 +1412,7 @@ def test_runtime_gate_rejects_exact_overlap_fallback_that_extrapolates_later_suf
     transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
     transfer["fields"]["partitioned_exact_overlap_bridge"]["later_suffix_extrapolated"] = True
 
-    with pytest.raises(RuntimeGateError, match="extrapolated into unmeasured later suffix"):
+    with pytest.raises(RuntimeGateError, match="historical exact-overlap repair extrapolated into later suffix tokens"):
         validate_partitioned_runtime_evidence(
             metrics,
             _log(),
