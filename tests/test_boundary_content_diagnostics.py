@@ -10,13 +10,11 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     LEARNED_TRANSFER_RESIDUAL_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
-    PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY,
     PROVIDER_BOUNDARY_TEMPORAL_SUPPORT_SHADOW_POLICY,
-    apply_provider_boundary_post_high_temporal_stabilization,
     apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
@@ -31,7 +29,6 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     RuntimeGateError,
     _validate_boundary_content_diagnostics,
     _validate_provider_boundary_post_high_shadow,
-    _validate_provider_boundary_post_high_stabilization,
     _validate_provider_boundary_predictor,
     _validate_provider_boundary_predictor_calibration,
     _validate_provider_boundary_soft_support_shadow,
@@ -616,51 +613,6 @@ def test_post_high_provider_boundary_shadow_is_non_mutating_and_reuses_final_dom
     )
 
 
-def test_post_high_temporal_stabilization_changes_only_fixed_suffix_horizon():
-    video = _video_with_local_boundary_change(scale=4.0)
-    video = torch.cat(
-        [
-            video,
-            video[:, :, -1:].clone(),
-            video[:, :, -1:].clone(),
-            video[:, :, -1:].clone(),
-        ],
-        dim=2,
-    )
-    torch.manual_seed(7015)
-    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
-    content = measure_boundary_content_continuity(video, 5)
-    shadow = measure_provider_boundary_post_high_shadow(
-        video,
-        5,
-        post_high_content_receipt=content,
-    )
-    before = video.clone()
-
-    stabilized, receipt = apply_provider_boundary_post_high_temporal_stabilization(
-        video,
-        5,
-        soft_shadow_receipt=shadow["soft_shadow"],
-        temporal_span=3,
-    )
-
-    assert torch.equal(video, before)
-    assert receipt["policy"] == PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY
-    assert receipt["applied"] is True
-    assert receipt["corrected_tokens"] == 3
-    assert receipt["weights"] == pytest.approx([1.0, 0.75, 0.25])
-    assert receipt["authoritative_prefix_modified"] is False
-    assert receipt["later_suffix_extrapolated"] is False
-    assert torch.equal(stabilized[:, :, :5], before[:, :, :5])
-    assert torch.equal(stabilized[:, :, 8:], before[:, :, 8:])
-
-    delta0 = before[:, :, 5].float() - stabilized[:, :, 5].float()
-    delta1 = before[:, :, 6].float() - stabilized[:, :, 6].float()
-    delta2 = before[:, :, 7].float() - stabilized[:, :, 7].float()
-    assert torch.allclose(delta1, 0.75 * delta0, rtol=1e-5, atol=1e-6)
-    assert torch.allclose(delta2, 0.25 * delta0, rtol=1e-5, atol=1e-6)
-
-
 def test_post_high_temporal_support_shadow_covers_full_fade_and_terminal_return():
     video = _video_with_local_boundary_change(scale=4.0)
     video = torch.cat(
@@ -764,101 +716,6 @@ def test_runtime_gate_accepts_fail_closed_receipt_and_post_high_shadow():
 
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
-
-
-def test_runtime_gate_accepts_post_high_temporal_production_bound_to_shadow():
-    video = _video_with_local_boundary_change(scale=4.0)
-    video = torch.cat(
-        [
-            video,
-            video[:, :, -1:].clone(),
-            video[:, :, -1:].clone(),
-            video[:, :, -1:].clone(),
-        ],
-        dim=2,
-    )
-    torch.manual_seed(7016)
-    video[:, :, :5] += 0.02 * torch.randn_like(video[:, :, :5])
-    content = measure_boundary_content_continuity(video, 5)
-    shadow = measure_provider_boundary_post_high_shadow(
-        video,
-        5,
-        post_high_content_receipt=content,
-    )
-    _stabilized, production = apply_provider_boundary_post_high_temporal_stabilization(
-        video,
-        5,
-        soft_shadow_receipt=shadow["soft_shadow"],
-        temporal_span=3,
-    )
-    stabilization = {
-        "kind": "partitioned_provider_boundary_stabilization",
-        "fields": {
-            "requested": True,
-            "mode": "soft_support_v1",
-            "applied": False,
-            "reason": "deferred_to_post_high_temporal_support",
-            "authoritative_prefix_modified": False,
-            "later_suffix_extrapolated": False,
-            "corrected_tokens": 0,
-            "exact_overlap_fallback_required": True,
-            "exact_overlap_fallback_requested": True,
-            "historical_candidate_policy": PROVIDER_BOUNDARY_STABILIZATION_POLICY,
-            "historical_candidate_mutation_disabled": True,
-            "production_mutation_allowed": False,
-            "extra_h3_nfe": 0,
-            "extra_sampler_lifetimes": 0,
-            "extra_history_boundaries": 0,
-            "extra_provider_calls": 0,
-            "extra_vae_calls": 0,
-        },
-    }
-    post_shadow = {
-        "kind": "partitioned_provider_boundary_post_high_shadow",
-        "fields": {
-            "mode": "soft_support_v1",
-            "domain": "model_internal_clean",
-            "owner_before": "authoritative_exact_prefix",
-            "owner_after": "post_high_generated_suffix",
-            "legacy_pre_high_mutation_disabled": True,
-            "extra_h3_nfe": 0,
-            "extra_sampler_lifetimes": 0,
-            "extra_history_boundaries": 0,
-            "extra_provider_calls": 0,
-            "extra_vae_calls": 0,
-            "elapsed_ms": 1.0,
-            **shadow,
-        },
-    }
-    production_event = {
-        "kind": "partitioned_provider_boundary_post_high_stabilization",
-        "fields": {
-            "domain": "model_internal_clean_to_caller_output_latent",
-            "requested": True,
-            "mode": "soft_support_v1",
-            "reason": "applied",
-            "output_mutated": True,
-            "audio_modified": False,
-            "exact_overlap_fallback_requested": True,
-            "caller_domain_projection": "process_latent_out_fixed_horizon_video_only_v1",
-            **production,
-        },
-    }
-    window = [
-        stabilization,
-        _event("post_high_internal_clean", content),
-        post_shadow,
-        production_event,
-    ]
-
-    _validate_provider_boundary_stabilization(window)
-    _validate_provider_boundary_post_high_shadow(window)
-    _validate_provider_boundary_post_high_stabilization(window)
-
-    bad = copy.deepcopy(window)
-    bad[-1]["fields"]["audio_modified"] = True
-    with pytest.raises(RuntimeGateError, match="modified audio"):
-        _validate_provider_boundary_post_high_stabilization(bad)
 
 
 def test_runtime_gate_rejects_post_high_shadow_that_claims_output_mutation():
