@@ -12,6 +12,7 @@ from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.partitioned_runtime_gate import RuntimeGateError, _validate_boundary_motion_receipt
 from h3_flow_regenerate.partitioned_scheduler import (
+    _emit_bicubic_transfer_shadow_trajectory,
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
     _prepare_registered_guidance_reference,
@@ -788,6 +789,72 @@ def test_guidance_registration_prefers_exact_handoff_probe_at_duplicate_coordina
     assert registered is not None
     assert fields["status"] == "identity"
     assert torch.equal(registered.video, exact_full)
+
+
+def test_bicubic_transfer_shadow_is_diagnostic_only_and_uses_one_spatial_resize(monkeypatch):
+    source = torch.randn(1, 24, 6, 8, 10)
+    source_before = source.clone()
+    resize_calls = []
+    measure_calls = []
+    events = []
+
+    class Metrics:
+        def event(self, kind, **fields):
+            events.append((kind, fields))
+
+    def fake_resize(video, target_h, target_w, *, mode):
+        resize_calls.append((video, target_h, target_w, mode))
+        return torch.zeros(
+            video.shape[0],
+            video.shape[1],
+            video.shape[2],
+            target_h,
+            target_w,
+            dtype=video.dtype,
+            device=video.device,
+        )
+
+    def fake_measure(video, prefix_t, **kwargs):
+        measure_calls.append((tuple(video.shape), prefix_t, kwargs))
+        return {
+            "pairwise_dx": [0.0],
+            "pairwise_dy": [0.0],
+            "pairwise_response": [10.0],
+            "pairwise_clipped": [False],
+        }
+
+    monkeypatch.setattr(partitioned_scheduler, "resize_video", fake_resize)
+    monkeypatch.setattr(partitioned_scheduler, "measure_translation_trajectory", fake_measure)
+
+    _emit_bicubic_transfer_shadow_trajectory(
+        Metrics(),
+        source,
+        prefix_t=4,
+        source_h=8,
+        source_w=10,
+        target_h=12,
+        target_w=14,
+    )
+
+    assert torch.equal(source, source_before)
+    assert len(resize_calls) == 1
+    assert resize_calls[0][0] is source
+    assert resize_calls[0][1:] == (12, 14, "bicubic")
+    assert [call[2]["roi_fraction"] for call in measure_calls] == [0.45, 1.0]
+    assert all(call[0] == (1, 24, 6, 12, 14) for call in measure_calls)
+    assert len(events) == 2
+    assert [fields["roi"] for _, fields in events] == ["upper45", "full"]
+    for kind, fields in events:
+        assert kind == "partitioned_multiframe_trajectory"
+        assert fields["stage"] == "source_low_exact_context_bicubic_shadow"
+        assert fields["transfer_mode"] == "bicubic"
+        assert fields["diagnostic_only"] is True
+        assert fields["production_gate"] is False
+        assert fields["extra_h3_nfe"] == 0
+        assert fields["extra_provider_calls"] == 0
+        assert fields["extra_vae_calls"] == 0
+        assert fields["extra_sampler_lifetimes"] == 0
+        assert fields["extra_history_boundaries"] == 0
 
 
 def test_guidance_registration_rejects_high_schedule_above_probe_endpoint():

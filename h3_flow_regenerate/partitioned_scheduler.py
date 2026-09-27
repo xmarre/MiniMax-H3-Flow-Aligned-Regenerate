@@ -1988,6 +1988,54 @@ def _frame_gauge_clean_postprocess(
     return result, None, witnesses, transaction
 
 
+def _emit_bicubic_transfer_shadow_trajectory(
+    metrics,
+    clean_video: torch.Tensor,
+    *,
+    prefix_t: int,
+    source_h: int,
+    source_w: int,
+    target_h: int,
+    target_w: int,
+) -> None:
+    """Measure a spatial-only transfer shadow without changing production state."""
+
+    shadow = resize_video(clean_video, target_h, target_w, mode="bicubic")
+    expected_shape = (*clean_video.shape[:-2], int(target_h), int(target_w))
+    if tuple(shadow.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"bicubic transfer shadow returned shape {tuple(shadow.shape)}; expected {tuple(expected_shape)}"
+        )
+    try:
+        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+            trajectory = measure_translation_trajectory(
+                shadow,
+                prefix_t,
+                forward_steps=4,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
+            metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="source_low_exact_context_bicubic_shadow",
+                roi=roi_name,
+                source_hw=(int(source_h), int(source_w)),
+                target_hw=(int(target_h), int(target_w)),
+                transfer_mode="bicubic",
+                diagnostic_only=True,
+                production_gate=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                **trajectory,
+            )
+    finally:
+        del shadow
+
+
 def _bounded_residual_stage_slice(
     video: torch.Tensor,
     *,
@@ -2982,6 +3030,17 @@ def run_partitioned_progressive(
                     source_hw=(source_h, source_w),
                     target_hw=(target_h, target_w),
                 ),
+            )
+
+        if residual_mode == "measure":
+            _emit_bicubic_transfer_shadow_trajectory(
+                binding.metrics,
+                clean_video,
+                prefix_t=stage_plan.prefix_t,
+                source_h=source_h,
+                source_w=source_w,
+                target_h=target_h,
+                target_w=target_w,
             )
 
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:

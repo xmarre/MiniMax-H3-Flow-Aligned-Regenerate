@@ -1011,3 +1011,87 @@ claim: preserve 00686/00687 background consistency, verify the audio tuple, and
 capture regional residual geometry needed to design a bounded non-global video
 correction.
 
+
+
+## 00688 hardware result: residual geometry rejects; raw decode localizes pre-assembly shift
+
+00688 preserves the exact-main heterogeneous low/probe execution and runs the
+VDN-H3-Plus #33 batching candidate. The run does **not**, however, execute the
+audio tuple requested after 00687: the runtime control receipt reports
+`audio_guided_overlap_mode=sampler_mask` with `audio_guided_overlap_ticks=16`.
+This is a saved-workflow/control mismatch, not evidence against the intended
+`sampler_mask_exact_timestep / 4` setting.
+
+The frame-gauge transaction remains correctly fail-closed. The rigid candidate
+is still available as a measurement witness, but
+`production_mutation_allowed=false`; no spatial warp is applied and no
+registered guidance reference is published to target-high.
+
+The 3x3 residual-geometry evidence does not justify a non-rigid production
+correction. The video measurement accepts only 1 of 54 observations; 53 reject,
+leaving no globally supported fit or held-out support. The guidance measurement
+has much better numerical support, but its horizontal model is still ineligible
+and worsens the held-out RMS by about 2.35%. Neither arm authorizes horizontal,
+affine, projective, or regional production warping.
+
+The retained regional provider diagnostics continue to isolate `r2c0` as a
+provider-native first-suffix outlier. Its boundary prediction error is about
+1.483x the recent held-out maximum and its dispersion-normalized error about
+1.706x the recent maximum. The existing shadow residual clamp improves local
+diagnostic metrics, but earlier hardware runs already showed that those metric
+improvements do not establish decoded semantic continuity. It therefore remains
+shadow-only.
+
+The decoded-media evidence closes another branch of the fault tree. Continuum
+PT212 records the discontinuity from the pre-patch raw VAE decode, before video
+assembly. The upper-45% first decoded pair is about `(+1.04, +5.50) px` and
+the full-frame pair about `(+3.26, +2.26) px`, while the preceding medians are
+near zero. PT216 then reports `applied=false`, `patch_frames=0`, and
+`source=pre_patch_raw_decode`. Video assembly is therefore not the origin of
+the frame impulse. The final latent already contains a boundary impulse; decode
+can shape or amplify it, but assembly does not create it.
+
+### 00688 performance evidence
+
+Against the 00686 exact-main baseline:
+
+- low-stage wall: `131.903 s -> 127.151 s` (**-3.60%**);
+- exact-probe wall: `25.373 s -> 23.964 s` (**-5.55%**);
+- continuation sampler wall: `225.233 s -> 246.638 s` (**+9.50%**);
+- high-stage wall: `59.160 s -> 72.812 s` (**+23.08%**).
+
+The VDN #33 optimization is active in the process log. The intended
+heterogeneous low/probe axis is modestly faster, so #33 remains a valid
+performance candidate, but this run does not establish an end-to-end speedup.
+The slower high stage and total continuation prevent promotion from this single
+measurement.
+
+### Next discriminator: spatial-only transfer shadow
+
+The source-low clean state already carries the authoritative exact prefix
+projected to the source H3 patch lattice before the learned 3D provider runs.
+The next measurement therefore compares the provider against a cheap
+spatial-only control from that **same** clean source tensor.
+
+When `frame_gauge_residual_mode=measure`, the runtime now constructs one
+diagnostic bicubic target-grid shadow and records the same upper-45% and
+full-frame multi-frame trajectory witnesses under
+`source_low_exact_context_bicubic_shadow`. The shadow:
+
+- uses the exact same source clean video consumed by the learned handoff;
+- performs no learned-provider call;
+- adds no H3 NFE, VAE call, sampler lifetime, or history boundary;
+- never changes production state or any guidance reference.
+
+This distinguishes a generic source-to-target spatial-coordinate effect from a
+discontinuity introduced specifically by the learned 3D mapping. If bicubic
+stays near the source-low trajectory while the learned provider reproduces the
+large boundary impulse, the learned transfer is the remaining causal layer to
+investigate. If bicubic reproduces the impulse too, the defect lies earlier in
+the source/target representation transition.
+
+The offline runtime gate also now treats the **latest** audio-overlap log
+receipt as authoritative rather than accepting any earlier four-tick receipt in
+the process log. Optional expected mode/width checks allow the next run to
+require exactly `sampler_mask_exact_timestep / 4` and fail immediately on stale
+saved-workflow values.

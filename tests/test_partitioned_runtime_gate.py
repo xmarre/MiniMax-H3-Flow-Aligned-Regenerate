@@ -148,18 +148,65 @@ def test_partitioned_runtime_gate_accepts_complete_evidence():
     assert report.sol_requested_q_rows == report.sol_kernel_q_rows == 192
     assert report.vdn_variable_grid_linear_active is True
     assert report.audio_guided_overlap_active is True
+    assert report.audio_guided_overlap_mode == "model_timestep_only"
+    assert report.audio_guided_overlap_ticks == 4
 
 
 def test_partitioned_runtime_gate_rejects_unapplied_or_wrong_width_audio_overlap():
-    with pytest.raises(RuntimeGateError, match="four-tick partitioned audio guided overlap"):
+    with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(
             _metrics(),
             _log().replace("ticks=4 applied=True", "ticks=3 applied=True"),
         )
-    with pytest.raises(RuntimeGateError, match="four-tick partitioned audio guided overlap"):
+    with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(
             _metrics(),
             _log().replace("ticks=4 applied=True", "ticks=4 applied=False"),
+        )
+
+
+def test_partitioned_runtime_gate_uses_latest_audio_overlap_receipt_and_exact_expectations():
+    stale = _log().splitlines()[1]
+    current = stale.replace(
+        "mode=model_timestep_only ticks=4",
+        "mode=sampler_mask ticks=16",
+    )
+    log_text = "\n".join(
+        (
+            "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active",
+            stale,
+            current,
+            "INFO comfy.sol_h3 Sol-H3 " + json.dumps(_sol_record(), sort_keys=True),
+        )
+    )
+
+    with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
+        validate_partitioned_runtime_evidence(_metrics(), log_text)
+
+    exact_log = _log().replace(
+        "mode=model_timestep_only",
+        "mode=sampler_mask_exact_timestep",
+    )
+    report = validate_partitioned_runtime_evidence(
+        _metrics(),
+        exact_log,
+        expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        expected_audio_guided_overlap_ticks=4,
+    )
+    assert report.audio_guided_overlap_mode == "sampler_mask_exact_timestep"
+    assert report.audio_guided_overlap_ticks == 4
+
+    with pytest.raises(RuntimeGateError, match="mode differs from expectation"):
+        validate_partitioned_runtime_evidence(
+            _metrics(),
+            _log(),
+            expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        )
+    with pytest.raises(RuntimeGateError, match="width differs from expectation"):
+        validate_partitioned_runtime_evidence(
+            _metrics(),
+            _log(),
+            expected_audio_guided_overlap_ticks=16,
         )
 
 

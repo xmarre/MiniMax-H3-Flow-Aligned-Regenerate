@@ -58,6 +58,16 @@ def main() -> None:
     parser.add_argument("--expected-actual", type=int)
     parser.add_argument("--expected-forecast", type=int)
     parser.add_argument(
+        "--expected-audio-guided-overlap-mode",
+        choices=("sampler_mask", "model_timestep_only", "sampler_mask_exact_timestep"),
+        help="Require the latest applied partitioned audio guided-overlap mode.",
+    )
+    parser.add_argument(
+        "--expected-audio-guided-overlap-ticks",
+        type=int,
+        help="Require the latest applied partitioned audio guided-overlap width.",
+    )
+    parser.add_argument(
         "--expected-audio-position-domain",
         choices=("legacy_target", "source_carrier"),
         help="Validate the selected target-audio position policy and its candidate receipts.",
@@ -115,6 +125,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.expected_audio_guided_overlap_ticks is not None and args.expected_audio_guided_overlap_ticks < 0:
+        parser.error("--expected-audio-guided-overlap-ticks must be non-negative")
     if (args.expected_residual_mode is None) != (args.expected_residual_result is None):
         parser.error("--expected-residual-mode and --expected-residual-result must be supplied together")
     if args.expected_residual_mode == "measure" and args.expected_frame_gauge_mode is None:
@@ -143,6 +155,8 @@ def main() -> None:
             require_spectrum=not args.allow_no_spectrum,
             require_audio_overlap=not args.allow_no_audio_overlap,
             require_vdn_linear=not args.allow_no_vdn_linear,
+            expected_audio_guided_overlap_mode=args.expected_audio_guided_overlap_mode,
+            expected_audio_guided_overlap_ticks=args.expected_audio_guided_overlap_ticks,
             expected_audio_position_domain=args.expected_audio_position_domain,
             expected_frame_gauge_mode=args.expected_frame_gauge_mode,
             expected_residual_mode=args.expected_residual_mode,

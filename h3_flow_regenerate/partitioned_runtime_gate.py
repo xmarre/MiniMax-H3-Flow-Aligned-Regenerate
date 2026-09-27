@@ -43,6 +43,10 @@ VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
+_AUDIO_OVERLAP_RE = re.compile(
+    r"partitioned audio guided overlap mode=(?P<mode>\S+) "
+    r"ticks=(?P<ticks>\d+)\b applied=(?P<applied>True|False)\b"
+)
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
@@ -85,6 +89,8 @@ class RuntimeGateReport:
     sol_kernel_q_rows: int
     vdn_variable_grid_linear_active: bool
     audio_guided_overlap_active: bool
+    audio_guided_overlap_mode: str | None
+    audio_guided_overlap_ticks: int | None
     audio_position_domain: str | None
     audio_position_candidate_verified: bool
     audio_position_candidate_block0_calls: int
@@ -2918,6 +2924,8 @@ def validate_partitioned_runtime_evidence(
     require_spectrum: bool = True,
     require_audio_overlap: bool = True,
     require_vdn_linear: bool = True,
+    expected_audio_guided_overlap_mode: str | None = None,
+    expected_audio_guided_overlap_ticks: int | None = None,
     expected_audio_position_domain: str | None = None,
     expected_frame_gauge_mode: str | None = None,
     expected_residual_mode: str | None = None,
@@ -3237,13 +3245,14 @@ def validate_partitioned_runtime_evidence(
     )
 
     vdn_linear = VDN_LINEAR_ACTIVE_MARKER in log_text
-    audio_overlap = bool(
-        AUDIO_OVERLAP_MARKER in log_text
-        and re.search(
-            r"partitioned audio guided overlap mode=\S+ ticks=4\b applied=True\b",
-            log_text,
-        )
+    audio_overlap_receipts = list(_AUDIO_OVERLAP_RE.finditer(log_text))
+    latest_audio_overlap = audio_overlap_receipts[-1] if audio_overlap_receipts else None
+    audio_overlap_mode = latest_audio_overlap.group("mode") if latest_audio_overlap is not None else None
+    audio_overlap_ticks = int(latest_audio_overlap.group("ticks")) if latest_audio_overlap is not None else None
+    audio_overlap_applied = (
+        latest_audio_overlap is not None and latest_audio_overlap.group("applied") == "True"
     )
+    audio_overlap = bool(audio_overlap_applied and audio_overlap_ticks == 4)
     if require_vdn_linear:
         _require(
             vdn_linear,
@@ -3252,7 +3261,31 @@ def validate_partitioned_runtime_evidence(
     if require_audio_overlap:
         _require(
             audio_overlap,
-            "four-tick partitioned audio guided overlap was not observed",
+            "latest partitioned audio guided overlap was not an applied four-tick receipt",
+        )
+    if expected_audio_guided_overlap_mode is not None:
+        _require(
+            isinstance(expected_audio_guided_overlap_mode, str) and bool(expected_audio_guided_overlap_mode),
+            "expected audio guided-overlap mode must be a non-empty string",
+        )
+        _require(
+            audio_overlap_applied and audio_overlap_mode == expected_audio_guided_overlap_mode,
+            (
+                "latest applied partitioned audio guided-overlap mode differs from expectation: "
+                f"expected {expected_audio_guided_overlap_mode!r}, observed {audio_overlap_mode!r}"
+            ),
+        )
+    if expected_audio_guided_overlap_ticks is not None:
+        _require(
+            type(expected_audio_guided_overlap_ticks) is int and expected_audio_guided_overlap_ticks >= 0,
+            "expected audio guided-overlap ticks must be a non-negative integer",
+        )
+        _require(
+            audio_overlap_applied and audio_overlap_ticks == expected_audio_guided_overlap_ticks,
+            (
+                "latest applied partitioned audio guided-overlap width differs from expectation: "
+                f"expected {expected_audio_guided_overlap_ticks}, observed {audio_overlap_ticks}"
+            ),
         )
 
     return RuntimeGateReport(
@@ -3277,6 +3310,8 @@ def validate_partitioned_runtime_evidence(
         sol_kernel_q_rows=sol_kernel,
         vdn_variable_grid_linear_active=vdn_linear,
         audio_guided_overlap_active=audio_overlap,
+        audio_guided_overlap_mode=audio_overlap_mode,
+        audio_guided_overlap_ticks=audio_overlap_ticks,
         audio_position_domain=audio_position_domain,
         audio_position_candidate_verified=candidate_verified,
         audio_position_candidate_block0_calls=candidate_block0_calls,
