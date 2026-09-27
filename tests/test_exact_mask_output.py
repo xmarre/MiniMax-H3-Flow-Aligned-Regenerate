@@ -217,8 +217,9 @@ def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_c
     returned_video_before = returned_video.clone()
     returned_audio[..., 5] = 1.8
     returned_audio[..., 6] = 2.2
-    sampled_first_relation = returned_audio[..., 6].clone().float() - returned_audio[..., 5].clone().float()
-    delta = audio[..., 5].float() - returned_audio[..., 5].float()
+    returned_audio_before = returned_audio.clone()
+    sampled_first_relation = returned_audio_before[..., 6].float() - returned_audio_before[..., 5].float()
+    delta = audio[..., 5].float() - returned_audio_before[..., 5].float()
 
     binding = FlowBinding()
     guider = SimpleNamespace(model_options={"transformer_options": {"h3_flow_stage": "high"}})
@@ -254,10 +255,10 @@ def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_c
     expected_step = -0.25 * delta
     for tick in range(7, 10):
         actual = result_audio[..., tick].float() - result_audio[..., tick - 1].float()
-        native = audio[..., tick].float() - audio[..., tick - 1].float()
+        native = returned_audio_before[..., tick].float() - returned_audio_before[..., tick - 1].float()
         torch.testing.assert_close(actual - native, expected_step, rtol=0.0, atol=1.0e-6)
     exit_step = result_audio[..., 10].float() - result_audio[..., 9].float()
-    native_exit = audio[..., 10].float() - audio[..., 9].float()
+    native_exit = returned_audio_before[..., 10].float() - returned_audio_before[..., 9].float()
     torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=1.0e-6)
 
     bridge_events = [event for event in binding.metrics.events if event.kind == "audio_exact_restore_successor_bridge"]
