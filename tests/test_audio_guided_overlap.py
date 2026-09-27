@@ -115,7 +115,6 @@ def test_audio_successor_bridge_distributes_restore_delta_without_moving_full_ju
     assert report["legacy_one_tick_exit_step_rms"] == pytest.approx(report["delta_rms"])
 
 
-
 def test_audio_successor_bridge_scales_to_decoder_context_support():
     support = 52
     packed, shapes, exact_mask = _packed_case(audio_t=70, audio_prefix=6)
@@ -155,6 +154,7 @@ def test_audio_successor_bridge_scales_to_decoder_context_support():
     corrected_exit = bridged_audio[..., 6 + support].float() - bridged_audio[..., 5 + support].float()
     native_exit = before[..., 6 + support].float() - before[..., 5 + support].float()
     torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=0.0, atol=1e-6)
+
 
 def test_audio_guided_overlap_all_generated_audio_is_expected_noop():
     packed, shapes, mask = _packed_case(audio_prefix=0)
