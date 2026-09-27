@@ -1873,9 +1873,7 @@ def _validate_frame_gauge_transfer(
                 enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
             )
             eligible_shadow = (
-                enabled
-                and result == "shadow_only"
-                and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+                enabled and result == "shadow_only" and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
             _require(
                 eligible_rejected or eligible_shadow,
@@ -2043,9 +2041,7 @@ def _validate_frame_gauge(
             trigger = str(receipt.get("exact_overlap_fallback_trigger", ""))
             rejected_arm = mode == "on" and result == "rejected"
             shadow_arm = (
-                mode == "on"
-                and result == "shadow_only"
-                and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+                mode == "on" and result == "shadow_only" and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
             _require(
                 rejected_arm or shadow_arm,
