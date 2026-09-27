@@ -207,14 +207,19 @@ def partitioned_outer_wrapper(
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
-    audio_exact_restore_successor_ticks = (
-        guided_ticks
-        if guided_report is not None
+    # 00692 proves the four-tick exact-restore successor bridge can satisfy its
+    # local first-edge algebra while the decoded suffix remains catastrophically
+    # discontinuous. Keep the primitive available for isolated tests/evidence,
+    # but retire it from the production candidate so it cannot confound the
+    # target-high AV boundary-retention repair.
+    audio_exact_restore_successor_ticks = 0
+    if (
+        guided_report is not None
         and guided_report.get("applied") is True
         and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
         and guided_ticks == 4
-        else 0
-    )
+    ):
+        guided_report["exact_restore_successor_bridge"] = "retired_after_00692_target_high_localization"
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
