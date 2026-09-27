@@ -63,7 +63,6 @@ def test_ownership_without_measurement_and_nested_rejection():
     assert binding.guidance_protected_prefix_t == 0
 
 
-
 def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support():
     torch.manual_seed(7)
     video = torch.randn(1, 24, 9, 6, 6)
@@ -76,9 +75,9 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     video_reference = video[:, :, prefix_t : prefix_t + 4].clone()
     video_reference += torch.randn_like(video_reference) * 0.25
     audio_reference = audio.clone()
-    audio_reference[..., audio_prefix : audio_prefix + 4] += torch.randn_like(
-        audio_reference[..., audio_prefix : audio_prefix + 4]
-    ) * 0.4
+    audio_reference[..., audio_prefix : audio_prefix + 4] += (
+        torch.randn_like(audio_reference[..., audio_prefix : audio_prefix + 4]) * 0.4
+    )
 
     video_mask = torch.ones_like(video)
     video_mask[:, :, :prefix_t] = 0
@@ -118,19 +117,12 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     for offset, weight in enumerate(HIGH_BOUNDARY_REFERENCE_WEIGHTS[1:], start=1):
         expected_video = (
             original_video[:, :, prefix_t + offset].float()
-            + weight
-            * (
-                video_reference[:, :, offset].float()
-                - original_video[:, :, prefix_t + offset].float()
-            )
+            + weight * (video_reference[:, :, offset].float() - original_video[:, :, prefix_t + offset].float())
         ).to(result_video.dtype)
         expected_audio = (
             original_audio[..., audio_prefix + offset].float()
             + weight
-            * (
-                audio_reference[..., audio_prefix + offset].float()
-                - original_audio[..., audio_prefix + offset].float()
-            )
+            * (audio_reference[..., audio_prefix + offset].float() - original_audio[..., audio_prefix + offset].float())
         ).to(result_audio.dtype)
         torch.testing.assert_close(result_video[:, :, prefix_t + offset], expected_video, rtol=0, atol=0)
         torch.testing.assert_close(result_audio[..., audio_prefix + offset], expected_audio, rtol=0, atol=0)
@@ -169,13 +161,16 @@ def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
         metrics=H3FlowMetrics(),
     )
 
-    with pytest.raises(ValueError, match="contiguous exact prefix"), high_boundary_contract(
-        binding,
-        video[:, :, :3],
-        shapes,
-        measure=False,
-        audio_reference=audio,
-        exact_denoise_mask=exact_mask,
+    with (
+        pytest.raises(ValueError, match="contiguous exact prefix"),
+        high_boundary_contract(
+            binding,
+            video[:, :, :3],
+            shapes,
+            measure=False,
+            audio_reference=audio,
+            exact_denoise_mask=exact_mask,
+        ),
     ):
         pass
     assert torch.equal(packed, pack_streams((video, audio))[0])
