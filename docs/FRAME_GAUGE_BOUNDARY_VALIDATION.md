@@ -1095,3 +1095,105 @@ receipt as authoritative rather than accepting any earlier four-tick receipt in
 the process log. Optional expected mode/width checks allow the next run to
 require exactly `sampler_mask_exact_timestep / 4` and fail immediately on stale
 saved-workflow values.
+
+## 00689 hardware result: spatial-only control diverges from the learned transfer
+
+00689 executes the intended exact-main continuation and the corrected audio
+control. The partitioned node reports
+\`sampler_mask_exact_timestep / 4\`, source-carrier audio positions, exact
+target-prefix transformer context, normal VDN linear behavior, residual
+measurement, and the shadow-only provider-boundary selector. The rigid candidate
+remains fail-closed and does not mutate production video or publish registered
+guidance.
+
+The new spatial-only control materially narrows the video fault tree. It is
+constructed from the exact same source-clean tensor consumed by the learned 3D
+handoff. At the physical boundary its first-pair target-grid motion is:
+
+| ROI | bicubic spatial-only | learned provider native |
+| --- | --- | --- |
+| upper 45% | \`(+0.129,+0.067)\` cell | \`(-0.102,+0.690)\` cell |
+| full | \`(+0.348,+0.358)\` cell | \`(+0.810,+0.051)\` cell |
+
+The two mappings therefore do not reproduce the same boundary signature. The
+learned provider creates a substantially different local transition before
+exact-prefix restoration or target-high refinement. This is stronger evidence
+against a generic source-to-target coordinate-resize explanation, but it does
+not yet establish which learned component causes the defect or that the learned
+provider is the only contributor.
+
+The current provider source gives a plausible mechanism that now warrants direct
+measurement rather than inference. The handoff API receives the complete clean
+video plus target H/W, but no exact-prefix boundary. Its 3D resizer contains
+temporal-mixing \`Conv3d\` layers and depthwise \`TemporalConv\` blocks with a
+five-frame kernel every two blocks; inference deliberately processes the full
+temporal sequence because temporal chunking is not equivalent. A boundary-local
+state change can therefore be introduced by the learned residual even though the
+spatial-only resize is comparatively benign. This remains a hypothesis until the
+learned residual itself is isolated.
+
+Decoded evidence still shows a real multi-frame motion hitch before assembly.
+PT212 measures first-pair motion of approximately \`(+6.67,+14.24) px\` in the
+upper 45% and \`(+6.81,+14.16) px\` full-frame. PT216 again records no assembly
+patch, so assembly remains downstream of the observed discontinuity.
+
+### Audio
+
+The intended four-tick exact-timestep mode did execute in 00689. It produces a
+clean carried-overlap receipt (about \`-0.008 dB\`, correlation \`0.9974\`), but
+the newly decoded suffix is still about \`+12.06 dB\` above the preceding
+500-ms window before the seam and \`+11.86 dB\` after it. The carried overlap is
+therefore not the dominant failure in this sample. The unresolved problem is the
+newly generated audio state/loudness across the chunk boundary. A future
+audio-only discriminator should substitute the existing source-carrier shadow
+audio state while preserving exact-main video, but that adds another sampler
+lifetime and can influence joint high-stage AV dynamics; it should not be mixed
+into the next video-causal run.
+
+### Performance
+
+Against the 00686 exact-main baseline:
+
+- low stage: \`131.903 s -> 132.108 s\` (**+0.16%**);
+- exact probe: \`25.373 s -> 23.503 s\` (**-7.37%**);
+- low + probe combined: \`157.276 s -> 155.610 s\` (**-1.06%**);
+- high stage: \`59.160 s -> 70.378 s\` (**+18.96%**);
+- continuation sampler: \`225.233 s -> 244.685 s\` (**+8.64%**).
+
+Together with 00688, VDN-H3-Plus #33 shows no structural regression on its
+intended heterogeneous low/probe path, but the measured gain is small and
+variable. It is not yet a material end-to-end hardware speedup.
+
+### Learned-transfer residual diagnostic
+
+The next observation-only policy is
+\`partitioned_learned_transfer_residual_temporal_v1\`.
+
+For the actual learned-provider clean witness \`L\` and the bicubic target-grid
+shadow \`B\` derived from the same source-clean tensor, it forms:
+
+\`R = L - B\`.
+
+The existing held-out temporal predictor/calibration is then applied to \`R\`
+globally and on the fixed 4x4 grid. This directly asks whether the learned
+correction itself develops a first-suffix temporal surprise beyond its own recent
+prefix behavior.
+
+The diagnostic:
+
+- reuses the already-computed bicubic shadow and actual provider clean witness;
+- adds no provider call, H3 NFE, VAE call, sampler lifetime, or history boundary;
+- never changes either source tensor, production video, guidance, or a production
+  gate;
+- publishes the residual RMS, held-out global calibration, all 16 tile
+  calibrations, and both held-out-max rankings;
+- is required by the offline gate whenever a successful residual-measure run
+  reaches the learned-provider witness.
+
+The next matched hardware run must keep the complete 00689 execution tuple
+unchanged. If the learned residual has a boundary-local held-out outlier while
+the bicubic control remains comparatively ordinary, the next implementation
+target becomes the learned provider's temporal boundary contract. If the
+residual is temporally ordinary, the large provider-vs-bicubic difference is not
+itself sufficient to justify changing provider temporal behavior.
+
