@@ -310,3 +310,55 @@ def test_exact_overlap_fallback_requires_unambiguous_rigid_boundary_veto():
     eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(wrong_failure)
     assert eligible is False
     assert trigger == "frame_gauge_rejection_not_structural_overlap_eligible"
+
+
+def _hardware_invalidated_shadow_transaction():
+    transaction = _boundary_rejection_transaction()
+    transaction.update(
+        result="shadow_only",
+        reason="hardware_invalidated_global_rigid_application_00687",
+        candidate_accepted=True,
+        production_mutation_allowed=False,
+        spatial_warp_applied=False,
+    )
+    transaction["boundary_motion"]["status"] = "accepted"
+    transaction["boundary_motion"]["reason"] = "accepted"
+    transaction["boundary_motion"]["policy"] = "native_boundary_motion_preservation_v2"
+    return transaction
+
+
+def test_exact_overlap_fallback_accepts_hardware_invalidated_rigid_shadow():
+    transaction = _hardware_invalidated_shadow_transaction()
+
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(transaction)
+
+    assert eligible is True
+    assert trigger == "hardware_invalidated_global_rigid_application_00687"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("candidate_accepted", False, "frame_gauge_shadow_candidate_not_accepted"),
+        ("production_mutation_allowed", True, "frame_gauge_shadow_production_mutation_not_disabled"),
+        ("spatial_warp_applied", True, "frame_gauge_shadow_spatial_warp_was_applied"),
+    ],
+)
+def test_exact_overlap_fallback_rejects_invalid_hardware_shadow_ownership(field, value, reason):
+    transaction = _hardware_invalidated_shadow_transaction()
+    transaction[field] = value
+
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(transaction)
+
+    assert eligible is False
+    assert trigger == reason
+
+
+def test_exact_overlap_fallback_rejects_ambiguous_hardware_shadow_boundary():
+    transaction = _hardware_invalidated_shadow_transaction()
+    transaction["boundary_motion"]["checks"]["full"]["candidate"]["clipped"] = True
+
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(transaction)
+
+    assert eligible is False
+    assert trigger == "boundary_full_candidate_clipped"
