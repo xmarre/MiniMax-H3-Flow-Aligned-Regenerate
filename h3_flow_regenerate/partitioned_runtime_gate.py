@@ -20,6 +20,7 @@ from .boundary_content_diagnostics import (
     LEARNED_TRANSFER_RESIDUAL_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
+    PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
     PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY,
     PROVIDER_BOUNDARY_STABILIZATION_POLICY,
@@ -664,6 +665,125 @@ def _validate_exact_overlap_boundary_veto(fields: Any, *, reason: str) -> None:
     _require(observed_reason == reason, "exact-overlap fallback does not reproduce the recorded boundary veto")
 
 
+def _validate_provider_boundary_post_high_stabilization(window: list[dict[str, Any]]) -> None:
+    """Validate the opt-in final-domain temporal stabilization receipt."""
+
+    stabilization = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_stabilization"
+    ]
+    requested_soft = bool(
+        stabilization and stabilization[0].get("requested") and stabilization[0].get("mode") == "soft_support_v1"
+    )
+    has_boundary_diagnostics = any(_event_kind(event) == "partitioned_boundary_content_continuity" for event in window)
+    events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_post_high_stabilization"
+    ]
+
+    if not (requested_soft and has_boundary_diagnostics):
+        _require(not events, "unexpected post-high provider-boundary production receipt")
+        return
+
+    _require(len(events) == 1, "requested soft-support path must emit one post-high production receipt")
+    receipt = events[0]
+    _require(
+        receipt.get("policy") == PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
+        "post-high provider-boundary production policy drifted",
+    )
+    _require(receipt.get("requested") is True, "post-high provider-boundary production receipt lost request")
+    _require(receipt.get("mode") == "soft_support_v1", "post-high provider-boundary production mode drifted")
+    _require(
+        receipt.get("authoritative_prefix_modified") is False,
+        "post-high provider-boundary production modified authoritative prefix",
+    )
+    _require(receipt.get("audio_modified") is False, "post-high provider-boundary production modified audio")
+    for field in (
+        "extra_h3_nfe",
+        "extra_provider_calls",
+        "extra_vae_calls",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+    ):
+        _require(receipt.get(field) == 0, f"post-high provider-boundary production added work through {field}")
+
+    shadows = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_provider_boundary_post_high_shadow"
+    ]
+    _require(len(shadows) == 1, "post-high provider-boundary production lost its shadow evidence")
+    shadow = shadows[0]
+    temporal_shadow = shadow.get("temporal_support_shadow")
+    _require(isinstance(temporal_shadow, dict), "post-high provider-boundary production lost temporal shadow")
+    soft_shadow = shadow.get("soft_shadow")
+    _require(isinstance(soft_shadow, dict), "post-high provider-boundary production lost soft shadow")
+
+    applied = receipt.get("applied") is True
+    if applied:
+        _require(
+            receipt.get("reason") == "applied" and receipt.get("output_mutated") is True,
+            "applied post-high stabilization did not report production mutation",
+        )
+        _require(
+            receipt.get("exact_overlap_fallback_requested") is True,
+            "post-high stabilization applied outside structural exact-overlap arm",
+        )
+        _require(
+            int(receipt.get("temporal_span", -1)) == 3
+            and receipt.get("temporal_span_source") == "provider_predictor_pre_steps",
+            "post-high stabilization temporal support drifted",
+        )
+        expected_weights = [1.0, 0.75, 0.2500000000000001]
+        weights = receipt.get("weights")
+        _require(
+            isinstance(weights, list)
+            and len(weights) == len(expected_weights)
+            and all(_close_number(actual, expected, atol=1e-12) for actual, expected in zip(weights, expected_weights)),
+            "post-high stabilization temporal weights drifted",
+        )
+        _require(
+            receipt.get("temporal_support") == "raised_cosine_fade_to_zero_v1",
+            "post-high stabilization temporal support policy drifted",
+        )
+        eligible_tiles = list(map(str, receipt.get("eligible_tiles", [])))
+        _require(
+            eligible_tiles == list(map(str, soft_shadow.get("eligible_tiles", [])))
+            and int(receipt.get("eligible_tile_count", -1)) == len(eligible_tiles)
+            and len(eligible_tiles) > 0,
+            "post-high stabilization eligible tiles differ from its measured shadow",
+        )
+        _require(
+            int(receipt.get("corrected_tokens", -1)) == int(temporal_shadow.get("corrected_tokens", -2)) == 3,
+            "post-high stabilization corrected-token horizon drifted",
+        )
+        for field, shadow_field in (
+            ("correction_rms", "spatial_correction_rms"),
+            ("correction_abs_max", "spatial_correction_abs_max"),
+        ):
+            _require(
+                _close_number(receipt.get(field), temporal_shadow.get(shadow_field), atol=1e-8),
+                f"post-high stabilization {field} differs from temporal shadow",
+            )
+        _require(
+            receipt.get("later_suffix_extrapolated") is False,
+            "post-high stabilization escaped its fixed temporal horizon",
+        )
+        _require(
+            receipt.get("caller_domain_projection") == "process_latent_out_fixed_horizon_video_only_v1",
+            "post-high stabilization caller-domain projection drifted",
+        )
+    else:
+        _require(
+            receipt.get("reason") in {"exact_overlap_fallback_not_selected", "no_eligible_tiles"},
+            "inactive post-high stabilization failed closed for an unknown reason",
+        )
+        _require(receipt.get("output_mutated") is False, "inactive post-high stabilization mutated output")
+        _require(int(receipt.get("corrected_tokens", 0)) == 0, "inactive post-high stabilization corrected tokens")
+
+
 def _validate_provider_boundary_predictor(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only provider temporal predictor evidence."""
 
@@ -1300,13 +1420,14 @@ def _validate_provider_boundary_stabilization(window: list[dict[str, Any]]) -> N
         reason
         in {
             "disabled_pending_post_high_validation",
+            "deferred_to_post_high_temporal_support",
             "exact_overlap_fallback_not_selected",
             "rigid_v2_selected",
             "frame_gauge_selected",
         },
         "provider-boundary stabilization failed closed for an unknown reason",
     )
-    if reason == "disabled_pending_post_high_validation":
+    if reason in {"disabled_pending_post_high_validation", "deferred_to_post_high_temporal_support"}:
         _require(
             receipt.get("historical_candidate_policy") == PROVIDER_BOUNDARY_STABILIZATION_POLICY,
             "provider-boundary stabilization historical policy identity drifted",
@@ -3113,6 +3234,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_soft_support_shadow(window)
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
+    _validate_provider_boundary_post_high_stabilization(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
