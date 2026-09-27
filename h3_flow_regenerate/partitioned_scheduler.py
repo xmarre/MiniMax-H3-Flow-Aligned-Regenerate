@@ -2002,9 +2002,7 @@ def _frame_gauge_clean_postprocess(
     )
     witnesses = {
         "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
-        "learned_boundary_pair": (
-            learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()
-        ),
+        "learned_boundary_pair": (learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()),
         "paired_prefix_aligned_witness": aligned_witness,
         "candidate_corrected_clean": (candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()),
     }
