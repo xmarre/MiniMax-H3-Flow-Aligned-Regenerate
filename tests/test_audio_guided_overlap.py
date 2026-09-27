@@ -115,6 +115,47 @@ def test_audio_successor_bridge_distributes_restore_delta_without_moving_full_ju
     assert report["legacy_one_tick_exit_step_rms"] == pytest.approx(report["delta_rms"])
 
 
+
+def test_audio_successor_bridge_scales_to_decoder_context_support():
+    support = 52
+    packed, shapes, exact_mask = _packed_case(audio_t=70, audio_prefix=6)
+    result = packed.clone()
+    _result_video, result_audio = unpack_streams(result, shapes)
+    _reference_video, reference_audio = unpack_streams(packed, shapes)
+    result_audio[..., 5] += 0.8
+    result_audio[..., 6] -= 0.2
+    before = result_audio.clone()
+    delta = reference_audio[..., 5].float() - before[..., 5].float()
+    sampled_first = before[..., 6].float() - before[..., 5].float()
+
+    bridged, report = apply_audio_exact_restore_successor_bridge(
+        result,
+        packed,
+        exact_mask,
+        shapes,
+        support_ticks=support,
+    )
+    _bridged_video, bridged_audio = unpack_streams(bridged, shapes)
+
+    assert report["applied"] is True
+    assert report["corrected_ticks"] == support
+    assert report["max_weight_step"] == pytest.approx(1.0 / support)
+    assert torch.equal(bridged_audio[..., :6], before[..., :6])
+    assert torch.equal(bridged_audio[..., 6 + support :], before[..., 6 + support :])
+
+    exact_last = reference_audio[..., 5].float()
+    corrected_first = bridged_audio[..., 6].float() - exact_last
+    torch.testing.assert_close(corrected_first, sampled_first, rtol=0.0, atol=1e-6)
+
+    expected_step = -delta / support
+    for tick in range(7, 6 + support):
+        corrected_step = bridged_audio[..., tick].float() - bridged_audio[..., tick - 1].float()
+        native_step = before[..., tick].float() - before[..., tick - 1].float()
+        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=0.0, atol=1e-6)
+    corrected_exit = bridged_audio[..., 6 + support].float() - bridged_audio[..., 5 + support].float()
+    native_exit = before[..., 6 + support].float() - before[..., 5 + support].float()
+    torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=0.0, atol=1e-6)
+
 def test_audio_guided_overlap_all_generated_audio_is_expected_noop():
     packed, shapes, mask = _packed_case(audio_prefix=0)
 
