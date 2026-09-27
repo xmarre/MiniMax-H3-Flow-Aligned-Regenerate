@@ -7,6 +7,7 @@ import torch
 
 from h3_flow_regenerate.boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    LEARNED_TRANSFER_RESIDUAL_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
@@ -17,6 +18,7 @@ from h3_flow_regenerate.boundary_content_diagnostics import (
     apply_provider_boundary_soft_support_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
+    measure_learned_transfer_residual_diagnostic,
     measure_provider_boundary_post_high_shadow,
     measure_provider_boundary_soft_support_shadow,
     measure_provider_boundary_stabilization_shadow,
@@ -886,3 +888,42 @@ def test_runtime_gate_rejects_boundary_content_receipt_that_claims_production_co
 
     with pytest.raises(RuntimeGateError, match="production gate"):
         _validate_boundary_content_diagnostics(bad)
+
+def test_learned_transfer_residual_diagnostic_is_zero_for_spatially_identical_provider():
+    spatial = torch.zeros(1, 24, 6, 32, 32, dtype=torch.float32)
+    learned = spatial.clone()
+    spatial_before = spatial.clone()
+    learned_before = learned.clone()
+
+    receipt = measure_learned_transfer_residual_diagnostic(learned, spatial, 5)
+
+    assert torch.equal(spatial, spatial_before)
+    assert torch.equal(learned, learned_before)
+    assert receipt["policy"] == LEARNED_TRANSFER_RESIDUAL_POLICY
+    assert receipt["diagnostic_only"] is True
+    assert receipt["production_gate"] is False
+    assert receipt["output_mutated"] is False
+    assert receipt["decomposition"] == "learned_minus_bicubic_spatial_shadow"
+    assert receipt["residual_rms"] == pytest.approx(0.0, abs=1e-8)
+    assert receipt["global"]["boundary_prediction_error_rms"] == pytest.approx(0.0, abs=1e-8)
+    assert len(receipt["tiles"]) == 16
+
+
+def test_learned_transfer_residual_diagnostic_localizes_learned_only_boundary_jump():
+    spatial = torch.zeros(1, 24, 6, 32, 32, dtype=torch.float32)
+    learned = spatial.clone()
+    learned[:, :, 5, 16:24, :8] = 2.0
+    spatial_before = spatial.clone()
+    learned_before = learned.clone()
+
+    receipt = measure_learned_transfer_residual_diagnostic(learned, spatial, 5)
+
+    assert torch.equal(spatial, spatial_before)
+    assert torch.equal(learned, learned_before)
+    assert receipt["residual_rms"] > 0.0
+    assert receipt["tiles_by_boundary_error_over_historical_max"][0] == "r2c0"
+    tile = receipt["tiles"]["r2c0"]
+    assert tile["boundary_prediction_error_rms"] > 0.0
+    assert tile["boundary_error_over_historical_max"] > 1.0
+    assert tile["boundary_dispersion_ratio_over_historical_max"] > 1.0
+
