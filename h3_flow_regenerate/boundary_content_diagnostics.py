@@ -13,6 +13,7 @@ _EPS = 1e-12
 BOUNDARY_CONTENT_DIAGNOSTIC_POLICY = "partitioned_boundary_content_continuity_v1"
 PROVIDER_BOUNDARY_PREDICTOR_POLICY = "partitioned_provider_boundary_temporal_predictor_v1"
 PROVIDER_BOUNDARY_CALIBRATION_POLICY = "partitioned_provider_boundary_temporal_calibration_v1"
+LEARNED_TRANSFER_RESIDUAL_POLICY = "partitioned_learned_transfer_residual_temporal_v1"
 PROVIDER_BOUNDARY_STABILIZATION_SHADOW_POLICY = "partitioned_provider_boundary_stabilization_shadow_v1"
 PROVIDER_BOUNDARY_SOFT_SUPPORT_SHADOW_POLICY = "partitioned_provider_boundary_soft_support_shadow_v1"
 PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY = "partitioned_provider_boundary_post_high_shadow_v1"
@@ -709,6 +710,73 @@ def measure_provider_boundary_temporal_calibration(
         "tiles": tile_fields,
         "tiles_by_boundary_error_over_historical_max": by_max_error,
         "tiles_by_boundary_dispersion_ratio_over_historical_max": by_max_dispersion,
+    }
+
+
+
+def measure_learned_transfer_residual_diagnostic(
+    learned_video: torch.Tensor,
+    spatial_shadow: torch.Tensor,
+    prefix_t: int,
+    *,
+    pre_steps: int = 3,
+    calibration_targets: int = 5,
+    tile_rows: int = 4,
+    tile_cols: int = 4,
+    lowpass_kernel: int = 5,
+) -> dict[str, Any]:
+    """Measure the learned transfer residual relative to a spatial-only shadow.
+
+    The diagnostic decomposes the learned target-grid output L into the bicubic
+    spatial control B plus residual R = L - B. It then applies the existing
+    held-out temporal calibration to R. This isolates temporal/state behavior
+    introduced by the learned transfer without changing either input tensor.
+    """
+
+    if learned_video.ndim != 5 or spatial_shadow.ndim != 5:
+        raise ValueError("learned-transfer residual diagnostic expects BxCxTxHxW tensors")
+    if tuple(learned_video.shape) != tuple(spatial_shadow.shape):
+        raise ValueError("learned-transfer residual diagnostic requires matching learned/shadow geometry")
+    if not learned_video.is_floating_point() or not spatial_shadow.is_floating_point():
+        raise TypeError("learned-transfer residual diagnostic expects floating tensors")
+    if not bool(torch.isfinite(learned_video).all().item()):
+        raise RuntimeError("learned-transfer residual learned input contains NaN or Inf")
+    if not bool(torch.isfinite(spatial_shadow).all().item()):
+        raise RuntimeError("learned-transfer residual spatial shadow contains NaN or Inf")
+
+    residual = learned_video.float() - spatial_shadow.float()
+    calibration = measure_provider_boundary_temporal_calibration(
+        residual,
+        prefix_t,
+        pre_steps=int(pre_steps),
+        calibration_targets=int(calibration_targets),
+        tile_rows=int(tile_rows),
+        tile_cols=int(tile_cols),
+        lowpass_kernel=int(lowpass_kernel),
+    )
+    return {
+        "policy": LEARNED_TRANSFER_RESIDUAL_POLICY,
+        "diagnostic_only": True,
+        "production_gate": False,
+        "output_mutated": False,
+        "decomposition": "learned_minus_bicubic_spatial_shadow",
+        "prefix_t": int(prefix_t),
+        "pre_steps": int(pre_steps),
+        "requested_calibration_targets": int(calibration_targets),
+        "calibration_target_indices": list(calibration["calibration_target_indices"]),
+        "calibration_target_count": int(calibration["calibration_target_count"]),
+        "tile_rows": int(tile_rows),
+        "tile_cols": int(tile_cols),
+        "lowpass_kernel": int(lowpass_kernel),
+        "residual_rms": _rms(residual),
+        "global": calibration["global"],
+        "tiles": calibration["tiles"],
+        "tiles_by_boundary_error_over_historical_max": calibration[
+            "tiles_by_boundary_error_over_historical_max"
+        ],
+        "tiles_by_boundary_dispersion_ratio_over_historical_max": calibration[
+            "tiles_by_boundary_dispersion_ratio_over_historical_max"
+        ],
     }
 
 
