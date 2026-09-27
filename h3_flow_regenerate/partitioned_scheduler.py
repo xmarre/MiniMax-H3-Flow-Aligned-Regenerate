@@ -99,6 +99,12 @@ from .partitioned_stage import (
     tensor_sha256,
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
+from .post_high_retention import (
+    POST_HIGH_AUDIO_RETENTION_TICKS,
+    POST_HIGH_VIDEO_RETENTION_WEIGHTS,
+    apply_post_high_boundary_retention,
+    exact_audio_prefix_ticks,
+)
 from .representation_bridge import (
     apply_suffix_representation_bridge,
     disabled_suffix_representation_bridge_metrics,
@@ -123,6 +129,7 @@ from .runtime import (
     _merge_preserved_noise,
     _noise_argument,
     _process_latent_in,
+    _process_latent_out,
     _raw_sampler_state,
     _reset_guider_conds,
     _resize_packed_latent_image,
@@ -2961,7 +2968,11 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
-        low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
+        low_probe_clean_audio = (
+            clean_audio.detach().clone()
+            if diagnostic_audio_control or bool(config.frame_gauge_repair)
+            else None
+        )
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
