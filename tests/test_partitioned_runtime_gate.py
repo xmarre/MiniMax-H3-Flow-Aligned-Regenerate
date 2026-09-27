@@ -514,6 +514,39 @@ def _rejected_v2_boundary_motion():
     }
 
 
+def _accepted_v2_boundary_motion():
+    return {
+        "status": "accepted",
+        "reason": "accepted",
+        "policy": "native_boundary_motion_preservation_v2",
+        "min_error_cells": 0.125,
+        "min_improvement_ratio": 0.25,
+        "min_response": 3.0,
+        "checks": {
+            "upper45": {
+                "informative": True,
+                "before_error_cells": 1.0,
+                "after_error_cells": 0.3,
+                "error_improvement_ratio": 0.7,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "transformed_native": {"dx": 0.2, "dy": 0.0, "response": 10.0, "clipped": False},
+                "exact_restored": {"dx": 1.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "candidate": {"dx": 0.5, "dy": 0.0, "response": 10.0, "clipped": False},
+            },
+            "full": {
+                "informative": True,
+                "before_error_cells": 0.8,
+                "after_error_cells": 0.2,
+                "error_improvement_ratio": 0.75,
+                "native": {"dx": 0.0, "dy": 0.0, "response": 10.0, "clipped": False},
+                "transformed_native": {"dx": 0.1, "dy": 0.0, "response": 10.0, "clipped": False},
+                "exact_restored": {"dx": 0.8, "dy": 0.0, "response": 10.0, "clipped": False},
+                "candidate": {"dx": 0.3, "dy": 0.0, "response": 10.0, "clipped": False},
+            },
+        },
+    }
+
+
 def _frame_gauge_event(
     *,
     mode="off",
@@ -1281,12 +1314,71 @@ def test_runtime_gate_accepts_partitioned_exact_overlap_fallback_after_rigid_bou
     assert report.frame_gauge_result == "rejected"
 
 
+def _install_shadow_exact_overlap_fallback_receipt(metrics):
+    reason = "hardware_invalidated_global_rigid_application_00687"
+    metrics = _install_frame_gauge_transfer(metrics, mode="on", result="shadow_only")
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"].update(
+        frame_gauge_reason=reason,
+        splice_clean_source="actual_provider_boundary_pair_plus_inverse_recovered",
+        partitioned_exact_overlap_bridge={
+            "policy": "partitioned_exact_overlap_structural_plus_dc_v1",
+            "requested": True,
+            "trigger": reason,
+            "applied": True,
+            "state_mapping": "conditional_renoise_affine",
+            "source": "actual_provider_boundary_pair",
+            "authoritative_prefix_modified": False,
+            "later_suffix_extrapolated": False,
+            "suffix_representation_bridge_enabled": True,
+            "suffix_representation_bridge_accepted": True,
+            "suffix_representation_bridge_corrected_tokens": 1,
+        },
+    )
+    frame = _frame_gauge_event(mode="on", result="shadow_only")
+    frame["fields"].update(
+        reason=reason,
+        boundary_motion=_accepted_v2_boundary_motion(),
+        exact_overlap_fallback_policy="partitioned_exact_overlap_structural_plus_dc_v1",
+        exact_overlap_fallback_requested=True,
+        exact_overlap_fallback_trigger=reason,
+        exact_overlap_fallback_applied=True,
+        exact_overlap_fallback_source="actual_provider_boundary_pair",
+    )
+    metrics["events"].insert(-2, frame)
+    return metrics
+
+
+def test_runtime_gate_accepts_exact_overlap_after_hardware_invalidated_rigid_shadow():
+    report = validate_partitioned_runtime_evidence(
+        _install_shadow_exact_overlap_fallback_receipt(_metrics()),
+        _log(),
+        expected_frame_gauge_mode="on-shadow_only",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "shadow_only"
+
+
+def test_runtime_gate_rejects_shadow_overlap_if_rigid_mutation_is_reenabled():
+    metrics = _install_shadow_exact_overlap_fallback_receipt(_metrics())
+    frame = next(event for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge")
+    frame["fields"]["production_mutation_allowed"] = True
+
+    with pytest.raises(RuntimeGateError, match="fail-closed ownership"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-shadow_only",
+        )
+
+
 def test_runtime_gate_rejects_exact_overlap_fallback_not_bound_to_transaction_reason():
     metrics = _install_exact_overlap_fallback_receipt(_metrics())
     transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
     transfer["fields"]["partitioned_exact_overlap_bridge"]["trigger"] = "boundary_full_insufficient_improvement"
 
-    with pytest.raises(RuntimeGateError, match="trigger differs from the frame-gauge rejection"):
+    with pytest.raises(RuntimeGateError, match="trigger differs from the frame-gauge"):
         validate_partitioned_runtime_evidence(
             metrics,
             _log(),
