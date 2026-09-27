@@ -1273,3 +1273,75 @@ hardware-invalidated shadow transaction to stay fail-closed, reject clipped or
 ambiguous boundary evidence, and fail if rigid production mutation is
 re-enabled. Existing rejected-boundary behavior remains unchanged.
 
+## 00691: one-token repairs relocate the discontinuity to the successor
+
+00691 executes the 00690 structural exact-overlap arm and separately enables the
+source-uniform audio handoff shadow. The run confirms three distinct facts.
+
+First, the structural exact-overlap transaction is active rather than silently
+falling back. The measured exact-versus-provider overlap residual is transferred
+onto the first generated suffix token and the centered structural mismatch at
+that first edge is reduced to numerical noise. The decoded boundary nevertheless
+still has a visible multi-frame motion impulse before Continuum assembly.
+
+That exposes a stronger invariant than first-edge equality. If the exact-prefix
+restore requires residual
+
+`D = E_p - L_p`
+
+and only suffix token zero receives `D`, the first edge is preserved exactly
+but the next generated transition acquires `-D`. A one-token bridge therefore
+moves the full representation discontinuity from prefix->suffix0 to
+suffix0->suffix1. The same algebra applies to a one-tick audio exact-restore
+bridge.
+
+The hardware-invalidated rigid-shadow arm now uses
+`partitioned_exact_overlap_successor_safe_v2` with fixed weights:
+
+`[1.0, 0.75, 0.5, 0.25]`.
+
+The first generated video token still receives the complete measured overlap
+residual, so the provider-native first boundary relation is preserved exactly.
+The following three tokens receive progressively smaller fractions. Including
+the return to the untouched suffix, every correction-induced successor step is
+therefore bounded to one quarter of the original residual instead of relocating
+the entire residual to one successor transition. The support is explicit and
+fail-closed: exactly four suffix tokens, no modification outside that interval,
+no rigid spatial warp, and no additional H3 NFE, sampler lifetime, history
+boundary, provider call, or VAE call. Historical rejected-boundary arms retain
+their existing one-token policy.
+
+Second, the 00691 source-uniform **audio-only** shadow is a failed discriminator,
+not a production fix. It adds one sampler lifetime, one history boundary, five
+source-uniform transformer calls and four actual transformer NFEs. Its execution
+cost is about 67.6 seconds; continuation sampler wall time rises from about
+247.7 seconds in 00690 to about 327.9 seconds in 00691. The target-high stage
+itself is not responsible for that regression.
+
+The audio result also repeats the earlier negative evidence from the dedicated
+audio-shadow experiment: replacing only the low/probe raw audio handoff state is
+insufficient. In 00691 the carried decoded overlap is still essentially exact,
+but the newly decoded suffix is about +8.35 dB over the preceding 500-ms window
+before seam handling and about +8.18 dB afterward. The source-uniform audio
+shadow path is therefore closed again and must not be used for the next
+production candidate.
+
+Third, the remaining audio exact-restore mechanism has the same successor
+problem as the video bridge. The four-tick
+`sampler_mask_exact_timestep` path now applies a final
+`audio_exact_restore_successor_safe_v2` bridge immediately before authoritative
+exact-mask canonicalization. For restore delta `D`, generated ticks receive
+weights `[1.0, 0.75, 0.5, 0.25]`. This preserves the sampler-produced first
+boundary relation exactly while bounding the correction-induced step on each
+subsequent transition, including the return to the untouched suffix, to
+`D / 4`. The bridge changes audio only, leaves the protected prefix untouched
+until canonicalization, changes no suffix tick outside the declared support, and
+adds no model evaluation or sampler lifetime.
+
+These changes are structurally testable but remain hardware candidates. Passing
+unit tests proves boundary algebra, ownership, bounded support and zero extra
+sampling topology; it does not establish decoded video or audio quality. The
+next hardware run must therefore use the ordinary exact-main AV handoff and
+remove the 00691 source-uniform audio shadow so quality and runtime are measured
+without that confound.
+
