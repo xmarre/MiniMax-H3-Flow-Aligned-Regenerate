@@ -5,12 +5,13 @@ import torch
 
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.high_stage_boundary import (
-    HIGH_BOUNDARY_AUDIO_ALIGNMENT_WEIGHTS,
+    HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS,
     HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS,
+    HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS,
+    HIGH_BOUNDARY_AUDIO_RELEASE_TICKS,
     HIGH_BOUNDARY_AUDIO_SEAM_TICKS,
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
-    build_authoritative_audio_boundary_reference,
     high_boundary_contract,
 )
 from h3_flow_regenerate.metrics import H3FlowMetrics
@@ -70,7 +71,7 @@ def test_ownership_without_measurement_and_nested_rejection():
 def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support():
     torch.manual_seed(7)
     video = torch.randn(1, 24, 9, 6, 6)
-    audio = torch.randn(1, 32, 2, 70)
+    audio = torch.randn(1, 32, 2, 100)
     packed, shapes = pack_streams((video, audio))
     original = packed.clone()
     prefix_t = 3
@@ -119,10 +120,11 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
         original_audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
     )
     assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
-    assert torch.equal(
-        result_audio[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
-        audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
-    )
+    for offset, weight in enumerate(HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS):
+        original_tick = original_audio[..., audio_prefix + offset].float()
+        reference_tick = audio_reference[..., audio_prefix + offset].float()
+        expected_audio = (original_tick + weight * (reference_tick - original_tick)).to(result_audio.dtype)
+        torch.testing.assert_close(result_audio[..., audio_prefix + offset], expected_audio, rtol=0, atol=0)
 
     for offset, weight in enumerate(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS[1:], start=1):
         expected_video = (
@@ -140,7 +142,7 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     assert fields["video_support_tokens"] == 4
     assert fields["audio_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
     assert fields["video_temporal_weights"] == list(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)
-    assert fields["audio_temporal_weights"] == [1.0] * HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+    assert fields["audio_temporal_weights"] == list(HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS)
     assert fields["video_first_reference_error_rms"] == 0.0
     assert fields["audio_first_reference_error_rms"] == 0.0
     assert fields["authoritative_prefix_modified"] is False
@@ -148,44 +150,17 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     assert binding.high_boundary_anchor is None
 
 
-def test_authoritative_audio_reference_preserves_low_probe_edge_and_decoder_context():
-    torch.manual_seed(13)
-    video = torch.zeros(1, 24, 4, 2, 2)
-    low_probe = torch.randn(1, 32, 2, 80)
-    authoritative = low_probe.clone()
-    prefix = 6
-    authoritative[..., :prefix] += 0.75
+def test_audio_reference_weights_hold_decoder_window_then_release_monotonically():
+    weights = HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS
+    assert len(weights) == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+    assert weights[:HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS] == (1.0,) * HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
 
-    video_mask = torch.ones_like(video)
-    audio_mask = torch.ones_like(low_probe)
-    audio_mask[..., :prefix] = 0
-    exact_mask, shapes = pack_streams((video_mask, audio_mask))
-
-    reference, report = build_authoritative_audio_boundary_reference(
-        low_probe,
-        authoritative,
-        exact_mask,
-        shapes,
-    )
-    delta = authoritative[..., prefix - 1].float() - low_probe[..., prefix - 1].float()
-
-    assert torch.equal(reference[..., :prefix], authoritative[..., :prefix])
-    for offset, weight in enumerate(HIGH_BOUNDARY_AUDIO_ALIGNMENT_WEIGHTS):
-        expected = low_probe[..., prefix + offset].float() + delta * weight
-        torch.testing.assert_close(reference[..., prefix + offset].float(), expected, rtol=0, atol=0)
-    assert torch.equal(
-        reference[..., prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
-        low_probe[..., prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
-    )
-
-    source_edge = low_probe[..., prefix].float() - low_probe[..., prefix - 1].float()
-    aligned_edge = reference[..., prefix].float() - reference[..., prefix - 1].float()
-    torch.testing.assert_close(aligned_edge, source_edge, rtol=0, atol=1e-6)
-    assert report["audio_reference_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
-    assert report["audio_seam_ticks"] == HIGH_BOUNDARY_AUDIO_SEAM_TICKS
-    assert report["audio_decoder_context_ticks"] == 32
-    assert report["audio_first_edge_relation_error_rms"] < 1e-6
-    assert report["reference_domain"] == "authoritative_prefix_aligned_low_probe_clean"
+    release = weights[HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS:]
+    assert len(release) == HIGH_BOUNDARY_AUDIO_RELEASE_TICKS
+    assert release[0] == pytest.approx(HIGH_BOUNDARY_AUDIO_RELEASE_TICKS / (HIGH_BOUNDARY_AUDIO_RELEASE_TICKS + 1))
+    assert release[-1] == pytest.approx(1.0 / (HIGH_BOUNDARY_AUDIO_RELEASE_TICKS + 1))
+    assert all(left > right for left, right in zip(release, release[1:], strict=True))
+    assert HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS == HIGH_BOUNDARY_AUDIO_SEAM_TICKS + 32
 
 
 def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
