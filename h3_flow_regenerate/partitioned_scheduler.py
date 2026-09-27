@@ -2007,35 +2007,32 @@ def _emit_bicubic_transfer_shadow_trajectory(
         raise RuntimeError(
             f"bicubic transfer shadow returned shape {tuple(shadow.shape)}; expected {tuple(expected_shape)}"
         )
-    try:
-        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
-            trajectory = measure_translation_trajectory(
-                shadow,
-                prefix_t,
-                forward_steps=4,
-                backward_steps=3,
-                roi_fraction=roi_fraction,
-                max_shift=4,
-            )
-            metrics.event(
-                "partitioned_multiframe_trajectory",
-                stage="source_low_exact_context_bicubic_shadow",
-                roi=roi_name,
-                source_hw=(int(source_h), int(source_w)),
-                target_hw=(int(target_h), int(target_w)),
-                transfer_mode="bicubic",
-                diagnostic_only=True,
-                production_gate=False,
-                extra_h3_nfe=0,
-                extra_provider_calls=0,
-                extra_vae_calls=0,
-                extra_sampler_lifetimes=0,
-                extra_history_boundaries=0,
-                **trajectory,
-            )
-        return shadow
-    finally:
-        del shadow
+    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+        trajectory = measure_translation_trajectory(
+            shadow,
+            prefix_t,
+            forward_steps=4,
+            backward_steps=3,
+            roi_fraction=roi_fraction,
+            max_shift=4,
+        )
+        metrics.event(
+            "partitioned_multiframe_trajectory",
+            stage="source_low_exact_context_bicubic_shadow",
+            roi=roi_name,
+            source_hw=(int(source_h), int(source_w)),
+            target_hw=(int(target_h), int(target_w)),
+            transfer_mode="bicubic",
+            diagnostic_only=True,
+            production_gate=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            **trajectory,
+        )
+    return shadow
 
 
 def _bounded_residual_stage_slice(
