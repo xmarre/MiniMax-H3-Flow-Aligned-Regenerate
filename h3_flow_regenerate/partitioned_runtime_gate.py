@@ -53,6 +53,9 @@ AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = [1.0, 0.75, 0.5, 0.25]
+POST_HIGH_BOUNDARY_RETENTION_POLICY = "partitioned_post_high_boundary_retention_v1"
+POST_HIGH_BOUNDARY_RETENTION_VIDEO_WEIGHTS = [1.0, 0.75, 0.5, 0.25]
+POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT = 30
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -1957,6 +1960,174 @@ def _validate_frame_gauge_transfer(
             )
 
 
+def _validate_post_high_boundary_retention(
+    window: list[dict[str, Any]],
+    plan_fields: dict[str, Any],
+    counters: dict[str, Any],
+) -> None:
+    """Validate the 00692 target-high AV boundary-retention candidate.
+
+    Historical evidence has no stage-plan marker and remains replayable. New
+    heads publish the marker on every partitioned plan, but production retention
+    is required only for the exact-main tuple plus an applied successor-safe
+    exact-overlap bridge.
+    """
+
+    policy_marker = plan_fields.get("post_high_boundary_retention_policy")
+    if policy_marker is None:
+        return
+    _require(
+        policy_marker == POST_HIGH_BOUNDARY_RETENTION_POLICY,
+        "post-high boundary-retention stage-plan policy drifted",
+    )
+
+    exact_main_controls = (
+        plan_fields.get("prefix_transformer_context") == "exact_target_partitioned"
+        and plan_fields.get("audio_handoff_source") == "main_partitioned"
+        and plan_fields.get("av_handoff_source") == "main_partitioned"
+        and plan_fields.get("guidance_trajectory_source") == "main_exact_partitioned"
+        and plan_fields.get("low_probe_execution_source") == "main_then_shadow"
+        and plan_fields.get("audio_guided_overlap_mode") == "sampler_mask_exact_timestep"
+        and int(plan_fields.get("audio_guided_overlap_ticks", -1)) == 4
+    )
+
+    transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
+    _require(len(transfers) == 1, "post-high retention validation requires exactly one partitioned transfer")
+    overlap = transfers[0].get("partitioned_exact_overlap_bridge")
+    successor_safe_applied = bool(
+        isinstance(overlap, dict)
+        and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+        and overlap.get("requested") is True
+        and overlap.get("applied") is True
+    )
+    expected = exact_main_controls and successor_safe_applied
+
+    plans = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_post_high_boundary_retention_plan"
+    ]
+    applications = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_post_high_boundary_retention"
+    ]
+    retired_audio_bridge = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "audio_exact_restore_successor_bridge"
+    ]
+    _require(
+        not retired_audio_bridge,
+        "00692-retired final audio exact-restore successor bridge became active",
+    )
+    _require(
+        int(counters.get("audio_exact_restore_successor_bridge_runs", 0)) == 0,
+        "00692-retired final audio exact-restore successor bridge counter is nonzero",
+    )
+
+    if not expected:
+        _require(
+            not plans and not applications,
+            "post-high boundary retention executed outside its exact-main successor-safe arm",
+        )
+        return
+
+    _require(len(plans) == 1, "eligible exact-main run must emit exactly one post-high retention plan")
+    _require(len(applications) == 1, "eligible exact-main run must apply exactly one post-high retention transaction")
+    plan = plans[0]
+    receipt = applications[0]
+
+    _require(plan.get("policy") == POST_HIGH_BOUNDARY_RETENTION_POLICY, "post-high retention plan policy drifted")
+    _require(
+        plan.get("source") == "00692_target_high_localization",
+        "post-high retention plan lost its 00692 hardware provenance",
+    )
+    _require(
+        plan.get("video_reference") == "exact_restored_pre_high"
+        and plan.get("audio_reference") == "low_probe_clean",
+        "post-high retention plan changed AV reference ownership",
+    )
+    _require(
+        int(plan.get("video_support_tokens", -1)) == len(POST_HIGH_BOUNDARY_RETENTION_VIDEO_WEIGHTS)
+        and plan.get("video_weights") == POST_HIGH_BOUNDARY_RETENTION_VIDEO_WEIGHTS,
+        "post-high retention video support drifted",
+    )
+    _require(
+        int(plan.get("audio_support_ticks", -1)) == POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT,
+        "post-high retention audio support drifted",
+    )
+    _require(
+        plan.get("audio_weights_policy") == "linear_1_to_1_over_support",
+        "post-high retention audio taper policy drifted",
+    )
+
+    _require(receipt.get("policy") == POST_HIGH_BOUNDARY_RETENTION_POLICY, "post-high retention policy drifted")
+    _require(receipt.get("applied") is True, "post-high retention did not apply")
+    _require(
+        receipt.get("source") == "00692_target_high_localization"
+        and receipt.get("exact_overlap_policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY,
+        "post-high retention is not bound to the 00692 successor-safe arm",
+    )
+    _require(
+        receipt.get("caller_domain_support_only") is True
+        and receipt.get("caller_video_outside_support_exact") is True
+        and receipt.get("caller_audio_outside_support_exact") is True,
+        "post-high retention escaped its caller-domain support",
+    )
+    _require(
+        receipt.get("authoritative_video_prefix_modified") is False
+        and receipt.get("authoritative_audio_prefix_modified") is False
+        and receipt.get("video_outside_support_modified") is False
+        and receipt.get("audio_outside_support_modified") is False,
+        "post-high retention violated prefix or outside-support ownership",
+    )
+
+    video = receipt.get("video")
+    audio = receipt.get("audio")
+    _require(isinstance(video, dict) and isinstance(audio, dict), "post-high retention AV receipt is malformed")
+    _require(
+        int(video.get("support", -1)) == len(POST_HIGH_BOUNDARY_RETENTION_VIDEO_WEIGHTS)
+        and video.get("weights") == POST_HIGH_BOUNDARY_RETENTION_VIDEO_WEIGHTS,
+        "post-high retention applied the wrong video taper",
+    )
+    audio_weights = audio.get("weights")
+    _require(
+        int(audio.get("support", -1)) == POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT
+        and isinstance(audio_weights, list)
+        and len(audio_weights) == POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT,
+        "post-high retention applied the wrong audio support",
+    )
+    expected_audio_weights = [
+        1.0 - float(offset) / float(POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT)
+        for offset in range(POST_HIGH_BOUNDARY_RETENTION_AUDIO_SUPPORT)
+    ]
+    for observed, expected_weight in zip(audio_weights, expected_audio_weights, strict=True):
+        _require(
+            _close_number(observed, expected_weight, atol=1.0e-12),
+            "post-high retention audio taper weights drifted",
+        )
+    for label, stream in (("video", video), ("audio", audio)):
+        for field in (
+            "first_correction_rms",
+            "last_correction_rms",
+            "max_adjacent_correction_step_rms",
+            "exit_correction_step_rms",
+        ):
+            value = _finite_number(stream.get(field))
+            _require(value >= 0.0, f"post-high retention {label} correction summary is invalid")
+
+    for fields in (plan, receipt):
+        for field in (
+            "extra_h3_nfe",
+            "extra_sampler_lifetimes",
+            "extra_history_boundaries",
+            "extra_provider_calls",
+            "extra_vae_calls",
+        ):
+            _require(fields.get(field) == 0, f"post-high retention added work through {field}")
+
+
 def _validate_frame_gauge(
     window: list[dict[str, Any]],
     *,
@@ -3185,6 +3356,7 @@ def validate_partitioned_runtime_evidence(
         plan_fields.get("deprecated_mixed_grid_contract_active") is False,
         "deprecated Mixed-Grid contract became active",
     )
+    _validate_post_high_boundary_retention(window, plan_fields, counters)
 
     transformer_events = [event for event in window if _event_kind(event) == "partitioned_exact_prefix_transformer"]
     _require(
