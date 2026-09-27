@@ -4131,6 +4131,9 @@ def run_partitioned_progressive(
         _reset_guider_conds(guider, template=conditioning_template)
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
+        high_boundary_reference_calls_before = int(
+            binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0)
+        )
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
@@ -4171,6 +4174,40 @@ def run_partitioned_progressive(
         first_high_actual = bool(high_model_calls[0].fields.get("actual"))
         if not first_high_actual:
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
+        high_boundary_reference_calls = (
+            int(binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0))
+            - high_boundary_reference_calls_before
+        )
+        high_boundary_reference_expected = bool(
+            high_video_reference_enabled or high_audio_reference_enabled
+        )
+        if high_boundary_reference_expected and high_boundary_reference_calls != len(high_model_calls):
+            raise RuntimeError(
+                "target-high clean boundary reference did not cover every high-stage model prediction"
+            )
+        if not high_boundary_reference_expected and high_boundary_reference_calls != 0:
+            raise RuntimeError("target-high clean boundary reference executed outside its selected plan")
+        binding.metrics.event(
+            "partitioned_high_boundary_reference_verified",
+            policy=HIGH_BOUNDARY_REFERENCE_POLICY,
+            expected=high_boundary_reference_expected,
+            model_calls=len(high_model_calls),
+            anchor_calls=high_boundary_reference_calls,
+            all_model_calls_covered=(
+                high_boundary_reference_calls == len(high_model_calls)
+                if high_boundary_reference_expected
+                else high_boundary_reference_calls == 0
+            ),
+            first_high_actual=first_high_actual,
+            video_enabled=high_video_reference_enabled,
+            audio_enabled=high_audio_reference_enabled,
+            fail_closed=True,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
 
         final_video, final_audio = unpack_streams(result, target_shapes)
         final_internal = None
