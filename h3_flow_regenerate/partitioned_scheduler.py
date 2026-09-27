@@ -3551,6 +3551,13 @@ def run_partitioned_progressive(
             ),
         )
 
+        exact_overlap_corrected_tokens = int(
+            representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)
+        )
+        exact_overlap_bounded_successor_support = (
+            exact_overlap_policy == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+            and exact_overlap_corrected_tokens > 1
+        )
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
             policy=exact_overlap_policy,
@@ -3563,7 +3570,12 @@ def run_partitioned_progressive(
                 else "disabled_or_noop"
             ),
             authoritative_prefix_modified=False,
-            later_suffix_extrapolated=False,
+            later_suffix_extrapolated=exact_overlap_bounded_successor_support,
+            suffix_support_policy=(
+                "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
+            ),
+            suffix_support_tokens=exact_overlap_corrected_tokens,
+            suffix_outside_support_modified=False,
             extra_h3_nfe=0,
             extra_provider_calls=0,
             extra_vae_calls=0,
@@ -3938,7 +3950,14 @@ def run_partitioned_progressive(
                 ),
                 "source": ("actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"),
                 "authoritative_prefix_modified": False,
-                "later_suffix_extrapolated": False,
+                "later_suffix_extrapolated": exact_overlap_bounded_successor_support,
+                "suffix_support_policy": (
+                    "bounded_linear_return_v2"
+                    if exact_overlap_bounded_successor_support
+                    else "first_suffix_only_v1"
+                ),
+                "suffix_support_tokens": exact_overlap_corrected_tokens,
+                "suffix_outside_support_modified": False,
                 **representation_metrics,
             },
             **dc_metrics,
