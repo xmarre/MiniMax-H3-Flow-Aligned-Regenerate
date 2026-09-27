@@ -291,6 +291,8 @@ def apply_partitioned_diagnostic_controls(
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
             "prefix_transformer_context": prefix_context,
+            "post_high_boundary_retention_policy": "partitioned_post_high_boundary_retention_v1",
+            "audio_exact_restore_successor_bridge": "retired_after_00692_target_high_localization",
             "model_local": True,
             "native_vdn_unchanged": True,
             "production_default_changed": False,
