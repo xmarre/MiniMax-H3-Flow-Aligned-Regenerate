@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from h3_flow_regenerate.boundary_content_diagnostics import measure_learned_transfer_residual_diagnostic
-
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
