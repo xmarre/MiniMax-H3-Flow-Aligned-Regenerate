@@ -3257,6 +3257,7 @@ def run_partitioned_progressive(
             prefix_t=stage_plan.prefix_t,
             requested=False,
         )
+        exact_overlap_successor_safe_selected = False
         splice_started = time.perf_counter()
         aligned_witness = None
         provider_native_clean: torch.Tensor | None = None
@@ -3339,10 +3340,15 @@ def run_partitioned_progressive(
                         production_mutation_allowed=False,
                     )
 
+                exact_overlap_successor_safe_selected = (
+                    frame_gauge_transaction.get("result") == "shadow_only"
+                    and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+                    and int(learned_clean.shape[2]) - int(exact_prefix.shape[2])
+                    >= len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS)
+                )
                 exact_overlap_weights = (
                     PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS
-                    if frame_gauge_transaction.get("result") == "shadow_only"
-                    and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+                    if exact_overlap_successor_safe_selected
                     else (1.0,)
                 )
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
@@ -3374,9 +3380,7 @@ def run_partitioned_progressive(
             raise RuntimeError("partitioned provider-native clean witness was not established")
         exact_overlap_policy = (
             PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
-            if exact_overlap_fallback_requested
-            and frame_gauge_transaction.get("result") == "shadow_only"
-            and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+            if exact_overlap_fallback_requested and exact_overlap_successor_safe_selected
             else PARTITIONED_EXACT_OVERLAP_POLICY
         )
         binding.metrics.event(
