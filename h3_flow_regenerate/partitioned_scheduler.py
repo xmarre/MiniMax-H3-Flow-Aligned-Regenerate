@@ -3600,6 +3600,61 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
+        post_high_retention_requested = (
+            exact_overlap_policy == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+            and bool(representation_metrics.get("suffix_representation_bridge_accepted", False))
+            and low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
+            and audio_guided_overlap_ticks == 4
+        )
+        post_high_video_reference_suffix = None
+        post_high_audio_reference_suffix = None
+        post_high_audio_prefix_ticks = 0
+        if post_high_retention_requested:
+            video_support = len(POST_HIGH_VIDEO_RETENTION_WEIGHTS)
+            video_stop = stage_plan.prefix_t + video_support
+            if video_stop > int(restored_clean.shape[2]):
+                raise RuntimeError("post-high video retention support exceeds generated continuation")
+            post_high_video_reference_suffix = restored_clean[
+                :, :, stage_plan.prefix_t : video_stop
+            ].detach().clone()
+
+            if low_probe_clean_audio is None:
+                raise RuntimeError("post-high audio retention lost the low/probe clean reference")
+            _exact_video_mask, exact_audio_mask = unpack_streams(
+                diagnostic_target_mask,
+                target_shapes,
+            )
+            post_high_audio_prefix_ticks = exact_audio_prefix_ticks(exact_audio_mask)
+            audio_stop = post_high_audio_prefix_ticks + POST_HIGH_AUDIO_RETENTION_TICKS
+            if audio_stop > int(low_probe_clean_audio.shape[-1]):
+                raise RuntimeError("post-high audio retention support exceeds generated continuation")
+            post_high_audio_reference_suffix = low_probe_clean_audio[
+                ..., post_high_audio_prefix_ticks:audio_stop
+            ].detach().clone()
+            binding.metrics.event(
+                "partitioned_post_high_boundary_retention_plan",
+                policy="partitioned_post_high_boundary_retention_v1",
+                source="00692_target_high_localization",
+                video_reference="exact_restored_pre_high",
+                audio_reference="low_probe_clean",
+                video_support_tokens=video_support,
+                video_weights=list(POST_HIGH_VIDEO_RETENTION_WEIGHTS),
+                audio_support_ticks=POST_HIGH_AUDIO_RETENTION_TICKS,
+                audio_prefix_ticks=post_high_audio_prefix_ticks,
+                audio_weights_policy="linear_1_to_1_over_support",
+                exact_main_required=True,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+            )
+
         if boundary_content_diagnostic_enabled:
             boundary_content_started = time.perf_counter()
             provider_receipt = measure_boundary_content_continuity(
