@@ -1,3 +1,4 @@
+import itertools
 from types import SimpleNamespace
 
 import pytest
@@ -159,7 +160,7 @@ def test_audio_reference_weights_hold_decoder_window_then_release_monotonically(
     assert len(release) == HIGH_BOUNDARY_AUDIO_RELEASE_TICKS
     assert release[0] == pytest.approx(HIGH_BOUNDARY_AUDIO_RELEASE_TICKS / (HIGH_BOUNDARY_AUDIO_RELEASE_TICKS + 1))
     assert release[-1] == pytest.approx(1.0 / (HIGH_BOUNDARY_AUDIO_RELEASE_TICKS + 1))
-    assert all(left > right for left, right in zip(release, release[1:], strict=True))
+    assert all(left > right for left, right in itertools.pairwise(release))
     assert HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS == HIGH_BOUNDARY_AUDIO_SEAM_TICKS + 32
 
 
