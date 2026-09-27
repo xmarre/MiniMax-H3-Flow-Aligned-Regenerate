@@ -156,6 +156,7 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
         "boundary_upper45_not_improved",
@@ -1018,36 +1019,60 @@ def _apply_partitioned_suffix_dc_bridge(
 def _partitioned_exact_overlap_fallback_eligibility(
     transaction: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Authorize structural overlap repair only after an unambiguous rigid boundary veto.
+    """Authorize the structural overlap bridge from validated rigid evidence.
 
-    The rigid transaction remains authoritative.  This fallback is not a
-    weaker registration threshold: it is eligible only when video registration
-    accepted, all four boundary-motion witnesses were measurable in both ROIs,
-    and the proposed rigid translation was rejected solely because it did not
-    preserve enough native boundary motion.  Ambiguous, clipped, invalid-area,
-    guidance, or registration failures remain exact baseline fallbacks.
+    Two fail-closed arms are eligible:
+
+    1. the historical rigid boundary-motion veto, where registration accepted
+       but the proposed rigid transform failed the native-motion preservation
+       gate; and
+    2. the 00687 hardware-invalidated rigid arm, where the complete v4 rigid
+       candidate passed numerically but production mutation is deliberately
+       shadow-only because decoded media disproved the global warp itself.
+
+    The second arm is not permission to resurrect the rigid transform. It only
+    permits the independent exact-overlap bridge that restores the provider's
+    measured native prefix->suffix transition after authoritative prefix
+    replacement. Ambiguous/clipped evidence remains ineligible.
     """
 
-    if transaction.get("result") != "rejected":
-        return False, "frame_gauge_not_rejected"
+    result = str(transaction.get("result", ""))
     reason = str(transaction.get("reason", ""))
-    if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
-        return False, "frame_gauge_rejection_not_structural_overlap_eligible"
+    if result == "rejected":
+        if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
+            return False, "frame_gauge_rejection_not_structural_overlap_eligible"
+        expected_boundary_status = "rejected"
+    elif result == "shadow_only":
+        if reason != FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON:
+            return False, "frame_gauge_shadow_not_hardware_invalidated_rigid"
+        if transaction.get("candidate_accepted") is not True:
+            return False, "frame_gauge_shadow_candidate_not_accepted"
+        if transaction.get("production_mutation_allowed") is not False:
+            return False, "frame_gauge_shadow_production_mutation_not_disabled"
+        if transaction.get("spatial_warp_applied") is not False:
+            return False, "frame_gauge_shadow_spatial_warp_was_applied"
+        expected_boundary_status = "accepted"
+    else:
+        return False, "frame_gauge_not_structural_overlap_eligible"
+
     video_registration = transaction.get("video_registration")
     if not isinstance(video_registration, dict) or video_registration.get("status") != "accepted":
         return False, "video_registration_not_accepted"
     boundary = transaction.get("boundary_motion")
     if (
         not isinstance(boundary, dict)
-        or boundary.get("status") != "rejected"
-        or str(boundary.get("reason", "")) != reason
+        or boundary.get("status") != expected_boundary_status
         or boundary.get("policy")
         not in {
             "native_boundary_motion_preservation_v2",
             "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
         }
     ):
         return False, "boundary_receipt_inconsistent"
+    if result == "rejected" and str(boundary.get("reason", "")) != reason:
+        return False, "boundary_receipt_inconsistent"
+
     checks = boundary.get("checks")
     if not isinstance(checks, dict) or set(checks) != {"upper45", "full"}:
         return False, "boundary_receipt_incomplete"
@@ -1977,6 +2002,9 @@ def _frame_gauge_clean_postprocess(
     )
     witnesses = {
         "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
+        "learned_boundary_pair": (
+            learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()
+        ),
         "paired_prefix_aligned_witness": aligned_witness,
         "candidate_corrected_clean": (candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()),
     }
@@ -3217,14 +3245,10 @@ def run_partitioned_progressive(
         )
         exact_overlap_fallback_requested, exact_overlap_fallback_trigger = (
             _partitioned_exact_overlap_fallback_eligibility(frame_gauge_transaction)
-            if config.frame_gauge_repair and not frame_gauge_candidate_accepted
+            if config.frame_gauge_repair and not frame_gauge_accepted
             else (
                 False,
-                "frame_gauge_shadow_selected"
-                if frame_gauge_candidate_accepted and not frame_gauge_accepted
-                else "frame_gauge_selected"
-                if frame_gauge_accepted
-                else "frame_gauge_repair_disabled",
+                "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled",
             )
         )
         representation_metrics = disabled_suffix_representation_bridge_metrics(
