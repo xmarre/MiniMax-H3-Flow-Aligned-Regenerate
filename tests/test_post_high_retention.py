@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 import torch
 
@@ -116,7 +118,7 @@ def test_linear_return_weights_has_matching_exit_step():
     weights = linear_return_weights(30)
     assert weights[0] == 1.0
     assert weights[-1] == pytest.approx(1.0 / 30.0)
-    steps = [left - right for left, right in zip(weights, weights[1:], strict=False)]
+    steps = [left - right for left, right in pairwise(weights)]
     steps.append(weights[-1])
     assert max(steps) == pytest.approx(1.0 / 30.0)
     assert min(steps) == pytest.approx(1.0 / 30.0)
