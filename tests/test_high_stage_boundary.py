@@ -178,7 +178,6 @@ def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
     assert binding.high_boundary_anchor is None
 
 
-
 def test_runtime_applies_boundary_reference_before_flow_observation():
     torch.manual_seed(11)
     video = torch.randn(1, 24, 9, 16, 16)
