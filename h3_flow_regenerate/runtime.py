@@ -86,6 +86,7 @@ class FlowBinding:
     registered_guidance_reference: RegisteredGuidanceReference | None = None
     guidance_protected_prefix_t: int = 0
     high_boundary_trace: Any = None
+    high_boundary_anchor: Any = None
     frame_gauge_invocation_active: bool = False
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
@@ -508,9 +509,32 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         )
 
     boundary_trace = binding.high_boundary_trace if stage == "high" else None
-    boundary_call_index = boundary_trace.calls if boundary_trace is not None else 0
+    boundary_anchor = binding.high_boundary_anchor if stage == "high" else None
+    boundary_call_index = (
+        boundary_trace.calls
+        if boundary_trace is not None
+        else boundary_anchor.calls
+        if boundary_anchor is not None
+        else 0
+    )
     if boundary_trace is not None:
         boundary_trace.calls += 1
+        if boundary_anchor is not None:
+            boundary_trace.observe(
+                result,
+                point="before_anchor",
+                call_index=boundary_call_index,
+                sigma=sigma,
+                actual=actual,
+            )
+    if boundary_anchor is not None:
+        result = boundary_anchor.apply(
+            result,
+            call_index=boundary_call_index,
+            sigma=sigma,
+            actual=actual,
+        )
+    if boundary_trace is not None:
         boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
 
     if binding.guidance is not None and binding.guidance.mode != "off":
