@@ -3706,9 +3706,7 @@ def run_partitioned_progressive(
                 )
 
         provider_native_trajectory_source = (
-            frame_gauge_witnesses.get("learned_native")
-            if frame_gauge_candidate_accepted
-            else provider_native_clean
+            frame_gauge_witnesses.get("learned_native") if frame_gauge_candidate_accepted else provider_native_clean
         )
         if provider_native_trajectory_source is None:
             provider_native_trajectory_source = provider_native_clean
