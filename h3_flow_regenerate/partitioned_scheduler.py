@@ -3604,9 +3604,10 @@ def run_partitioned_progressive(
             and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             and exact_overlap_successor_safe_selected
         )
+        # Audio continuity is owned by the explicit audio overlap contract,
+        # not by the independent video frame-gauge selector.
         high_audio_reference_enabled = bool(
-            config.frame_gauge_repair
-            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
             and audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
