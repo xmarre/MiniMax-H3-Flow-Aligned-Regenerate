@@ -3551,20 +3551,27 @@ def run_partitioned_progressive(
                 extra_vae_calls=0,
                 **provider_receipt,
             )
-            if residual_mode == "measure":
+            if residual_mode == "measure" and frame_gauge_candidate_accepted:
                 if bicubic_transfer_shadow is None:
                     raise RuntimeError("residual measurement lost the bicubic transfer shadow")
+                actual_provider_witness = frame_gauge_witnesses.get("learned_native")
+                if actual_provider_witness is None:
+                    raise RuntimeError("learned-transfer residual diagnostic lost the actual provider clean witness")
+                shadow_witness = bicubic_transfer_shadow[:, :, : int(actual_provider_witness.shape[2])]
+                if tuple(shadow_witness.shape) != tuple(actual_provider_witness.shape):
+                    raise RuntimeError("learned-transfer residual witness geometry drifted")
                 learned_residual_started = time.perf_counter()
                 learned_residual_receipt = measure_learned_transfer_residual_diagnostic(
-                    provider_native_clean,
-                    bicubic_transfer_shadow,
+                    actual_provider_witness,
+                    shadow_witness,
                     stage_plan.prefix_t,
                 )
                 binding.metrics.event(
                     "partitioned_learned_transfer_residual",
                     domain="model_internal_clean",
                     owner_before="source_low_exact_context_bicubic_shadow",
-                    owner_after="learned_provider_native",
+                    owner_after="actual_provider_clean_postprocess",
+                    provenance="actual_provider_clean_minus_same_source_bicubic_shadow",
                     elapsed_ms=(time.perf_counter() - learned_residual_started) * 1000.0,
                     extra_h3_nfe=0,
                     extra_sampler_lifetimes=0,
