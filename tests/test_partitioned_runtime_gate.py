@@ -1357,6 +1357,130 @@ def _install_shadow_exact_overlap_fallback_receipt(metrics):
     return metrics
 
 
+def _install_post_high_retention_receipt(metrics):
+    metrics = _install_shadow_exact_overlap_fallback_receipt(metrics)
+    stage_plan = next(event for event in metrics["events"] if event["kind"] == "partitioned_stage_plan")
+    stage_plan["fields"].update(
+        prefix_transformer_context="exact_target_partitioned",
+        audio_handoff_source="main_partitioned",
+        av_handoff_source="main_partitioned",
+        guidance_trajectory_source="main_exact_partitioned",
+        low_probe_execution_source="main_then_shadow",
+        audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        audio_guided_overlap_ticks=4,
+        post_high_boundary_retention_policy="partitioned_post_high_boundary_retention_v1",
+    )
+    audio_weights = [1.0 - float(offset) / 30.0 for offset in range(30)]
+    plan = _event(
+        "partitioned_post_high_boundary_retention_plan",
+        policy="partitioned_post_high_boundary_retention_v1",
+        source="00692_target_high_localization",
+        video_reference="exact_restored_pre_high",
+        audio_reference="low_probe_clean",
+        video_support_tokens=4,
+        video_weights=[1.0, 0.75, 0.5, 0.25],
+        audio_support_ticks=30,
+        audio_prefix_ticks=65,
+        audio_weights_policy="linear_1_to_1_over_support",
+        exact_main_required=True,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+    )
+    stream_common = {
+        "correction_rms_by_token": [0.2],
+        "reference_delta_rms_by_token": [0.2],
+        "first_correction_rms": 0.2,
+        "last_correction_rms": 0.05,
+        "max_adjacent_correction_step_rms": 0.05,
+        "exit_correction_step_rms": 0.05,
+    }
+    receipt = _event(
+        "partitioned_post_high_boundary_retention",
+        policy="partitioned_post_high_boundary_retention_v1",
+        source="00692_target_high_localization",
+        exact_overlap_policy="partitioned_exact_overlap_successor_safe_v2",
+        applied=True,
+        caller_domain_support_only=True,
+        caller_video_outside_support_exact=True,
+        caller_audio_outside_support_exact=True,
+        video={
+            **stream_common,
+            "weights": [1.0, 0.75, 0.5, 0.25],
+            "support": 4,
+        },
+        audio={
+            **stream_common,
+            "weights": audio_weights,
+            "support": 30,
+        },
+        video_prefix_t=12,
+        audio_prefix_ticks=65,
+        authoritative_video_prefix_modified=False,
+        authoritative_audio_prefix_modified=False,
+        video_outside_support_modified=False,
+        audio_outside_support_modified=False,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+    )
+    complete_index = next(
+        index for index, event in enumerate(metrics["events"]) if event["kind"] == "partitioned_exact_prefix_complete"
+    )
+    metrics["events"][complete_index:complete_index] = [plan, receipt]
+    return metrics
+
+
+def test_runtime_gate_accepts_00692_post_high_retention_contract():
+    report = validate_partitioned_runtime_evidence(
+        _install_post_high_retention_receipt(_metrics()),
+        _log(),
+        expected_frame_gauge_mode="on-shadow_only",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "shadow_only"
+
+
+def test_runtime_gate_rejects_post_high_retention_audio_weight_drift():
+    metrics = _install_post_high_retention_receipt(_metrics())
+    receipt = next(
+        event for event in metrics["events"] if event["kind"] == "partitioned_post_high_boundary_retention"
+    )
+    receipt["fields"]["audio"]["weights"][17] += 0.01
+
+    with pytest.raises(RuntimeGateError, match="audio taper weights drifted"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-shadow_only",
+        )
+
+
+def test_runtime_gate_rejects_retired_audio_successor_bridge_on_new_head():
+    metrics = _install_post_high_retention_receipt(_metrics())
+    metrics["events"].insert(
+        -2,
+        _event(
+            "audio_exact_restore_successor_bridge",
+            policy="audio_exact_restore_successor_safe_v2",
+            applied=True,
+        ),
+    )
+    metrics["counters"]["audio_exact_restore_successor_bridge_runs"] = 1
+
+    with pytest.raises(RuntimeGateError, match="retired final audio exact-restore successor bridge"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-shadow_only",
+        )
+
+
 def test_runtime_gate_accepts_exact_overlap_after_hardware_invalidated_rigid_shadow():
     report = validate_partitioned_runtime_evidence(
         _install_shadow_exact_overlap_fallback_receipt(_metrics()),
