@@ -18,14 +18,16 @@ the next three toward that pre-high trajectory with weights 1, 0.75, 0.5 and
 fallback and DC handling; it is not conditional on one particular frame-gauge
 transaction outcome.
 
-Audio uses a separate clean-domain reference. The caller-owned exact audio
-prefix is combined with the low/probe clean continuation by preserving the
-low/probe first-edge relation, then carrying that alignment through the 20-tick
-(500 ms) boundary window and tapering it across 32 additional latent ticks.
-Target-high model predictions hold all 52 generated reference ticks exactly.
-The 32-tick future-context bound is tied to the pinned MiniMax-H3 BigVGAN
-decoder architecture and is source-contract checked. No additional H3
-evaluation, sampler lifetime, provider call, or VAE decode is introduced.
+Audio uses a separate clean-domain reference. Target-high model predictions
+hold the low/probe clean trajectory exactly across the 20-tick (500 ms) seam
+window and the following 32 latent ticks required as future decoder context.
+Ownership then tapers to zero over another 32 ticks instead of creating a
+second hard boundary when the reference support ends. Final exact-prefix
+canonicalization preserves the sampled first-edge relation by distributing its
+restore delta across the same 52-tick seam-plus-decoder-context interval. The
+32-tick future-context bound is tied to the pinned MiniMax-H3 BigVGAN decoder
+architecture and is source-contract checked. No additional H3 evaluation,
+sampler lifetime, provider call, or VAE decode is introduced.
 
 ## Video evidence
 
