@@ -76,8 +76,7 @@ def disabled_suffix_representation_bridge_metrics(
         raise ValueError("representation bridge prefix length must be positive")
     normalized_weights = _normalize_weights(weights)
     successor_steps = tuple(
-        abs(right - left)
-        for left, right in zip(normalized_weights, (*normalized_weights[1:], 0.0), strict=True)
+        abs(right - left) for left, right in zip(normalized_weights, (*normalized_weights[1:], 0.0), strict=True)
     )
     return {
         "suffix_representation_bridge_version": 2 if len(normalized_weights) > 1 else 1,
