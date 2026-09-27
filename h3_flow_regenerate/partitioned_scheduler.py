@@ -3577,6 +3577,7 @@ def run_partitioned_progressive(
                     extra_vae_calls=0,
                     **learned_residual_receipt,
                 )
+                del shadow_witness
                 del bicubic_transfer_shadow
                 bicubic_transfer_shadow = None
 
