@@ -1977,9 +1977,7 @@ def _frame_gauge_clean_postprocess(
     witnesses = {
         "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
         "paired_prefix_aligned_witness": aligned_witness,
-        "candidate_corrected_clean": (
-            candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()
-        ),
+        "candidate_corrected_clean": (candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()),
     }
     witnesses.update(residual_witnesses)
     result = CleanVideoPostprocessResult(
@@ -1988,6 +1986,7 @@ def _frame_gauge_clean_postprocess(
         metadata=transaction,
     )
     return result, None, witnesses, transaction
+
 
 def _bounded_residual_stage_slice(
     video: torch.Tensor,
@@ -3369,15 +3368,11 @@ def run_partitioned_progressive(
                 )
             ),
             candidate_accepted=bool(frame_gauge_transaction.get("candidate_accepted", False)),
-            candidate_spatial_warp_computed=bool(
-                frame_gauge_transaction.get("candidate_spatial_warp_computed", False)
-            ),
+            candidate_spatial_warp_computed=bool(frame_gauge_transaction.get("candidate_spatial_warp_computed", False)),
             candidate_guidance_reference_computed=bool(
                 frame_gauge_transaction.get("candidate_guidance_reference_computed", False)
             ),
-            production_mutation_allowed=bool(
-                frame_gauge_transaction.get("production_mutation_allowed", False)
-            ),
+            production_mutation_allowed=bool(frame_gauge_transaction.get("production_mutation_allowed", False)),
             hardware_invalidation=(
                 "00687_visible_frame_shift_after_applied_rigid_v4"
                 if frame_gauge_transaction.get("result") == "shadow_only"
