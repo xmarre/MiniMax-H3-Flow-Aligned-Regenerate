@@ -2076,7 +2076,18 @@ def _validate_frame_gauge(
                     and receipt.get("spatial_warp_applied") is False,
                     "hardware-invalidated rigid shadow lost its fail-closed ownership",
                 )
-                _validate_boundary_motion_receipt(receipt.get("boundary_motion"))
+                shadow_boundary = receipt.get("boundary_motion")
+                _require(
+                    isinstance(shadow_boundary, dict)
+                    and shadow_boundary.get("policy")
+                    in {
+                        "native_boundary_motion_preservation_v2",
+                        "native_boundary_motion_consensus_v3",
+                        "native_boundary_motion_consensus_v4",
+                    },
+                    "hardware-invalidated rigid shadow lacks transformed-native boundary evidence",
+                )
+                _validate_boundary_motion_receipt(shadow_boundary)
             _require(
                 receipt.get("exact_overlap_fallback_source") == "actual_provider_boundary_pair",
                 "frame-gauge exact-overlap fallback did not use the actual provider overlap witness",
