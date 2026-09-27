@@ -1191,12 +1191,9 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
             expected_residual_result="measured-only",
         )
 
-
     broken_residual = json.loads(json.dumps(metrics))
     learned_event = next(
-        event
-        for event in broken_residual["events"]
-        if event["kind"] == "partitioned_learned_transfer_residual"
+        event for event in broken_residual["events"] if event["kind"] == "partitioned_learned_transfer_residual"
     )
     learned_event["fields"]["output_mutated"] = True
     with pytest.raises(RuntimeGateError, match="claims output mutation"):
