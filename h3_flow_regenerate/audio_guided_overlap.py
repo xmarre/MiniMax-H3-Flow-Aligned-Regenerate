@@ -316,7 +316,12 @@ def apply_audio_exact_restore_successor_bridge(
     if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
         raise ValueError("audio successor bridge requires a contiguous exact prefix and generated suffix")
     if temporal - prefix < support_ticks:
-        raise ValueError("audio successor bridge support exceeds generated suffix length")
+        report["reason"] = "insufficient_generated_audio_suffix"
+        return result, report
+
+    if result.data_ptr() == latent_image.data_ptr():
+        result = result.clone()
+        result_audio = unpack_streams(result, latent_shapes)[1]
 
     sampled_last = result_audio[..., prefix - 1].detach().to(torch.float32)
     exact_last = reference_audio[..., prefix - 1].detach().to(device=result_audio.device, dtype=torch.float32)
