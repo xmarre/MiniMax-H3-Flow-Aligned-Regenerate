@@ -2719,9 +2719,7 @@ def _validate_residual_geometry(
             _require(event.get(field) == 0, f"bicubic transfer shadow added work through {field}")
 
     learned_residual_events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_learned_transfer_residual"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_learned_transfer_residual"
     ]
     _require(
         len(learned_residual_events) == 1,
