@@ -2525,6 +2525,13 @@ def run_partitioned_progressive(
         vdn_linear_diagnostic=vdn_linear_diagnostic,
         prefix_transformer_context=prefix_transformer_context,
         audio_position_domain=audio_position_domain,
+        audio_handoff_source=audio_handoff_source,
+        av_handoff_source=av_handoff_source,
+        guidance_trajectory_source=guidance_trajectory_source,
+        low_probe_execution_source=low_probe_execution_source,
+        audio_guided_overlap_mode=audio_guided_overlap_mode,
+        audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+        post_high_boundary_retention_policy="partitioned_post_high_boundary_retention_v1",
     )
     if audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
         binding.metrics.event(
