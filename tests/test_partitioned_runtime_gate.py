@@ -5,6 +5,8 @@ import json
 import pytest
 import torch
 
+from h3_flow_regenerate.boundary_content_diagnostics import measure_learned_transfer_residual_diagnostic
+
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
@@ -1096,6 +1098,7 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
             "session_id": "session",
             "chunk_id": "chunk",
             "tensor_sha256": "a" * 64,
+            "prefix_boundary_index": 5,
             "domain": ("caller_output_latent" if stage == "final_post_high_caller_domain" else "model_internal_clean"),
         }
         if stage == "final_post_high_internal_clean":
@@ -1121,6 +1124,27 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
         for roi in ("upper45", "full")
     ]
 
+    spatial_shadow = torch.zeros(1, 24, 6, 32, 32, dtype=torch.float32)
+    learned_provider = spatial_shadow.clone()
+    learned_residual_receipt = measure_learned_transfer_residual_diagnostic(
+        learned_provider,
+        spatial_shadow,
+        5,
+    )
+    learned_residual = _event(
+        "partitioned_learned_transfer_residual",
+        domain="model_internal_clean",
+        owner_before="source_low_exact_context_bicubic_shadow",
+        owner_after="learned_provider_native",
+        elapsed_ms=1.0,
+        extra_h3_nfe=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        **learned_residual_receipt,
+    )
+
     evidence = _event(
         "partitioned_residual_geometry_evidence",
         policy="paired_prefix_residual_geometry_v1",
@@ -1133,7 +1157,13 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
         bundle="h3_flow_regenerate/residual_geometry/test-bundle",
     )
     insert_at = len(metrics["events"]) - 2
-    metrics["events"][insert_at:insert_at] = [frame, *stages, *bicubic_shadow, evidence]
+    metrics["events"][insert_at:insert_at] = [
+        frame,
+        *stages,
+        *bicubic_shadow,
+        learned_residual,
+        evidence,
+    ]
 
     report = validate_partitioned_runtime_evidence(
         metrics,
@@ -1157,6 +1187,22 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
     with pytest.raises(RuntimeGateError, match="bicubic transfer shadow added work"):
         validate_partitioned_runtime_evidence(
             broken,
+            _log(),
+            expected_residual_mode="measure",
+            expected_residual_result="measured-only",
+        )
+
+
+    broken_residual = json.loads(json.dumps(metrics))
+    learned_event = next(
+        event
+        for event in broken_residual["events"]
+        if event["kind"] == "partitioned_learned_transfer_residual"
+    )
+    learned_event["fields"]["output_mutated"] = True
+    with pytest.raises(RuntimeGateError, match="claims output mutation"):
+        validate_partitioned_runtime_evidence(
+            broken_residual,
             _log(),
             expected_residual_mode="measure",
             expected_residual_result="measured-only",
