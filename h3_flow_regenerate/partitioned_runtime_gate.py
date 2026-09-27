@@ -1950,8 +1950,7 @@ def _validate_frame_gauge(
                     "rigid shadow-only transaction allowed a production mutation",
                 )
                 _require(
-                    receipt.get("hardware_invalidation")
-                    == "00687_visible_frame_shift_after_applied_rigid_v4",
+                    receipt.get("hardware_invalidation") == "00687_visible_frame_shift_after_applied_rigid_v4",
                     "rigid shadow-only transaction lost the 00687 hardware invalidation",
                 )
 
@@ -2609,9 +2608,7 @@ def _validate_residual_geometry(
         receipt.get("measurement_status") == "measured",
         "residual measure arm did not complete its bounded regional measurement",
     )
-    expected_final_path = (
-        "production_baseline_rigid_shadow_only" if frame_result == "shadow_only" else "rigid_v2"
-    )
+    expected_final_path = "production_baseline_rigid_shadow_only" if frame_result == "shadow_only" else "rigid_v2"
     _require(
         receipt.get("final_path") == expected_final_path,
         "residual measurement changed the selected production/shadow path",
@@ -2745,11 +2742,7 @@ def compare_residual_measurement_pair(
         and measure_residual.get("measured") is True
         and measure_residual.get("applied") is False
         and measure_residual.get("final_path")
-        == (
-            "production_baseline_rigid_shadow_only"
-            if measure_frame.get("result") == "shadow_only"
-            else "rigid_v2"
-        ),
+        == ("production_baseline_rigid_shadow_only" if measure_frame.get("result") == "shadow_only" else "rigid_v2"),
         "matched candidate is not residual measurement-only",
     )
 
