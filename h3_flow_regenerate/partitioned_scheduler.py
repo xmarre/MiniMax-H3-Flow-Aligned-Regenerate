@@ -48,6 +48,7 @@ from .handoff import (
     build_handoff_state,
     deterministic_video_noise,
 )
+from .high_stage_boundary import high_boundary_contract
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -4068,7 +4069,11 @@ def run_partitioned_progressive(
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with (
+            _flow_stage_contract(guider, "high"),
+            _high_stage_contract(guider),
+            high_boundary_contract(binding, exact_prefix, target_shapes, measure=residual_mode == "measure"),
+        ):
             result = executor(
                 target_noise,
                 latent_image,

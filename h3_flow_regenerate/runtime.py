@@ -84,6 +84,8 @@ class FlowBinding:
     guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     registered_guidance_reference: RegisteredGuidanceReference | None = None
+    guidance_protected_prefix_t: int = 0
+    high_boundary_trace: Any = None
     frame_gauge_invocation_active: bool = False
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
@@ -505,9 +507,19 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             **bridge_metrics,
         )
 
+    boundary_trace = binding.high_boundary_trace if stage == "high" else None
+    boundary_call_index = boundary_trace.calls if boundary_trace is not None else 0
+    if boundary_trace is not None:
+        boundary_trace.calls += 1
+        boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
         if run is None:
+            if boundary_trace is not None:
+                boundary_trace.observe(
+                    result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual
+                )
             return result
         base_model = getattr(guider, "inner_model", None)
         shapes = getattr(base_model, "latent_shapes", None)
@@ -525,6 +537,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             high_state=video_state,
             sigma=sigma,
             registered_reference=binding.registered_guidance_reference,
+            protected_prefix_t=binding.guidance_protected_prefix_t,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))
@@ -557,6 +570,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
             temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
             registered_reference_used=binding.guidance_state.last_registered_reference_used,
+            protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(
                 spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
@@ -565,6 +579,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             if spectrum_active_step is not None
             else transformer.get(SPECTRUM_OUTER_STEP_KEY),
         )
+    if boundary_trace is not None:
+        boundary_trace.observe(result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
     return result
 
 

@@ -826,3 +826,37 @@ def test_registered_temporal_guidance_with_one_suffix_frame_uses_direction_only(
     assert state.temporal_cache is not None
     assert state.last_temporal_valid_fraction == pytest.approx(0.0)
     assert state.last_temporal_rms_ratio == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("mode", ["direction", "direction+temporal", "downsample_consistency"])
+def test_unregistered_guidance_preserves_prefix_and_ignores_prefix_reference(mode):
+    high = torch.randn(1, 24, 5, 8, 8)
+    reference = torch.randn_like(high)
+    altered = reference.clone()
+    altered[:, :, :2] += 100
+    config = GuidanceConfig(mode=mode, consistency_weight=0.35)
+    state = GuidanceState()
+    first = apply_guidance(
+        high, run=run_video(reference), coordinate=0.5, config=config, state=state, protected_prefix_t=2
+    )
+    second = apply_guidance(
+        high, run=run_video(altered), coordinate=0.5, config=config, state=GuidanceState(), protected_prefix_t=2
+    )
+    assert torch.equal(first[:, :, :2], high[:, :, :2])
+    assert torch.equal(first, second)
+    assert not state.last_registered_reference_used
+    if mode == "direction+temporal":
+        assert state.last_temporal_cross_prefix_pairs_disabled == 2
+        assert torch.count_nonzero(state.temporal_cache.backward_confidence[:, :2]) == 0
+
+
+def test_temporal_cache_rebuilds_when_prefix_ownership_changes():
+    video = torch.randn(1, 24, 5, 8, 8)
+    state = GuidanceState()
+    config = GuidanceConfig(mode="direction+temporal")
+    trajectory = run_video(video)
+    apply_guidance(video, run=trajectory, coordinate=0.5, config=config, state=state)
+    assert state.temporal_cache.prefix_t == 0
+    apply_guidance(video, run=trajectory, coordinate=0.5, config=config, state=state, protected_prefix_t=2)
+    assert not state.last_temporal_cache_hit
+    assert state.temporal_cache.prefix_t == 2

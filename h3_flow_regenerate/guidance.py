@@ -69,6 +69,7 @@ class RegisteredGuidanceReference:
 class _TemporalCorrespondence:
     coordinate: float
     cache_key: str | None
+    prefix_t: int
     backward_flow: torch.Tensor
     forward_flow: torch.Tensor
     backward_confidence: torch.Tensor
@@ -398,6 +399,7 @@ def _build_temporal_correspondence(
         )
         return _TemporalCorrespondence(
             coordinate=float(coordinate),
+            prefix_t=prefix_t,
             cache_key=cache_key,
             backward_flow=zero_flow,
             forward_flow=zero_flow.clone(),
@@ -510,6 +512,7 @@ def _build_temporal_correspondence(
     if pair_start == 0:
         return _TemporalCorrespondence(
             coordinate=float(coordinate),
+            prefix_t=prefix_t,
             cache_key=cache_key,
             backward_flow=backward.reshape(
                 batch,
@@ -590,6 +593,7 @@ def _build_temporal_correspondence(
 
     return _TemporalCorrespondence(
         coordinate=float(coordinate),
+        prefix_t=prefix_t,
         cache_key=cache_key,
         backward_flow=backward_full.detach(),
         forward_flow=forward_full.detach(),
@@ -620,6 +624,7 @@ def _temporal_correspondence(
     if (
         cached is not None
         and cached.cache_key == cache_key
+        and cached.prefix_t == prefix_t
         and math.isclose(
             cached.coordinate,
             coordinate,
@@ -867,6 +872,7 @@ def apply_guidance(
     high_state: torch.Tensor | None = None,
     sigma: float | None = None,
     registered_reference: RegisteredGuidanceReference | None = None,
+    protected_prefix_t: int = 0,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
@@ -893,7 +899,9 @@ def apply_guidance(
         sigma_value = None
 
     registered = registered_reference is not None
-    prefix_t = 0
+    if type(protected_prefix_t) is not int or not 0 <= protected_prefix_t < high_x0.shape[2]:
+        raise ValueError("guidance protected prefix length is invalid")
+    prefix_t = protected_prefix_t
     temporal_validity = None
     temporal_radius = config.temporal_search_radius
     temporal_cache_key = None
@@ -909,6 +917,8 @@ def apply_guidance(
             torch.isfinite(registered_reference.video).all().item()
         ):
             raise RuntimeError("registered guidance reference is not a finite materialized tensor")
+        if protected_prefix_t not in (0, registered_reference.prefix_t):
+            raise RuntimeError("registered guidance and authoritative prefix ownership disagree")
         prefix_t = registered_reference.prefix_t
         if type(prefix_t) is not int or not 0 <= prefix_t < high_x0.shape[2]:
             raise RuntimeError("registered guidance reference prefix ownership is invalid")
@@ -984,7 +994,7 @@ def apply_guidance(
                 direction_delta,
                 config.cutoff,
             )
-        if registered and prefix_t:
+        if prefix_t:
             residual = residual.clone()
             residual[:, :, :prefix_t] = 0
         correction = correction + schedule * config.direction_weight * residual
@@ -1033,7 +1043,7 @@ def apply_guidance(
             coordinate=reference_coordinate,
             config=config,
             state=state,
-            prefix_t=prefix_t if registered else 0,
+            prefix_t=prefix_t,
             validity=temporal_validity,
             search_radius=temporal_radius,
             cache_key=temporal_cache_key,
@@ -1047,7 +1057,7 @@ def apply_guidance(
                 reference_is_target_grid=registered,
             )
             temporal_correction = schedule * config.temporal_weight * temporal_delta
-            if registered and prefix_t:
+            if prefix_t:
                 temporal_correction = temporal_correction.clone()
                 temporal_correction[:, :, :prefix_t] = 0
             guided = guided + temporal_correction
@@ -1092,7 +1102,7 @@ def apply_guidance(
             acceleration_applied = True
         correction = guided - high_x0
 
-    if registered and prefix_t:
+    if prefix_t:
         correction = correction.clone()
         correction[:, :, :prefix_t] = 0
         acceleration_correction = acceleration_correction.clone()
@@ -1101,16 +1111,14 @@ def apply_guidance(
         correction,
         high_x0,
         config.max_correction_rms_ratio,
-        prefix_t=prefix_t if registered else 0,
+        prefix_t=prefix_t,
     )
     result = high_x0 + correction
 
-    metric_reference = high_x0[:, :, prefix_t:] if registered and prefix_t else high_x0
-    direction_metric = direction_correction[:, :, prefix_t:] if registered and prefix_t else direction_correction
-    temporal_metric = temporal_correction[:, :, prefix_t:] if registered and prefix_t else temporal_correction
-    acceleration_metric = (
-        acceleration_correction[:, :, prefix_t:] if registered and prefix_t else acceleration_correction
-    )
+    metric_reference = high_x0[:, :, prefix_t:] if prefix_t else high_x0
+    direction_metric = direction_correction[:, :, prefix_t:] if prefix_t else direction_correction
+    temporal_metric = temporal_correction[:, :, prefix_t:] if prefix_t else temporal_correction
+    acceleration_metric = acceleration_correction[:, :, prefix_t:] if prefix_t else acceleration_correction
 
     state.last_schedule = float(schedule)
     state.last_correction_rms = correction_stats["correction_rms"]
@@ -1137,7 +1145,7 @@ def apply_guidance(
     state.last_temporal_reference_clamped = reference_clamped if temporal_active else False
     state.last_temporal_search_radius = temporal_radius if temporal_active else None
     state.last_temporal_cross_prefix_pairs_disabled = (
-        min(prefix_t, max(0, high_x0.shape[2] - 1)) if temporal_active and registered else 0
+        min(prefix_t, max(0, high_x0.shape[2] - 1)) if temporal_active else 0
     )
     state.last_registered_reference_used = registered
 
