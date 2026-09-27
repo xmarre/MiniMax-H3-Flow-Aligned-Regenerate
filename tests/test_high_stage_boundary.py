@@ -169,16 +169,15 @@ def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
         metrics=H3FlowMetrics(),
     )
 
-    with pytest.raises(ValueError, match="contiguous exact prefix"):
-        with high_boundary_contract(
-            binding,
-            video[:, :, :3],
-            shapes,
-            measure=False,
-            audio_reference=audio,
-            exact_denoise_mask=exact_mask,
-        ):
-            pass
+    with pytest.raises(ValueError, match="contiguous exact prefix"), high_boundary_contract(
+        binding,
+        video[:, :, :3],
+        shapes,
+        measure=False,
+        audio_reference=audio,
+        exact_denoise_mask=exact_mask,
+    ):
+        pass
     assert torch.equal(packed, pack_streams((video, audio))[0])
     assert binding.guidance_protected_prefix_t == 0
     assert binding.high_boundary_anchor is None
