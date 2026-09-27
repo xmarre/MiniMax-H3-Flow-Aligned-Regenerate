@@ -198,6 +198,7 @@ def test_target_input_fallback_canonicalizes_single_sampler_return():
     assert events[0].fields["canonicalized"] is True
     assert events[0].fields["changed_elements"] == 1
 
+
 def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_canonicalization():
     video = torch.zeros(1, 24, 3, 2, 2)
     audio = torch.zeros(1, 32, 2, 12)
@@ -259,9 +260,7 @@ def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_c
     native_exit = audio[..., 10].float() - audio[..., 9].float()
     torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=1.0e-6)
 
-    bridge_events = [
-        event for event in binding.metrics.events if event.kind == "audio_exact_restore_successor_bridge"
-    ]
+    bridge_events = [event for event in binding.metrics.events if event.kind == "audio_exact_restore_successor_bridge"]
     assert len(bridge_events) == 1
     bridge = bridge_events[0].fields
     assert bridge["applied"] is True
@@ -272,4 +271,3 @@ def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_c
     assert bridge["extra_history_boundaries"] == 0
     assert bridge["extra_vae_calls"] == 0
     assert binding.metrics.counters["audio_exact_restore_successor_bridge_runs"] == 1
-
