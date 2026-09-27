@@ -3276,9 +3276,7 @@ def validate_partitioned_runtime_evidence(
     latest_audio_overlap = audio_overlap_receipts[-1] if audio_overlap_receipts else None
     audio_overlap_mode = latest_audio_overlap.group("mode") if latest_audio_overlap is not None else None
     audio_overlap_ticks = int(latest_audio_overlap.group("ticks")) if latest_audio_overlap is not None else None
-    audio_overlap_applied = (
-        latest_audio_overlap is not None and latest_audio_overlap.group("applied") == "True"
-    )
+    audio_overlap_applied = latest_audio_overlap is not None and latest_audio_overlap.group("applied") == "True"
     audio_overlap = bool(audio_overlap_applied and audio_overlap_ticks == 4)
     if require_vdn_linear:
         _require(
