@@ -48,7 +48,11 @@ from .handoff import (
     build_handoff_state,
     deterministic_video_noise,
 )
-from .high_stage_boundary import high_boundary_contract
+from .high_stage_boundary import (
+    HIGH_BOUNDARY_REFERENCE_POLICY,
+    HIGH_BOUNDARY_REFERENCE_WEIGHTS,
+    high_boundary_contract,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -2962,7 +2966,10 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
-        low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
+        # Audio has no spatial transfer. Retain the bounded-size clean probe state
+        # through target-high so the high-stage boundary contract can preserve
+        # clean-domain continuation state without another H3 evaluation.
+        low_probe_clean_audio = clean_audio.detach().clone()
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
@@ -3590,6 +3597,65 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
+        high_video_reference_enabled = bool(
+            config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and frame_gauge_transaction.get("result") == "shadow_only"
+            and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+            and exact_overlap_successor_safe_selected
+        )
+        high_audio_reference_enabled = bool(
+            config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+            and audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
+            and int(audio_guided_overlap_ticks) == len(HIGH_BOUNDARY_REFERENCE_WEIGHTS)
+        )
+        high_video_reference_suffix = (
+            restored_clean[
+                :,
+                :,
+                stage_plan.prefix_t : stage_plan.prefix_t + len(HIGH_BOUNDARY_REFERENCE_WEIGHTS),
+            ]
+            .detach()
+            .clone()
+            if high_video_reference_enabled
+            else None
+        )
+        high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
+        binding.metrics.event(
+            "partitioned_high_boundary_reference_plan",
+            policy=HIGH_BOUNDARY_REFERENCE_POLICY,
+            enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
+            video_enabled=high_video_reference_enabled,
+            video_reference_domain="exact_restored_pre_high_clean",
+            video_support_tokens=(
+                int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
+            ),
+            video_temporal_weights=(
+                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS[: int(high_video_reference_suffix.shape[2])])
+                if high_video_reference_suffix is not None
+                else []
+            ),
+            audio_enabled=high_audio_reference_enabled,
+            audio_reference_domain="low_probe_clean",
+            audio_support_ticks=(
+                len(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else 0
+            ),
+            audio_temporal_weights=(
+                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else []
+            ),
+            authoritative_prefix_modified=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
+
         if boundary_content_diagnostic_enabled:
             boundary_content_started = time.perf_counter()
             provider_receipt = measure_boundary_content_continuity(
@@ -4072,7 +4138,15 @@ def run_partitioned_progressive(
         with (
             _flow_stage_contract(guider, "high"),
             _high_stage_contract(guider),
-            high_boundary_contract(binding, exact_prefix, target_shapes, measure=residual_mode == "measure"),
+            high_boundary_contract(
+                binding,
+                exact_prefix,
+                target_shapes,
+                measure=residual_mode == "measure",
+                video_reference_suffix=high_video_reference_suffix,
+                audio_reference=high_audio_reference,
+                exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
+            ),
         ):
             result = executor(
                 target_noise,
