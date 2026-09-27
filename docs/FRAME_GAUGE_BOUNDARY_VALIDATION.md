@@ -911,3 +911,103 @@ validation. The next matched run must keep the 00686 exact-main semantics and
 measure whether VDN #33 materially closes the low/probe timing gap while v4
 restores the independently validated rigid frame-gauge transaction.
 
+## 00687 hardware result: global rigid production warp invalidated; audio width-16 regressed
+
+00687 is a cold run. Startup, first-chunk, and model-profile costs therefore must
+not be used as a hot performance promotion result. The continuation still
+executes the intended exact-main heterogeneous path, and VDN-H3-Plus PR #33
+remains the performance companion pending a matched primed run.
+
+The media result invalidates the production interpretation of the global rigid
+candidate. Consensus v4 accepted, the learned suffix was translated, and the
+independently registered Flow guidance reference was published:
+
+- video registration: `dx=-0.4375, dy=-0.375`;
+- `spatial_warp_applied=true`;
+- `registered_guidance_reference=true`;
+- exact-overlap fallback not requested.
+
+The decoded frame shift nevertheless remains. PT212 at the physical boundary
+reports an upper-45% first-pair vertical displacement of about **+5.26 px** and
+a first-three post-boundary median of about **+3.90 px**, versus a pre-boundary
+median near zero. Full-frame post-boundary motion also develops a multi-frame
+vertical drift. This is not consistent with a single static whole-suffix camera
+translation being the remaining defect.
+
+The stage-localized latent evidence is also spatially nonuniform. In 00687 the
+source-low upper-region first boundary motion is small after projection to the
+target lattice (about +0.045 target cell), while the learned 3D provider output
+jumps to about +0.786 cell in the same region. The full-frame learned-provider
+vertical boundary remains near zero. After exact restoration plus the rigid
+candidate, the upper-region first-boundary impulse is still about +0.583 cell.
+Historical accepted framing evidence instead has near-zero vertical boundary
+motion after exact restoration. The next correction therefore needs regional
+evidence; another global suffix translation is not justified.
+
+### Fail-closed production contract after 00687
+
+The paired-prefix estimator, v4 boundary witness, guidance registration, rigid
+translation and one-token DC candidate remain available as diagnostics, but an
+accepted rigid candidate no longer mutates production output. The transaction
+reports:
+
+- `result=shadow_only`;
+- `candidate_accepted=true`;
+- `candidate_spatial_warp_computed=true`;
+- `production_mutation_allowed=false`;
+- `spatial_warp_applied=false`;
+- no registered guidance reference is published to target-high;
+- production continues from the unwarped learned-provider state and existing
+  one-token DC bridge.
+
+This fail-closed state is specifically tied to the 00687 hardware invalidation:
+a numerically accepted global rigid transaction is not a decoded-media pass.
+
+`frame_gauge_residual_mode=measure` remains non-mutating and is now the next
+video discriminator. It measures the existing 3x3 regional residual geometry
+against the shadow rigid candidate and exports the bounded evidence bundle while
+production stays on the baseline path. It adds no H3 NFE, sampler lifetime,
+provider call, VAE call or history boundary.
+
+### Audio
+
+The reported audio "shift" is not an overlap-routing failure. In 00687 the
+configured `sampler_mask / 16` overlap executes and final exact restoration is
+preserved, yet the model-internal boundary already shows about **+1.55 dB** over
+the first 100 ms and **+1.07 dB** over 500 ms after target-high, and the user
+hears the seam.
+
+Later matched hardware evidence already provides a stronger audio control:
+00611 reduced the decoded boundary discontinuity by about 10.94 dB when moving
+from width-16 `sampler_mask` to
+`sampler_mask_exact_timestep / 4`. The next run therefore returns to that
+production-proven audio tuple instead of widening the overlap again.
+
+### Next matched run
+
+Keep exact-main video context and the VDN #33 companion. Use:
+
+```text
+low_probe_execution_source = main_then_shadow
+prefix_transformer_context = exact_target_partitioned
+vdn_linear_diagnostic = normal
+audio_position_domain = source_carrier
+audio_handoff_source = main_partitioned
+av_handoff_source = main_partitioned
+guidance_trajectory_source = main_exact_partitioned
+
+audio_guided_overlap_mode = sampler_mask_exact_timestep
+audio_guided_overlap_ticks = 4
+
+frame_gauge_repair = true
+frame_gauge_residual_mode = measure
+provider_boundary_stabilization = soft_support_v1
+```
+
+All handoff/shadow selectors remain on the main path, so no duplicate
+source-uniform low/probe lifetime is requested. The rigid candidate must be
+shadow-only. Acceptance for the next run is evidence collection, not a repair
+claim: preserve 00686/00687 background consistency, verify the audio tuple, and
+capture regional residual geometry needed to design a bounded non-global video
+correction.
+
