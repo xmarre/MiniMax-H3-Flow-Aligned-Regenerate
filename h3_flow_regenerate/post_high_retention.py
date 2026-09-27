@@ -14,6 +14,7 @@ untouched.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 import torch
@@ -126,7 +127,7 @@ def apply_post_high_boundary_retention(
         raise ValueError("post-high video retention must begin with full pre-high ownership")
     if any(not 0.0 < weight <= 1.0 for weight in video_weights):
         raise ValueError("post-high video retention weights must be inside (0, 1]")
-    if any(right >= left for left, right in zip(video_weights, video_weights[1:], strict=True)):
+    if any(right >= left for left, right in pairwise(video_weights)):
         raise ValueError("post-high video retention weights must decrease strictly")
 
     video_support = len(video_weights)
