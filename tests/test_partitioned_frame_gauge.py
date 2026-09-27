@@ -108,19 +108,22 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
         video_shift=H3_VIDEO_SHIFT,
     )
 
-    assert transaction["result"] == "accepted", transaction
+    assert transaction["result"] == "shadow_only", transaction
+    assert transaction["candidate_accepted"] is True
+    assert transaction["production_mutation_allowed"] is False
+    assert transaction["spatial_warp_applied"] is False
     assert transaction["video_registration"]["dx"] == pytest.approx(1.0, abs=0.125)
     assert transaction["video_registration"]["dy"] == pytest.approx(0.0, abs=0.125)
     assert transaction["guidance_registration"]["dx"] == pytest.approx(-1.0, abs=0.125)
     assert transaction["guidance_registration"]["dy"] == pytest.approx(0.0, abs=0.125)
-    assert registered is not None
+    assert registered is None
     assert transaction["boundary_motion"]["status"] == "accepted"
-    assert registered.dx != pytest.approx(transaction["video_registration"]["dx"], abs=0.125)
-    assert torch.equal(postprocess.clean_video[:, :, :prefix_t], learned[:, :, :prefix_t])
+    assert transaction["candidate_guidance_reference_computed"] is True
+    assert torch.equal(postprocess.clean_video, learned)
     assert set(witnesses) == {
         "learned_native",
         "paired_prefix_aligned_witness",
-        "corrected_clean",
+        "candidate_corrected_clean",
     }
 
 
