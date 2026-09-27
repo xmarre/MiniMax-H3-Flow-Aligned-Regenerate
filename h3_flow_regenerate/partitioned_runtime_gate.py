@@ -2690,6 +2690,33 @@ def _validate_residual_geometry(
         "post-high internal comparison did not preserve authoritative exact-prefix ownership",
     )
 
+    bicubic_shadow = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_multiframe_trajectory"
+        and _event_fields(event).get("stage") == "source_low_exact_context_bicubic_shadow"
+    ]
+    _require(
+        len(bicubic_shadow) == 2,
+        "residual measure arm must emit exactly two bicubic transfer-shadow trajectory receipts",
+    )
+    _require(
+        {str(event.get("roi")) for event in bicubic_shadow} == {"upper45", "full"},
+        "bicubic transfer-shadow trajectory did not cover upper45 and full ROIs exactly once",
+    )
+    for event in bicubic_shadow:
+        _require(event.get("transfer_mode") == "bicubic", "bicubic transfer-shadow mode drifted")
+        _require(event.get("diagnostic_only") is True, "bicubic transfer shadow became production-visible")
+        _require(event.get("production_gate") is False, "bicubic transfer shadow became a production gate")
+        for field in (
+            "extra_h3_nfe",
+            "extra_provider_calls",
+            "extra_vae_calls",
+            "extra_sampler_lifetimes",
+            "extra_history_boundaries",
+        ):
+            _require(event.get(field) == 0, f"bicubic transfer shadow added work through {field}")
+
     _require(len(evidence_events) == 1, "residual measure arm must emit exactly one evidence bundle receipt")
     evidence = evidence_events[0]
     _require(evidence.get("policy") == RESIDUAL_GEOMETRY_POLICY_VERSION, "residual evidence policy drifted")

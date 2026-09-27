@@ -1102,6 +1102,25 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
             fields["owner_before"] = "authoritative_exact_prefix_E"
         stages.append(_event("partitioned_residual_geometry_stage", **fields))
 
+    bicubic_shadow = [
+        _event(
+            "partitioned_multiframe_trajectory",
+            stage="source_low_exact_context_bicubic_shadow",
+            roi=roi,
+            source_hw=(44, 44),
+            target_hw=(64, 64),
+            transfer_mode="bicubic",
+            diagnostic_only=True,
+            production_gate=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
+        for roi in ("upper45", "full")
+    ]
+
     evidence = _event(
         "partitioned_residual_geometry_evidence",
         policy="paired_prefix_residual_geometry_v1",
@@ -1114,7 +1133,7 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
         bundle="h3_flow_regenerate/residual_geometry/test-bundle",
     )
     insert_at = len(metrics["events"]) - 2
-    metrics["events"][insert_at:insert_at] = [frame, *stages, evidence]
+    metrics["events"][insert_at:insert_at] = [frame, *stages, *bicubic_shadow, evidence]
 
     report = validate_partitioned_runtime_evidence(
         metrics,
@@ -1126,6 +1145,22 @@ def test_runtime_gate_accepts_producer_fed_measured_only_receipt():
     assert report.residual_geometry_verified is True
     assert report.residual_geometry_result == "measured-only"
     assert report.residual_geometry_evidence_bundle == "h3_flow_regenerate/residual_geometry/test-bundle"
+
+    broken = json.loads(json.dumps(metrics))
+    shadow = next(
+        event
+        for event in broken["events"]
+        if event["kind"] == "partitioned_multiframe_trajectory"
+        and event["fields"].get("stage") == "source_low_exact_context_bicubic_shadow"
+    )
+    shadow["fields"]["extra_provider_calls"] = 1
+    with pytest.raises(RuntimeGateError, match="bicubic transfer shadow added work"):
+        validate_partitioned_runtime_evidence(
+            broken,
+            _log(),
+            expected_residual_mode="measure",
+            expected_residual_result="measured-only",
+        )
 
 
 def test_matched_residual_pair_requires_identical_rigid_v2_and_work_topology():
