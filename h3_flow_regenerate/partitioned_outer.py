@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
+from .high_stage_boundary import HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -208,7 +209,7 @@ def partitioned_outer_wrapper(
         )
 
     audio_exact_restore_successor_ticks = (
-        guided_ticks
+        HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
         if guided_report is not None
         and guided_report.get("applied") is True
         and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
