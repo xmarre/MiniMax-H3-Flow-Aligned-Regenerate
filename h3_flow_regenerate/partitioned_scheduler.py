@@ -3032,7 +3032,7 @@ def run_partitioned_progressive(
                 ),
             )
 
-        if residual_mode == "measure":
+        if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
             _emit_bicubic_transfer_shadow_trajectory(
                 binding.metrics,
                 clean_video,
