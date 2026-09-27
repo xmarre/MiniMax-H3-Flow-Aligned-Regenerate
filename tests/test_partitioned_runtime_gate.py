@@ -503,9 +503,7 @@ def _frame_gauge_event(
         candidate_spatial_warp_computed=shadow_only,
         candidate_guidance_reference_computed=shadow_only and guidance_mode != "off",
         production_mutation_allowed=accepted,
-        hardware_invalidation=(
-            "00687_visible_frame_shift_after_applied_rigid_v4" if shadow_only else None
-        ),
+        hardware_invalidation=("00687_visible_frame_shift_after_applied_rigid_v4" if shadow_only else None),
         authoritative_prefix_modified=False,
         exact_prefix_sha256="9" * 64,
         registration_domain="actual_clean_target_video" if mode == "on" else "off",
