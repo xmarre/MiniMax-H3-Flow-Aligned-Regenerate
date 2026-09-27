@@ -1869,7 +1869,9 @@ def _validate_frame_gauge_transfer(
                 "partitioned exact-overlap repair did not use the actual provider overlap witness",
             )
             trigger = str(overlap.get("trigger", ""))
-            eligible_rejected = enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
+            eligible_rejected = (
+                enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
+            )
             eligible_shadow = (
                 enabled
                 and result == "shadow_only"
