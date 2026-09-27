@@ -4164,12 +4164,119 @@ def run_partitioned_progressive(
         final_internal_video = None
         final_internal_audio = None
         if (
-            diagnostic_audio_control
+            post_high_retention_requested
+            or diagnostic_audio_control
             or (residual_mode == "measure" and frame_gauge_candidate_accepted)
             or boundary_content_diagnostic_enabled
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+
+        if post_high_retention_requested:
+            if (
+                final_internal is None
+                or final_internal_video is None
+                or final_internal_audio is None
+                or post_high_video_reference_suffix is None
+                or post_high_audio_reference_suffix is None
+            ):
+                raise RuntimeError("post-high AV retention lost a required clean-domain operand")
+            if exact_denoise_mask is None:
+                raise RuntimeError("post-high AV retention requires the authoritative exact denoise mask")
+
+            for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+                native_post_high_trajectory = measure_translation_trajectory(
+                    final_internal_video,
+                    stage_plan.prefix_t,
+                    forward_steps=4,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="final_post_high_native_pre_retention",
+                    roi=roi_name,
+                    domain="model_internal_clean",
+                    production_gate=False,
+                    **native_post_high_trajectory,
+                )
+            native_audio_report = measure_audio_latent_boundary(
+                final_internal,
+                target_shapes,
+                diagnostic_target_mask,
+                windows=(4, 20),
+            )
+            binding.metrics.event(
+                "partitioned_audio_stage_boundary",
+                stage="final_high_clean_pre_retention",
+                domain="model_internal_clean",
+                production_gate=False,
+                **native_audio_report,
+            )
+
+            retained_internal_video, retained_internal_audio, retention_receipt = (
+                apply_post_high_boundary_retention(
+                    final_internal_video,
+                    final_internal_audio,
+                    video_prefix_t=stage_plan.prefix_t,
+                    video_reference_suffix=post_high_video_reference_suffix,
+                    audio_prefix_t=post_high_audio_prefix_ticks,
+                    audio_reference_suffix=post_high_audio_reference_suffix,
+                )
+            )
+            retained_internal = pack_streams((retained_internal_video, retained_internal_audio))[0]
+            retained_caller = _process_latent_out(base_model, retained_internal, target_shapes)
+            retained_caller_video, retained_caller_audio = unpack_streams(retained_caller, target_shapes)
+
+            video_support = len(POST_HIGH_VIDEO_RETENTION_WEIGHTS)
+            audio_support = POST_HIGH_AUDIO_RETENTION_TICKS
+            production_video = final_video.clone()
+            production_audio = final_audio.clone()
+            production_video[
+                :, :, stage_plan.prefix_t : stage_plan.prefix_t + video_support
+            ] = retained_caller_video[
+                :, :, stage_plan.prefix_t : stage_plan.prefix_t + video_support
+            ].to(production_video)
+            production_audio[
+                ..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support
+            ] = retained_caller_audio[
+                ..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support
+            ].to(production_audio)
+
+            if not torch.equal(
+                production_video[:, :, : stage_plan.prefix_t],
+                final_video[:, :, : stage_plan.prefix_t],
+            ) or not torch.equal(
+                production_video[:, :, stage_plan.prefix_t + video_support :],
+                final_video[:, :, stage_plan.prefix_t + video_support :],
+            ):
+                raise RuntimeError("post-high retention escaped bounded caller-domain video support")
+            if not torch.equal(
+                production_audio[..., :post_high_audio_prefix_ticks],
+                final_audio[..., :post_high_audio_prefix_ticks],
+            ) or not torch.equal(
+                production_audio[..., post_high_audio_prefix_ticks + audio_support :],
+                final_audio[..., post_high_audio_prefix_ticks + audio_support :],
+            ):
+                raise RuntimeError("post-high retention escaped bounded caller-domain audio support")
+
+            result = pack_streams((production_video, production_audio))[0]
+            final_video, final_audio = unpack_streams(result, target_shapes)
+            final_internal = _process_latent_in(base_model, result, target_shapes)
+            final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+
+            binding.metrics.increment("partitioned_post_high_boundary_retention_runs")
+            binding.metrics.event(
+                "partitioned_post_high_boundary_retention",
+                source="00692_target_high_localization",
+                exact_overlap_policy=exact_overlap_policy,
+                caller_domain_support_only=True,
+                caller_video_outside_support_exact=True,
+                caller_audio_outside_support_exact=True,
+                **retention_receipt,
+            )
+
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
                 raise RuntimeError("residual measurement lost the common-domain final video operand")
