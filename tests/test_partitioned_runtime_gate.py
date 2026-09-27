@@ -475,8 +475,10 @@ def _frame_gauge_event(
     video_last_holdout_improvement=0.29,
 ):
     accepted = mode == "on" and result == "accepted"
+    shadow_only = mode == "on" and result == "shadow_only"
+    candidate = accepted or shadow_only
     identity = mode == "on" and result == "identity"
-    if accepted:
+    if candidate:
         video_registration = _accepted_registration(
             rms_improvement=video_rms_improvement,
             last_holdout_improvement=video_last_holdout_improvement,
@@ -487,7 +489,7 @@ def _frame_gauge_event(
         video_registration = {"status": result, "reason": result}
     guidance_registration = (
         _accepted_registration(0.375, -0.125)
-        if accepted and guidance_mode != "off"
+        if candidate and guidance_mode != "off"
         else {"status": "off", "reason": "guidance_off"}
     )
     return _event(
@@ -497,19 +499,26 @@ def _frame_gauge_event(
         result=result,
         policy_version=FRAME_GAUGE_POLICY_VERSION,
         spatial_warp_applied=accepted,
+        candidate_accepted=shadow_only,
+        candidate_spatial_warp_computed=shadow_only,
+        candidate_guidance_reference_computed=shadow_only and guidance_mode != "off",
+        production_mutation_allowed=accepted,
+        hardware_invalidation=(
+            "00687_visible_frame_shift_after_applied_rigid_v4" if shadow_only else None
+        ),
         authoritative_prefix_modified=False,
         exact_prefix_sha256="9" * 64,
         registration_domain="actual_clean_target_video" if mode == "on" else "off",
         transform_domain="actual_clean_target_video" if accepted else "none",
         video_registration=video_registration,
         guidance_registration=guidance_registration,
-        boundary_motion=(_accepted_boundary_motion() if accepted else {"status": "not_evaluated"}),
+        boundary_motion=(_accepted_boundary_motion() if candidate else {"status": "not_evaluated"}),
         registered_guidance_reference=accepted and guidance_mode != "off",
         guidance_mode=guidance_mode,
-        video_dx=0.5 if accepted else 0.0,
-        video_dy=-0.25 if accepted else 0.0,
-        guidance_dx=0.375 if accepted and guidance_mode != "off" else 0.0,
-        guidance_dy=-0.125 if accepted and guidance_mode != "off" else 0.0,
+        video_dx=0.5 if candidate else 0.0,
+        video_dy=-0.25 if candidate else 0.0,
+        guidance_dx=0.375 if candidate and guidance_mode != "off" else 0.0,
+        guidance_dy=-0.125 if candidate and guidance_mode != "off" else 0.0,
         extra_h3_nfe=0,
         extra_sampler_lifetimes=0,
         extra_history_boundaries=0,
@@ -587,6 +596,25 @@ def test_runtime_gate_verifies_accepted_frame_gauge_transaction_with_guidance():
 
     assert report.frame_gauge_verified is True
     assert report.frame_gauge_result == "accepted"
+    assert report.frame_gauge_video_dx == pytest.approx(0.5)
+    assert report.frame_gauge_guidance_dx == pytest.approx(0.375)
+
+
+def test_runtime_gate_verifies_00687_fail_closed_rigid_shadow_with_guidance():
+    metrics = _install_frame_gauge_transfer(_metrics(), mode="on", result="shadow_only")
+    metrics["events"].insert(
+        -2,
+        _frame_gauge_event(mode="on", result="shadow_only", guidance_mode="direction+temporal"),
+    )
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_frame_gauge_mode="on-shadow_only",
+    )
+
+    assert report.frame_gauge_verified is True
+    assert report.frame_gauge_result == "shadow_only"
     assert report.frame_gauge_video_dx == pytest.approx(0.5)
     assert report.frame_gauge_guidance_dx == pytest.approx(0.375)
 
