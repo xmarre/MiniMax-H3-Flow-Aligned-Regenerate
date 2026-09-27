@@ -741,7 +741,10 @@ def _validate_provider_boundary_post_high_stabilization(window: list[dict[str, A
         _require(
             isinstance(weights, list)
             and len(weights) == len(expected_weights)
-            and all(_close_number(actual, expected, atol=1e-12) for actual, expected in zip(weights, expected_weights)),
+            and all(
+                _close_number(actual, expected, atol=1e-12)
+                for actual, expected in zip(weights, expected_weights, strict=True)
+            ),
             "post-high stabilization temporal weights drifted",
         )
         _require(
@@ -1990,7 +1993,9 @@ def _validate_frame_gauge_transfer(
                 "partitioned exact-overlap repair did not use the actual provider overlap witness",
             )
             trigger = str(overlap.get("trigger", ""))
-            eligible_rejected = enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
+            eligible_rejected = (
+                enabled and result == "rejected" and trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS
+            )
             eligible_shadow = (
                 enabled
                 and result == "shadow_only"
