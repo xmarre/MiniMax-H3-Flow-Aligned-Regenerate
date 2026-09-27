@@ -927,4 +927,3 @@ def test_learned_transfer_residual_diagnostic_localizes_learned_only_boundary_ju
     assert tile["boundary_prediction_error_rms"] > 0.0
     assert tile["boundary_error_over_historical_max"] > 1.0
     assert tile["boundary_dispersion_ratio_over_historical_max"] > 1.0
-
