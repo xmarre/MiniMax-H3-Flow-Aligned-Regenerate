@@ -3588,16 +3588,19 @@ def run_partitioned_progressive(
             binding.metrics.increment("partitioned_boundary_content_diagnostic_runs")
 
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            measurement_learned_native = frame_gauge_witnesses.get("learned_native")
+            if measurement_learned_native is None:
+                raise RuntimeError("residual measurement lost the actual provider clean witness")
             if aligned_witness is None:
                 aligned_witness = frame_gauge_witnesses.get("paired_prefix_aligned_witness")
             if aligned_witness is None:
                 raise RuntimeError("residual measurement lost the rigid shadow witness")
             evidence_start = max(0, stage_plan.prefix_t - 6)
-            evidence_stop = min(int(learned_clean.shape[2]), stage_plan.prefix_t + 4)
+            evidence_stop = min(int(measurement_learned_native.shape[2]), stage_plan.prefix_t + 4)
             residual_evidence_tensors["exact_prefix_last6"] = exact_prefix[
                 :, :, evidence_start : stage_plan.prefix_t
             ].detach()
-            residual_evidence_tensors["learned_native_prefix_suffix"] = learned_clean[
+            residual_evidence_tensors["learned_native_prefix_suffix"] = measurement_learned_native[
                 :, :, evidence_start:evidence_stop
             ].detach()
             residual_evidence_tensors["learned_rigid_aligned_prefix_suffix"] = aligned_witness[
@@ -3611,7 +3614,7 @@ def run_partitioned_progressive(
                     _emit_residual_geometry_stage(
                         binding.metrics,
                         stage="learned_native_same_time",
-                        video=learned_clean,
+                        video=measurement_learned_native,
                         prefix_t=stage_plan.prefix_t,
                         session_id=session_id,
                         chunk_id=chunk_id,
@@ -3702,12 +3705,20 @@ def run_partitioned_progressive(
                     )
                 )
 
+        provider_native_trajectory_source = (
+            frame_gauge_witnesses.get("learned_native")
+            if frame_gauge_candidate_accepted
+            else provider_native_clean
+        )
+        if provider_native_trajectory_source is None:
+            provider_native_trajectory_source = provider_native_clean
+
         for roi_name, roi_fraction in (
             ("upper45", 0.45),
             ("full", 1.0),
         ):
             native_trajectory = measure_translation_trajectory(
-                provider_native_clean,
+                provider_native_trajectory_source,
                 stage_plan.prefix_t,
                 forward_steps=4,
                 backward_steps=3,
@@ -3877,6 +3888,7 @@ def run_partitioned_progressive(
         del corrected_clean
         del learned_clean
         del provider_native_clean
+        del provider_native_trajectory_source
         if aligned_witness is not None:
             del aligned_witness
         frame_gauge_witnesses.clear()
