@@ -10,6 +10,7 @@ from h3_flow_regenerate.high_stage_boundary import (
     high_boundary_contract,
 )
 from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
 
 
 def test_boundary_trace_is_bounded_nonmutating_and_cleans_up_on_exception():
@@ -181,3 +182,62 @@ def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
     assert torch.equal(packed, pack_streams((video, audio))[0])
     assert binding.guidance_protected_prefix_t == 0
     assert binding.high_boundary_anchor is None
+
+
+
+def test_runtime_applies_boundary_reference_before_flow_observation():
+    torch.manual_seed(11)
+    video = torch.randn(1, 24, 9, 16, 16)
+    audio = torch.randn(1, 32, 2, 14)
+    packed, shapes = pack_streams((video, audio))
+    prefix_t = 3
+    video_reference = video[:, :, prefix_t : prefix_t + 4].clone()
+    video_reference[:, :, 0] += 0.5
+
+    binding = FlowBinding()
+    guider = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options, seed):
+            del timestep, model_options, seed
+            return x.clone()
+
+    model_options = {"transformer_options": {FLOW_STAGE_KEY: "high"}}
+    with high_boundary_contract(
+        binding,
+        video[:, :, :prefix_t],
+        shapes,
+        measure=True,
+        video_reference_suffix=video_reference,
+    ):
+        result = flow_predict_wrapper(
+            Executor(),
+            packed,
+            torch.tensor([0.8]),
+            model_options=model_options,
+            seed=17,
+        )
+
+    result_video, _ = unpack_streams(result, shapes)
+    assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
+    points = [
+        event.fields["point"]
+        for event in binding.metrics.events
+        if event.kind == "partitioned_high_boundary_prediction"
+    ]
+    assert points == ["before_anchor", "before_flow", "after_flow"]
+    ordered_kinds = [event.kind for event in binding.metrics.events]
+    before_anchor_index = next(
+        index
+        for index, event in enumerate(binding.metrics.events)
+        if event.kind == "partitioned_high_boundary_prediction" and event.fields["point"] == "before_anchor"
+    )
+    anchor_index = ordered_kinds.index("partitioned_high_boundary_reference_anchor")
+    before_flow_index = next(
+        index
+        for index, event in enumerate(binding.metrics.events)
+        if event.kind == "partitioned_high_boundary_prediction" and event.fields["point"] == "before_flow"
+    )
+    assert before_anchor_index < anchor_index < before_flow_index
