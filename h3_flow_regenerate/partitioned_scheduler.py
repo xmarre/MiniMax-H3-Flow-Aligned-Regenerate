@@ -3642,12 +3642,8 @@ def run_partitioned_progressive(
             ),
             audio_enabled=high_audio_reference_enabled,
             audio_reference_domain="low_probe_clean",
-            audio_support_ticks=(
-                len(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else 0
-            ),
-            audio_temporal_weights=(
-                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else []
-            ),
+            audio_support_ticks=(len(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else 0),
+            audio_temporal_weights=(list(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else []),
             authoritative_prefix_modified=False,
             extra_h3_nfe=0,
             extra_provider_calls=0,
@@ -4178,13 +4174,9 @@ def run_partitioned_progressive(
             int(binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0))
             - high_boundary_reference_calls_before
         )
-        high_boundary_reference_expected = bool(
-            high_video_reference_enabled or high_audio_reference_enabled
-        )
+        high_boundary_reference_expected = bool(high_video_reference_enabled or high_audio_reference_enabled)
         if high_boundary_reference_expected and high_boundary_reference_calls != len(high_model_calls):
-            raise RuntimeError(
-                "target-high clean boundary reference did not cover every high-stage model prediction"
-            )
+            raise RuntimeError("target-high clean boundary reference did not cover every high-stage model prediction")
         if not high_boundary_reference_expected and high_boundary_reference_calls != 0:
             raise RuntimeError("target-high clean boundary reference executed outside its selected plan")
         binding.metrics.event(
