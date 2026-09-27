@@ -10,6 +10,7 @@ model predictions only; it adds no model, sampler, provider, or VAE work.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import time
 from typing import Any
 
@@ -62,7 +63,7 @@ class HighStageBoundaryReferenceAnchor:
     ):
         if not weights or any(not 0.0 < float(weight) <= 1.0 for weight in weights):
             raise ValueError("high-boundary reference weights must be non-empty values in (0, 1]")
-        if any(float(left) < float(right) for left, right in zip(weights, weights[1:], strict=False)):
+        if any(float(left) < float(right) for left, right in itertools.pairwise(weights)):
             raise ValueError("high-boundary reference weights must be monotonically non-increasing")
         self.metrics = metrics
         self.shapes = shapes
