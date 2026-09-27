@@ -2969,9 +2969,7 @@ def run_partitioned_progressive(
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
         low_probe_clean_audio = (
-            clean_audio.detach().clone()
-            if diagnostic_audio_control or bool(config.frame_gauge_repair)
-            else None
+            clean_audio.detach().clone() if diagnostic_audio_control or bool(config.frame_gauge_repair) else None
         )
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
@@ -3619,9 +3617,7 @@ def run_partitioned_progressive(
             video_stop = stage_plan.prefix_t + video_support
             if video_stop > int(restored_clean.shape[2]):
                 raise RuntimeError("post-high video retention support exceeds generated continuation")
-            post_high_video_reference_suffix = restored_clean[
-                :, :, stage_plan.prefix_t : video_stop
-            ].detach().clone()
+            post_high_video_reference_suffix = restored_clean[:, :, stage_plan.prefix_t : video_stop].detach().clone()
 
             if low_probe_clean_audio is None:
                 raise RuntimeError("post-high audio retention lost the low/probe clean reference")
@@ -3633,9 +3629,9 @@ def run_partitioned_progressive(
             audio_stop = post_high_audio_prefix_ticks + POST_HIGH_AUDIO_RETENTION_TICKS
             if audio_stop > int(low_probe_clean_audio.shape[-1]):
                 raise RuntimeError("post-high audio retention support exceeds generated continuation")
-            post_high_audio_reference_suffix = low_probe_clean_audio[
-                ..., post_high_audio_prefix_ticks:audio_stop
-            ].detach().clone()
+            post_high_audio_reference_suffix = (
+                low_probe_clean_audio[..., post_high_audio_prefix_ticks:audio_stop].detach().clone()
+            )
             binding.metrics.event(
                 "partitioned_post_high_boundary_retention_plan",
                 policy="partitioned_post_high_boundary_retention_v1",
@@ -4215,15 +4211,13 @@ def run_partitioned_progressive(
                 **native_audio_report,
             )
 
-            retained_internal_video, retained_internal_audio, retention_receipt = (
-                apply_post_high_boundary_retention(
-                    final_internal_video,
-                    final_internal_audio,
-                    video_prefix_t=stage_plan.prefix_t,
-                    video_reference_suffix=post_high_video_reference_suffix,
-                    audio_prefix_t=post_high_audio_prefix_ticks,
-                    audio_reference_suffix=post_high_audio_reference_suffix,
-                )
+            retained_internal_video, retained_internal_audio, retention_receipt = apply_post_high_boundary_retention(
+                final_internal_video,
+                final_internal_audio,
+                video_prefix_t=stage_plan.prefix_t,
+                video_reference_suffix=post_high_video_reference_suffix,
+                audio_prefix_t=post_high_audio_prefix_ticks,
+                audio_reference_suffix=post_high_audio_reference_suffix,
             )
             retained_internal = pack_streams((retained_internal_video, retained_internal_audio))[0]
             retained_caller = _process_latent_out(base_model, retained_internal, target_shapes)
@@ -4233,16 +4227,14 @@ def run_partitioned_progressive(
             audio_support = POST_HIGH_AUDIO_RETENTION_TICKS
             production_video = final_video.clone()
             production_audio = final_audio.clone()
-            production_video[
-                :, :, stage_plan.prefix_t : stage_plan.prefix_t + video_support
-            ] = retained_caller_video[
+            production_video[:, :, stage_plan.prefix_t : stage_plan.prefix_t + video_support] = retained_caller_video[
                 :, :, stage_plan.prefix_t : stage_plan.prefix_t + video_support
             ].to(production_video)
-            production_audio[
-                ..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support
-            ] = retained_caller_audio[
-                ..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support
-            ].to(production_audio)
+            production_audio[..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support] = (
+                retained_caller_audio[
+                    ..., post_high_audio_prefix_ticks : post_high_audio_prefix_ticks + audio_support
+                ].to(production_audio)
+            )
 
             if not torch.equal(
                 production_video[:, :, : stage_plan.prefix_t],
