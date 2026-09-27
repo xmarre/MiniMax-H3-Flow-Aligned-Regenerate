@@ -1380,6 +1380,7 @@ def test_runtime_gate_rejects_successor_safe_shadow_overlap_with_weight_drift():
             expected_frame_gauge_mode="on-shadow_only",
         )
 
+
 def test_runtime_gate_rejects_shadow_overlap_if_rigid_mutation_is_reenabled():
     metrics = _install_shadow_exact_overlap_fallback_receipt(_metrics())
     frame = next(event for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge")
