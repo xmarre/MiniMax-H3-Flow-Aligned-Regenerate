@@ -187,6 +187,7 @@ def test_authoritative_audio_reference_preserves_low_probe_edge_and_decoder_cont
     assert report["audio_first_edge_relation_error_rms"] < 1e-6
     assert report["reference_domain"] == "authoritative_prefix_aligned_low_probe_clean"
 
+
 def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
     video = torch.zeros(1, 24, 7, 4, 4)
     audio = torch.zeros(1, 32, 2, 10)
