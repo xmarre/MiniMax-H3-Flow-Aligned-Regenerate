@@ -17,6 +17,7 @@ from typing import Any
 
 from .boundary_content_diagnostics import (
     BOUNDARY_CONTENT_DIAGNOSTIC_POLICY,
+    LEARNED_TRANSFER_RESIDUAL_POLICY,
     PROVIDER_BOUNDARY_CALIBRATION_POLICY,
     PROVIDER_BOUNDARY_POST_HIGH_SHADOW_POLICY,
     PROVIDER_BOUNDARY_PREDICTOR_POLICY,
@@ -2716,6 +2717,79 @@ def _validate_residual_geometry(
             "extra_history_boundaries",
         ):
             _require(event.get(field) == 0, f"bicubic transfer shadow added work through {field}")
+
+    learned_residual_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_learned_transfer_residual"
+    ]
+    _require(
+        len(learned_residual_events) == 1,
+        "residual measure arm must emit exactly one learned-transfer residual receipt",
+    )
+    learned_residual = learned_residual_events[0]
+    _require(
+        learned_residual.get("policy") == LEARNED_TRANSFER_RESIDUAL_POLICY,
+        "learned-transfer residual policy drifted",
+    )
+    _require(
+        learned_residual.get("decomposition") == "learned_minus_bicubic_spatial_shadow",
+        "learned-transfer residual decomposition drifted",
+    )
+    _require(learned_residual.get("diagnostic_only") is True, "learned-transfer residual became production-visible")
+    _require(learned_residual.get("production_gate") is False, "learned-transfer residual became a production gate")
+    _require(learned_residual.get("output_mutated") is False, "learned-transfer residual claims output mutation")
+    _require(int(learned_residual.get("pre_steps", -1)) == 3, "learned-transfer residual predictor history drifted")
+    _require(
+        int(learned_residual.get("requested_calibration_targets", -1)) == 5,
+        "learned-transfer residual calibration target count drifted",
+    )
+    _require(int(learned_residual.get("tile_rows", -1)) == 4, "learned-transfer residual tile rows drifted")
+    _require(int(learned_residual.get("tile_cols", -1)) == 4, "learned-transfer residual tile columns drifted")
+    _require(int(learned_residual.get("lowpass_kernel", -1)) == 5, "learned-transfer residual low-pass kernel drifted")
+    _require(
+        int(learned_residual.get("prefix_t", -1)) == int(final_internal.get("prefix_boundary_index", -2)),
+        "learned-transfer residual prefix boundary drifted",
+    )
+    residual_rms = _finite_number(learned_residual.get("residual_rms"))
+    _require(residual_rms >= 0.0, "learned-transfer residual RMS is negative")
+    residual_tiles = learned_residual.get("tiles")
+    _require(
+        isinstance(residual_tiles, dict) and len(residual_tiles) == 16,
+        "learned-transfer residual did not cover the fixed 4x4 tile grid",
+    )
+    residual_tile_ids = set(residual_tiles)
+    for ranking_field in (
+        "tiles_by_boundary_error_over_historical_max",
+        "tiles_by_boundary_dispersion_ratio_over_historical_max",
+    ):
+        ranking = learned_residual.get(ranking_field)
+        _require(
+            isinstance(ranking, list) and len(ranking) == 16 and set(map(str, ranking)) == residual_tile_ids,
+            f"learned-transfer residual ranking {ranking_field} is incomplete",
+        )
+    residual_regions = [learned_residual.get("global"), *residual_tiles.values()]
+    for region in residual_regions:
+        _require(isinstance(region, dict), "learned-transfer residual region is malformed")
+        for field in (
+            "boundary_prediction_error_rms",
+            "historical_prediction_error_rms_max",
+            "boundary_error_over_historical_max",
+            "boundary_prediction_error_over_prefix_dispersion",
+            "historical_error_over_prefix_dispersion_max",
+            "boundary_dispersion_ratio_over_historical_max",
+            "boundary_actual_vs_predictor_cosine",
+            "boundary_projection_gain_on_predictor",
+        ):
+            _finite_number(region.get(field))
+    for field in (
+        "extra_h3_nfe",
+        "extra_provider_calls",
+        "extra_vae_calls",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+    ):
+        _require(learned_residual.get(field) == 0, f"learned-transfer residual added work through {field}")
 
     _require(len(evidence_events) == 1, "residual measure arm must emit exactly one evidence bundle receipt")
     evidence = evidence_events[0]
