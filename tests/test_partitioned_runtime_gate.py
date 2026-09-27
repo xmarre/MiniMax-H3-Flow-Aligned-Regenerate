@@ -1321,8 +1321,10 @@ def _install_shadow_exact_overlap_fallback_receipt(metrics):
     transfer["fields"].update(
         frame_gauge_reason=reason,
         splice_clean_source="actual_provider_boundary_pair_plus_inverse_recovered",
+        suffix_dc_bridge_policy="successor_safe_linear_v2",
+        suffix_dc_bridge_corrected_tokens=4,
         partitioned_exact_overlap_bridge={
-            "policy": "partitioned_exact_overlap_structural_plus_dc_v1",
+            "policy": "partitioned_exact_overlap_successor_safe_v2",
             "requested": True,
             "trigger": reason,
             "applied": True,
@@ -1332,14 +1334,17 @@ def _install_shadow_exact_overlap_fallback_receipt(metrics):
             "later_suffix_extrapolated": False,
             "suffix_representation_bridge_enabled": True,
             "suffix_representation_bridge_accepted": True,
-            "suffix_representation_bridge_corrected_tokens": 1,
+            "suffix_representation_bridge_corrected_tokens": 4,
+            "suffix_representation_bridge_successor_safe": True,
+            "suffix_representation_bridge_temporal_weights": [1.0, 0.75, 0.5, 0.25],
+            "suffix_representation_bridge_max_weight_step": 0.25,
         },
     )
     frame = _frame_gauge_event(mode="on", result="shadow_only")
     frame["fields"].update(
         reason=reason,
         boundary_motion=_accepted_v2_boundary_motion(),
-        exact_overlap_fallback_policy="partitioned_exact_overlap_structural_plus_dc_v1",
+        exact_overlap_fallback_policy="partitioned_exact_overlap_successor_safe_v2",
         exact_overlap_fallback_requested=True,
         exact_overlap_fallback_trigger=reason,
         exact_overlap_fallback_applied=True,
@@ -1359,6 +1364,18 @@ def test_runtime_gate_accepts_exact_overlap_after_hardware_invalidated_rigid_sha
     assert report.frame_gauge_verified is True
     assert report.frame_gauge_result == "shadow_only"
 
+
+def test_runtime_gate_rejects_successor_safe_shadow_overlap_with_weight_drift():
+    metrics = _install_shadow_exact_overlap_fallback_receipt(_metrics())
+    transfer = next(event for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["fields"]["partitioned_exact_overlap_bridge"]["suffix_representation_bridge_temporal_weights"][2] = 0.6
+
+    with pytest.raises(RuntimeGateError, match="weights drifted"):
+        validate_partitioned_runtime_evidence(
+            metrics,
+            _log(),
+            expected_frame_gauge_mode="on-shadow_only",
+        )
 
 def test_runtime_gate_rejects_shadow_overlap_if_rigid_mutation_is_reenabled():
     metrics = _install_shadow_exact_overlap_fallback_receipt(_metrics())
