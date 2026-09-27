@@ -1365,7 +1365,7 @@ def test_runtime_gate_rejects_shadow_overlap_if_rigid_mutation_is_reenabled():
     frame = next(event for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge")
     frame["fields"]["production_mutation_allowed"] = True
 
-    with pytest.raises(RuntimeGateError, match="fail-closed ownership"):
+    with pytest.raises(RuntimeGateError, match="allowed a production mutation"):
         validate_partitioned_runtime_evidence(
             metrics,
             _log(),
