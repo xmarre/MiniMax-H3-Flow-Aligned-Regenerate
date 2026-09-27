@@ -239,6 +239,131 @@ def compare_audio_latent_stages(
     return report
 
 
+def apply_audio_exact_restore_successor_bridge(
+    result: torch.Tensor,
+    latent_image: torch.Tensor,
+    exact_denoise_mask: torch.Tensor | None,
+    latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,
+    *,
+    support_ticks: int,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Distribute the exact-restore delta across generated audio successors.
+
+    A one-tick transition transfer preserves the first sampled edge but moves
+    the full restore delta onto the next generated transition. For K ticks this
+    bridge applies weights ``1, (K-1)/K, ..., 1/K``. The first boundary remains
+    exact and every correction-induced successor step, including the return to
+    the untouched suffix, is bounded to ``delta / K``.
+    """
+
+    support_ticks = int(support_ticks)
+    if support_ticks < 2:
+        raise ValueError("audio successor bridge requires at least two support ticks")
+    report: dict[str, Any] = {
+        "policy": "audio_exact_restore_successor_safe_v2",
+        "applied": False,
+        "reason": "pending",
+        "audio_prefix_ticks": 0,
+        "support_ticks": support_ticks,
+        "corrected_ticks": 0,
+        "temporal_weights": [],
+        "max_weight_step": 1.0 / float(support_ticks),
+        "delta_rms": 0.0,
+        "delta_max_abs": 0.0,
+        "sampled_first_edge_rms": 0.0,
+        "uncorrected_exact_first_edge_rms": 0.0,
+        "corrected_exact_first_edge_rms": 0.0,
+        "first_edge_relation_error_rms": 0.0,
+        "max_induced_successor_step_rms": 0.0,
+        "legacy_one_tick_exit_step_rms": 0.0,
+        "protected_prefix_modified": False,
+        "suffix_outside_support_modified": False,
+        "extra_h3_nfe": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_history_boundaries": 0,
+        "extra_vae_calls": 0,
+    }
+    if exact_denoise_mask is None:
+        report["reason"] = "no_exact_denoise_mask"
+        return result, report
+    if latent_shapes is None or len(latent_shapes) != 2:
+        raise ValueError("audio successor bridge requires native packed H3 AV shapes")
+    if result.shape != latent_image.shape or result.shape != exact_denoise_mask.shape:
+        raise ValueError("audio successor bridge requires matching packed sampler tensors")
+
+    result_audio = unpack_streams(result, latent_shapes)[1]
+    reference_audio = unpack_streams(latent_image, latent_shapes)[1]
+    mask_audio = unpack_streams(exact_denoise_mask, latent_shapes)[1]
+    if result_audio.ndim != 4 or int(result_audio.shape[2]) != 2:
+        raise ValueError("audio successor bridge requires native BxCx2xT audio latents")
+
+    temporal_min = mask_audio.amin(dim=(0, 1, 2))
+    temporal_max = mask_audio.amax(dim=(0, 1, 2))
+    exact_zero = temporal_max <= 1e-8
+    exact_one = temporal_min >= 1.0 - 1e-8
+    temporal = int(result_audio.shape[-1])
+    if bool(exact_one.all().item()):
+        report["reason"] = "no_exact_audio_prefix"
+        return result, report
+    if bool(exact_zero.all().item()):
+        report.update(reason="no_generated_audio_suffix", audio_prefix_ticks=temporal)
+        return result, report
+
+    prefix = 0
+    while prefix < temporal and bool(exact_zero[prefix].item()):
+        prefix += 1
+    report["audio_prefix_ticks"] = prefix
+    if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
+        raise ValueError("audio successor bridge requires a contiguous exact prefix and generated suffix")
+    if temporal - prefix < support_ticks:
+        raise ValueError("audio successor bridge support exceeds generated suffix length")
+
+    sampled_last = result_audio[..., prefix - 1].detach().to(torch.float32)
+    exact_last = reference_audio[..., prefix - 1].detach().to(device=result_audio.device, dtype=torch.float32)
+    sampled_first = result_audio[..., prefix].detach().to(torch.float32)
+    delta = exact_last - sampled_last
+    delta_rms = float(delta.square().mean().sqrt().item())
+    delta_max = float(delta.abs().max().item())
+    sampled_relation = sampled_first - sampled_last
+    uncorrected_relation = sampled_first - exact_last
+    sampled_rms = float(sampled_relation.square().mean().sqrt().item())
+    uncorrected_rms = float(uncorrected_relation.square().mean().sqrt().item())
+    weights = tuple(1.0 - float(offset) / float(support_ticks) for offset in range(support_ticks))
+    report.update(
+        temporal_weights=list(weights),
+        delta_rms=delta_rms,
+        delta_max_abs=delta_max,
+        sampled_first_edge_rms=sampled_rms,
+        uncorrected_exact_first_edge_rms=uncorrected_rms,
+        max_induced_successor_step_rms=delta_rms / float(support_ticks),
+        legacy_one_tick_exit_step_rms=delta_rms,
+    )
+    if delta_max == 0.0:
+        report.update(reason="sampler_prefix_already_exact", corrected_exact_first_edge_rms=uncorrected_rms)
+        return result, report
+
+    before_prefix = result_audio[..., :prefix].clone()
+    support_stop = prefix + support_ticks
+    before_later = result_audio[..., support_stop:].clone()
+    for offset, weight in enumerate(weights):
+        result_audio[..., prefix + offset].add_((delta * weight).to(dtype=result_audio.dtype))
+
+    if not torch.equal(result_audio[..., :prefix], before_prefix):
+        raise RuntimeError("audio successor bridge modified protected prefix before canonicalization")
+    if not torch.equal(result_audio[..., support_stop:], before_later):
+        raise RuntimeError("audio successor bridge modified suffix outside bounded support")
+    corrected_relation = result_audio[..., prefix].detach().to(torch.float32) - exact_last
+    relation_error = corrected_relation - sampled_relation
+    report.update(
+        applied=True,
+        reason="exact_restore_successor_distributed",
+        corrected_ticks=support_ticks,
+        corrected_exact_first_edge_rms=float(corrected_relation.square().mean().sqrt().item()),
+        first_edge_relation_error_rms=float(relation_error.square().mean().sqrt().item()),
+    )
+    return result, report
+
+
 def apply_audio_guided_overlap_mask(
     denoise_mask: torch.Tensor | None,
     latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None,
