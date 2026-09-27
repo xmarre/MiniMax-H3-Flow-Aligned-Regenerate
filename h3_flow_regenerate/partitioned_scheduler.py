@@ -18,6 +18,8 @@ import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
+    PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
+    apply_provider_boundary_post_high_temporal_stabilization,
     compare_boundary_content_stages,
     measure_boundary_content_continuity,
     measure_learned_transfer_residual_diagnostic,
@@ -123,6 +125,7 @@ from .runtime import (
     _merge_preserved_noise,
     _noise_argument,
     _process_latent_in,
+    _process_latent_out,
     _raw_sampler_state,
     _reset_guider_conds,
     _resize_packed_latent_image,
@@ -3330,7 +3333,7 @@ def run_partitioned_progressive(
                     # Preserve the serialized selector for old workflows but fail closed.
                     # The same requested run now emits a post-high shadow below instead.
                     provider_boundary_stabilization_receipt.update(
-                        reason="disabled_pending_post_high_validation",
+                        reason="deferred_to_post_high_temporal_support",
                         exact_overlap_fallback_required=True,
                         historical_candidate_policy="partitioned_provider_boundary_soft_support_production_v1",
                         historical_candidate_mutation_disabled=True,
@@ -4182,6 +4185,104 @@ def run_partitioned_progressive(
                     extra_vae_calls=0,
                     elapsed_ms=(time.perf_counter() - post_high_shadow_started) * 1000.0,
                     **post_high_shadow,
+                )
+
+                post_high_production_receipt: dict[str, Any] = {
+                    "policy": PROVIDER_BOUNDARY_POST_HIGH_TEMPORAL_POLICY,
+                    "requested": True,
+                    "mode": provider_boundary_stabilization,
+                    "applied": False,
+                    "reason": "exact_overlap_fallback_not_selected",
+                    "output_mutated": False,
+                    "authoritative_prefix_modified": False,
+                    "audio_modified": False,
+                    "corrected_tokens": 0,
+                    "extra_h3_nfe": 0,
+                    "extra_sampler_lifetimes": 0,
+                    "extra_history_boundaries": 0,
+                    "extra_provider_calls": 0,
+                    "extra_vae_calls": 0,
+                }
+                if exact_overlap_fallback_requested:
+                    soft_shadow_receipt = post_high_shadow.get("soft_shadow")
+                    if not isinstance(soft_shadow_receipt, dict):
+                        raise RuntimeError("post-high stabilization lost its soft-shadow receipt")
+                    eligible_count = int(soft_shadow_receipt.get("eligible_tile_count", 0))
+                    if eligible_count > 0:
+                        corrected_internal_video, temporal_receipt = (
+                            apply_provider_boundary_post_high_temporal_stabilization(
+                                post_high_diagnostic_video,
+                                stage_plan.prefix_t,
+                                soft_shadow_receipt=soft_shadow_receipt,
+                                temporal_span=int(soft_shadow_receipt.get("pre_steps", 3)),
+                            )
+                        )
+                        corrected_tokens = int(temporal_receipt.get("corrected_tokens", 0))
+                        if temporal_receipt.get("applied") is not True or corrected_tokens < 1:
+                            raise RuntimeError("eligible post-high stabilization produced no correction")
+                        corrected_internal_packed, corrected_internal_shapes = pack_streams(
+                            (corrected_internal_video, final_internal_audio)
+                        )
+                        if corrected_internal_shapes != target_shapes:
+                            raise RuntimeError("post-high stabilization changed internal AV geometry")
+                        corrected_caller_packed = _process_latent_out(
+                            base_model,
+                            corrected_internal_packed,
+                            target_shapes,
+                        )
+                        corrected_caller_video, _corrected_caller_audio = unpack_streams(
+                            corrected_caller_packed,
+                            target_shapes,
+                        )
+                        production_video = final_video.clone()
+                        stop = min(
+                            int(production_video.shape[2]),
+                            int(stage_plan.prefix_t) + corrected_tokens,
+                        )
+                        production_video[:, :, stage_plan.prefix_t : stop] = corrected_caller_video[
+                            :, :, stage_plan.prefix_t : stop
+                        ].to(production_video)
+                        if not torch.equal(
+                            production_video[:, :, : stage_plan.prefix_t],
+                            final_video[:, :, : stage_plan.prefix_t],
+                        ):
+                            raise RuntimeError("post-high stabilization modified caller exact prefix")
+                        if stop < int(production_video.shape[2]) and not torch.equal(
+                            production_video[:, :, stop:],
+                            final_video[:, :, stop:],
+                        ):
+                            raise RuntimeError("post-high stabilization modified caller suffix outside fixed horizon")
+                        result, result_shapes = pack_streams((production_video, final_audio))
+                        if result_shapes != target_shapes:
+                            raise RuntimeError("post-high stabilization changed caller AV geometry")
+                        final_video = production_video
+                        final_internal_video = corrected_internal_video
+                        final_internal, internal_shapes = pack_streams(
+                            (final_internal_video, final_internal_audio)
+                        )
+                        if internal_shapes != target_shapes:
+                            raise RuntimeError("post-high stabilization changed diagnostic internal AV geometry")
+                        post_high_production_receipt.update(
+                            temporal_receipt,
+                            requested=True,
+                            mode=provider_boundary_stabilization,
+                            applied=True,
+                            reason="applied",
+                            output_mutated=True,
+                            caller_domain_projection="process_latent_out_fixed_horizon_video_only_v1",
+                            audio_modified=False,
+                        )
+                    else:
+                        post_high_production_receipt.update(
+                            reason="no_eligible_tiles",
+                            eligible_tile_count=0,
+                            eligible_tiles=[],
+                        )
+                binding.metrics.event(
+                    "partitioned_provider_boundary_post_high_stabilization",
+                    domain="model_internal_clean_to_caller_output_latent",
+                    exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+                    **post_high_production_receipt,
                 )
 
         if diagnostic_audio_control:
