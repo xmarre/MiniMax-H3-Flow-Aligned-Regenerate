@@ -14,7 +14,12 @@ import torch
 
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
-from .guidance import GuidanceConfig, GuidanceState, apply_guidance
+from .guidance import (
+    GuidanceConfig,
+    GuidanceState,
+    RegisteredGuidanceReference,
+    apply_guidance,
+)
 from .handoff import (
     ProgressiveHandoffConfig,
     ProgressiveTargetInputConfig,
@@ -78,6 +83,11 @@ class FlowBinding:
     captured_run_id: str | None = None
     guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
+    registered_guidance_reference: RegisteredGuidanceReference | None = None
+    guidance_protected_prefix_t: int = 0
+    high_boundary_trace: Any = None
+    high_boundary_anchor: Any = None
+    frame_gauge_invocation_active: bool = False
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
 
@@ -498,9 +508,42 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             **bridge_metrics,
         )
 
+    boundary_trace = binding.high_boundary_trace if stage == "high" else None
+    boundary_anchor = binding.high_boundary_anchor if stage == "high" else None
+    boundary_call_index = (
+        boundary_trace.calls
+        if boundary_trace is not None
+        else boundary_anchor.calls
+        if boundary_anchor is not None
+        else 0
+    )
+    if boundary_trace is not None:
+        boundary_trace.calls += 1
+        if boundary_anchor is not None:
+            boundary_trace.observe(
+                result,
+                point="before_anchor",
+                call_index=boundary_call_index,
+                sigma=sigma,
+                actual=actual,
+            )
+    if boundary_anchor is not None:
+        result = boundary_anchor.apply(
+            result,
+            call_index=boundary_call_index,
+            sigma=sigma,
+            actual=actual,
+        )
+    if boundary_trace is not None:
+        boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
         if run is None:
+            if boundary_trace is not None:
+                boundary_trace.observe(
+                    result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual
+                )
             return result
         base_model = getattr(guider, "inner_model", None)
         shapes = getattr(base_model, "latent_shapes", None)
@@ -517,6 +560,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             state=binding.guidance_state,
             high_state=video_state,
             sigma=sigma,
+            registered_reference=binding.registered_guidance_reference,
+            protected_prefix_t=binding.guidance_protected_prefix_t,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))
@@ -546,6 +591,10 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
             temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
             temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
+            temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
+            temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
+            registered_reference_used=binding.guidance_state.last_registered_reference_used,
+            protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(
                 spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
@@ -554,6 +603,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             if spectrum_active_step is not None
             else transformer.get(SPECTRUM_OUTER_STEP_KEY),
         )
+    if boundary_trace is not None:
+        boundary_trace.observe(result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
     return result
 
 
@@ -588,6 +639,7 @@ def flow_outer_wrapper(
         raise RuntimeError("H3 flow wrapper requires mutable packed latent shape metadata")
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+    binding.registered_guidance_reference = None
     progressive = (getattr(guider, "model_options", None) or {}).get(PROGRESSIVE_KEY)
     is_progressive = isinstance(progressive, (ProgressiveHandoffConfig, ProgressiveTargetInputConfig))
     if not is_progressive and binding.guidance is not None and binding.guidance.mode != "off":
@@ -645,6 +697,7 @@ def flow_outer_wrapper(
             _finish_capture(binding, error=error)
         binding.guidance_state.reset()
         binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
         binding.metrics.event(
             "sampler_wall",
             elapsed_ms=(time.perf_counter() - outer_started) * 1000.0,
