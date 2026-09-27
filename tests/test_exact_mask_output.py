@@ -7,6 +7,7 @@ import torch
 
 from h3_flow_regenerate.comfy_compat import (
     _canonicalize_exact_masked_output,
+    _ProgressiveExactMaskExecutor,
     flow_outer_wrapper_with_exact_mask,
 )
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
@@ -196,3 +197,79 @@ def test_target_input_fallback_canonicalizes_single_sampler_return():
     assert events[0].fields["source"] == "target_input_fallback_return"
     assert events[0].fields["canonicalized"] is True
     assert events[0].fields["changed_elements"] == 1
+
+def test_partitioned_exact_mask_adapter_distributes_audio_restore_delta_before_canonicalization():
+    video = torch.zeros(1, 24, 3, 2, 2)
+    audio = torch.zeros(1, 32, 2, 12)
+    audio[..., :6] = 1.0
+    audio[..., 6:] = 2.0
+    packed, shapes = pack_streams((video, audio))
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :1] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :6] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    returned = packed.clone()
+    returned_video, returned_audio = unpack_streams(returned, shapes)
+    returned_video_before = returned_video.clone()
+    returned_audio[..., 5] = 1.8
+    returned_audio[..., 6] = 2.2
+    sampled_first_relation = returned_audio[..., 6].clone().float() - returned_audio[..., 5].clone().float()
+    delta = audio[..., 5].float() - returned_audio[..., 5].float()
+
+    binding = FlowBinding()
+    guider = SimpleNamespace(model_options={"transformer_options": {"h3_flow_stage": "high"}})
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return returned
+
+    adapted = _ProgressiveExactMaskExecutor(
+        Executor(),
+        binding=binding,
+        progressive=SimpleNamespace(exact_prefix_mode="partitioned_exact_prefix"),
+        latent_image=packed,
+        denoise_mask=exact_mask,
+        sampler=SimpleNamespace(sampler_function=lambda: None, extra_options={}),
+        latent_shapes=list(shapes),
+        audio_exact_restore_successor_ticks=4,
+    )
+    result = adapted(None)
+    result_video, result_audio = unpack_streams(result, shapes)
+
+    assert torch.equal(result_video, returned_video_before)
+    assert torch.equal(result_audio[..., :6], audio[..., :6])
+    assert torch.equal(result_audio[..., 10:], audio[..., 10:])
+    torch.testing.assert_close(
+        result_audio[..., 6].float() - result_audio[..., 5].float(),
+        sampled_first_relation,
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+    expected_step = -0.25 * delta
+    for tick in range(7, 10):
+        actual = result_audio[..., tick].float() - result_audio[..., tick - 1].float()
+        native = audio[..., tick].float() - audio[..., tick - 1].float()
+        torch.testing.assert_close(actual - native, expected_step, rtol=0.0, atol=1.0e-6)
+    exit_step = result_audio[..., 10].float() - result_audio[..., 9].float()
+    native_exit = audio[..., 10].float() - audio[..., 9].float()
+    torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=1.0e-6)
+
+    bridge_events = [
+        event for event in binding.metrics.events if event.kind == "audio_exact_restore_successor_bridge"
+    ]
+    assert len(bridge_events) == 1
+    bridge = bridge_events[0].fields
+    assert bridge["applied"] is True
+    assert bridge["corrected_ticks"] == 4
+    assert bridge["final_exact_restore_follows"] is True
+    assert bridge["extra_h3_nfe"] == 0
+    assert bridge["extra_sampler_lifetimes"] == 0
+    assert bridge["extra_history_boundaries"] == 0
+    assert bridge["extra_vae_calls"] == 0
+    assert binding.metrics.counters["audio_exact_restore_successor_bridge_runs"] == 1
+
