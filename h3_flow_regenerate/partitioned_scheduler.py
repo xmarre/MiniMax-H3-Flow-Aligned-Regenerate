@@ -1857,10 +1857,11 @@ def _frame_gauge_clean_postprocess(
     else:
         residual_geometry.update(final_path="rigid_v2")
 
-    # Only now materialize the translated learned trajectory. The final clean
-    # state needs the translated suffix and one translated provider-prefix
-    # witness for the DC bridge. Measurement mode additionally keeps the last
-    # six prefix frames aligned for its bounded evidence bundle.
+    # Materialize the rigid candidate only as a bounded shadow witness. Run
+    # 00687 proved that a fully accepted/applied whole-suffix rigid transaction
+    # can still retain the user-visible frame shift. Do not let paired-prefix
+    # calibration mutate production video or Flow guidance until a regional
+    # boundary model is validated against decoded media.
     aligned_start_frame = max(0, prefix_t - 6) if residual_mode == "measure" else prefix_t - 1
     aligned_translation_started = time.perf_counter()
     aligned_application = translate_video_cells(
@@ -1874,7 +1875,7 @@ def _frame_gauge_clean_postprocess(
     transaction["aligned_translation_elapsed_ms"] = aligned_translation_elapsed_ms
     transaction["aligned_translation_start_frame"] = aligned_start_frame
     if aligned_application.invalid_fraction > 0.08:
-        raise RuntimeError("frame-gauge accepted boundary witness but full translation exceeded invalid-area bound")
+        raise RuntimeError("frame-gauge accepted boundary witness but shadow translation exceeded invalid-area bound")
     aligned_full = aligned_application.video
 
     diagnostic_end = min(
@@ -1902,21 +1903,19 @@ def _frame_gauge_clean_postprocess(
     )
     translation_grid_bytes = int(learned_clean.shape[-2]) * int(learned_clean.shape[-1]) * 2 * 4
     aligned_witness = aligned_full[:, :, :diagnostic_end].detach().clone()
-    corrected_clean, dc_metrics = apply_suffix_dc_bridge(
+    candidate_corrected_clean, candidate_dc_metrics = apply_suffix_dc_bridge(
         aligned_full,
         exact_prefix,
         weights=(1.0,),
         clone_output=False,
     )
-    # The shifted prefix exists only as a disposable registration/DC witness.
-    # Restore the provider's original learned prefix before the clean state is
-    # re-noised; scheduler ownership will replace it with authoritative E later.
-    corrected_clean[:, :, :prefix_t] = learned_clean[:, :, :prefix_t]
+    # The shifted prefix is a disposable shadow witness only.
+    candidate_corrected_clean[:, :, :prefix_t] = learned_clean[:, :, :prefix_t]
     if not torch.equal(
-        corrected_clean[:, :, :prefix_t],
+        candidate_corrected_clean[:, :, :prefix_t],
         learned_clean[:, :, :prefix_t],
     ):
-        raise RuntimeError("frame-gauge clean transaction altered learned prefix ownership")
+        raise RuntimeError("frame-gauge shadow candidate altered learned prefix ownership")
 
     if residual_mode == "measure":
         video_residual = residual_geometry.get("video", {})
@@ -1926,7 +1925,7 @@ def _frame_gauge_clean_postprocess(
                 learned_clean,
                 exact_prefix,
                 aligned_witness,
-                corrected_clean,
+                candidate_corrected_clean,
                 prefix_t=prefix_t,
                 tile_bounds=tile_bounds,
             )
@@ -1937,18 +1936,28 @@ def _frame_gauge_clean_postprocess(
                 "reason": "regional_measurement_unavailable",
             }
 
+    residual_geometry.update(
+        final_path="production_baseline_rigid_shadow_only",
+        rigid_candidate_evaluated=True,
+        rigid_candidate_production_applied=False,
+    )
     video_registration = dict(transaction["video_registration"])
     video_registration["invalid_fraction"] = float(aligned_application.invalid_fraction)
     transaction["video_registration"] = video_registration
     transaction.update(
-        result="accepted",
-        reason="accepted",
-        dc_applied_in_clean_hook=True,
-        spatial_warp_applied=True,
+        result="shadow_only",
+        reason="hardware_invalidated_global_rigid_application_00687",
+        candidate_accepted=True,
+        production_mutation_allowed=False,
+        candidate_spatial_warp_computed=True,
+        candidate_guidance_reference_computed=bool(registered_reference is not None),
+        candidate_dc_applied=True,
+        candidate_dc_metrics=candidate_dc_metrics,
+        dc_applied_in_clean_hook=False,
+        spatial_warp_applied=False,
         invalid_fraction=aligned_application.invalid_fraction,
         dc_policy="existing_one_token_spatial_mean_v1",
-        dc_order="after_spatial_registration_before_conditional_renoise",
-        dc_metrics=dc_metrics,
+        dc_order="production_baseline_after_shadow_candidate",
         workspace_upper_bound_bytes=(
             registration_pair_f64_bytes
             + registration_pair_f32_bytes
@@ -1968,16 +1977,17 @@ def _frame_gauge_clean_postprocess(
     witnesses = {
         "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
         "paired_prefix_aligned_witness": aligned_witness,
-        "corrected_clean": (corrected_clean[:, :, :diagnostic_end].detach().clone()),
+        "candidate_corrected_clean": (
+            candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()
+        ),
     }
     witnesses.update(residual_witnesses)
     result = CleanVideoPostprocessResult(
-        clean_video=corrected_clean,
+        clean_video=learned_clean,
         protected_prefix_t=prefix_t,
         metadata=transaction,
     )
-    return result, registered_reference, witnesses, transaction
-
+    return result, None, witnesses, transaction
 
 def _bounded_residual_stage_slice(
     video: torch.Tensor,
