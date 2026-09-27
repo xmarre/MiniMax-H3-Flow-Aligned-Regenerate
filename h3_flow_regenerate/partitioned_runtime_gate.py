@@ -1870,10 +1870,30 @@ def _validate_frame_gauge_transfer(
             overlap.get("authoritative_prefix_modified") is False,
             "partitioned exact-overlap repair altered authoritative prefix ownership",
         )
-        _require(
-            overlap.get("later_suffix_extrapolated") is False,
-            "partitioned exact-overlap repair extrapolated into unmeasured later suffix tokens",
-        )
+        successor_safe_policy = overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+        if successor_safe_policy:
+            _require(
+                overlap.get("later_suffix_extrapolated") is True,
+                "successor-safe exact-overlap repair did not disclose later-suffix support",
+            )
+            _require(
+                overlap.get("suffix_support_policy") == "bounded_linear_return_v2"
+                and int(overlap.get("suffix_support_tokens", 0))
+                == len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS)
+                and overlap.get("suffix_outside_support_modified") is False,
+                "successor-safe exact-overlap support escaped its declared bound",
+            )
+        else:
+            _require(
+                overlap.get("later_suffix_extrapolated") is False,
+                "historical exact-overlap repair extrapolated into later suffix tokens",
+            )
+            _require(
+                overlap.get("suffix_support_policy") in {None, "first_suffix_only_v1"}
+                and int(overlap.get("suffix_support_tokens", 1)) in {0, 1}
+                and overlap.get("suffix_outside_support_modified") in {None, False},
+                "historical exact-overlap repair changed its first-suffix-only support",
+            )
         if requested:
             _require(
                 overlap.get("source") == "actual_provider_boundary_pair",
