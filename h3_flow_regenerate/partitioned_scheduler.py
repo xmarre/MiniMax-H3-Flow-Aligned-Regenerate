@@ -156,6 +156,8 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
+PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -1101,6 +1103,7 @@ def _apply_partitioned_exact_overlap_bridge(
     exact_prefix: torch.Tensor,
     *,
     sigma: float,
+    weights: tuple[float, ...] = (1.0,),
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
     """Reconcile the measured exact/learned overlap before authoritative restore.
 
@@ -1117,11 +1120,12 @@ def _apply_partitioned_exact_overlap_bridge(
         learned_clean,
         exact_prefix,
         requested=True,
+        weights=weights,
     )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         structured_clean,
         exact_prefix,
-        weights=(1.0,),
+        weights=weights,
     )
     corrected_tokens = max(
         int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
@@ -3335,12 +3339,19 @@ def run_partitioned_progressive(
                         production_mutation_allowed=False,
                     )
 
+                exact_overlap_weights = (
+                    PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS
+                    if frame_gauge_transaction.get("result") == "shadow_only"
+                    and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+                    else (1.0,)
+                )
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
                     _apply_partitioned_exact_overlap_bridge(
                         target_video,
                         learned_clean,
                         exact_prefix,
                         sigma=sigma,
+                        weights=exact_overlap_weights,
                     )
                 )
             else:
@@ -3361,6 +3372,13 @@ def run_partitioned_progressive(
 
         if provider_native_clean is None:
             raise RuntimeError("partitioned provider-native clean witness was not established")
+        exact_overlap_policy = (
+            PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+            if exact_overlap_fallback_requested
+            and frame_gauge_transaction.get("result") == "shadow_only"
+            and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
+            else PARTITIONED_EXACT_OVERLAP_POLICY
+        )
         binding.metrics.event(
             "partitioned_provider_boundary_stabilization",
             exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
@@ -3517,12 +3535,17 @@ def run_partitioned_progressive(
             exact_overlap_fallback_applied=bool(
                 representation_metrics.get("suffix_representation_bridge_accepted", False)
             ),
-            exact_overlap_fallback_policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+            exact_overlap_fallback_policy=exact_overlap_policy,
             exact_overlap_fallback_source=(
                 "actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"
             ),
             exact_overlap_fallback_transformed_states=(
-                ["learned_suffix_first"]
+                [
+                    f"learned_suffix_{offset}"
+                    for offset in range(
+                        int(representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0))
+                    )
+                ]
                 if representation_metrics.get("suffix_representation_bridge_accepted", False)
                 else []
             ),
@@ -3530,7 +3553,7 @@ def run_partitioned_progressive(
 
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
-            policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+            policy=exact_overlap_policy,
             requested=bool(exact_overlap_fallback_requested),
             trigger=str(exact_overlap_fallback_trigger),
             applied=bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
@@ -3897,10 +3920,14 @@ def run_partitioned_progressive(
             suffix_dc_bridge_state_mapping=(
                 "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
             ),
-            suffix_dc_bridge_policy="one_token_spatial_mean_v1",
+            suffix_dc_bridge_policy=(
+                "successor_safe_linear_v2"
+                if int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)) > 1
+                else "one_token_spatial_mean_v1"
+            ),
             provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
             partitioned_exact_overlap_bridge={
-                "policy": PARTITIONED_EXACT_OVERLAP_POLICY,
+                "policy": exact_overlap_policy,
                 "requested": bool(exact_overlap_fallback_requested),
                 "trigger": str(exact_overlap_fallback_trigger),
                 "applied": bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
