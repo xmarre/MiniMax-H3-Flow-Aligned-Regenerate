@@ -3952,9 +3952,7 @@ def run_partitioned_progressive(
                 "authoritative_prefix_modified": False,
                 "later_suffix_extrapolated": exact_overlap_bounded_successor_support,
                 "suffix_support_policy": (
-                    "bounded_linear_return_v2"
-                    if exact_overlap_bounded_successor_support
-                    else "first_suffix_only_v1"
+                    "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
                 ),
                 "suffix_support_tokens": exact_overlap_corrected_tokens,
                 "suffix_outside_support_modified": False,
