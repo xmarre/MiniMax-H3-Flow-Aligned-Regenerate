@@ -3154,10 +3154,20 @@ def run_partitioned_progressive(
             dtype=target_video.dtype,
         )
         frame_gauge_accepted = frame_gauge_transaction.get("result") == "accepted"
+        frame_gauge_candidate_accepted = bool(
+            frame_gauge_accepted or frame_gauge_transaction.get("candidate_accepted") is True
+        )
         exact_overlap_fallback_requested, exact_overlap_fallback_trigger = (
             _partitioned_exact_overlap_fallback_eligibility(frame_gauge_transaction)
-            if config.frame_gauge_repair and not frame_gauge_accepted
-            else (False, "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled")
+            if config.frame_gauge_repair and not frame_gauge_candidate_accepted
+            else (
+                False,
+                "frame_gauge_shadow_selected"
+                if frame_gauge_candidate_accepted and not frame_gauge_accepted
+                else "frame_gauge_selected"
+                if frame_gauge_accepted
+                else "frame_gauge_repair_disabled",
+            )
         )
         representation_metrics = disabled_suffix_representation_bridge_metrics(
             prefix_t=stage_plan.prefix_t,
@@ -3336,7 +3346,7 @@ def run_partitioned_progressive(
             enabled=bool(config.frame_gauge_repair),
             eligible=bool(
                 config.frame_gauge_repair
-                and frame_gauge_transaction.get("result") in {"accepted", "identity", "rejected"}
+                and frame_gauge_transaction.get("result") in {"accepted", "identity", "rejected", "shadow_only"}
             ),
             result=str(frame_gauge_transaction.get("result", "off")),
             reason=str(frame_gauge_transaction.get("reason", "unknown")),
@@ -3357,6 +3367,21 @@ def run_partitioned_progressive(
                     "spatial_warp_applied",
                     False,
                 )
+            ),
+            candidate_accepted=bool(frame_gauge_transaction.get("candidate_accepted", False)),
+            candidate_spatial_warp_computed=bool(
+                frame_gauge_transaction.get("candidate_spatial_warp_computed", False)
+            ),
+            candidate_guidance_reference_computed=bool(
+                frame_gauge_transaction.get("candidate_guidance_reference_computed", False)
+            ),
+            production_mutation_allowed=bool(
+                frame_gauge_transaction.get("production_mutation_allowed", False)
+            ),
+            hardware_invalidation=(
+                "00687_visible_frame_shift_after_applied_rigid_v4"
+                if frame_gauge_transaction.get("result") == "shadow_only"
+                else None
             ),
             dc_bridge_applied=True,
             dc_policy="existing_one_token_spatial_mean_v1",
@@ -3567,7 +3592,11 @@ def run_partitioned_progressive(
             )
             binding.metrics.increment("partitioned_boundary_content_diagnostic_runs")
 
-        if residual_mode == "measure" and frame_gauge_accepted:
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            if aligned_witness is None:
+                aligned_witness = frame_gauge_witnesses.get("paired_prefix_aligned_witness")
+            if aligned_witness is None:
+                raise RuntimeError("residual measurement lost the rigid shadow witness")
             evidence_start = max(0, stage_plan.prefix_t - 6)
             evidence_stop = min(int(learned_clean.shape[2]), stage_plan.prefix_t + 4)
             residual_evidence_tensors["exact_prefix_last6"] = exact_prefix[
@@ -3609,8 +3638,12 @@ def run_partitioned_progressive(
                         owner_before="rigid_aligned_learned_L",
                         owner_after="authoritative_exact_prefix_E",
                         temporal_relation="same_time_prefix_calibration_and_native_boundary",
-                        applied_transform="paired_prefix_rigid_v2",
-                        provenance="actual_provider_clean_postprocess",
+                        applied_transform=(
+                            "paired_prefix_rigid_v2"
+                            if frame_gauge_accepted
+                            else "shadow_candidate_paired_prefix_rigid_v2"
+                        ),
+                        provenance="actual_provider_clean_postprocess_shadow_candidate",
                     ),
                     _emit_residual_geometry_stage(
                         binding.metrics,
@@ -3623,7 +3656,11 @@ def run_partitioned_progressive(
                         owner_before="authoritative_exact_prefix_E",
                         owner_after="rigid_aligned_learned_suffix_plus_single_dc",
                         temporal_relation="adjacent_time_boundary",
-                        applied_transform="paired_prefix_rigid_v2_then_one_token_dc",
+                        applied_transform=(
+                            "paired_prefix_rigid_v2_then_one_token_dc"
+                            if frame_gauge_accepted
+                            else "production_baseline_then_one_token_dc"
+                        ),
                         provenance="actual_pre_high_clean",
                     ),
                 ]
@@ -3893,12 +3930,12 @@ def run_partitioned_progressive(
         final_internal_audio = None
         if (
             diagnostic_audio_control
-            or (residual_mode == "measure" and frame_gauge_accepted)
+            or (residual_mode == "measure" and frame_gauge_candidate_accepted)
             or boundary_content_diagnostic_enabled
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
-        if residual_mode == "measure" and frame_gauge_accepted:
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
                 raise RuntimeError("residual measurement lost the common-domain final video operand")
             final_internal_prefix = final_internal_video[:, :, : stage_plan.prefix_t]
@@ -4135,7 +4172,7 @@ def run_partitioned_progressive(
             )
 
         residual_evidence_receipt: dict[str, Any] | None = None
-        if residual_mode == "measure" and frame_gauge_accepted:
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
             video_registration = frame_gauge_transaction.get("video_registration", {})
             guidance_registration = frame_gauge_transaction.get("guidance_registration", {})
             residual_evidence_receipt = export_residual_geometry_evidence(
