@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from itertools import pairwise
 
 import torch
 
@@ -59,7 +60,7 @@ def _normalize_weights(weights: Sequence[float]) -> tuple[float, ...]:
         raise ValueError("representation bridge weights must be finite values inside [0, 1]")
     if normalized[0] != 1.0:
         raise ValueError("representation bridge first weight must be exactly 1.0")
-    if any(right > left for left, right in zip(normalized, normalized[1:], strict=False)):
+    if any(right > left for left, right in pairwise(normalized)):
         raise ValueError("representation bridge weights must be monotonic non-increasing")
     return normalized
 
