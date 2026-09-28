@@ -110,6 +110,7 @@ from .post_high_video import (
     POST_HIGH_VIDEO_RESIDUAL_POLICY,
     apply_weighted_vertical_translation,
     repair_post_high_vertical_residual,
+    validate_post_high_vertical_candidate,
 )
 from .representation_bridge import (
     apply_suffix_representation_bridge,
@@ -4359,11 +4360,11 @@ def run_partitioned_progressive(
                 "extra_vae_calls": 0,
             }
             if bool(repair_receipt.get("applied")):
-                post_high_repair_selected_dy = float(repair_receipt["selected_dy_cells"])
+                proposed_dy = float(repair_receipt["selected_dy_cells"])
                 corrected_caller_video = apply_weighted_vertical_translation(
                     final_video,
                     prefix_t=stage_plan.prefix_t,
-                    dy=post_high_repair_selected_dy,
+                    dy=proposed_dy,
                 )
                 if not torch.equal(
                     corrected_caller_video[:, :, : stage_plan.prefix_t],
@@ -4376,14 +4377,11 @@ def run_partitioned_progressive(
                 _corrected_video_check, corrected_audio_check = unpack_streams(corrected_result, target_shapes)
                 if not torch.equal(corrected_audio_check, final_audio):
                     raise RuntimeError("post-high video residual repair modified audio")
-                final_video = corrected_caller_video
-                result = corrected_result
 
                 # Caller-domain output is authoritative. Re-enter through the
-                # model's latent-input contract instead of assuming that a
-                # spatial interpolation commutes bit-for-bit with H3 latent
-                # scaling/normalization.
-                recomputed_internal = _process_latent_in(base_model, result, target_shapes)
+                # model's latent-input contract and re-run the exact same
+                # acceptance gates before committing the candidate.
+                recomputed_internal = _process_latent_in(base_model, corrected_result, target_shapes)
                 recomputed_internal_video, recomputed_internal_audio = unpack_streams(
                     recomputed_internal,
                     target_shapes,
@@ -4395,13 +4393,42 @@ def run_partitioned_progressive(
                     exact_prefix.to(device=recomputed_internal_video.device),
                 ):
                     raise RuntimeError("post-high video residual repair changed the internal exact prefix")
-                final_internal = recomputed_internal
-                final_internal_video = recomputed_internal_video
-                final_internal_audio = recomputed_internal_audio
-                post_high_video_repair["caller_audio_exact"] = True
-                post_high_video_repair["caller_prefix_exact"] = True
-                post_high_video_repair["internal_audio_exact"] = True
-                post_high_video_repair["internal_prefix_exact"] = True
+                canonical_receipts = {
+                    roi_name: measure_translation_trajectory(
+                        recomputed_internal_video,
+                        stage_plan.prefix_t,
+                        forward_steps=4,
+                        backward_steps=3,
+                        roi_fraction=roi_fraction,
+                        max_shift=4,
+                    )
+                    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0))
+                }
+                canonical_accepted, canonical_validation = validate_post_high_vertical_candidate(
+                    repair_receipt["post_high_before"],
+                    canonical_receipts,
+                )
+                post_high_video_repair["caller_reentry_validation"] = canonical_validation
+                post_high_video_repair["canonical_candidate_accepted"] = canonical_accepted
+                post_high_video_repair["post_high_after"] = canonical_receipts
+                if canonical_accepted:
+                    post_high_repair_selected_dy = proposed_dy
+                    final_video = corrected_caller_video
+                    result = corrected_result
+                    final_internal = recomputed_internal
+                    final_internal_video = recomputed_internal_video
+                    final_internal_audio = recomputed_internal_audio
+                    post_high_video_repair["caller_audio_exact"] = True
+                    post_high_video_repair["caller_prefix_exact"] = True
+                    post_high_video_repair["internal_audio_exact"] = True
+                    post_high_video_repair["internal_prefix_exact"] = True
+                else:
+                    post_high_video_repair.update(
+                        applied=False,
+                        accepted=False,
+                        output_mutated=False,
+                        reason="caller_reentry_validation_failed",
+                    )
         elif config.frame_gauge_repair:
             post_high_video_repair["reason"] = "safe_video_topology_not_active"
             post_high_video_repair["safe_video_topology"] = False
