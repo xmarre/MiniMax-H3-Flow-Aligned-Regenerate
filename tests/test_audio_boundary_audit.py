@@ -102,6 +102,9 @@ def test_low_probe_counterfactual_decodes_exact_final_prefix_with_probe_suffix()
     )
     assert output is audios
     assert len(vae.calls) == 3
+    assert vae.calls[2].shape == vae.calls[1].shape
+    assert torch.equal(vae.calls[2][..., : 32 + prefix], vae.calls[1][..., : 32 + prefix])
+    assert not torch.equal(vae.calls[2][..., 32 + prefix :], vae.calls[1][..., 32 + prefix :])
     report = json.loads(report_json)[0]
     assert report["extra_vae_calls"] == 3
     counterfactual = report["low_probe_counterfactual"]
