@@ -170,6 +170,8 @@ PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_res
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
+
+
 def _cache_audio_decode_witness(
     binding,
     model_options,
