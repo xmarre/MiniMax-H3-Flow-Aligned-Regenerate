@@ -95,10 +95,7 @@ def test_video_boundary_production_contract_fails_closed_to_residual_only():
         partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
         == "source_residual_handoff_plus_first_suffix_overlap_v1"
     )
-    assert (
-        partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY
-        == "partitioned_exact_overlap_structural_plus_dc_v1"
-    )
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_structural_plus_dc_v1"
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
