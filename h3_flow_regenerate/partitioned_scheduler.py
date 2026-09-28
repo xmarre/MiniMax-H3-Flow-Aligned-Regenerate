@@ -43,6 +43,8 @@ from .geometry import (
 )
 from .guidance import RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     CleanVideoPostprocessResult,
     ProgressiveTargetInputConfig,
     build_handoff_state,
@@ -3200,6 +3202,11 @@ def run_partitioned_progressive(
 
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
+        handoff_noise_mode = (
+            H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            if config.frame_gauge_repair
+            else H3_HANDOFF_NOISE_INDEPENDENT
+        )
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -3212,6 +3219,17 @@ def run_partitioned_progressive(
             learned_upscaler=config.learned_upscaler,
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
+            noise_mode=handoff_noise_mode,
+        )
+        handoff_noise_report = transfer_metrics.get("handoff_noise")
+        if not isinstance(handoff_noise_report, dict):
+            raise RuntimeError("partitioned handoff did not report its target-grid noise contract")
+        if handoff_noise_report.get("policy") != handoff_noise_mode:
+            raise RuntimeError("partitioned handoff noise policy drifted from the selected contract")
+        binding.metrics.event(
+            "partitioned_handoff_noise",
+            frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
+            **handoff_noise_report,
         )
         if rebuilt_shapes != target_shapes:
             raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
@@ -4034,6 +4052,7 @@ def run_partitioned_progressive(
             temporal_length=transfer_metrics.get("temporal_length"),
             learned_upscale_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
             clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
+            handoff_noise=transfer_metrics.get("handoff_noise"),
             **splice_diagnostics,
         )
 
