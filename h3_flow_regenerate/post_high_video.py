@@ -188,9 +188,7 @@ def plan_post_high_vertical_residual(
         return receipt
 
     extended_weights = (*POST_HIGH_VIDEO_RELEASE_WEIGHTS, 0.0)
-    max_weight_step = max(
-        abs(float(right) - float(left)) for left, right in itertools.pairwise(extended_weights)
-    )
+    max_weight_step = max(abs(float(right) - float(left)) for left, right in itertools.pairwise(extended_weights))
     max_induced_step = magnitude * max_weight_step
     if max_induced_step > POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS:
         receipt["reason"] = "temporal_release_step_over_bound"
