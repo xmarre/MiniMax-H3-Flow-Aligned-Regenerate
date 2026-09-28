@@ -63,6 +63,53 @@ def _exact_audio_prefix_ticks(mask_audio: torch.Tensor) -> int:
     return prefix
 
 
+def align_audio_reference_to_authoritative_prefix(
+    low_probe_clean_audio: torch.Tensor,
+    authoritative_audio: torch.Tensor,
+    exact_denoise_mask: torch.Tensor,
+    shapes,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Translate the clean continuation onto the caller-owned exact-prefix gauge."""
+
+    if low_probe_clean_audio.ndim != 4 or int(low_probe_clean_audio.shape[2]) != 2:
+        raise ValueError("audio boundary alignment requires native BxCx2xT low/probe audio")
+    if tuple(authoritative_audio.shape) != tuple(low_probe_clean_audio.shape):
+        raise ValueError("audio boundary alignment requires authoritative/reference geometry parity")
+    mask_audio = unpack_streams(exact_denoise_mask, shapes)[1]
+    if tuple(mask_audio.shape) != tuple(low_probe_clean_audio.shape):
+        raise ValueError("audio boundary alignment mask geometry drifted")
+
+    prefix = _exact_audio_prefix_ticks(mask_audio)
+    support = min(HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS, int(low_probe_clean_audio.shape[-1]) - prefix)
+    if support <= 0:
+        raise ValueError("audio boundary alignment has no generated suffix support")
+
+    reference = low_probe_clean_audio.detach().clone()
+    authoritative = authoritative_audio.detach().to(device=reference.device, dtype=reference.dtype)
+    reference[..., :prefix] = authoritative[..., :prefix]
+
+    low_tail = low_probe_clean_audio[..., prefix - 1].detach().to(torch.float32)
+    authoritative_tail = authoritative[..., prefix - 1].detach().to(torch.float32)
+    translation = authoritative_tail - low_tail
+    reference[..., prefix : prefix + support] = (
+        low_probe_clean_audio[..., prefix : prefix + support].detach().to(torch.float32)
+        + translation.unsqueeze(-1)
+    ).to(dtype=reference.dtype)
+
+    source_edge = low_probe_clean_audio[..., prefix].detach().to(torch.float32) - low_tail
+    aligned_edge = reference[..., prefix].detach().to(torch.float32) - authoritative_tail
+    edge_error = aligned_edge - source_edge
+    return reference, {
+        "audio_prefix_ticks": prefix,
+        "audio_support_ticks": support,
+        "audio_prefix_translation_rms": _rms(translation),
+        "audio_prefix_translation_max_abs": float(translation.abs().max().item()),
+        "audio_first_edge_relation_error_rms": _rms(edge_error),
+        "authoritative_prefix_modified": False,
+        "reference_domain": "authoritative_prefix_aligned_low_probe_clean",
+    }
+
+
 class HighStageBoundaryReferenceAnchor:
     """Blend a bounded high-stage clean prediction back to the handoff clean state."""
 
@@ -218,7 +265,7 @@ class HighStageBoundaryReferenceAnchor:
                 audio_prefix_ticks=self.audio_prefix_ticks,
                 audio_support_ticks=support,
                 audio_temporal_weights=list(weights),
-                audio_reference_domain="low_probe_clean",
+                audio_reference_domain="authoritative_prefix_aligned_low_probe_clean",
                 audio_prediction_delta_rms=_rms(before - reference.to(torch.float32)),
                 audio_correction_rms=_rms(after - before),
                 audio_first_reference_error_rms=_rms(first_error),
