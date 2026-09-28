@@ -286,6 +286,108 @@ class HighStageBoundaryReferenceAnchor:
         return result
 
 
+def apply_final_boundary_reference(
+    packed: torch.Tensor,
+    shapes,
+    *,
+    video_prefix_t: int,
+    video_reference_suffix: torch.Tensor | None,
+    audio_reference: torch.Tensor | None,
+    exact_denoise_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Apply the same bounded reference directly to the final clean sampler state.
+
+    Model-output anchoring constrains every high-stage denoiser prediction, but a
+    multistep solver can still integrate a residual boundary offset. This final
+    clean-domain projection closes that remaining degree of freedom without
+    touching the authoritative prefix or any suffix outside the bounded support.
+    """
+
+    if video_reference_suffix is None and audio_reference is None:
+        return packed, {
+            "applied": False,
+            "video_applied": False,
+            "audio_applied": False,
+            "reason": "no_reference",
+            "authoritative_prefix_modified": False,
+            "suffix_outside_support_modified": False,
+        }
+
+    original_video, original_audio = unpack_streams(packed, shapes)
+    result = packed.clone()
+    video, audio = unpack_streams(result, shapes)
+    report: dict[str, Any] = {
+        "applied": True,
+        "video_applied": False,
+        "audio_applied": False,
+        "authoritative_prefix_modified": False,
+        "suffix_outside_support_modified": False,
+        "extra_h3_nfe": 0,
+        "extra_provider_calls": 0,
+        "extra_vae_calls": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_history_boundaries": 0,
+    }
+
+    if video_reference_suffix is not None:
+        support = min(int(video_reference_suffix.shape[2]), len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS))
+        stop = int(video_prefix_t) + support
+        if (
+            video_prefix_t <= 0
+            or support <= 0
+            or stop > int(video.shape[2])
+            or tuple(video_reference_suffix.shape[:2]) != tuple(video.shape[:2])
+            or tuple(video_reference_suffix.shape[-2:]) != tuple(video.shape[-2:])
+        ):
+            raise RuntimeError("final video boundary reference geometry drifted")
+        before = video[:, :, video_prefix_t:stop].detach().to(torch.float32).clone()
+        reference = video_reference_suffix[:, :, :support].to(device=video.device, dtype=video.dtype)
+        weights = HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS[:support]
+        for offset, weight in enumerate(weights):
+            current = video[:, :, video_prefix_t + offset].to(torch.float32)
+            target = reference[:, :, offset].to(torch.float32)
+            video[:, :, video_prefix_t + offset] = (current + float(weight) * (target - current)).to(video.dtype)
+        after = video[:, :, video_prefix_t:stop].detach().to(torch.float32)
+        report.update(
+            video_applied=True,
+            video_support_tokens=support,
+            video_temporal_weights=list(weights),
+            video_correction_rms=_rms(after - before),
+            video_first_reference_error_rms=_rms(after[:, :, :1] - reference[:, :, :1].to(torch.float32)),
+        )
+        if not torch.equal(video[:, :, :video_prefix_t], original_video[:, :, :video_prefix_t]):
+            raise RuntimeError("final video boundary reference modified authoritative prefix")
+        if not torch.equal(video[:, :, stop:], original_video[:, :, stop:]):
+            raise RuntimeError("final video boundary reference escaped bounded support")
+
+    if audio_reference is not None:
+        if exact_denoise_mask is None:
+            raise ValueError("final audio boundary reference requires authoritative exact mask")
+        mask_audio = unpack_streams(exact_denoise_mask, shapes)[1]
+        if tuple(mask_audio.shape) != tuple(audio.shape) or tuple(audio_reference.shape) != tuple(audio.shape):
+            raise RuntimeError("final audio boundary reference geometry drifted")
+        prefix = _exact_audio_prefix_ticks(mask_audio)
+        support = min(HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS, int(audio.shape[-1]) - prefix)
+        stop = prefix + support
+        before = audio[..., prefix:stop].detach().to(torch.float32).clone()
+        reference = audio_reference[..., prefix:stop].to(device=audio.device, dtype=audio.dtype)
+        audio[..., prefix:stop] = reference
+        after = audio[..., prefix:stop].detach().to(torch.float32)
+        report.update(
+            audio_applied=True,
+            audio_prefix_ticks=prefix,
+            audio_support_ticks=support,
+            audio_correction_rms=_rms(after - before),
+            audio_reference_error_rms=_rms(after - reference.to(torch.float32)),
+        )
+        if not torch.equal(audio[..., :prefix], original_audio[..., :prefix]):
+            raise RuntimeError("final audio boundary reference modified authoritative prefix")
+        if not torch.equal(audio[..., stop:], original_audio[..., stop:]):
+            raise RuntimeError("final audio boundary reference escaped bounded support")
+
+    return result, report
+
+
 class HighStageBoundaryTrace:
     max_calls = 16
     suffix_tokens = 4
