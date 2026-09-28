@@ -4752,6 +4752,9 @@ def run_partitioned_progressive(
                 final_exact_video_prefix=True,
                 final_exact_audio_prefix=True,
                 sampler_masks_unchanged=True,
+                source_sampler_masks_unchanged=True,
+                high_stage_guard_mask_local_override=high_video_guard_enabled,
+                high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
