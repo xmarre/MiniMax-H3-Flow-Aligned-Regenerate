@@ -3797,6 +3797,7 @@ def run_partitioned_progressive(
                 internal_guard_exact=True,
                 internal_audio_exact=True,
                 caller_internal_round_trip_verified=True,
+                flow_guidance_protected_video_tokens=stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
                 reason="safe_one_token_high_context",
             )
             del (
@@ -3812,6 +3813,22 @@ def run_partitioned_progressive(
                 high_internal_video_check,
                 high_internal_audio_check,
             )
+        high_boundary_context = exact_prefix
+        high_boundary_prefix_witness = "authoritative_exact_tail_after_inpaint_restore"
+        if high_video_guard_enabled:
+            guard_slice = slice(
+                stage_plan.prefix_t,
+                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+            )
+            high_boundary_context = torch.cat(
+                (
+                    exact_prefix,
+                    restored_clean[:, :, guard_slice].to(exact_prefix),
+                ),
+                dim=2,
+            )
+            high_boundary_prefix_witness = "protected_first_generated_guard_tail_after_inpaint_restore"
+
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
@@ -3822,6 +3839,8 @@ def run_partitioned_progressive(
             high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
             high_video_guard_enabled=high_video_guard_enabled,
             high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
+            high_boundary_prefix_witness=high_boundary_prefix_witness,
             video_reference_domain="disabled",
             video_support_tokens=(
                 int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
@@ -4397,12 +4416,13 @@ def run_partitioned_progressive(
             _high_stage_contract(guider),
             high_boundary_contract(
                 binding,
-                exact_prefix,
+                high_boundary_context,
                 target_shapes,
                 measure=residual_mode == "measure",
                 video_reference_suffix=high_video_reference_suffix,
                 audio_reference=high_audio_reference,
                 exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
+                prefix_witness=high_boundary_prefix_witness,
             ),
         ):
             result = executor(
@@ -4451,6 +4471,9 @@ def run_partitioned_progressive(
             first_high_actual=first_high_actual,
             video_enabled=high_video_reference_enabled,
             audio_enabled=high_audio_reference_enabled,
+            high_video_guard_enabled=high_video_guard_enabled,
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
+            high_boundary_prefix_witness=high_boundary_prefix_witness,
             fail_closed=True,
             extra_h3_nfe=0,
             extra_provider_calls=0,
@@ -4862,6 +4885,7 @@ def run_partitioned_progressive(
             high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             high_video_guard_final_exact=high_guard_final_exact,
             high_video_guard_endpoint_canonicalized=high_guard_endpoint_canonicalized,
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
         binding.metrics.event(
             "handoff_complete",
