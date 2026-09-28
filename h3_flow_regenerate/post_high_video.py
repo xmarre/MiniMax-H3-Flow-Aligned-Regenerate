@@ -283,11 +283,12 @@ def score_post_high_vertical_candidate(
         count = min(len(original_dx), len(original_dy), len(candidate_dx), len(candidate_dy))
         if count < len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1:
             raise ValueError("post-high residual repair lost the temporal release frontier")
+        release_range = range(1, len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1)
         successor_x_perturbation[roi] = max(
-            abs(candidate_dx[index] - original_dx[index]) for index in range(1, len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1)
+            abs(candidate_dx[index] - original_dx[index]) for index in release_range
         )
         successor_y_perturbation[roi] = max(
-            abs(candidate_dy[index] - original_dy[index]) for index in range(1, len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1)
+            abs(candidate_dy[index] - original_dy[index]) for index in release_range
         )
         responses = [float(value) for value in candidate[roi]["pairwise_response"]]
         clipped = [bool(value) for value in candidate[roi]["pairwise_clipped"]]
