@@ -170,7 +170,7 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
                         ),
                         "final_vs_low_probe_suffix": _comparison(
                             low_probe_suffix,
-                            baseline_suffix,
+                            extended_suffix,
                         ),
                     }
 
