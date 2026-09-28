@@ -161,7 +161,9 @@ def test_video_reference_covers_boundary_decode_chunk_and_overlap_release():
     assert HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS == 5
     assert HIGH_BOUNDARY_VIDEO_RELEASE_TOKENS == 2
     assert weights[:HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS] == (1.0,) * 5
-    assert weights[HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS:] == pytest.approx((2.0 / 3.0, 1.0 / 3.0))
+    assert weights[HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS:] == pytest.approx(
+        (2.0 / 3.0, 1.0 / 3.0)
+    )
 
 
 def test_audio_reference_weights_hold_decoder_window_then_release_monotonically():
@@ -317,7 +319,7 @@ def test_runtime_applies_boundary_reference_before_flow_observation():
 def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_edges():
     torch.manual_seed(23)
     video = torch.randn(1, 24, 10, 6, 6)
-    audio = torch.randn(1, 32, 2, 80)
+    audio = torch.randn(1, 32, 2, 100)
     packed, shapes = pack_streams((video, audio))
     prefix_t = 3
     audio_prefix = 7
