@@ -16,6 +16,7 @@ from .geometry import pack_streams, unpack_streams
 
 HIGH_STAGE_VIDEO_GUARD_POLICY = "first_generated_token_exact_high_context_v1"
 HIGH_STAGE_VIDEO_GUARD_TOKENS = 1
+HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA = 2e-5
 
 
 def build_high_stage_video_guard(
@@ -167,6 +168,7 @@ def disabled_high_stage_video_guard(*, prefix_t: int, reason: str) -> dict[str, 
 
 
 __all__ = [
+    "HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA",
     "HIGH_STAGE_VIDEO_GUARD_POLICY",
     "HIGH_STAGE_VIDEO_GUARD_TOKENS",
     "build_high_stage_video_guard",
