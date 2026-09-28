@@ -3207,25 +3207,26 @@ def run_partitioned_progressive(
             if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
-        handoff_noise_scale = float(getattr(base_model.model_sampling, "noise_scale", 1.0))
-        if not math.isfinite(handoff_noise_scale) or handoff_noise_scale <= 0.0:
-            raise ValueError("partitioned H3 handoff requires a finite positive model noise_scale")
         if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
                 source_state_video.to(torch.float32) - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
-            ) / (float(sigma) * handoff_noise_scale)
+            ) / float(sigma)
             residual_suffix = source_effective_residual[:, :, stage_plan.prefix_t :]
+            model_noise_scale = float(getattr(base_model.model_sampling, "noise_scale", 1.0))
+            if not math.isfinite(model_noise_scale) or model_noise_scale <= 0.0:
+                raise ValueError("partitioned H3 handoff requires a finite positive model noise_scale")
             initial_suffix = source_video_noise[:, :, stage_plan.prefix_t :].to(
                 device=residual_suffix.device,
                 dtype=torch.float32,
             )
-            residual_delta = residual_suffix - initial_suffix
+            initial_effective_suffix = initial_suffix * model_noise_scale
+            residual_delta = residual_suffix - initial_effective_suffix
             residual_norm = float(residual_suffix.norm().item())
-            initial_norm = float(initial_suffix.norm().item())
+            initial_norm = float(initial_effective_suffix.norm().item())
             residual_cosine = (
-                float(torch.dot(residual_suffix.reshape(-1), initial_suffix.reshape(-1)).item())
+                float(torch.dot(residual_suffix.reshape(-1), initial_effective_suffix.reshape(-1)).item())
                 / (residual_norm * initial_norm)
                 if residual_norm > 1e-20 and initial_norm > 1e-20
                 else None
@@ -3238,14 +3239,16 @@ def run_partitioned_progressive(
                 prefix_t=int(stage_plan.prefix_t),
                 residual_rms=float(residual_suffix.square().mean().sqrt().item()),
                 initial_source_noise_rms=float(initial_suffix.square().mean().sqrt().item()),
+                initial_effective_residual_rms=float(initial_effective_suffix.square().mean().sqrt().item()),
                 residual_vs_initial_rms=float(residual_delta.square().mean().sqrt().item()),
                 residual_vs_initial_cosine=residual_cosine,
-                noise_scale=handoff_noise_scale,
+                model_noise_scale=model_noise_scale,
+                residual_domain="effective_flow_residual_carried_state_units",
                 extra_h3_nfe=0,
                 extra_sampler_lifetimes=0,
                 extra_history_boundaries=0,
             )
-            del source_effective_residual, residual_suffix, initial_suffix, residual_delta
+            del source_effective_residual, residual_suffix, initial_suffix, initial_effective_suffix, residual_delta
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -3259,7 +3262,6 @@ def run_partitioned_progressive(
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
-            noise_scale=handoff_noise_scale,
         )
         handoff_noise_report = transfer_metrics.get("handoff_noise")
         if not isinstance(handoff_noise_report, dict):
