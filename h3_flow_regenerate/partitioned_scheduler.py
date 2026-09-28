@@ -4388,6 +4388,22 @@ def run_partitioned_progressive(
             "partitioned_post_high_video_residual_repair",
             **post_high_video_repair,
         )
+        for roi_name, trajectory in post_high_video_repair.get("post_high_before", {}).items():
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="post_high_internal_uncorrected",
+                domain="model_internal_clean",
+                roi=roi_name,
+                **trajectory,
+            )
+        for roi_name, trajectory in post_high_video_repair.get("post_high_after", {}).items():
+            binding.metrics.event(
+                "partitioned_multiframe_trajectory",
+                stage="post_high_internal_corrected",
+                domain="model_internal_clean",
+                roi=roi_name,
+                **trajectory,
+            )
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
                 raise RuntimeError("residual measurement lost the common-domain final video operand")
