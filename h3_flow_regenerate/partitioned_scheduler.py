@@ -105,12 +105,12 @@ from .partitioned_stage import (
     build_partitioned_stage_plan,
     tensor_sha256,
 )
+from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .post_high_video import (
     POST_HIGH_VIDEO_RESIDUAL_POLICY,
     apply_weighted_vertical_translation,
     repair_post_high_vertical_residual,
 )
-from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .representation_bridge import (
     apply_suffix_representation_bridge,
     disabled_suffix_representation_bridge_metrics,
