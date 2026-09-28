@@ -1666,13 +1666,9 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
 def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
     """Validate the bounded one-token high-stage context ownership contract."""
 
-    setup_events = [
-        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_video_guard"
-    ]
+    setup_events = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_high_video_guard"]
     complete_events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_video_guard_complete"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_video_guard_complete"
     ]
     # Retain support for historical evidence generated before this policy.
     if not setup_events and not complete_events:
@@ -1702,14 +1698,10 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
     completes = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"]
     handoffs = [_event_fields(event) for event in window if _event_kind(event) == "handoff_complete"]
     reference_plans = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_boundary_reference_plan"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_boundary_reference_plan"
     ]
     reference_verified = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_boundary_reference_verified"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_boundary_reference_verified"
     ]
     _require(len(transfers) == 1, "high-stage video guard requires exactly one transfer receipt")
     _require(bool(completes), "high-stage video guard requires a completion receipt")
@@ -1804,9 +1796,7 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
         setup.get("preserved_noise_scope") == "caller_original_exact_mask_only",
         "high-stage video guard noise ownership drifted",
     )
-    target_state_max_abs_delta = _finite_number(
-        setup.get("target_state_reconstruction_max_abs_delta")
-    )
+    target_state_max_abs_delta = _finite_number(setup.get("target_state_reconstruction_max_abs_delta"))
     _require(
         target_state_max_abs_delta <= HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
         "high-stage video guard does not reconstruct the handoff sampler state",
