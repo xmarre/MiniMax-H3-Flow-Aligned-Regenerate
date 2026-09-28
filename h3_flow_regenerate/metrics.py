@@ -17,6 +17,16 @@ class MetricEvent:
     fields: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class TransientWitness:
+    """In-memory evidence that is deliberately excluded from metrics JSON."""
+
+    kind: str
+    payload: Any
+    timestamp_ns: int = field(default_factory=time.time_ns)
+    fields: dict[str, Any] = field(default_factory=dict)
+
+
 class H3FlowMetrics:
     api_version = 1
 
@@ -25,6 +35,7 @@ class H3FlowMetrics:
         self._events: list[MetricEvent] = []
         self._counters: Counter[str] = Counter()
         self._autosave_path: Path | None = None
+        self._transient_witnesses: dict[str, list[TransientWitness]] = {}
 
     def event(self, kind: str, **fields: Any) -> None:
         kind = str(kind)
@@ -47,6 +58,33 @@ class H3FlowMetrics:
     def counters(self) -> dict[str, int]:
         with self._lock:
             return dict(self._counters)
+
+    def append_transient_witness(
+        self,
+        kind: str,
+        payload: Any,
+        *,
+        limit: int = 16,
+        **fields: Any,
+    ) -> TransientWitness:
+        """Retain bounded runtime evidence without serializing it into metrics JSON."""
+
+        kind = str(kind)
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError("transient witness limit must be positive")
+        witness = TransientWitness(kind=kind, payload=payload, fields=dict(fields))
+        with self._lock:
+            bucket = self._transient_witnesses.setdefault(kind, [])
+            bucket.append(witness)
+            if len(bucket) > limit:
+                del bucket[:-limit]
+        return witness
+
+    def transient_witnesses(self, kind: str) -> tuple[TransientWitness, ...]:
+        with self._lock:
+            return tuple(self._transient_witnesses.get(str(kind), ()))
+
 
     def snapshot(self) -> dict[str, Any]:
         return {
