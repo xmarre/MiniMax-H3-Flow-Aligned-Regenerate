@@ -4271,7 +4271,11 @@ def run_partitioned_progressive(
             model_sampling = getattr(base_model, "model_sampling", None)
             model_noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
             reconstructed_guard_state = (
-                (1.0 - float(sigma)) * high_internal_video[:, :, guard_slice].to(torch.float32)
+                (1.0 - float(sigma))
+                * high_internal_video[:, :, guard_slice].to(
+                    device=merged_video_noise.device,
+                    dtype=torch.float32,
+                )
                 + float(sigma)
                 * model_noise_scale
                 * merged_video_noise[:, :, guard_slice].to(torch.float32)
