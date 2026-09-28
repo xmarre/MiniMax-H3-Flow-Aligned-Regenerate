@@ -165,7 +165,9 @@ FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
 PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_v1"
+PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
+PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -3640,18 +3642,9 @@ def run_partitioned_progressive(
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
         high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
-        high_audio_reference_enabled = bool(
-            config.frame_gauge_repair
-            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
-            and audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
-            and audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
-            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
-            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-            and int(audio_guided_overlap_ticks) == len(HIGH_BOUNDARY_REFERENCE_WEIGHTS)
-        )
+        high_audio_reference_enabled = PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED
         high_video_reference_suffix = None
-        high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
+        high_audio_reference = None
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
@@ -3669,9 +3662,11 @@ def run_partitioned_progressive(
                 else []
             ),
             audio_enabled=high_audio_reference_enabled,
-            audio_reference_domain="low_probe_clean",
-            audio_support_ticks=(len(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else 0),
-            audio_temporal_weights=(list(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else []),
+            audio_selection_reason="released_sampler_overlap_exact_restore_only",
+            audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
+            audio_reference_domain="disabled",
+            audio_support_ticks=0,
+            audio_temporal_weights=[],
             authoritative_prefix_modified=False,
             extra_h3_nfe=0,
             extra_provider_calls=0,
@@ -4035,6 +4030,9 @@ def run_partitioned_progressive(
             provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             video_high_clean_reference_enabled=high_video_reference_enabled,
+            audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
+            audio_high_clean_reference_enabled=high_audio_reference_enabled,
+            audio_exact_restore_successor_bridge_enabled=False,
             partitioned_exact_overlap_bridge={
                 "policy": exact_overlap_policy,
                 "requested": bool(exact_overlap_fallback_requested),
