@@ -20,7 +20,18 @@ from .geometry import unpack_streams
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v2"
-HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
+
+# Core H3's pinned temporal decoder uses five latent tokens per production
+# chunk and two-token overlap. At prefix_t=12 the boundary chunk starts at
+# token 10, so all five generated tokens 12..16 participate in the same decode
+# as the authoritative prefix tail. Hold those five exactly on the pre-high
+# trajectory, then release across the decoder's two-token overlap.
+HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS = 5
+HIGH_BOUNDARY_VIDEO_RELEASE_TOKENS = 2
+HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS = (1.0,) * HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS + (
+    2.0 / 3.0,
+    1.0 / 3.0,
+)
 
 # The production AudioVAE is a finite-receptive-field BigVGAN. The pinned
 # ComfyUI architecture needs fewer than 32 latent ticks of future context for
