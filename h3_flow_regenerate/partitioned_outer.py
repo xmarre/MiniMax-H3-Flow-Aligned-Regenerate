@@ -208,14 +208,22 @@ def partitioned_outer_wrapper(
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
-    audio_exact_restore_successor_ticks = (
-        HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
-        if guided_report is not None
+    audio_exact_restore_successor_ticks = 0
+    if (
+        guided_report is not None
         and guided_report.get("applied") is True
         and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
         and guided_ticks == 4
-        else 0
-    )
+    ):
+        audio_prefix_ticks = int(guided_report.get("audio_prefix_ticks", 0))
+        audio_total_ticks = int(latent_shapes[1][-1])
+        generated_audio_ticks = max(0, audio_total_ticks - audio_prefix_ticks)
+        audio_exact_restore_successor_ticks = min(
+            HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS,
+            generated_audio_ticks,
+        )
+        if audio_exact_restore_successor_ticks < 2:
+            audio_exact_restore_successor_ticks = 0
     if isinstance(guided_report, dict):
         guided_report["exact_restore_successor_ticks"] = audio_exact_restore_successor_ticks
     adapted = _ProgressiveExactMaskExecutor(
