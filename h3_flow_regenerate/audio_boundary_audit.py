@@ -188,9 +188,7 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
                         final_common_decode_boundary=_comparison(extended_prefix, extended_suffix),
                         low_probe_vs_final_suffix=_comparison(low_probe_suffix, extended_suffix),
                         low_probe_vs_final_preboundary=_comparison(low_probe_prefix, extended_prefix),
-                        interpretation=(
-                            "decode_matched_low_probe_vs_final_generated_suffix_stage_localizer"
-                        ),
+                        interpretation=("decode_matched_low_probe_vs_final_generated_suffix_stage_localizer"),
                     )
 
         report.update(
