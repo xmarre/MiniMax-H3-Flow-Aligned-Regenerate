@@ -187,6 +187,53 @@ def test_boundary_reference_anchor_supports_single_video_successor():
     assert event.fields["suffix_outside_support_modified"] is False
 
 
+def test_audio_only_boundary_reference_leaves_video_bit_exact():
+    torch.manual_seed(23)
+    video = torch.randn(1, 24, 8, 6, 6)
+    audio = torch.randn(1, 32, 2, 14)
+    packed, shapes = pack_streams((video, audio))
+    prefix_t = 3
+    audio_prefix = 6
+    audio_reference = audio.clone()
+    audio_reference[..., audio_prefix : audio_prefix + 4] += 0.25
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :prefix_t] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :audio_prefix] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    binding = SimpleNamespace(
+        guidance_protected_prefix_t=0,
+        high_boundary_trace=None,
+        high_boundary_anchor=None,
+        metrics=H3FlowMetrics(),
+    )
+    with high_boundary_contract(
+        binding,
+        video[:, :, :prefix_t],
+        shapes,
+        measure=False,
+        video_reference_suffix=None,
+        audio_reference=audio_reference,
+        exact_denoise_mask=exact_mask,
+    ):
+        anchor = binding.high_boundary_anchor
+        assert anchor is not None
+        result = anchor.apply(packed, call_index=0, sigma=0.8, actual=True)
+
+    result_video, result_audio = unpack_streams(result, shapes)
+    assert torch.equal(result_video, video)
+    assert torch.equal(result_audio[..., :audio_prefix], audio[..., :audio_prefix])
+    assert torch.equal(result_audio[..., audio_prefix], audio_reference[..., audio_prefix])
+    event = next(
+        event for event in binding.metrics.events if event.kind == "partitioned_high_boundary_reference_anchor"
+    )
+    assert event.fields["video_applied"] is False
+    assert event.fields["video_support_tokens"] == 0
+    assert event.fields["audio_support_ticks"] == 4
+
+
 def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
     video = torch.zeros(1, 24, 7, 4, 4)
     audio = torch.zeros(1, 32, 2, 10)
