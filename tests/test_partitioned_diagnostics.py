@@ -868,7 +868,7 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
 
 
-def test_pr89_audio_boundary_mutations_fail_closed_to_released_sampler_contract():
+def test_audio_boundary_mutations_fail_closed_to_released_sampler_contract():
     assert PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED is False
     assert PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT == "released_sampler_overlap_exact_restore_v1"
 
