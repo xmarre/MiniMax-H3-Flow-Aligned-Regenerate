@@ -196,6 +196,8 @@ def _high_video_reference_eligible(
     av_handoff_source: str,
     handoff_noise_mode: str,
     frame_gauge_result: str,
+    exact_overlap_fallback_requested: bool,
+    exact_overlap_bridge_applied: bool,
     available_suffix_tokens: int,
 ) -> bool:
     """Select the bounded first-successor target-high video reference.
@@ -212,6 +214,8 @@ def _high_video_reference_eligible(
         and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
         and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
         and frame_gauge_result in {"rejected", "shadow_only"}
+        and exact_overlap_fallback_requested
+        and exact_overlap_bridge_applied
         and int(available_suffix_tokens) >= PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS
     )
 
@@ -3691,6 +3695,10 @@ def run_partitioned_progressive(
             av_handoff_source=av_handoff_source,
             handoff_noise_mode=handoff_noise_mode,
             frame_gauge_result=str(frame_gauge_transaction.get("result", "")),
+            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+            exact_overlap_bridge_applied=bool(
+                representation_metrics.get("suffix_representation_bridge_accepted", False)
+            ),
             available_suffix_tokens=int(restored_clean.shape[2]) - int(stage_plan.prefix_t),
         )
         high_audio_reference_enabled = bool(
@@ -3723,7 +3731,7 @@ def run_partitioned_progressive(
             video_selection_reason=(
                 "source_residual_first_generated_successor_v1"
                 if high_video_reference_enabled
-                else "repair_disabled_or_nonexact_or_nonmain_or_rigid_owned_or_no_suffix"
+                else "repair_disabled_or_nonexact_or_nonmain_or_no_overlap_bridge_or_rigid_owned_or_no_suffix"
             ),
             video_reference_domain="exact_restored_pre_high_clean",
             video_support_tokens=(
