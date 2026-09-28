@@ -3211,8 +3211,7 @@ def run_partitioned_progressive(
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
-                source_state_video.to(torch.float32)
-                - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
+                source_state_video.to(torch.float32) - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
             ) / float(sigma)
             residual_suffix = source_effective_residual[:, :, stage_plan.prefix_t :]
             initial_suffix = source_video_noise[:, :, stage_plan.prefix_t :].to(
