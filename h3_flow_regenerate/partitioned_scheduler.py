@@ -16,7 +16,7 @@ from typing import Any
 
 import torch
 
-from .audio_boundary_audit import LOW_PROBE_AUDIO_WITNESS_KIND
+from .audio_boundary_audit import LOW_PROBE_AUDIO_WITNESS_KIND, PRE_SUCCESSOR_AUDIO_WITNESS_KIND
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
     compare_boundary_content_stages,
@@ -4199,6 +4199,11 @@ def run_partitioned_progressive(
                 seed,
                 latent_shapes=target_shapes,
             )
+        pre_successor_audio_witness = None
+        if diagnostic_audio_control:
+            candidate_pre_successor = getattr(executor, "_pre_audio_successor_audio", None)
+            if torch.is_tensor(candidate_pre_successor):
+                pre_successor_audio_witness = candidate_pre_successor
         binding.metrics.event(
             "high_stage_wall",
             elapsed_ms=(time.perf_counter() - high_started) * 1000.0,
@@ -4468,7 +4473,19 @@ def run_partitioned_progressive(
                 final_exact_audio_prefix=True,
                 sampler_masks_unchanged=True,
             )
-        if diagnostic_audio_control and low_probe_caller_audio_witness is not None:
+        witness_candidates = (
+            (
+                LOW_PROBE_AUDIO_WITNESS_KIND,
+                "low_probe",
+                low_probe_caller_audio_witness,
+            ),
+            (
+                PRE_SUCCESSOR_AUDIO_WITNESS_KIND,
+                "high_pre_successor_bridge",
+                pre_successor_audio_witness,
+            ),
+        )
+        if diagnostic_audio_control and any(torch.is_tensor(item[2]) for item in witness_candidates):
             _witness_video_mask, witness_audio_mask = unpack_streams(
                 diagnostic_target_mask,
                 target_shapes,
@@ -4482,61 +4499,71 @@ def run_partitioned_progressive(
                 exact_zero[audio_prefix_ticks].item()
             ):
                 audio_prefix_ticks += 1
-            witness_available = bool(
+            canonical_mask = bool(
                 0 < audio_prefix_ticks < int(witness_audio_mask.shape[-1])
                 and bool(exact_one[audio_prefix_ticks:].all().item())
-                and tuple(low_probe_caller_audio_witness.shape) == tuple(final_audio.shape)
-                and low_probe_caller_audio_witness.dtype == final_audio.dtype
             )
-            if witness_available:
-                final_prefix_sha256 = tensor_sha256(final_audio[..., :audio_prefix_ticks])
-                witness_capture_started = time.perf_counter()
-                low_probe_caller_audio_cpu = low_probe_caller_audio_witness.to(device="cpu").clone()
-                witness_capture_elapsed_ms = (time.perf_counter() - witness_capture_started) * 1000.0
-                binding.metrics.append_transient_witness(
-                    LOW_PROBE_AUDIO_WITNESS_KIND,
-                    low_probe_caller_audio_cpu,
-                    session_id=str(session_id),
-                    chunk_id=str(chunk_id),
-                    audio_prefix_ticks=int(audio_prefix_ticks),
-                    audio_total_ticks=int(final_audio.shape[-1]),
-                    final_prefix_sha256=final_prefix_sha256,
-                    source_stage="low_probe",
-                    source_domain="caller_output_latent",
+            final_prefix_sha256 = (
+                tensor_sha256(final_audio[..., :audio_prefix_ticks]) if canonical_mask else None
+            )
+            for witness_kind, source_stage, witness_tensor in witness_candidates:
+                if not torch.is_tensor(witness_tensor):
+                    continue
+                witness_available = bool(
+                    canonical_mask
+                    and tuple(witness_tensor.shape) == tuple(final_audio.shape)
+                    and witness_tensor.dtype == final_audio.dtype
                 )
-                binding.metrics.event(
-                    "partitioned_audio_stage_decode_witness",
-                    available=True,
-                    source_stage="low_probe",
-                    source_domain="caller_output_latent",
-                    storage_domain="cpu_transient_only",
-                    session_id=str(session_id),
-                    chunk_id=str(chunk_id),
-                    audio_prefix_ticks=int(audio_prefix_ticks),
-                    audio_total_ticks=int(final_audio.shape[-1]),
-                    final_prefix_sha256=final_prefix_sha256,
-                    payload_serialized=False,
-                    production_latent_modified=False,
-                    capture_elapsed_ms=float(witness_capture_elapsed_ms),
-                    extra_h3_nfe=0,
-                    extra_sampler_lifetimes=0,
-                    extra_history_boundaries=0,
-                    extra_vae_calls=0,
-                )
-            else:
-                binding.metrics.event(
-                    "partitioned_audio_stage_decode_witness",
-                    available=False,
-                    reason="noncanonical_mask_or_audio_geometry_mismatch",
-                    source_stage="low_probe",
-                    source_domain="caller_output_latent",
-                    payload_serialized=False,
-                    production_latent_modified=False,
-                    extra_h3_nfe=0,
-                    extra_sampler_lifetimes=0,
-                    extra_history_boundaries=0,
-                    extra_vae_calls=0,
-                )
+                if witness_available:
+                    witness_capture_started = time.perf_counter()
+                    witness_cpu = witness_tensor.to(device="cpu").clone()
+                    witness_capture_elapsed_ms = (time.perf_counter() - witness_capture_started) * 1000.0
+                    binding.metrics.append_transient_witness(
+                        witness_kind,
+                        witness_cpu,
+                        session_id=str(session_id),
+                        chunk_id=str(chunk_id),
+                        audio_prefix_ticks=int(audio_prefix_ticks),
+                        audio_total_ticks=int(final_audio.shape[-1]),
+                        final_prefix_sha256=final_prefix_sha256,
+                        source_stage=source_stage,
+                        source_domain="caller_output_latent",
+                    )
+                    binding.metrics.event(
+                        "partitioned_audio_stage_decode_witness",
+                        available=True,
+                        witness_kind=witness_kind,
+                        source_stage=source_stage,
+                        source_domain="caller_output_latent",
+                        storage_domain="cpu_transient_only",
+                        session_id=str(session_id),
+                        chunk_id=str(chunk_id),
+                        audio_prefix_ticks=int(audio_prefix_ticks),
+                        audio_total_ticks=int(final_audio.shape[-1]),
+                        final_prefix_sha256=final_prefix_sha256,
+                        payload_serialized=False,
+                        production_latent_modified=False,
+                        capture_elapsed_ms=float(witness_capture_elapsed_ms),
+                        extra_h3_nfe=0,
+                        extra_sampler_lifetimes=0,
+                        extra_history_boundaries=0,
+                        extra_vae_calls=0,
+                    )
+                else:
+                    binding.metrics.event(
+                        "partitioned_audio_stage_decode_witness",
+                        available=False,
+                        witness_kind=witness_kind,
+                        reason="noncanonical_mask_or_audio_geometry_mismatch",
+                        source_stage=source_stage,
+                        source_domain="caller_output_latent",
+                        payload_serialized=False,
+                        production_latent_modified=False,
+                        extra_h3_nfe=0,
+                        extra_sampler_lifetimes=0,
+                        extra_history_boundaries=0,
+                        extra_vae_calls=0,
+                    )
 
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
