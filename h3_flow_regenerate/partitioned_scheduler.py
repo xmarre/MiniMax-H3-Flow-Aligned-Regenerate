@@ -163,9 +163,8 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
-PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
-PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
-PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS = 1
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_v1"
+PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -188,36 +187,6 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
     "history_policy": "attention_backend_history_v1",
 }
 
-
-def _high_video_reference_eligible(
-    *,
-    frame_gauge_repair: bool,
-    prefix_transformer_context: str,
-    av_handoff_source: str,
-    handoff_noise_mode: str,
-    frame_gauge_result: str,
-    exact_overlap_fallback_requested: bool,
-    exact_overlap_bridge_applied: bool,
-    available_suffix_tokens: int,
-) -> bool:
-    """Select the bounded first-successor target-high video reference.
-
-    The source-residual handoff already preserves the low-stage stochastic
-    trajectory. Keep the clean-reference intervention minimal: own only the
-    first generated successor, only on the main AV exact-prefix repair path,
-    and only when no rigid frame-gauge transform became production-owned.
-    """
-
-    return bool(
-        frame_gauge_repair
-        and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
-        and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
-        and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
-        and frame_gauge_result in {"rejected", "shadow_only"}
-        and exact_overlap_fallback_requested
-        and exact_overlap_bridge_applied
-        and int(available_suffix_tokens) >= PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS
-    )
 
 
 class PartitionedPreflightUnsupported(RuntimeError):
@@ -3357,7 +3326,6 @@ def run_partitioned_progressive(
             prefix_t=stage_plan.prefix_t,
             requested=False,
         )
-        exact_overlap_successor_safe_selected = False
         splice_started = time.perf_counter()
         aligned_witness = None
         provider_native_clean: torch.Tensor | None = None
@@ -3440,24 +3408,13 @@ def run_partitioned_progressive(
                         production_mutation_allowed=False,
                     )
 
-                exact_overlap_successor_safe_selected = (
-                    frame_gauge_transaction.get("result") == "shadow_only"
-                    and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
-                    and int(learned_clean.shape[2]) - int(exact_prefix.shape[2])
-                    >= len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS)
-                )
-                exact_overlap_weights = (
-                    PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS
-                    if exact_overlap_successor_safe_selected
-                    else (1.0,)
-                )
                 target_video, corrected_clean, representation_metrics, dc_metrics = (
                     _apply_partitioned_exact_overlap_bridge(
                         target_video,
                         learned_clean,
                         exact_prefix,
                         sigma=sigma,
-                        weights=exact_overlap_weights,
+                        weights=(1.0,),
                     )
                 )
             else:
@@ -3478,11 +3435,7 @@ def run_partitioned_progressive(
 
         if provider_native_clean is None:
             raise RuntimeError("partitioned provider-native clean witness was not established")
-        exact_overlap_policy = (
-            PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
-            if exact_overlap_fallback_requested and exact_overlap_successor_safe_selected
-            else PARTITIONED_EXACT_OVERLAP_POLICY
-        )
+        exact_overlap_policy = PARTITIONED_EXACT_OVERLAP_POLICY
         binding.metrics.event(
             "partitioned_provider_boundary_stabilization",
             exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
@@ -3658,10 +3611,7 @@ def run_partitioned_progressive(
         exact_overlap_corrected_tokens = int(
             representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)
         )
-        exact_overlap_bounded_successor_support = (
-            exact_overlap_policy == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
-            and exact_overlap_corrected_tokens > 1
-        )
+        exact_overlap_bounded_successor_support = False
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
             policy=exact_overlap_policy,
@@ -3689,18 +3639,7 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
-        high_video_reference_enabled = _high_video_reference_eligible(
-            frame_gauge_repair=bool(config.frame_gauge_repair),
-            prefix_transformer_context=prefix_transformer_context,
-            av_handoff_source=av_handoff_source,
-            handoff_noise_mode=handoff_noise_mode,
-            frame_gauge_result=str(frame_gauge_transaction.get("result", "")),
-            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
-            exact_overlap_bridge_applied=bool(
-                representation_metrics.get("suffix_representation_bridge_accepted", False)
-            ),
-            available_suffix_tokens=int(restored_clean.shape[2]) - int(stage_plan.prefix_t),
-        )
+        high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
         high_audio_reference_enabled = bool(
             config.frame_gauge_repair
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
@@ -3711,29 +3650,16 @@ def run_partitioned_progressive(
             and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
             and int(audio_guided_overlap_ticks) == len(HIGH_BOUNDARY_REFERENCE_WEIGHTS)
         )
-        high_video_reference_suffix = (
-            restored_clean[
-                :,
-                :,
-                stage_plan.prefix_t : stage_plan.prefix_t + PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS,
-            ]
-            .detach()
-            .clone()
-            if high_video_reference_enabled
-            else None
-        )
+        high_video_reference_suffix = None
         high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
             enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
             video_enabled=high_video_reference_enabled,
-            video_selection_reason=(
-                "source_residual_first_generated_successor_v1"
-                if high_video_reference_enabled
-                else "repair_disabled_or_nonexact_or_nonmain_or_no_overlap_bridge_or_rigid_owned_or_no_suffix"
-            ),
-            video_reference_domain="exact_restored_pre_high_clean",
+            video_selection_reason="source_residual_handoff_only_no_high_clean_reference",
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            video_reference_domain="disabled",
             video_support_tokens=(
                 int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
             ),
@@ -4107,6 +4033,8 @@ def run_partitioned_progressive(
                 else "one_token_spatial_mean_v1"
             ),
             provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            video_high_clean_reference_enabled=high_video_reference_enabled,
             partitioned_exact_overlap_bridge={
                 "policy": exact_overlap_policy,
                 "requested": bool(exact_overlap_fallback_requested),
