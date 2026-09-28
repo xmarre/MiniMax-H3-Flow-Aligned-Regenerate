@@ -32,6 +32,11 @@ from .frame_gauge import (
     LEARNED_VIDEO_POLICY,
     FrameGaugePolicy,
 )
+from .high_stage_guard import (
+    HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
+    HIGH_STAGE_VIDEO_GUARD_POLICY,
+    HIGH_STAGE_VIDEO_GUARD_TOKENS,
+)
 from .residual_geometry import (
     DEFAULT_RESIDUAL_POLICY,
     RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -1658,6 +1663,163 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
 
 
+def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
+    """Validate the bounded one-token high-stage context ownership contract."""
+
+    setup_events = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_video_guard"
+    ]
+    complete_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_video_guard_complete"
+    ]
+    # Retain support for historical evidence generated before this policy.
+    if not setup_events and not complete_events:
+        return
+    _require(len(setup_events) == 1, "high-stage video guard must emit exactly one setup receipt")
+    _require(len(complete_events) == 1, "high-stage video guard must emit exactly one completion receipt")
+    setup = setup_events[0]
+    guard_complete = complete_events[0]
+    _require(setup.get("policy") == HIGH_STAGE_VIDEO_GUARD_POLICY, "high-stage video guard policy drifted")
+    _require(
+        guard_complete.get("policy") == HIGH_STAGE_VIDEO_GUARD_POLICY,
+        "high-stage video guard completion policy drifted",
+    )
+    for receipt in (setup, guard_complete):
+        for field in (
+            "extra_h3_nfe",
+            "extra_sampler_lifetimes",
+            "extra_history_boundaries",
+            "extra_provider_calls",
+            "extra_vae_calls",
+        ):
+            _require(receipt.get(field) == 0, f"high-stage video guard added work: {field}")
+        _require(receipt.get("caller_prefix_modified") is False, "high-stage video guard modified caller prefix")
+        _require(receipt.get("audio_modified") is False, "high-stage video guard modified audio")
+
+    transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
+    completes = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"]
+    handoffs = [_event_fields(event) for event in window if _event_kind(event) == "handoff_complete"]
+    reference_plans = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_boundary_reference_plan"
+    ]
+    reference_verified = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_boundary_reference_verified"
+    ]
+    _require(len(transfers) == 1, "high-stage video guard requires exactly one transfer receipt")
+    _require(bool(completes), "high-stage video guard requires a completion receipt")
+    _require(bool(handoffs), "high-stage video guard requires a handoff receipt")
+    _require(len(reference_plans) == 1, "high-stage video guard requires one high-reference plan")
+    _require(len(reference_verified) == 1, "high-stage video guard requires one high-reference verification")
+    transfer = transfers[0]
+    complete = completes[-1]
+    handoff = handoffs[-1]
+    reference_plan = reference_plans[0]
+    reference_check = reference_verified[0]
+
+    enabled = bool(setup.get("enabled"))
+    applied = bool(setup.get("applied"))
+    _require(enabled is applied, "high-stage video guard enable/application state drifted")
+    _require(
+        bool(transfer.get("video_high_guard_enabled")) is enabled,
+        "high-stage video guard transfer state drifted",
+    )
+    _require(
+        bool(complete.get("high_video_guard_enabled")) is enabled,
+        "high-stage video guard completion state drifted",
+    )
+    _require(
+        bool(reference_plan.get("high_video_guard_enabled")) is enabled,
+        "high-stage video guard reference-plan state drifted",
+    )
+    _require(
+        transfer.get("video_high_guard_policy") == HIGH_STAGE_VIDEO_GUARD_POLICY
+        and complete.get("high_video_guard_policy") == HIGH_STAGE_VIDEO_GUARD_POLICY
+        and reference_plan.get("high_video_guard_policy") == HIGH_STAGE_VIDEO_GUARD_POLICY,
+        "high-stage video guard provenance drifted",
+    )
+
+    # The rejected 00707 clean-reference mutation remains forbidden. The guard
+    # uses native exact-mask ownership instead of a post-model x0 rewrite.
+    _require(reference_plan.get("video_enabled") is False, "high-stage clean-video reference was re-enabled")
+    _require(int(reference_plan.get("video_support_tokens", -1)) == 0, "high-stage clean-video support is non-zero")
+    _require(reference_check.get("video_enabled") is False, "high-stage clean-video verification was re-enabled")
+    _require(int(reference_check.get("anchor_calls", -1)) == 0, "high-stage clean-video anchor executed")
+
+    if not enabled:
+        _require(int(setup.get("guard_tokens", -1)) == 0, "disabled high-stage video guard claims support")
+        _require(int(guard_complete.get("guard_tokens", -1)) == 0, "disabled high-stage guard completed support")
+        _require(
+            int(handoff.get("high_stage_video_guard_requested", -1)) == 0,
+            "disabled high-stage video guard leaked into high sampler ownership",
+        )
+        return
+
+    _require(int(setup.get("guard_tokens", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS, "high-stage guard width drifted")
+    _require(
+        int(guard_complete.get("guard_tokens", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS,
+        "high-stage guard completion width drifted",
+    )
+    _require(
+        int(transfer.get("video_high_guard_tokens", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS
+        and int(complete.get("high_video_guard_tokens", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS
+        and int(handoff.get("high_stage_video_guard_requested", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS,
+        "high-stage guard width provenance drifted",
+    )
+    prefix_t = int(setup.get("caller_exact_prefix_tokens", 0))
+    _require(prefix_t > 0, "high-stage video guard caller prefix is invalid")
+    _require(int(setup.get("guard_token_index", -1)) == prefix_t, "high-stage guard token is not first generated")
+    _require(
+        int(setup.get("high_protected_video_tokens", 0)) == prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+        "high-stage protected-video ownership width drifted",
+    )
+    _require(
+        setup.get("guard_source") == "exact_restored_pre_high_first_suffix_clean",
+        "high-stage guard source provenance drifted",
+    )
+    for field in (
+        "guard_source_exact",
+        "caller_prefix_exact",
+        "audio_exact",
+        "audio_mask_exact",
+        "later_suffix_exact",
+        "mask_outside_guard_exact",
+        "original_guard_mask_exact_one",
+        "high_guard_mask_exact_zero",
+        "internal_guard_exact",
+        "internal_audio_exact",
+        "caller_internal_round_trip_verified",
+        "target_state_reconstruction_verified",
+    ):
+        _require(setup.get(field) is True, f"high-stage video guard invariant failed: {field}")
+    _require(setup.get("audio_mask_modified") is False, "high-stage video guard changed audio mask")
+    _require(setup.get("later_suffix_modified") is False, "high-stage video guard changed later suffix")
+    _require(setup.get("mask_outside_guard_modified") is False, "high-stage video guard changed mask outside guard")
+    _require(
+        setup.get("preserved_noise_scope") == "caller_original_exact_mask_only",
+        "high-stage video guard noise ownership drifted",
+    )
+    _require(
+        _finite_number(setup.get("target_state_reconstruction_max_abs_delta")) <= HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
+        "high-stage video guard does not reconstruct the handoff sampler state",
+    )
+    _require(guard_complete.get("final_guard_exact") is True, "high-stage video guard was not exact at sampler output")
+    endpoint_delta = _finite_number(guard_complete.get("endpoint_max_abs_delta"))
+    _require(
+        endpoint_delta <= HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
+        "high-stage guard endpoint correction exceeded numerical roundoff",
+    )
+    _require(
+        complete.get("high_video_guard_final_exact") is True,
+        "partitioned completion lost exact high-stage guard ownership",
+    )
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
@@ -3170,6 +3332,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_soft_support_shadow(window)
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
+    _validate_high_stage_video_guard(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
