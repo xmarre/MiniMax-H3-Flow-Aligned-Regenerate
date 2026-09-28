@@ -14,6 +14,7 @@ from .audio_guided_overlap import (
     configured_audio_guided_overlap_ticks,
 )
 from .contracts import H3FlowTrajectory
+from .geometry import unpack_streams
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveHandoffConfig, ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
@@ -186,6 +187,7 @@ class _ProgressiveExactMaskExecutor:
         self._sampler = sampler
         self._latent_shapes = latent_shapes
         self._audio_exact_restore_successor_ticks = int(audio_exact_restore_successor_ticks)
+        self._pre_audio_successor_audio: torch.Tensor | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._executor, name)
@@ -204,6 +206,10 @@ class _ProgressiveExactMaskExecutor:
             return result
 
         if self._audio_exact_restore_successor_ticks:
+            if self._latent_shapes is None:
+                raise RuntimeError("audio successor witness requires native packed H3 latent shapes")
+            _pre_bridge_video, pre_bridge_audio = unpack_streams(result, self._latent_shapes)
+            self._pre_audio_successor_audio = pre_bridge_audio.detach().clone()
             result, bridge_stats = apply_audio_exact_restore_successor_bridge(
                 result,
                 self._latent_image,
