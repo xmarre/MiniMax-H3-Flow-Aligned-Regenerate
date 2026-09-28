@@ -188,8 +188,7 @@ def test_audio_reference_alignment_preserves_clean_edge_on_authoritative_prefix_
 
     assert torch.equal(reference[..., :prefix], authoritative[..., :prefix])
     expected = (
-        low_probe[..., prefix : prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS].float()
-        + translation.unsqueeze(-1)
+        low_probe[..., prefix : prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS].float() + translation.unsqueeze(-1)
     ).to(reference.dtype)
     torch.testing.assert_close(
         reference[..., prefix : prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
