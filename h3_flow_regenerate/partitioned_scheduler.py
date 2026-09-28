@@ -56,6 +56,7 @@ from .high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
     align_audio_reference_to_authoritative_prefix,
+    apply_final_boundary_reference,
     high_boundary_contract,
 )
 from .partitioned_diagnostics import (
