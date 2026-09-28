@@ -170,6 +170,53 @@ PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_res
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
+def _cache_audio_decode_witness(
+    binding,
+    model_options,
+    base_model,
+    internal_state: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+    *,
+    stage: str,
+) -> torch.Tensor:
+    """Cache one output-domain audio stage witness without affecting sampling."""
+
+    caller_state = _process_latent_out(base_model, internal_state, shapes)
+    _caller_video, caller_audio = unpack_streams(caller_state, shapes)
+    del _caller_video, caller_state
+    witness = caller_audio.detach().to(device="cpu").clone()
+    session_id, chunk_id = _interop_identity(model_options)
+    registry = binding.audio_stage_witnesses
+    resident_sessions = {key[0] for key in registry}
+    if resident_sessions and session_id not in resident_sessions:
+        registry.clear()
+    witness_key = (str(session_id), str(chunk_id))
+    registry[witness_key] = {
+        "stage": str(stage),
+        "domain": "caller_vae_latent",
+        "audio": witness,
+        "source_shapes": tuple(tuple(int(v) for v in shape) for shape in shapes),
+    }
+    while len(registry) > 16:
+        registry.pop(next(iter(registry)))
+    binding.metrics.event(
+        "partitioned_audio_decode_witness_cached",
+        session_id=str(session_id),
+        chunk_id=str(chunk_id),
+        stage=str(stage),
+        domain="caller_vae_latent",
+        audio_shape=tuple(int(v) for v in witness.shape),
+        storage_device=str(witness.device),
+        process_latent_out_applied=True,
+        output_neutral=True,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        extra_vae_calls=0,
+    )
+    return witness
+
+
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
         "boundary_upper45_not_improved",
@@ -2991,42 +3038,15 @@ def run_partitioned_progressive(
 
             # The low/probe tensor above is in MiniMax-H3's model-internal
             # packed domain. AudioVAE consumes the caller latent domain, and H3
-            # process_latent_in/out also owns sampler audio scaling. Convert the
-            # complete probe state back through process_latent_out before caching
-            # only its tiny audio stream. The cache is CPU-resident and is never
-            # consumed by sampling.
-            low_probe_caller = _process_latent_out(base_model, source_x0, source_shapes)
-            _caller_video, low_probe_caller_audio = unpack_streams(low_probe_caller, source_shapes)
-            del _caller_video, low_probe_caller
-            witness = low_probe_caller_audio.detach().to(device="cpu").clone()
-            witness_session_id, witness_chunk_id = _interop_identity(model_options)
-            registry = binding.audio_stage_witnesses
-            resident_sessions = {key[0] for key in registry}
-            if resident_sessions and witness_session_id not in resident_sessions:
-                registry.clear()
-            witness_key = (str(witness_session_id), str(witness_chunk_id))
-            registry[witness_key] = {
-                "stage": "low_probe_clean",
-                "domain": "caller_vae_latent",
-                "audio": witness,
-                "source_shapes": tuple(tuple(int(v) for v in shape) for shape in source_shapes),
-            }
-            while len(registry) > 16:
-                registry.pop(next(iter(registry)))
-            binding.metrics.event(
-                "partitioned_audio_decode_witness_cached",
-                session_id=str(witness_session_id),
-                chunk_id=str(witness_chunk_id),
+            # process_latent_in/out also owns sampler audio scaling. Cache a
+            # converted CPU copy for the downstream decode-matched audit only.
+            _cache_audio_decode_witness(
+                binding,
+                model_options,
+                base_model,
+                source_x0,
+                source_shapes,
                 stage="low_probe_clean",
-                domain="caller_vae_latent",
-                audio_shape=tuple(int(v) for v in witness.shape),
-                storage_device=str(witness.device),
-                process_latent_out_applied=True,
-                output_neutral=True,
-                extra_h3_nfe=0,
-                extra_sampler_lifetimes=0,
-                extra_history_boundaries=0,
-                extra_vae_calls=0,
             )
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_native_trajectory = measure_translation_trajectory(
