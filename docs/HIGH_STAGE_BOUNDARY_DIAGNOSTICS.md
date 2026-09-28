@@ -51,6 +51,30 @@ suffix, and right context. One prepends 32 actual earlier latent ticks. The
 comparison measures the same 500 ms suffix in both outputs. It therefore tests
 left-context dependence without changing generated content or production audio.
 
+When the Flow node's `H3_FLOW_METRICS` output is also connected to the audit's
+optional `metrics` input, partitioned sampling retains one bounded in-memory
+caller-domain audio witness from the completed low/probe stage. The witness is
+kept on CPU, excluded from metrics JSON, and matched to each physical boundary
+by physical order, audio geometry, exact-prefix width, and a SHA-256 digest of
+the final authoritative carried prefix. A stale or mismatched witness is rejected.
+
+For a matched witness, the audit performs one additional bounded AudioVAE decode.
+It constructs a counterfactual latent with the **final authoritative prefix**
+unchanged and replaces only the first 52 generated audio ticks with the
+low/probe stage's generated suffix. `low_probe_counterfactual` then reports:
+
+- `low_probe_common_decode_boundary`: the 500 ms pre/post boundary ratio if
+  low/probe generated audio had been retained;
+- `final_vs_low_probe_suffix`: the decoded change introduced between low/probe
+  and the final generated suffix.
+
+This isolates stage ownership without changing sampling. If the low/probe
+counterfactual is continuous while the ordinary common decode is discontinuous,
+the discontinuity was introduced after low/probe. If both are discontinuous, the
+defect was already present by low/probe and a high-stage-only clamp is not
+causally justified. The receipt is evidence only; it does not make either
+interpretation automatically.
+
 `same_suffix_context_comparison` reports the paired intervention.
 `production_crop_comparison` separately compares the baseline bounded decode
 with the ordinary full decode; truncation effects must be assessed here before
@@ -68,7 +92,10 @@ latent ratio nor an exact carried overlap proves smooth generated audio.
 The audit requires native 32-channel stereo latents at 40 Hz, 32 kHz audio,
 20–128 carried ticks, 32 additional earlier ticks, and 52 generated ticks. It
 skips unsupported/non-exact boundaries with an explicit report and no decode.
-Each eligible decode is at most 212 ticks. Latents, saved continuation state,
-assembled duration, masks, and production waveforms are not modified. Synthetic
-tests verify isolation and sensitivity; actual model/media validation is still
-required before claiming a video or audio repair.
+Each eligible decode is at most 212 ticks. Without a metrics witness it performs
+two extra VAE calls per eligible boundary; with a matched low/probe witness it
+performs three. Capturing the witness also introduces a small diagnostic tensor
+copy, so runs using this path are not production timing controls. Latents, saved
+continuation state, assembled duration, masks, and production waveforms are not
+modified. Synthetic tests verify isolation and sensitivity; actual model/media
+validation is still required before claiming a video or audio repair.
