@@ -34,7 +34,9 @@ POST_HIGH_VIDEO_MAX_CORRECTION_CELLS = 0.18
 POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS = 0.0625
 POST_HIGH_VIDEO_MAX_ROI_REGRESSION_CELLS = 0.03125
 POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT = 0.25
-POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS = 0.125
+POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS = 0.0625
+POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS = 0.0625
+POST_HIGH_VIDEO_MIN_SUCCESSOR_RESPONSE = 3.0
 POST_HIGH_VIDEO_ROIS = (("upper45", 0.45), ("full", 1.0))
 
 
@@ -51,7 +53,7 @@ def _measure(video: torch.Tensor, prefix_t: int) -> dict[str, dict[str, Any]]:
         name: measure_translation_trajectory(
             video,
             prefix_t,
-            forward_steps=4,
+            forward_steps=5,
             backward_steps=3,
             roi_fraction=fraction,
             max_shift=4,
@@ -250,11 +252,34 @@ def score_post_high_vertical_candidate(
     before_abs: dict[str, float] = {}
     after_abs: dict[str, float] = {}
     x_perturbation: dict[str, float] = {}
+    successor_x_perturbation: dict[str, float] = {}
+    successor_y_perturbation: dict[str, float] = {}
+    successor_min_response: dict[str, float] = {}
+    successor_clipped: dict[str, bool] = {}
     for roi, _fraction in POST_HIGH_VIDEO_ROIS:
         target_dy = _prefix_motion(original[roi], "y")
         before_abs[roi] = abs(_first_pair(original[roi], "y") - target_dy)
         after_abs[roi] = abs(_first_pair(candidate[roi], "y") - target_dy)
         x_perturbation[roi] = abs(_first_pair(candidate[roi], "x") - _first_pair(original[roi], "x"))
+
+        original_dx = [float(value) for value in original[roi]["pairwise_dx"]]
+        original_dy = [float(value) for value in original[roi]["pairwise_dy"]]
+        candidate_dx = [float(value) for value in candidate[roi]["pairwise_dx"]]
+        candidate_dy = [float(value) for value in candidate[roi]["pairwise_dy"]]
+        count = min(len(original_dx), len(original_dy), len(candidate_dx), len(candidate_dy))
+        if count < len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1:
+            raise ValueError("post-high residual repair lost the temporal release frontier")
+        successor_x_perturbation[roi] = max(
+            abs(candidate_dx[index] - original_dx[index]) for index in range(1, len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1)
+        )
+        successor_y_perturbation[roi] = max(
+            abs(candidate_dy[index] - original_dy[index]) for index in range(1, len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1)
+        )
+        responses = [float(value) for value in candidate[roi]["pairwise_response"]]
+        clipped = [bool(value) for value in candidate[roi]["pairwise_clipped"]]
+        successor_min_response[roi] = min(responses[1 : len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1])
+        successor_clipped[roi] = any(clipped[1 : len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1])
+
     before_mean = float(statistics.mean(before_abs.values()))
     after_mean = float(statistics.mean(after_abs.values()))
     improvement = 1.0 - after_mean / max(before_mean, 1e-12)
@@ -265,6 +290,10 @@ def score_post_high_vertical_candidate(
         "after_mean_abs_error_cells": after_mean,
         "mean_improvement_ratio": improvement,
         "x_first_pair_perturbation_cells": x_perturbation,
+        "successor_max_x_perturbation_cells": successor_x_perturbation,
+        "successor_max_y_perturbation_cells": successor_y_perturbation,
+        "successor_min_response": successor_min_response,
+        "successor_clipped": successor_clipped,
     }
 
 
@@ -284,12 +313,22 @@ def validate_post_high_vertical_candidate(
         float(score_fields["x_first_pair_perturbation_cells"][roi]) <= POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS
         for roi, _fraction in POST_HIGH_VIDEO_ROIS
     )
+    temporal_release_stable = all(
+        float(score_fields["successor_max_x_perturbation_cells"][roi])
+        <= POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS
+        and float(score_fields["successor_max_y_perturbation_cells"][roi])
+        <= POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS
+        and float(score_fields["successor_min_response"][roi]) >= POST_HIGH_VIDEO_MIN_SUCCESSOR_RESPONSE
+        and not bool(score_fields["successor_clipped"][roi])
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    )
     improved = float(score_fields["mean_improvement_ratio"]) >= POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT
-    accepted = bool(no_material_roi_regression and x_stable and improved)
+    accepted = bool(no_material_roi_regression and x_stable and temporal_release_stable and improved)
     return accepted, {
         **score_fields,
         "no_material_roi_regression": no_material_roi_regression,
         "horizontal_phase_stable": x_stable,
+        "temporal_release_stable": temporal_release_stable,
         "minimum_mean_improvement": POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
     }
 
