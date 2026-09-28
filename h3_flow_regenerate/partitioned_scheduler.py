@@ -109,6 +109,7 @@ from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .post_high_video import (
     POST_HIGH_VIDEO_RESIDUAL_POLICY,
     apply_weighted_vertical_translation,
+    measure_post_high_video_trajectory,
     repair_post_high_vertical_residual,
     validate_post_high_vertical_candidate,
 )
@@ -4393,17 +4394,10 @@ def run_partitioned_progressive(
                     exact_prefix.to(device=recomputed_internal_video.device),
                 ):
                     raise RuntimeError("post-high video residual repair changed the internal exact prefix")
-                canonical_receipts = {
-                    roi_name: measure_translation_trajectory(
-                        recomputed_internal_video,
-                        stage_plan.prefix_t,
-                        forward_steps=5,
-                        backward_steps=3,
-                        roi_fraction=roi_fraction,
-                        max_shift=4,
-                    )
-                    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0))
-                }
+                canonical_receipts = measure_post_high_video_trajectory(
+                    recomputed_internal_video,
+                    stage_plan.prefix_t,
+                )
                 canonical_accepted, canonical_validation = validate_post_high_vertical_candidate(
                     repair_receipt["post_high_before"],
                     canonical_receipts,
