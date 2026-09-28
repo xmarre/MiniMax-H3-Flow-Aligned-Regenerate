@@ -144,6 +144,20 @@ def plan_post_high_vertical_residual(
         }
 
     receipt["observations"] = observations
+    required_pairs = len(POST_HIGH_VIDEO_RELEASE_WEIGHTS) + 1
+    if any(
+        min(
+            len(post_high[roi].get("pairwise_dx", [])),
+            len(post_high[roi].get("pairwise_dy", [])),
+            len(post_high[roi].get("pairwise_response", [])),
+            len(post_high[roi].get("pairwise_clipped", [])),
+        )
+        < required_pairs
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    ):
+        receipt["reason"] = "insufficient_release_frontier"
+        return receipt
+
     boundary_signs = {_sign(v) for v in boundary_errors.values()}
     high_delta_signs = {_sign(v) for v in high_deltas.values()}
     if 0 in boundary_signs or len(boundary_signs) != 1:
