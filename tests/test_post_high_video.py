@@ -82,6 +82,18 @@ def test_vertical_release_preserves_prefix_and_suffix_outside_support():
     assert torch.equal(corrected[:, :, support_stop:], video[:, :, support_stop:])
 
 
+def test_plan_fails_closed_without_complete_release_frontier():
+    pre_high, post_high = _00712_receipts()
+    for receipt in post_high.values():
+        for field in ("pairwise_dx", "pairwise_dy", "pairwise_response", "pairwise_clipped"):
+            receipt[field] = receipt[field][:4]
+
+    plan = plan_post_high_vertical_residual(pre_high, post_high)
+
+    assert plan["eligible"] is False
+    assert plan["reason"] == "insufficient_release_frontier"
+
+
 def test_plan_fails_closed_when_target_high_vertical_delta_disagrees_between_rois():
     pre_high, post_high = _00712_receipts()
     post_high["upper45"]["pairwise_dy"][0] = 0.02
