@@ -4462,9 +4462,7 @@ def run_partitioned_progressive(
                     owner_after="returned_generated_suffix",
                     temporal_relation="adjacent_time_boundary_receipt_only",
                     applied_transform=(
-                        POST_HIGH_VIDEO_RESIDUAL_POLICY
-                        if post_high_video_repair.get("applied", False)
-                        else "none"
+                        POST_HIGH_VIDEO_RESIDUAL_POLICY if post_high_video_repair.get("applied", False) else "none"
                     ),
                     provenance=(
                         "returned_post_high_output_after_bounded_vertical_release"
