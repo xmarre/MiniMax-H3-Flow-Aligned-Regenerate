@@ -216,6 +216,8 @@ def partitioned_outer_wrapper(
         and guided_ticks == 4
         else 0
     )
+    if isinstance(guided_report, dict):
+        guided_report["exact_restore_successor_ticks"] = audio_exact_restore_successor_ticks
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
