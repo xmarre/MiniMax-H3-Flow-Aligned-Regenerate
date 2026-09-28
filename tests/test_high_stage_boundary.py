@@ -12,7 +12,9 @@ from h3_flow_regenerate.high_stage_boundary import (
     HIGH_BOUNDARY_AUDIO_RELEASE_TICKS,
     HIGH_BOUNDARY_AUDIO_SEAM_TICKS,
     HIGH_BOUNDARY_REFERENCE_POLICY,
+    HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
+    HIGH_BOUNDARY_VIDEO_RELEASE_TOKENS,
     align_audio_reference_to_authoritative_prefix,
     apply_final_boundary_reference,
     high_boundary_contract,
@@ -73,14 +75,14 @@ def test_ownership_without_measurement_and_nested_rejection():
 
 def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support():
     torch.manual_seed(7)
-    video = torch.randn(1, 24, 9, 6, 6)
+    video = torch.randn(1, 24, 12, 6, 6)
     audio = torch.randn(1, 32, 2, 100)
     packed, shapes = pack_streams((video, audio))
     original = packed.clone()
     prefix_t = 3
     audio_prefix = 6
 
-    video_reference = video[:, :, prefix_t : prefix_t + 4].clone()
+    video_reference = video[:, :, prefix_t : prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)].clone()
     video_reference += torch.randn_like(video_reference) * 0.25
     audio_reference = audio.clone()
     audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS] += (
@@ -116,7 +118,8 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     result_video, result_audio = unpack_streams(result, shapes)
     original_video, original_audio = unpack_streams(original, shapes)
     assert torch.equal(result_video[:, :, :prefix_t], original_video[:, :, :prefix_t])
-    assert torch.equal(result_video[:, :, prefix_t + 4 :], original_video[:, :, prefix_t + 4 :])
+    video_stop = prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)
+    assert torch.equal(result_video[:, :, video_stop:], original_video[:, :, video_stop:])
     assert torch.equal(result_audio[..., :audio_prefix], original_audio[..., :audio_prefix])
     assert torch.equal(
         result_audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
@@ -142,7 +145,7 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     assert len(anchor_events) == 1
     fields = anchor_events[0].fields
     assert fields["policy"] == HIGH_BOUNDARY_REFERENCE_POLICY
-    assert fields["video_support_tokens"] == 4
+    assert fields["video_support_tokens"] == len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)
     assert fields["audio_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
     assert fields["video_temporal_weights"] == list(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)
     assert fields["audio_temporal_weights"] == list(HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS)
@@ -151,6 +154,14 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     assert fields["authoritative_prefix_modified"] is False
     assert fields["suffix_outside_support_modified"] is False
     assert binding.high_boundary_anchor is None
+
+
+def test_video_reference_covers_boundary_decode_chunk_and_overlap_release():
+    weights = HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS
+    assert HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS == 5
+    assert HIGH_BOUNDARY_VIDEO_RELEASE_TOKENS == 2
+    assert weights[:HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS] == (1.0,) * 5
+    assert weights[HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS:] == pytest.approx((2.0 / 3.0, 1.0 / 3.0))
 
 
 def test_audio_reference_weights_hold_decoder_window_then_release_monotonically():
@@ -312,7 +323,9 @@ def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_ed
     prefix_t = 3
     audio_prefix = 7
 
-    video_reference = video[:, :, prefix_t : prefix_t + 4].clone() + 0.4
+    video_reference = (
+        video[:, :, prefix_t : prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)].clone() + 0.4
+    )
     audio_reference = audio.clone()
     audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS] += 0.25
 
@@ -334,7 +347,8 @@ def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_ed
 
     assert torch.equal(result_video[:, :, :prefix_t], video[:, :, :prefix_t])
     assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
-    assert torch.equal(result_video[:, :, prefix_t + 4 :], video[:, :, prefix_t + 4 :])
+    video_stop = prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)
+    assert torch.equal(result_video[:, :, video_stop:], video[:, :, video_stop:])
     assert torch.equal(result_audio[..., :audio_prefix], audio[..., :audio_prefix])
     full_stop = audio_prefix + HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
     support_stop = audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
