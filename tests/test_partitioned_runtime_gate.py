@@ -196,15 +196,34 @@ def _accepted_post_high_video_receipt(**overrides):
     return receipt
 
 
-def test_partitioned_runtime_gate_accepts_bounded_post_high_video_repair():
+def _metrics_with_post_high_video_receipt(receipt, *, armed=True):
     metrics = _metrics()
+    for event in metrics["events"]:
+        if event["kind"] == "partitioned_transfer":
+            event["fields"].update(
+                video_post_high_residual_policy="post_high_vertical_residual_release_v1",
+                video_post_high_residual_enabled=armed,
+            )
+        elif event["kind"] == "partitioned_exact_prefix_complete":
+            event["fields"].update(
+                video_post_high_residual_policy="post_high_vertical_residual_release_v1",
+                video_post_high_residual_applied=bool(receipt.get("applied")),
+                video_post_high_residual_selected_dy_cells=(
+                    receipt.get("selected_dy_cells") if receipt.get("applied") else None
+                ),
+            )
     metrics["events"].insert(
         -2,
         _event(
             "partitioned_post_high_video_residual_repair",
-            **_accepted_post_high_video_receipt(),
+            **receipt,
         ),
     )
+    return metrics
+
+
+def test_partitioned_runtime_gate_accepts_bounded_post_high_video_repair():
+    metrics = _metrics_with_post_high_video_receipt(_accepted_post_high_video_receipt())
 
     report = validate_partitioned_runtime_evidence(
         metrics,
@@ -217,40 +236,33 @@ def test_partitioned_runtime_gate_accepts_bounded_post_high_video_repair():
 
 
 def test_partitioned_runtime_gate_rejects_malformed_applied_post_high_video_repair():
-    metrics = _metrics()
-    metrics["events"].insert(
-        -2,
-        _event(
-            "partitioned_post_high_video_residual_repair",
-            **_accepted_post_high_video_receipt(
-                canonical_candidate_accepted=False,
-            ),
-        ),
+    metrics = _metrics_with_post_high_video_receipt(
+        _accepted_post_high_video_receipt(
+            canonical_candidate_accepted=False,
+        )
     )
     with pytest.raises(RuntimeGateError, match="round-trip validation"):
         validate_partitioned_runtime_evidence(metrics, _log())
 
 
 def test_partitioned_runtime_gate_accepts_known_fail_closed_post_high_video_repair():
-    metrics = _metrics()
-    metrics["events"].insert(
-        -2,
-        _event(
-            "partitioned_post_high_video_residual_repair",
-            policy="post_high_vertical_residual_release_v1",
-            eligible=False,
-            accepted=False,
-            applied=False,
-            output_mutated=False,
-            authoritative_prefix_modified=False,
-            audio_modified=False,
-            reason="target_high_vertical_delta_not_coherent",
-            extra_h3_nfe=0,
-            extra_sampler_lifetimes=0,
-            extra_history_boundaries=0,
-            extra_provider_calls=0,
-            extra_vae_calls=0,
-        ),
+    metrics = _metrics_with_post_high_video_receipt(
+        {
+            "policy": "post_high_vertical_residual_release_v1",
+            "eligible": False,
+            "accepted": False,
+            "applied": False,
+            "output_mutated": False,
+            "authoritative_prefix_modified": False,
+            "audio_modified": False,
+            "reason": "target_high_vertical_delta_not_coherent",
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        },
+        armed=True,
     )
 
     report = validate_partitioned_runtime_evidence(metrics, _log())
