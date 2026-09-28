@@ -153,6 +153,107 @@ def test_partitioned_runtime_gate_accepts_complete_evidence():
     assert report.audio_guided_overlap_ticks == 4
 
 
+def _accepted_post_high_video_receipt(**overrides):
+    receipt = {
+        "policy": "post_high_vertical_residual_release_v1",
+        "eligible": True,
+        "accepted": True,
+        "applied": True,
+        "output_mutated": True,
+        "authoritative_prefix_modified": False,
+        "audio_modified": False,
+        "safe_video_topology": True,
+        "reason": "accepted_bounded_vertical_release",
+        "horizontal_application_enabled": False,
+        "operator_dx_cells": 0.0,
+        "caller_audio_exact": True,
+        "caller_prefix_exact": True,
+        "internal_audio_exact": True,
+        "internal_prefix_exact": True,
+        "canonical_candidate_accepted": True,
+        "selected_dy_cells": -0.1143016587,
+        "correction_magnitude_cells": 0.1143016587,
+        "max_induced_step_cells": 0.040411,
+        "release_weights": [1.0, 0.8535533905932737, 0.5, 0.14644660940672627],
+        "corrected_tokens": 4,
+        "caller_reentry_validation": {
+            "before_mean_abs_error_cells": 0.14,
+            "after_mean_abs_error_cells": 0.04,
+            "mean_improvement_ratio": 0.7142857143,
+            "no_material_roi_regression": True,
+            "horizontal_phase_stable": True,
+        },
+        "extra_h3_nfe": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_history_boundaries": 0,
+        "extra_provider_calls": 0,
+        "extra_vae_calls": 0,
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+def test_partitioned_runtime_gate_accepts_bounded_post_high_video_repair():
+    metrics = _metrics()
+    metrics["events"].insert(
+        -2,
+        _event(
+            "partitioned_post_high_video_residual_repair",
+            **_accepted_post_high_video_receipt(),
+        ),
+    )
+
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_logical=5,
+        expected_actual=3,
+        expected_forecast=2,
+    )
+    assert report.logical_calls == 5
+
+
+def test_partitioned_runtime_gate_rejects_malformed_applied_post_high_video_repair():
+    metrics = _metrics()
+    metrics["events"].insert(
+        -2,
+        _event(
+            "partitioned_post_high_video_residual_repair",
+            **_accepted_post_high_video_receipt(
+                canonical_candidate_accepted=False,
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeGateError, match="round-trip validation"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_accepts_known_fail_closed_post_high_video_repair():
+    metrics = _metrics()
+    metrics["events"].insert(
+        -2,
+        _event(
+            "partitioned_post_high_video_residual_repair",
+            policy="post_high_vertical_residual_release_v1",
+            eligible=False,
+            accepted=False,
+            applied=False,
+            output_mutated=False,
+            authoritative_prefix_modified=False,
+            audio_modified=False,
+            reason="target_high_vertical_delta_not_coherent",
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+        ),
+    )
+
+    report = validate_partitioned_runtime_evidence(metrics, _log())
+    assert report.logical_calls == 5
+
+
 def test_partitioned_runtime_gate_rejects_unapplied_or_wrong_width_audio_overlap():
     with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(
