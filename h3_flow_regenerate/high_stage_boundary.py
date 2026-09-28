@@ -92,8 +92,7 @@ def align_audio_reference_to_authoritative_prefix(
     authoritative_tail = authoritative[..., prefix - 1].detach().to(torch.float32)
     translation = authoritative_tail - low_tail
     reference[..., prefix : prefix + support] = (
-        low_probe_clean_audio[..., prefix : prefix + support].detach().to(torch.float32)
-        + translation.unsqueeze(-1)
+        low_probe_clean_audio[..., prefix : prefix + support].detach().to(torch.float32) + translation.unsqueeze(-1)
     ).to(dtype=reference.dtype)
 
     source_edge = low_probe_clean_audio[..., prefix].detach().to(torch.float32) - low_tail
