@@ -16,6 +16,7 @@ from typing import Any
 
 import torch
 
+from .audio_boundary_audit import LOW_PROBE_AUDIO_WITNESS_KIND
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
 from .boundary_content_diagnostics import (
     compare_boundary_content_stages,
@@ -2969,7 +2970,7 @@ def run_partitioned_progressive(
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
         ):
             _low_probe_caller_video, low_probe_caller_audio = unpack_streams(source_x0, source_shapes)
-            low_probe_caller_audio_witness = low_probe_caller_audio.detach().to(device="cpu").clone()
+            low_probe_caller_audio_witness = low_probe_caller_audio.detach().clone()
 
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
@@ -4489,9 +4490,12 @@ def run_partitioned_progressive(
             )
             if witness_available:
                 final_prefix_sha256 = tensor_sha256(final_audio[..., :audio_prefix_ticks])
+                witness_capture_started = time.perf_counter()
+                low_probe_caller_audio_cpu = low_probe_caller_audio_witness.to(device="cpu").clone()
+                witness_capture_elapsed_ms = (time.perf_counter() - witness_capture_started) * 1000.0
                 binding.metrics.append_transient_witness(
-                    "partitioned_low_probe_audio_caller_v1",
-                    low_probe_caller_audio_witness,
+                    LOW_PROBE_AUDIO_WITNESS_KIND,
+                    low_probe_caller_audio_cpu,
                     session_id=str(session_id),
                     chunk_id=str(chunk_id),
                     audio_prefix_ticks=int(audio_prefix_ticks),
@@ -4513,6 +4517,7 @@ def run_partitioned_progressive(
                     final_prefix_sha256=final_prefix_sha256,
                     payload_serialized=False,
                     production_latent_modified=False,
+                    capture_elapsed_ms=float(witness_capture_elapsed_ms),
                     extra_h3_nfe=0,
                     extra_sampler_lifetimes=0,
                     extra_history_boundaries=0,
