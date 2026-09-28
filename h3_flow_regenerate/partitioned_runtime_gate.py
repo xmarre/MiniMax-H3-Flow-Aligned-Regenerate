@@ -1720,6 +1720,7 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
                 "target_high_vertical_delta_below_floor",
                 "pre_high_boundary_not_clean",
                 "target_high_delta_not_dominant_enough",
+                "insufficient_release_frontier",
                 "vertical_roi_disagreement_over_bound",
                 "vertical_correction_over_bound",
                 "temporal_release_step_over_bound",
