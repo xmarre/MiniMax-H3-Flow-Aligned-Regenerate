@@ -141,15 +141,13 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
                     stage_counterfactual["reason"] = "low_probe_witness_insufficient_right_context"
                 else:
                     counterfactual_latent = baseline_latent.clone()
-                    counterfactual_latent[..., prefix : prefix + 52] = low_probe_audio[
-                        ..., prefix : prefix + 52
-                    ].to(counterfactual_latent)
+                    counterfactual_latent[..., prefix : prefix + 52] = low_probe_audio[..., prefix : prefix + 52].to(
+                        counterfactual_latent
+                    )
                     low_probe_decoded = decode(counterfactual_latent)
                     extra_vae_calls = 3
                     low_probe_suffix = low_probe_decoded[..., prefix * HOP : prefix * HOP + window]
-                    low_probe_previous = low_probe_decoded[
-                        ..., (prefix - 20) * HOP : prefix * HOP
-                    ]
+                    low_probe_previous = low_probe_decoded[..., (prefix - 20) * HOP : prefix * HOP]
                     fields = witness.fields
                     stage_counterfactual = {
                         "status": "measured",
