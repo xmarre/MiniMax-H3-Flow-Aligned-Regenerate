@@ -2971,10 +2971,9 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
-        # Audio has no spatial transfer. Retain the bounded-size clean probe state
-        # through target-high so the high-stage boundary contract can preserve
-        # clean-domain continuation state without another H3 evaluation.
-        low_probe_clean_audio = clean_audio.detach().clone()
+        # Retain the clean low/probe audio only for output-neutral stage
+        # diagnostics. Production target-high no longer consumes this witness.
+        low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
