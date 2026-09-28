@@ -27,11 +27,14 @@ POST_HIGH_VIDEO_RELEASE_WEIGHTS = (
 POST_HIGH_VIDEO_MIN_RESPONSE = 6.0
 POST_HIGH_VIDEO_MIN_BOUNDARY_ERROR_CELLS = 0.05
 POST_HIGH_VIDEO_MIN_HIGH_DELTA_CELLS = 0.025
+POST_HIGH_VIDEO_MIN_HIGH_DELTA_FRACTION = 0.40
+POST_HIGH_VIDEO_MAX_PRE_HIGH_BOUNDARY_ERROR_CELLS = 0.125
 POST_HIGH_VIDEO_MAX_ROI_DISAGREEMENT_CELLS = 0.20
 POST_HIGH_VIDEO_MAX_CORRECTION_CELLS = 0.18
 POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS = 0.0625
+POST_HIGH_VIDEO_MAX_ROI_REGRESSION_CELLS = 0.03125
 POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT = 0.25
-POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS = 0.0625
+POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS = 0.125
 POST_HIGH_VIDEO_ROIS = (("upper45", 0.45), ("full", 1.0))
 
 
@@ -93,6 +96,7 @@ def plan_post_high_vertical_residual(
         "eligible": False,
         "reason": "not_evaluated",
         "horizontal_application_enabled": False,
+        "operator_dx_cells": 0.0,
         "release_weights": list(POST_HIGH_VIDEO_RELEASE_WEIGHTS),
     }
     if set(pre_high) != {"upper45", "full"} or set(post_high) != {"upper45", "full"}:
@@ -118,6 +122,7 @@ def plan_post_high_vertical_residual(
         post_high_dy = _first_pair(after, "y")
         prefix_dy = _prefix_motion(after, "y")
         boundary_error = post_high_dy - prefix_dy
+        pre_high_boundary_error = pre_high_dy - prefix_dy
         high_delta = post_high_dy - pre_high_dy
         boundary_errors[roi] = boundary_error
         high_deltas[roi] = high_delta
@@ -129,7 +134,9 @@ def plan_post_high_vertical_residual(
             "prefix_median_dx": _prefix_motion(after, "x"),
             "prefix_median_dy": prefix_dy,
             "boundary_error_dy": boundary_error,
+            "pre_high_boundary_error_dy": pre_high_boundary_error,
             "target_high_delta_dy": high_delta,
+            "target_high_fraction_of_boundary_error": abs(high_delta) / max(abs(boundary_error), 1e-12),
             "pre_high_response": before_response,
             "post_high_response": after_response,
         }
@@ -152,11 +159,28 @@ def plan_post_high_vertical_residual(
     if min(abs(v) for v in high_deltas.values()) < POST_HIGH_VIDEO_MIN_HIGH_DELTA_CELLS:
         receipt["reason"] = "target_high_vertical_delta_below_floor"
         return receipt
+    if any(
+        abs(float(observations[roi]["pre_high_boundary_error_dy"]))
+        > POST_HIGH_VIDEO_MAX_PRE_HIGH_BOUNDARY_ERROR_CELLS
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    ):
+        receipt["reason"] = "pre_high_boundary_not_clean"
+        return receipt
+    if any(
+        float(observations[roi]["target_high_fraction_of_boundary_error"])
+        < POST_HIGH_VIDEO_MIN_HIGH_DELTA_FRACTION
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    ):
+        receipt["reason"] = "target_high_delta_not_dominant_enough"
+        return receipt
     if max(boundary_errors.values()) - min(boundary_errors.values()) > POST_HIGH_VIDEO_MAX_ROI_DISAGREEMENT_CELLS:
         receipt["reason"] = "vertical_roi_disagreement_over_bound"
         return receipt
 
-    signed_consensus = float(statistics.median(boundary_errors.values()))
+    # Correct what target-high added, not the entire observed boundary motion.
+    # The pre-high exact-restored state is already the validated near-clean
+    # reference; the prefix-motion error is used only as the acceptance target.
+    signed_consensus = float(statistics.median(high_deltas.values()))
     magnitude = abs(signed_consensus)
     if magnitude > POST_HIGH_VIDEO_MAX_CORRECTION_CELLS:
         receipt["reason"] = "vertical_correction_over_bound"
@@ -291,7 +315,7 @@ def repair_post_high_vertical_residual(
     dy, candidate_video, candidate_receipts, _score, score_fields = min(trials, key=lambda item: item[3])
     no_material_roi_regression = all(
         float(score_fields["after_abs_error_cells"][roi])
-        <= float(score_fields["before_abs_error_cells"][roi]) + POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS
+        <= float(score_fields["before_abs_error_cells"][roi]) + POST_HIGH_VIDEO_MAX_ROI_REGRESSION_CELLS
         for roi, _fraction in POST_HIGH_VIDEO_ROIS
     )
     x_stable = all(
