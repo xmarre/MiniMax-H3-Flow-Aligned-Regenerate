@@ -407,9 +407,7 @@ def refine_h3_patch_lattice_residual(
 
             common = source_phase / group_counts.sqrt().to(source_phase)
             common_target = common[..., target_y_owner[:, None], target_x_owner[None, :]]
-            mean_target = innovation_group_mean[
-                ..., target_y_owner[:, None], target_x_owner[None, :]
-            ]
+            mean_target = innovation_group_mean[..., target_y_owner[:, None], target_x_owner[None, :]]
             refined_phase = common_target + innovation_phase - mean_target
             refined[..., phase_y::2, phase_x::2] = refined_phase
 
@@ -426,9 +424,7 @@ def refine_h3_patch_lattice_residual(
             projection_max = torch.maximum(projection_max, error.abs().max())
 
     refined = refined.to(dtype=source_residual.dtype)
-    projection_rms = float(
-        (projection_error_sq / max(projection_elements, 1)).sqrt().item()
-    )
+    projection_rms = float((projection_error_sq / max(projection_elements, 1)).sqrt().item())
     report = {
         "policy": H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
         "source_hw": (source_h, source_w),
@@ -482,10 +478,9 @@ def build_handoff_state(
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
     noise_report: dict[str, Any]
     if noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
-        source_residual = (
-            source_video.to(torch.float32)
-            - (1.0 - float(sigma)) * x0_video.to(torch.float32)
-        ) / float(sigma)
+        source_residual = (source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)) / float(
+            sigma
+        )
         noise, noise_report = refine_h3_patch_lattice_residual(
             source_residual,
             target_h=target_h,
@@ -493,18 +488,11 @@ def build_handoff_state(
             seed=seed,
         )
         noise = noise.to(source_video)
-        reconstruction = (
-            (1.0 - float(sigma)) * x0_video.to(torch.float32)
-            + float(sigma) * source_residual
-        )
+        reconstruction = (1.0 - float(sigma)) * x0_video.to(torch.float32) + float(sigma) * source_residual
         reconstruction_error = reconstruction - source_video.to(torch.float32)
         noise_report.update(
-            source_state_reconstruction_rms_error=float(
-                reconstruction_error.square().mean().sqrt().item()
-            ),
-            source_state_reconstruction_max_abs_error=float(
-                reconstruction_error.abs().max().item()
-            ),
+            source_state_reconstruction_rms_error=float(reconstruction_error.square().mean().sqrt().item()),
+            source_state_reconstruction_max_abs_error=float(reconstruction_error.abs().max().item()),
             residual_source="same_sigma_source_state_minus_clean_probe",
         )
     else:
