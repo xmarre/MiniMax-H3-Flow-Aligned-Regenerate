@@ -3,8 +3,8 @@ import json
 import torch
 
 from h3_flow_regenerate.audio_boundary_audit import (
-    H3FlowAudioBoundaryAudit,
     LOW_PROBE_AUDIO_WITNESS_KIND,
+    H3FlowAudioBoundaryAudit,
     audit_audio_boundaries,
 )
 from h3_flow_regenerate.metrics import H3FlowMetrics
