@@ -2962,6 +2962,11 @@ def run_partitioned_progressive(
                 fail_closed=True,
             )
 
+        low_probe_caller_audio_witness = None
+        if diagnostic_audio_control:
+            _low_probe_caller_video, low_probe_caller_audio = unpack_streams(source_x0, source_shapes)
+            low_probe_caller_audio_witness = low_probe_caller_audio.detach().to(device="cpu").clone()
+
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
@@ -4458,6 +4463,72 @@ def run_partitioned_progressive(
                 final_exact_audio_prefix=True,
                 sampler_masks_unchanged=True,
             )
+        if diagnostic_audio_control and low_probe_caller_audio_witness is not None:
+            _witness_video_mask, witness_audio_mask = unpack_streams(
+                diagnostic_target_mask,
+                target_shapes,
+            )
+            temporal_min = witness_audio_mask.amin(dim=(0, 1, 2))
+            temporal_max = witness_audio_mask.amax(dim=(0, 1, 2))
+            exact_zero = temporal_max <= 1e-8
+            exact_one = temporal_min >= 1.0 - 1e-8
+            audio_prefix_ticks = 0
+            while audio_prefix_ticks < int(witness_audio_mask.shape[-1]) and bool(
+                exact_zero[audio_prefix_ticks].item()
+            ):
+                audio_prefix_ticks += 1
+            witness_available = bool(
+                0 < audio_prefix_ticks < int(witness_audio_mask.shape[-1])
+                and bool(exact_one[audio_prefix_ticks:].all().item())
+                and tuple(low_probe_caller_audio_witness.shape) == tuple(final_audio.shape)
+                and low_probe_caller_audio_witness.dtype == final_audio.dtype
+            )
+            if witness_available:
+                final_prefix_sha256 = tensor_sha256(final_audio[..., :audio_prefix_ticks])
+                binding.metrics.append_transient_witness(
+                    "partitioned_low_probe_audio_caller_v1",
+                    low_probe_caller_audio_witness,
+                    session_id=str(session_id),
+                    chunk_id=str(chunk_id),
+                    audio_prefix_ticks=int(audio_prefix_ticks),
+                    audio_total_ticks=int(final_audio.shape[-1]),
+                    final_prefix_sha256=final_prefix_sha256,
+                    source_stage="low_probe",
+                    source_domain="caller_output_latent",
+                )
+                binding.metrics.event(
+                    "partitioned_audio_stage_decode_witness",
+                    available=True,
+                    source_stage="low_probe",
+                    source_domain="caller_output_latent",
+                    storage_domain="cpu_transient_only",
+                    session_id=str(session_id),
+                    chunk_id=str(chunk_id),
+                    audio_prefix_ticks=int(audio_prefix_ticks),
+                    audio_total_ticks=int(final_audio.shape[-1]),
+                    final_prefix_sha256=final_prefix_sha256,
+                    payload_serialized=False,
+                    production_latent_modified=False,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_vae_calls=0,
+                )
+            else:
+                binding.metrics.event(
+                    "partitioned_audio_stage_decode_witness",
+                    available=False,
+                    reason="noncanonical_mask_or_audio_geometry_mismatch",
+                    source_stage="low_probe",
+                    source_domain="caller_output_latent",
+                    payload_serialized=False,
+                    production_latent_modified=False,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_vae_calls=0,
+                )
+
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             final_trajectory = measure_translation_trajectory(
