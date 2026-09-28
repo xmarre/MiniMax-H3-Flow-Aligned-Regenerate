@@ -160,15 +160,13 @@ def plan_post_high_vertical_residual(
         receipt["reason"] = "target_high_vertical_delta_below_floor"
         return receipt
     if any(
-        abs(float(observations[roi]["pre_high_boundary_error_dy"]))
-        > POST_HIGH_VIDEO_MAX_PRE_HIGH_BOUNDARY_ERROR_CELLS
+        abs(float(observations[roi]["pre_high_boundary_error_dy"])) > POST_HIGH_VIDEO_MAX_PRE_HIGH_BOUNDARY_ERROR_CELLS
         for roi, _fraction in POST_HIGH_VIDEO_ROIS
     ):
         receipt["reason"] = "pre_high_boundary_not_clean"
         return receipt
     if any(
-        float(observations[roi]["target_high_fraction_of_boundary_error"])
-        < POST_HIGH_VIDEO_MIN_HIGH_DELTA_FRACTION
+        float(observations[roi]["target_high_fraction_of_boundary_error"]) < POST_HIGH_VIDEO_MIN_HIGH_DELTA_FRACTION
         for roi, _fraction in POST_HIGH_VIDEO_ROIS
     ):
         receipt["reason"] = "target_high_delta_not_dominant_enough"
