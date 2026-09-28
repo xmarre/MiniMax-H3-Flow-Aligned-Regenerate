@@ -4420,8 +4420,16 @@ def run_partitioned_progressive(
                     owner_before="authoritative_exact_prefix_E",
                     owner_after="post_high_generated_suffix",
                     temporal_relation="adjacent_time_boundary_and_next_three_suffix_pairs",
-                    applied_transform="none_post_high_observation",
-                    provenance="existing_post_high_output_via_model_latent_input_conversion",
+                    applied_transform=(
+                        POST_HIGH_VIDEO_RESIDUAL_POLICY
+                        if post_high_video_repair.get("applied", False)
+                        else "none_post_high_observation"
+                    ),
+                    provenance=(
+                        "post_high_output_after_bounded_vertical_release"
+                        if post_high_video_repair.get("applied", False)
+                        else "existing_post_high_output_via_model_latent_input_conversion"
+                    ),
                 )
             )
             residual_stage_receipts.append(
@@ -4436,8 +4444,16 @@ def run_partitioned_progressive(
                     owner_before="caller_owned_exact_prefix",
                     owner_after="returned_generated_suffix",
                     temporal_relation="adjacent_time_boundary_receipt_only",
-                    applied_transform="none",
-                    provenance="existing_post_high_output",
+                    applied_transform=(
+                        POST_HIGH_VIDEO_RESIDUAL_POLICY
+                        if post_high_video_repair.get("applied", False)
+                        else "none"
+                    ),
+                    provenance=(
+                        "returned_post_high_output_after_bounded_vertical_release"
+                        if post_high_video_repair.get("applied", False)
+                        else "existing_post_high_output"
+                    ),
                 )
             )
         if boundary_content_diagnostic_enabled:
