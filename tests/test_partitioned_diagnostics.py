@@ -754,9 +754,7 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
 
 
 @pytest.mark.parametrize("guided_ticks", [4, 16])
-def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(
-    monkeypatch, guided_ticks
-):
+def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(monkeypatch, guided_ticks):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
