@@ -244,8 +244,8 @@ class H3FlowAudioBoundaryAudit:
     DESCRIPTION = (
         "Optional diagnostic after Audio VAE Decode. Connect the original audio latent list, "
         "decoded audio list, VAE and assembly plan; forward audio to Assemble. "
-        "With Flow metrics connected, it also decodes the captured low/probe generated-audio "
-        "trajectory as a counterfactual. Production audio is never modified."
+        "With Flow metrics connected, it also decodes captured low/probe and pre-successor "
+        "generated-audio trajectories as counterfactuals. Production audio is never modified."
     )
 
     @classmethod
