@@ -163,6 +163,7 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
 PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
@@ -3414,7 +3415,7 @@ def run_partitioned_progressive(
                         learned_clean,
                         exact_prefix,
                         sigma=sigma,
-                        weights=(1.0,),
+                        weights=PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
                     )
                 )
             else:
