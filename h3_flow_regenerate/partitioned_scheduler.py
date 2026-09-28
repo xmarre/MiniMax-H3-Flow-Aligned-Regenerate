@@ -4263,8 +4263,8 @@ def run_partitioned_progressive(
                     len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS),
                 )
                 video_stop = stage_plan.prefix_t + video_support
-                result_video[:, :, stage_plan.prefix_t:video_stop] = stabilized_video[
-                    :, :, stage_plan.prefix_t:video_stop
+                result_video[:, :, stage_plan.prefix_t : video_stop] = stabilized_video[
+                    :, :, stage_plan.prefix_t : video_stop
                 ].to(result_video)
                 if not torch.equal(
                     result_video[:, :, : stage_plan.prefix_t],
