@@ -5,11 +5,14 @@ from h3_flow_regenerate.frame_gauge import translate_video_cells
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import (
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     CleanVideoPostprocessResult,
     ProgressiveHandoffConfig,
     ProgressiveTargetInputConfig,
     build_handoff_state,
     deterministic_video_noise,
+    refine_h3_patch_lattice_residual,
     select_handoff_index,
 )
 from h3_flow_regenerate.sigma import flow_shift
@@ -79,6 +82,114 @@ def test_handoff_geometry_audio_and_determinism():
     assert target_video.shape == (1, 24, 2, 8, 6)
     assert torch.equal(target_audio, audio)
     assert torch.equal(first, second)
+
+
+def test_patch_lattice_residual_refinement_is_deterministic_and_exactly_projects_source_modes():
+    torch.manual_seed(17)
+    source = torch.randn(1, 3, 2, 8, 12)
+
+    first, report = refine_h3_patch_lattice_residual(
+        source,
+        target_h=12,
+        target_w=16,
+        seed=90210,
+    )
+    second, second_report = refine_h3_patch_lattice_residual(
+        source,
+        target_h=12,
+        target_w=16,
+        seed=90210,
+    )
+
+    assert torch.equal(first, second)
+    assert report == second_report
+    assert first.shape == (1, 3, 2, 12, 16)
+    assert report["policy"] == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+    assert report["source_patch_grid"] == (4, 6)
+    assert report["target_patch_grid"] == (6, 8)
+    assert report["group_size_min"] >= 1
+    assert report["group_size_max"] <= 4
+    assert report["projection_rms_error"] < 2e-6
+    assert report["projection_max_abs_error"] < 2e-5
+    assert report["innovation_coarse_group_sum_zero"] is True
+    assert report["extra_h3_nfe"] == 0
+
+
+def test_patch_lattice_residual_refinement_identity_has_no_innovation():
+    torch.manual_seed(21)
+    source = torch.randn(1, 2, 1, 8, 10)
+    refined, report = refine_h3_patch_lattice_residual(
+        source,
+        target_h=8,
+        target_w=10,
+        seed=1234,
+    )
+    assert torch.equal(refined, source)
+    assert report["identity"] is True
+    assert report["projection_rms_error"] == 0.0
+
+
+def test_learned_handoff_can_refine_same_sigma_source_residual_without_touching_audio():
+    torch.manual_seed(29)
+    sigma = 0.4
+    source_x0_video = torch.randn(1, 24, 2, 4, 6)
+    source_residual = torch.randn_like(source_x0_video)
+    source_video = (1.0 - sigma) * source_x0_video + sigma * source_residual
+    audio = torch.randn(1, 32, 2, 7)
+    source_state, shapes = pack_streams((source_video, audio))
+    source_x0, _ = pack_streams((source_x0_video, torch.randn_like(audio)))
+    provider = FakeLearnedProvider()
+    report = {}
+
+    target, target_shapes = build_handoff_state(
+        source_packed_state=source_state,
+        source_x0_packed=source_x0,
+        source_shapes=shapes,
+        sigma=sigma,
+        target_h=8,
+        target_w=10,
+        seed=456,
+        transfer_mode="learned_3d",
+        learned_upscaler=provider,
+        transfer_metrics=report,
+        noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    )
+    target_video, target_audio = unpack_streams(target, target_shapes)
+    refined_residual, refinement_report = refine_h3_patch_lattice_residual(
+        source_residual,
+        target_h=8,
+        target_w=10,
+        seed=456,
+    )
+    expected_clean = torch.full_like(target_video, 5.0)
+    expected = (1.0 - sigma) * expected_clean + sigma * refined_residual.to(expected_clean)
+
+    torch.testing.assert_close(target_video, expected, rtol=0, atol=2e-6)
+    assert torch.equal(target_audio, audio)
+    assert report["handoff_noise"]["policy"] == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+    assert report["handoff_noise"]["projection_rms_error"] < 2e-6
+    assert report["handoff_noise"]["source_state_reconstruction_rms_error"] < 2e-6
+    assert report["handoff_noise"]["source_state_reconstruction_max_abs_error"] < 2e-5
+    assert report["handoff_noise"]["source_residual_rms"] == pytest.approx(
+        refinement_report["source_residual_rms"],
+        rel=1e-6,
+    )
+
+
+def test_independent_handoff_noise_remains_default_and_reports_policy():
+    state, x0, shapes, _, _ = packed()
+    report = {}
+    build_handoff_state(
+        source_packed_state=state,
+        source_x0_packed=x0,
+        source_shapes=shapes,
+        sigma=0.4,
+        target_h=8,
+        target_w=6,
+        seed=123,
+        transfer_metrics=report,
+    )
+    assert report["handoff_noise"]["policy"] == H3_HANDOFF_NOISE_INDEPENDENT
 
 
 def test_bicubic_default_never_invokes_connected_learned_provider():
