@@ -140,14 +140,15 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
                 elif low_probe_audio.shape[-1] < prefix + 52:
                     stage_counterfactual["reason"] = "low_probe_witness_insufficient_right_context"
                 else:
-                    counterfactual_latent = baseline_latent.clone()
-                    counterfactual_latent[..., prefix : prefix + 52] = low_probe_audio[..., prefix : prefix + 52].to(
-                        counterfactual_latent
-                    )
+                    counterfactual_latent = extended.clone()
+                    counterfactual_start = 32 + prefix
+                    counterfactual_latent[..., counterfactual_start : counterfactual_start + 52] = low_probe_audio[
+                        ..., prefix : prefix + 52
+                    ].to(counterfactual_latent)
                     low_probe_decoded = decode(counterfactual_latent)
                     extra_vae_calls = 3
-                    low_probe_suffix = low_probe_decoded[..., prefix * HOP : prefix * HOP + window]
-                    low_probe_previous = low_probe_decoded[..., (prefix - 20) * HOP : prefix * HOP]
+                    low_probe_suffix = low_probe_decoded[..., cut : cut + window]
+                    low_probe_previous = low_probe_decoded[..., cut - window : cut]
                     fields = witness.fields
                     stage_counterfactual = {
                         "status": "measured",
@@ -156,6 +157,8 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
                         "source_stage": "low_probe_caller",
                         "source_domain": "caller_output_latent",
                         "authoritative_prefix_source": "final_continuation_latent",
+                        "left_context_source": "same_extended_actual_context_as_final_counterfactual",
+                        "extra_left_ticks": 32,
                         "generated_ticks_replaced": 52,
                         "window_ticks": 20,
                         "final_prefix_sha256": final_prefix_digest,
