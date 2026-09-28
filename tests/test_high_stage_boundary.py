@@ -13,6 +13,7 @@ from h3_flow_regenerate.high_stage_boundary import (
     HIGH_BOUNDARY_AUDIO_SEAM_TICKS,
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
+    align_audio_reference_to_authoritative_prefix,
     high_boundary_contract,
 )
 from h3_flow_regenerate.metrics import H3FlowMetrics
@@ -162,6 +163,52 @@ def test_audio_reference_weights_hold_decoder_window_then_release_monotonically(
     assert release[-1] == pytest.approx(1.0 / (HIGH_BOUNDARY_AUDIO_RELEASE_TICKS + 1))
     assert all(left > right for left, right in itertools.pairwise(release))
     assert HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS == HIGH_BOUNDARY_AUDIO_SEAM_TICKS + 32
+
+
+def test_audio_reference_alignment_preserves_clean_edge_on_authoritative_prefix_gauge():
+    torch.manual_seed(17)
+    video = torch.zeros(1, 24, 4, 2, 2)
+    low_probe = torch.randn(1, 32, 2, 100)
+    authoritative = low_probe.clone()
+    prefix = 6
+    authoritative[..., :prefix] += 0.75
+
+    video_mask = torch.ones_like(video)
+    audio_mask = torch.ones_like(low_probe)
+    audio_mask[..., :prefix] = 0
+    exact_mask, shapes = pack_streams((video_mask, audio_mask))
+
+    reference, report = align_audio_reference_to_authoritative_prefix(
+        low_probe,
+        authoritative,
+        exact_mask,
+        shapes,
+    )
+    translation = authoritative[..., prefix - 1].float() - low_probe[..., prefix - 1].float()
+
+    assert torch.equal(reference[..., :prefix], authoritative[..., :prefix])
+    expected = (
+        low_probe[..., prefix : prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS].float()
+        + translation.unsqueeze(-1)
+    ).to(reference.dtype)
+    torch.testing.assert_close(
+        reference[..., prefix : prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
+        expected,
+        rtol=0,
+        atol=0,
+    )
+    assert torch.equal(
+        reference[..., prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
+        low_probe[..., prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
+    )
+    source_edge = low_probe[..., prefix].float() - low_probe[..., prefix - 1].float()
+    aligned_edge = reference[..., prefix].float() - authoritative[..., prefix - 1].float()
+    torch.testing.assert_close(aligned_edge, source_edge, rtol=0, atol=1e-6)
+    assert report["audio_prefix_ticks"] == prefix
+    assert report["audio_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+    assert report["audio_prefix_translation_rms"] == pytest.approx(0.75)
+    assert report["audio_first_edge_relation_error_rms"] < 1e-6
+    assert report["reference_domain"] == "authoritative_prefix_aligned_low_probe_clean"
 
 
 def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
