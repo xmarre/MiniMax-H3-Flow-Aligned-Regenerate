@@ -7,6 +7,7 @@ temporal support after the authoritative exact prefix.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from typing import Any
@@ -164,7 +165,7 @@ def plan_post_high_vertical_residual(
 
     extended_weights = (*POST_HIGH_VIDEO_RELEASE_WEIGHTS, 0.0)
     max_weight_step = max(
-        abs(float(right) - float(left)) for left, right in zip(extended_weights, extended_weights[1:], strict=True)
+        abs(float(right) - float(left)) for left, right in itertools.pairwise(extended_weights)
     )
     max_induced_step = magnitude * max_weight_step
     if max_induced_step > POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS:
