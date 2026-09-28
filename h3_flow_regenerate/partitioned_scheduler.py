@@ -3715,18 +3715,40 @@ def run_partitioned_progressive(
         high_video_reference_suffix = None
         high_audio_reference = None
 
-        high_video_guard_enabled = bool(
+        safe_high_guard_topology = bool(
             config.frame_gauge_repair
             and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == HIGH_STAGE_VIDEO_GUARD_TOKENS
             and not high_video_reference_enabled
         )
+        guard_mask_fully_generated = False
+        if denoise_mask is not None and stage_plan.prefix_t < int(target_video.shape[2]):
+            candidate_video_mask, _candidate_audio_mask = unpack_streams(
+                denoise_mask,
+                target_shapes,
+            )
+            guard_mask_fully_generated = bool(
+                torch.all(
+                    candidate_video_mask[
+                        :,
+                        :,
+                        stage_plan.prefix_t : stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+                    ]
+                    == 1
+                ).item()
+            )
+            del candidate_video_mask, _candidate_audio_mask
+        high_video_guard_enabled = bool(safe_high_guard_topology and guard_mask_fully_generated)
         high_latent_image = latent_image
         high_denoise_mask = denoise_mask
         high_video_guard_receipt = disabled_high_stage_video_guard(
             prefix_t=stage_plan.prefix_t,
-            reason="safe_video_topology_not_active",
+            reason=(
+                "guard_token_not_fully_generated"
+                if safe_high_guard_topology and not guard_mask_fully_generated
+                else "safe_video_topology_not_active"
+            ),
         )
         if high_video_guard_enabled:
             caller_internal = _process_latent_in(base_model, latent_image, target_shapes)
