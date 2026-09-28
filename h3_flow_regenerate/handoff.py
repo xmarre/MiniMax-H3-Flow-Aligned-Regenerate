@@ -462,6 +462,7 @@ def build_handoff_state(
     transfer_metrics: dict[str, Any] | None = None,
     clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
     noise_mode: str = H3_HANDOFF_NOISE_INDEPENDENT,
+    noise_scale: float = 1.0,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -476,11 +477,14 @@ def build_handoff_state(
         return source_packed_state.clone(), list(source_shapes)
     if noise_mode not in H3_HANDOFF_NOISE_MODES:
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
+    noise_scale = float(noise_scale)
+    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
+        raise ValueError("progressive H3 handoff noise_scale must be finite and positive")
     noise_report: dict[str, Any]
     if noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
-        source_residual = (source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)) / float(
-            sigma
-        )
+        source_residual = (
+            source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)
+        ) / (float(sigma) * noise_scale)
         noise, noise_report = refine_h3_patch_lattice_residual(
             source_residual,
             target_h=target_h,
@@ -494,6 +498,7 @@ def build_handoff_state(
             source_state_reconstruction_rms_error=float(reconstruction_error.square().mean().sqrt().item()),
             source_state_reconstruction_max_abs_error=float(reconstruction_error.abs().max().item()),
             residual_source="same_sigma_source_state_minus_clean_probe",
+            noise_scale=noise_scale,
         )
     else:
         noise = deterministic_video_noise(
@@ -507,6 +512,7 @@ def build_handoff_state(
             "source_hw": tuple(int(value) for value in source_video.shape[-2:]),
             "target_hw": (int(target_h), int(target_w)),
             "innovation_seed": int(seed),
+            "noise_scale": noise_scale,
             "extra_h3_nfe": 0,
         }
     if transfer_mode == "bicubic":
