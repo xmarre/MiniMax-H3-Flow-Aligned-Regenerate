@@ -88,9 +88,7 @@ def build_high_stage_video_guard(
         ),
     )
     guard_mask_exact_zero = bool(
-        torch.all(
-            checked_video_mask[:, :, prefix_t : prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS] == 0
-        ).item()
+        torch.all(checked_video_mask[:, :, prefix_t : prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS] == 0).item()
     )
     guard_source_exact = torch.equal(
         checked_video[:, :, prefix_t : prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS],
@@ -113,35 +111,39 @@ def build_high_stage_video_guard(
         original_guard,
         checked_video[:, :, prefix_t : prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS],
     )
-    return guarded_latent, guarded_mask, {
-        "policy": HIGH_STAGE_VIDEO_GUARD_POLICY,
-        "enabled": True,
-        "applied": True,
-        "guard_tokens": HIGH_STAGE_VIDEO_GUARD_TOKENS,
-        "guard_token_index": prefix_t,
-        "caller_exact_prefix_tokens": prefix_t,
-        "high_protected_video_tokens": prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-        "guard_source": "exact_restored_pre_high_first_suffix_clean",
-        "guard_source_exact": guard_source_exact,
-        "guard_differs_from_caller_latent": changed_from_caller,
-        "caller_prefix_modified": False,
-        "caller_prefix_exact": prefix_exact,
-        "audio_modified": False,
-        "audio_exact": audio_exact,
-        "audio_mask_modified": False,
-        "audio_mask_exact": audio_mask_exact,
-        "later_suffix_modified": False,
-        "later_suffix_exact": later_suffix_exact,
-        "mask_outside_guard_modified": False,
-        "mask_outside_guard_exact": mask_outside_guard_exact,
-        "original_guard_mask_exact_one": True,
-        "high_guard_mask_exact_zero": guard_mask_exact_zero,
-        "extra_h3_nfe": 0,
-        "extra_sampler_lifetimes": 0,
-        "extra_history_boundaries": 0,
-        "extra_provider_calls": 0,
-        "extra_vae_calls": 0,
-    }
+    return (
+        guarded_latent,
+        guarded_mask,
+    {
+            "policy": HIGH_STAGE_VIDEO_GUARD_POLICY,
+            "enabled": True,
+            "applied": True,
+            "guard_tokens": HIGH_STAGE_VIDEO_GUARD_TOKENS,
+            "guard_token_index": prefix_t,
+            "caller_exact_prefix_tokens": prefix_t,
+            "high_protected_video_tokens": prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+            "guard_source": "exact_restored_pre_high_first_suffix_clean",
+            "guard_source_exact": guard_source_exact,
+            "guard_differs_from_caller_latent": changed_from_caller,
+            "caller_prefix_modified": False,
+            "caller_prefix_exact": prefix_exact,
+            "audio_modified": False,
+            "audio_exact": audio_exact,
+            "audio_mask_modified": False,
+            "audio_mask_exact": audio_mask_exact,
+            "later_suffix_modified": False,
+            "later_suffix_exact": later_suffix_exact,
+            "mask_outside_guard_modified": False,
+            "mask_outside_guard_exact": mask_outside_guard_exact,
+            "original_guard_mask_exact_one": True,
+            "high_guard_mask_exact_zero": guard_mask_exact_zero,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        )
 
 
 def disabled_high_stage_video_guard(*, prefix_t: int, reason: str) -> dict[str, Any]:
