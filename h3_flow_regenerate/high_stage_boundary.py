@@ -371,14 +371,24 @@ def apply_final_boundary_reference(
         stop = prefix + support
         before = audio[..., prefix:stop].detach().to(torch.float32).clone()
         reference = audio_reference[..., prefix:stop].to(device=audio.device, dtype=audio.dtype)
-        audio[..., prefix:stop] = reference
+        weights = HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS[:support]
+        for offset, weight in enumerate(weights):
+            current = audio[..., prefix + offset].to(torch.float32)
+            target = reference[..., offset].to(torch.float32)
+            audio[..., prefix + offset] = (current + float(weight) * (target - current)).to(audio.dtype)
         after = audio[..., prefix:stop].detach().to(torch.float32)
+        full_reference = min(HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS, support)
         report.update(
             audio_applied=True,
             audio_prefix_ticks=prefix,
             audio_support_ticks=support,
+            audio_temporal_weights=list(weights),
             audio_correction_rms=_rms(after - before),
-            audio_reference_error_rms=_rms(after - reference.to(torch.float32)),
+            audio_full_reference_ticks=full_reference,
+            audio_full_reference_error_rms=_rms(
+                after[..., :full_reference] - reference[..., :full_reference].to(torch.float32)
+            ),
+            audio_weighted_reference_residual_rms=_rms(after - reference.to(torch.float32)),
         )
         if not torch.equal(audio[..., :prefix], original_audio[..., :prefix]):
             raise RuntimeError("final audio boundary reference modified authoritative prefix")
