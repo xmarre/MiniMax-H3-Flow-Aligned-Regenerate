@@ -245,7 +245,7 @@ def apply_weighted_vertical_translation(
     return output
 
 
-def _candidate_score(
+def score_post_high_vertical_candidate(
     original: dict[str, dict[str, Any]],
     candidate: dict[str, dict[str, Any]],
 ) -> tuple[float, dict[str, Any]]:
@@ -267,6 +267,32 @@ def _candidate_score(
         "after_mean_abs_error_cells": after_mean,
         "mean_improvement_ratio": improvement,
         "x_first_pair_perturbation_cells": x_perturbation,
+    }
+
+
+def validate_post_high_vertical_candidate(
+    original: dict[str, dict[str, Any]],
+    candidate: dict[str, dict[str, Any]],
+) -> tuple[bool, dict[str, Any]]:
+    """Apply the production acceptance gates to a measured candidate."""
+
+    _score, score_fields = score_post_high_vertical_candidate(original, candidate)
+    no_material_roi_regression = all(
+        float(score_fields["after_abs_error_cells"][roi])
+        <= float(score_fields["before_abs_error_cells"][roi]) + POST_HIGH_VIDEO_MAX_ROI_REGRESSION_CELLS
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    )
+    x_stable = all(
+        float(score_fields["x_first_pair_perturbation_cells"][roi]) <= POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS
+        for roi, _fraction in POST_HIGH_VIDEO_ROIS
+    )
+    improved = float(score_fields["mean_improvement_ratio"]) >= POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT
+    accepted = bool(no_material_roi_regression and x_stable and improved)
+    return accepted, {
+        **score_fields,
+        "no_material_roi_regression": no_material_roi_regression,
+        "horizontal_phase_stable": x_stable,
+        "minimum_mean_improvement": POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
     }
 
 
@@ -301,7 +327,7 @@ def repair_post_high_vertical_residual(
             dy=dy,
         )
         candidate_receipts = _measure(candidate_video, prefix_t)
-        score, score_fields = _candidate_score(post_high, candidate_receipts)
+        score, score_fields = score_post_high_vertical_candidate(post_high, candidate_receipts)
         trials.append((dy, candidate_video, candidate_receipts, score, score_fields))
         receipt["candidate_sign_trials"].append(
             {
@@ -310,25 +336,12 @@ def repair_post_high_vertical_residual(
             }
         )
 
-    dy, candidate_video, candidate_receipts, _score, score_fields = min(trials, key=lambda item: item[3])
-    no_material_roi_regression = all(
-        float(score_fields["after_abs_error_cells"][roi])
-        <= float(score_fields["before_abs_error_cells"][roi]) + POST_HIGH_VIDEO_MAX_ROI_REGRESSION_CELLS
-        for roi, _fraction in POST_HIGH_VIDEO_ROIS
-    )
-    x_stable = all(
-        float(score_fields["x_first_pair_perturbation_cells"][roi]) <= POST_HIGH_VIDEO_MAX_X_PERTURBATION_CELLS
-        for roi, _fraction in POST_HIGH_VIDEO_ROIS
-    )
-    improved = float(score_fields["mean_improvement_ratio"]) >= POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT
-    accepted = bool(no_material_roi_regression and x_stable and improved)
+    dy, candidate_video, candidate_receipts, _score, _score_fields = min(trials, key=lambda item: item[3])
+    accepted, validation = validate_post_high_vertical_candidate(post_high, candidate_receipts)
     receipt.update(
         selected_dy_cells=float(dy),
-        selected_score=score_fields,
+        selected_score=validation,
         post_high_after=candidate_receipts,
-        no_material_roi_regression=no_material_roi_regression,
-        horizontal_phase_stable=x_stable,
-        minimum_mean_improvement=POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
         accepted=accepted,
     )
     if not accepted:
@@ -350,4 +363,6 @@ __all__ = [
     "apply_weighted_vertical_translation",
     "plan_post_high_vertical_residual",
     "repair_post_high_vertical_residual",
+    "score_post_high_vertical_candidate",
+    "validate_post_high_vertical_candidate",
 ]
