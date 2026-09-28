@@ -482,9 +482,9 @@ def build_handoff_state(
         # deliberately not divided by model_sampling.noise_scale: the handoff
         # reconstruction below is x_t=(1-sigma)*x0+sigma*residual and therefore
         # consumes the already-scaled residual that is actually present in x_t.
-        source_residual = (
-            source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)
-        ) / float(sigma)
+        source_residual = (source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)) / float(
+            sigma
+        )
         noise, noise_report = refine_h3_patch_lattice_residual(
             source_residual,
             target_h=target_h,
