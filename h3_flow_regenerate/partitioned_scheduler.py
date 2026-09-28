@@ -105,6 +105,11 @@ from .partitioned_stage import (
     build_partitioned_stage_plan,
     tensor_sha256,
 )
+from .post_high_video import (
+    POST_HIGH_VIDEO_RESIDUAL_POLICY,
+    apply_weighted_vertical_translation,
+    repair_post_high_vertical_residual,
+)
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
 from .representation_bridge import (
     apply_suffix_representation_bridge,
@@ -165,7 +170,9 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_v1"
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = (
+    "source_residual_handoff_plus_first_suffix_overlap_plus_post_high_vertical_release_v1"
+)
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -4006,6 +4013,7 @@ def run_partitioned_progressive(
                     )
                 )
 
+        pre_high_trajectory_receipts: dict[str, dict[str, Any]] = {}
         provider_native_trajectory_source = (
             frame_gauge_witnesses.get("learned_native") if frame_gauge_candidate_accepted else provider_native_clean
         )
@@ -4059,6 +4067,7 @@ def run_partitioned_progressive(
                 roi_fraction=roi_fraction,
                 max_shift=4,
             )
+            pre_high_trajectory_receipts[roi_name] = dict(restored_trajectory)
             binding.metrics.event(
                 "partitioned_multiframe_trajectory",
                 stage="exact_restored_pre_high",
@@ -4092,6 +4101,8 @@ def run_partitioned_progressive(
             provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             video_high_clean_reference_enabled=high_video_reference_enabled,
+            video_post_high_residual_policy=POST_HIGH_VIDEO_RESIDUAL_POLICY,
+            video_post_high_residual_enabled=bool(config.frame_gauge_repair),
             audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
             audio_high_clean_reference_enabled=high_audio_reference_enabled,
             audio_exact_restore_successor_bridge_enabled=False,
@@ -4303,6 +4314,80 @@ def run_partitioned_progressive(
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+
+        post_high_video_repair: dict[str, Any] = {
+            "policy": POST_HIGH_VIDEO_RESIDUAL_POLICY,
+            "eligible": False,
+            "accepted": False,
+            "applied": False,
+            "output_mutated": False,
+            "reason": "frame_gauge_repair_disabled",
+            "authoritative_prefix_modified": False,
+            "audio_modified": False,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        post_high_repair_selected_dy: float | None = None
+        if config.frame_gauge_repair:
+            if final_internal_video is None or final_internal_audio is None:
+                raise RuntimeError("post-high video residual repair lost the common-domain final state")
+            safe_video_topology = bool(
+                handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+                and representation_metrics.get("suffix_representation_bridge_accepted", False)
+                and int(representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)) == 1
+                and not high_video_reference_enabled
+            )
+            if safe_video_topology:
+                corrected_internal_video, repair_receipt = repair_post_high_vertical_residual(
+                    pre_high_trajectory_receipts,
+                    final_internal_video,
+                    prefix_t=stage_plan.prefix_t,
+                )
+                post_high_video_repair = {
+                    **repair_receipt,
+                    "safe_video_topology": True,
+                    "audio_modified": False,
+                    "extra_h3_nfe": 0,
+                    "extra_sampler_lifetimes": 0,
+                    "extra_history_boundaries": 0,
+                    "extra_provider_calls": 0,
+                    "extra_vae_calls": 0,
+                }
+                if bool(repair_receipt.get("applied")):
+                    post_high_repair_selected_dy = float(repair_receipt["selected_dy_cells"])
+                    corrected_caller_video = apply_weighted_vertical_translation(
+                        final_video,
+                        prefix_t=stage_plan.prefix_t,
+                        dy=post_high_repair_selected_dy,
+                    )
+                    if not torch.equal(
+                        corrected_caller_video[:, :, : stage_plan.prefix_t],
+                        final_video[:, :, : stage_plan.prefix_t],
+                    ):
+                        raise RuntimeError("post-high video residual repair modified the caller-owned exact prefix")
+                    corrected_result, corrected_shapes = pack_streams((corrected_caller_video, final_audio))
+                    if corrected_shapes != target_shapes:
+                        raise RuntimeError("post-high video residual repair changed packed stream geometry")
+                    _corrected_video_check, corrected_audio_check = unpack_streams(corrected_result, target_shapes)
+                    if not torch.equal(corrected_audio_check, final_audio):
+                        raise RuntimeError("post-high video residual repair modified audio")
+                    final_video = corrected_caller_video
+                    result = corrected_result
+                    final_internal_video = corrected_internal_video
+                    final_internal = pack_streams((final_internal_video, final_internal_audio))[0]
+                    post_high_video_repair["caller_audio_exact"] = True
+                    post_high_video_repair["caller_prefix_exact"] = True
+            else:
+                post_high_video_repair["reason"] = "safe_video_topology_not_active"
+                post_high_video_repair["safe_video_topology"] = False
+
+        binding.metrics.event(
+            "partitioned_post_high_video_residual_repair",
+            **post_high_video_repair,
+        )
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
                 raise RuntimeError("residual measurement lost the common-domain final video operand")
@@ -4613,6 +4698,10 @@ def run_partitioned_progressive(
             final_over_transfer_exact_seam_spatial_mean_ratio=boundary["seam_spatial_mean_rms"]
             / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
             deprecated_mixed_grid_contract_active=False,
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            video_post_high_residual_policy=POST_HIGH_VIDEO_RESIDUAL_POLICY,
+            video_post_high_residual_applied=bool(post_high_video_repair.get("applied", False)),
+            video_post_high_residual_selected_dy_cells=post_high_repair_selected_dy,
         )
         binding.metrics.event(
             "handoff_complete",
