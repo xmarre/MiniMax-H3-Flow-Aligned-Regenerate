@@ -2975,6 +2975,7 @@ def run_partitioned_progressive(
         # through target-high so the high-stage boundary contract can preserve
         # clean-domain continuation state without another H3 evaluation.
         low_probe_clean_audio = clean_audio.detach().clone()
+        low_probe_audio_report = None
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
                 source_x0,
@@ -3629,6 +3630,19 @@ def run_partitioned_progressive(
         )
 
         high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
+        audio_reference_support_ticks = 0
+        if high_audio_reference_enabled:
+            if not isinstance(low_probe_audio_report, dict) or not low_probe_audio_report.get("available"):
+                raise RuntimeError("high-stage audio boundary reference lost exact-boundary geometry")
+            generated_audio_ticks = int(low_probe_audio_report["audio_total_ticks"]) - int(
+                low_probe_audio_report["audio_prefix_ticks"]
+            )
+            audio_reference_support_ticks = min(
+                HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS,
+                generated_audio_ticks,
+            )
+            if audio_reference_support_ticks <= 0:
+                raise RuntimeError("high-stage audio boundary reference has no generated suffix support")
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
@@ -3650,15 +3664,20 @@ def run_partitioned_progressive(
             ),
             audio_enabled=high_audio_reference_enabled,
             audio_reference_domain="low_probe_clean",
-            audio_support_ticks=(HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS if high_audio_reference_enabled else 0),
-            audio_full_reference_ticks=(
-                HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS if high_audio_reference_enabled else 0
+            audio_support_ticks=audio_reference_support_ticks,
+            audio_full_reference_ticks=min(
+                HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS,
+                audio_reference_support_ticks,
             ),
-            audio_seam_ticks=(HIGH_BOUNDARY_AUDIO_SEAM_TICKS if high_audio_reference_enabled else 0),
-            audio_decoder_context_ticks=(
-                HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS if high_audio_reference_enabled else 0
+            audio_seam_ticks=min(HIGH_BOUNDARY_AUDIO_SEAM_TICKS, audio_reference_support_ticks),
+            audio_decoder_context_ticks=min(
+                HIGH_BOUNDARY_AUDIO_DECODER_CONTEXT_TICKS,
+                max(0, audio_reference_support_ticks - HIGH_BOUNDARY_AUDIO_SEAM_TICKS),
             ),
-            audio_release_ticks=(HIGH_BOUNDARY_AUDIO_RELEASE_TICKS if high_audio_reference_enabled else 0),
+            audio_release_ticks=min(
+                HIGH_BOUNDARY_AUDIO_RELEASE_TICKS,
+                max(0, audio_reference_support_ticks - HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS),
+            ),
             audio_anchor_policy="full_seam_and_decoder_context_then_linear_release",
             audio_activation_overlap_ticks=int(audio_guided_overlap_ticks),
             authoritative_prefix_modified=False,
