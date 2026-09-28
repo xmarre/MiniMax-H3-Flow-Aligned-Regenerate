@@ -3597,12 +3597,17 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
+        # Target-high H3 predicts both the exact prefix and generated suffix,
+        # then Comfy's inpaint wrapper replaces only the prefix.  Reconcile that
+        # same-call replacement locally instead of freezing a stored pre-high
+        # suffix trajectory.  The bridge is opt-in with frame-gauge repair and
+        # applies on every high prediction regardless of which pre-high rigid
+        # candidate/fallback path happened to be selected.
         high_video_reference_enabled = bool(
             config.frame_gauge_repair
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
-            and frame_gauge_transaction.get("result") == "shadow_only"
-            and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
-            and exact_overlap_successor_safe_selected
+            and int(stage_plan.prefix_t) > 0
+            and int(stage_plan.prefix_t) < int(restored_clean.shape[2])
         )
         high_audio_reference_enabled = bool(
             config.frame_gauge_repair
@@ -3614,16 +3619,13 @@ def run_partitioned_progressive(
             and audio_guided_overlap_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
             and int(audio_guided_overlap_ticks) == len(HIGH_BOUNDARY_REFERENCE_WEIGHTS)
         )
-        high_video_reference_suffix = (
-            restored_clean[
-                :,
-                :,
-                stage_plan.prefix_t : stage_plan.prefix_t + len(HIGH_BOUNDARY_REFERENCE_WEIGHTS),
-            ]
-            .detach()
-            .clone()
+        high_video_support_tokens = (
+            min(
+                len(HIGH_BOUNDARY_REFERENCE_WEIGHTS),
+                int(restored_clean.shape[2]) - int(stage_plan.prefix_t),
+            )
             if high_video_reference_enabled
-            else None
+            else 0
         )
         high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
         binding.metrics.event(
@@ -3631,15 +3633,19 @@ def run_partitioned_progressive(
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
             enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
             video_enabled=high_video_reference_enabled,
-            video_reference_domain="exact_restored_pre_high_clean",
-            video_support_tokens=(
-                int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
-            ),
+            video_reference_domain="same_call_model_predicted_prefix_tail",
+            video_support_tokens=high_video_support_tokens,
             video_temporal_weights=(
-                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS[: int(high_video_reference_suffix.shape[2])])
-                if high_video_reference_suffix is not None
+                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS[:high_video_support_tokens])
+                if high_video_reference_enabled
                 else []
             ),
+            video_selection_reason=(
+                "exact_prefix_replacement_reconciliation"
+                if high_video_reference_enabled
+                else "frame_gauge_repair_or_exact_context_inactive"
+            ),
+            video_static_pre_high_reference=False,
             audio_enabled=high_audio_reference_enabled,
             audio_reference_domain="low_probe_clean",
             audio_support_ticks=(len(HIGH_BOUNDARY_REFERENCE_WEIGHTS) if high_audio_reference_enabled else 0),
@@ -4142,7 +4148,7 @@ def run_partitioned_progressive(
                 exact_prefix,
                 target_shapes,
                 measure=residual_mode == "measure",
-                video_reference_suffix=high_video_reference_suffix,
+                video_exact_prefix_bridge=high_video_reference_enabled,
                 audio_reference=high_audio_reference,
                 exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
             ),
