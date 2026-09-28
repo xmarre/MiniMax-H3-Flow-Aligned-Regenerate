@@ -68,6 +68,8 @@ from h3_flow_regenerate.partitioned_outer import (
     partitioned_outer_wrapper,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
+    PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
+    PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED,
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
     _prepare_registered_guidance_reference,
@@ -864,6 +866,11 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
     assert context_event.fields["sampler_mask_modified"] is True
     assert context_event.fields["exact_sampler_prefix_preserved"] is False
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
+
+
+def test_pr89_audio_boundary_mutations_fail_closed_to_released_sampler_contract():
+    assert PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED is False
+    assert PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT == "released_sampler_overlap_exact_restore_v1"
 
 
 def test_audio_model_timestep_mode_requires_post_wrapper_velocity_mask_contract():
