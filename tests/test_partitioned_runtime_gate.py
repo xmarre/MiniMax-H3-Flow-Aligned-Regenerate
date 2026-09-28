@@ -170,6 +170,7 @@ def _metrics_with_high_video_guard(**setup_overrides):
                 high_video_guard_tokens=1,
                 high_video_guard_final_exact=True,
                 high_video_guard_endpoint_canonicalized=False,
+                high_boundary_context_tokens=13,
             )
         elif event["kind"] == "handoff_complete":
             event["fields"]["high_stage_video_guard_requested"] = 1
@@ -199,6 +200,7 @@ def _metrics_with_high_video_guard(**setup_overrides):
         "internal_guard_exact": True,
         "internal_audio_exact": True,
         "caller_internal_round_trip_verified": True,
+        "flow_guidance_protected_video_tokens": 13,
         "target_state_reconstruction_verified": True,
         "target_state_reconstruction_max_abs_delta": 1e-7,
         "target_state_reconstruction_rms_delta": 1e-8,
@@ -236,6 +238,8 @@ def _metrics_with_high_video_guard(**setup_overrides):
             video_support_tokens=0,
             high_video_guard_enabled=True,
             high_video_guard_policy=policy,
+            high_boundary_context_tokens=13,
+            high_boundary_prefix_witness="protected_first_generated_guard_tail_after_inpaint_restore",
         ),
     )
     metrics["events"].insert(
@@ -244,6 +248,16 @@ def _metrics_with_high_video_guard(**setup_overrides):
             "partitioned_high_boundary_reference_verified",
             video_enabled=False,
             anchor_calls=0,
+            high_video_guard_enabled=True,
+            high_boundary_context_tokens=13,
+            high_boundary_prefix_witness="protected_first_generated_guard_tail_after_inpaint_restore",
+        ),
+    )
+    metrics["events"].insert(
+        -2,
+        _event(
+            "guidance",
+            protected_prefix_t=13,
         ),
     )
     metrics["events"].insert(-2, _event("partitioned_high_video_guard", **setup))
