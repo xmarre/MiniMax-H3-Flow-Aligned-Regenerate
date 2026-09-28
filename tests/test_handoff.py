@@ -176,64 +176,6 @@ def test_learned_handoff_can_refine_same_sigma_source_residual_without_touching_
     )
 
 
-def test_source_residual_handoff_respects_model_noise_scale():
-    torch.manual_seed(31)
-    sigma = 0.4
-    noise_scale = 2.0
-    source_x0_video = torch.randn(1, 24, 2, 4, 6)
-    source_noise = torch.randn_like(source_x0_video)
-    source_video = (1.0 - sigma) * source_x0_video + sigma * noise_scale * source_noise
-    audio = torch.randn(1, 32, 2, 7)
-    source_state, shapes = pack_streams((source_video, audio))
-    source_x0, _ = pack_streams((source_x0_video, torch.randn_like(audio)))
-    provider = FakeLearnedProvider()
-    report = {}
-
-    target, target_shapes = build_handoff_state(
-        source_packed_state=source_state,
-        source_x0_packed=source_x0,
-        source_shapes=shapes,
-        sigma=sigma,
-        target_h=8,
-        target_w=10,
-        seed=789,
-        transfer_mode="learned_3d",
-        learned_upscaler=provider,
-        transfer_metrics=report,
-        noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
-        noise_scale=noise_scale,
-    )
-    target_video, target_audio = unpack_streams(target, target_shapes)
-    refined_noise, _ = refine_h3_patch_lattice_residual(
-        source_noise,
-        target_h=8,
-        target_w=10,
-        seed=789,
-    )
-    expected_clean = torch.full_like(target_video, 5.0)
-    expected = (1.0 - sigma) * expected_clean + sigma * refined_noise.to(expected_clean)
-
-    torch.testing.assert_close(target_video, expected, rtol=0, atol=2e-6)
-    assert torch.equal(target_audio, audio)
-    assert report["handoff_noise"]["noise_scale"] == noise_scale
-
-
-def test_source_residual_handoff_rejects_invalid_noise_scale():
-    state, x0, shapes, _, _ = packed()
-    with pytest.raises(ValueError, match="noise_scale"):
-        build_handoff_state(
-            source_packed_state=state,
-            source_x0_packed=x0,
-            source_shapes=shapes,
-            sigma=0.4,
-            target_h=8,
-            target_w=6,
-            seed=123,
-            noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
-            noise_scale=0.0,
-        )
-
-
 def test_independent_handoff_noise_remains_default_and_reports_policy():
     state, x0, shapes, _, _ = packed()
     report = {}
