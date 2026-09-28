@@ -1698,8 +1698,28 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
     )
     _require(receipt.get("audio_modified") is False, "post-high video residual repair modified audio")
 
+    transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
+    completes = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"]
+    _require(len(transfers) == 1, "post-high video residual receipt requires exactly one transfer receipt")
+    _require(bool(completes), "post-high video residual receipt requires a completion receipt")
+    transfer = transfers[0]
+    complete = completes[-1]
+    _require(
+        transfer.get("video_post_high_residual_policy") == POST_HIGH_VIDEO_RESIDUAL_POLICY
+        and complete.get("video_post_high_residual_policy") == POST_HIGH_VIDEO_RESIDUAL_POLICY,
+        "post-high video residual policy provenance drifted across transfer/completion",
+    )
+
     applied = bool(receipt.get("applied"))
+    _require(
+        bool(complete.get("video_post_high_residual_applied")) is applied,
+        "post-high video residual completion application state drifted",
+    )
     if not applied:
+        _require(
+            complete.get("video_post_high_residual_selected_dy_cells") is None,
+            "rejected post-high video residual candidate leaked a selected displacement into completion",
+        )
         _require(receipt.get("output_mutated") is False, "rejected post-high video residual candidate mutated output")
         _require(receipt.get("accepted") is not True, "rejected post-high video residual candidate claims acceptance")
         reason = str(receipt.get("reason", ""))
@@ -1731,6 +1751,10 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
         )
         return
 
+    _require(
+        transfer.get("video_post_high_residual_enabled") is True,
+        "applied post-high video residual repair was not armed at transfer",
+    )
     _require(receipt.get("accepted") is True, "applied post-high video residual repair is not accepted")
     _require(receipt.get("output_mutated") is True, "applied post-high video residual repair did not mutate output")
     _require(receipt.get("safe_video_topology") is True, "post-high video residual repair escaped safe topology")
@@ -1752,7 +1776,17 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
         "post-high video residual repair failed caller-domain round-trip validation",
     )
 
-    selected_dy = abs(_finite_number(receipt.get("selected_dy_cells")))
+    selected_dy_value = _finite_number(receipt.get("selected_dy_cells"))
+    _require(
+        math.isclose(
+            _finite_number(complete.get("video_post_high_residual_selected_dy_cells")),
+            selected_dy_value,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ),
+        "post-high video residual completion displacement drifted",
+    )
+    selected_dy = abs(selected_dy_value)
     magnitude = _finite_number(receipt.get("correction_magnitude_cells"))
     _require(
         selected_dy <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS
