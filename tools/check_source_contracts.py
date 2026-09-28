@@ -127,7 +127,10 @@ def main() -> None:
         "class KSamplerX0Inpaint:",
         "latent_mask = 1. - denoise_mask",
         "out = out * denoise_mask + self.latent_image * latent_mask",
-        "scale_latent_inpaint(x=x, sigma=sigma, noise=self.noise, latent_image=self.latent_image, denoise_mask=denoise_mask)",
+        (
+            "scale_latent_inpaint(x=x, sigma=sigma, noise=self.noise, "
+            "latent_image=self.latent_image, denoise_mask=denoise_mask)"
+        ),
         "preprocess_conds_hooks(self.conds)",
         "filter_registered_hooks_on_conds(self.conds, self.model_options)",
         "self.conds = process_conds(",
