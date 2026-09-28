@@ -12,9 +12,12 @@ import logging
 
 import torch
 
+from .partitioned_stage import tensor_sha256
+
 LOG = logging.getLogger(__name__)
 HOP = 800
 RATE = 32000
+LOW_PROBE_AUDIO_WITNESS_KIND = "partitioned_low_probe_audio_caller_v1"
 
 
 def _rms(x):
@@ -36,13 +39,42 @@ def _comparison(reference, candidate):
     }
 
 
-def audit_audio_boundaries(audio_vae, latents, audios, plan):
+
+
+def _match_low_probe_witness(witnesses, right, prefix, used_indices):
+    """Match the newest unconsumed witness to the exact final carried prefix."""
+
+    prefix_digest = tensor_sha256(right[..., :prefix])
+    total_ticks = int(right.shape[-1])
+    for index in range(len(witnesses) - 1, -1, -1):
+        if index in used_indices:
+            continue
+        witness = witnesses[index]
+        fields = getattr(witness, "fields", None)
+        payload = getattr(witness, "payload", None)
+        if not isinstance(fields, dict) or not torch.is_tensor(payload):
+            continue
+        if (
+            int(fields.get("audio_prefix_ticks", -1)) != prefix
+            or int(fields.get("audio_total_ticks", -1)) != total_ticks
+            or fields.get("final_prefix_sha256") != prefix_digest
+            or tuple(payload.shape) != tuple(right.shape)
+        ):
+            continue
+        used_indices.add(index)
+        return witness, prefix_digest
+    return None, prefix_digest
+
+
+def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=None):
     if plan.get("magic") != "H3_CONTINUUM_ASSEMBLY_PLAN" or plan.get("fps") != 24:
         raise ValueError("audio boundary audit requires a native H3 Continuum assembly plan")
     groups = plan.get("decode_groups", plan.get("chunks"))
     if not isinstance(groups, list) or len(groups) != len(latents) or len(audios) != len(latents):
         raise ValueError("audio audit inputs must match physical decode groups")
     reports = []
+    witnesses = tuple(stage_witnesses or ())
+    used_witness_indices: set[int] = set()
     for i in range(1, len(latents)):
         report = {"boundary_index": i, "policy": "audio_left_context_audit_v1", "production_audio_modified": False}
         reports.append(report)
@@ -94,8 +126,66 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan):
         observed = production[..., prefix * HOP : prefix * HOP + window].detach().cpu()
         extended_suffix = decoded[..., cut : cut + window]
         baseline_suffix = baseline[..., prefix * HOP : prefix * HOP + window]
-        if not all(bool(torch.isfinite(x).all().item()) for x in (baseline, decoded, observed)):
-            report.update(status="not_evaluated", reason="nonfinite_audio", extra_vae_calls=2)
+
+        stage_counterfactual = {
+            "status": "not_requested" if not witnesses else "not_evaluated",
+            "reason": "metrics_witness_not_connected" if not witnesses else "no_matching_low_probe_witness",
+            "policy": "low_probe_generated_suffix_counterfactual_v1",
+        }
+        extra_vae_calls = 2
+        low_probe_decoded = None
+        if witnesses:
+            witness, final_prefix_digest = _match_low_probe_witness(
+                witnesses,
+                right,
+                prefix,
+                used_witness_indices,
+            )
+            if witness is not None:
+                low_probe_audio = witness.payload
+                if low_probe_audio.dtype != right.dtype:
+                    stage_counterfactual["reason"] = "low_probe_witness_dtype_mismatch"
+                elif low_probe_audio.shape[-1] < prefix + 52:
+                    stage_counterfactual["reason"] = "low_probe_witness_insufficient_right_context"
+                else:
+                    counterfactual_latent = baseline_latent.clone()
+                    counterfactual_latent[..., prefix : prefix + 52] = low_probe_audio[
+                        ..., prefix : prefix + 52
+                    ].to(counterfactual_latent)
+                    low_probe_decoded = decode(counterfactual_latent)
+                    extra_vae_calls = 3
+                    low_probe_suffix = low_probe_decoded[..., prefix * HOP : prefix * HOP + window]
+                    low_probe_previous = low_probe_decoded[
+                        ..., (prefix - 20) * HOP : prefix * HOP
+                    ]
+                    fields = witness.fields
+                    stage_counterfactual = {
+                        "status": "measured",
+                        "reason": "matched_exact_final_prefix",
+                        "policy": "low_probe_generated_suffix_counterfactual_v1",
+                        "source_stage": "low_probe_caller",
+                        "source_domain": "caller_output_latent",
+                        "authoritative_prefix_source": "final_continuation_latent",
+                        "generated_ticks_replaced": 52,
+                        "window_ticks": 20,
+                        "final_prefix_sha256": final_prefix_digest,
+                        "witness_session_id": fields.get("session_id"),
+                        "witness_chunk_id": fields.get("chunk_id"),
+                        "low_probe_common_decode_boundary": _comparison(
+                            low_probe_previous,
+                            low_probe_suffix,
+                        ),
+                        "final_vs_low_probe_suffix": _comparison(
+                            low_probe_suffix,
+                            baseline_suffix,
+                        ),
+                    }
+
+        finite_tensors = [baseline, decoded, observed]
+        if low_probe_decoded is not None:
+            finite_tensors.append(low_probe_decoded)
+        if not all(bool(torch.isfinite(x).all().item()) for x in finite_tensors):
+            report.update(status="not_evaluated", reason="nonfinite_audio", extra_vae_calls=extra_vae_calls)
             continue
         inactive = bool((production.float().std(dim=(1, 2)) < 0.2 - 1e-6).all().item())
         report.update(
@@ -105,13 +195,14 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan):
             right_context_ticks=32,
             window_ticks=20,
             decoded_ticks=int(extended.shape[-1]),
-            extra_vae_calls=2,
+            extra_vae_calls=extra_vae_calls,
             production_normalizer_provably_inactive=inactive,
             context_comparison_valid=True,
             production_crop_comparison_valid=inactive,
             same_suffix_context_comparison=_comparison(baseline_suffix, extended_suffix),
             production_crop_comparison=_comparison(observed, baseline_suffix),
             common_decode_boundary=_comparison(decoded[..., cut - window : cut], extended_suffix),
+            low_probe_counterfactual=stage_counterfactual,
             interpretation="paired_left_context_intervention_with_identical_suffix_and_right_context",
         )
         LOG.info("H3 Flow audio boundary audit %s", json.dumps(report, sort_keys=True))
@@ -122,7 +213,8 @@ class H3FlowAudioBoundaryAudit:
     DESCRIPTION = (
         "Optional diagnostic after Audio VAE Decode. Connect the original audio latent list, "
         "decoded audio list, VAE and assembly plan; forward audio to Assemble. "
-        "Preserves production audio and performs two bounded extra AudioVAE decodes per eligible boundary."
+        "With Flow metrics connected, it also decodes the captured low/probe generated-audio "
+        "trajectory as a counterfactual. Production audio is never modified."
     )
 
     @classmethod
@@ -133,7 +225,10 @@ class H3FlowAudioBoundaryAudit:
                 "audio_latents": ("LATENT",),
                 "audio": ("AUDIO",),
                 "assembly_plan": ("H3_CONTINUUM_ASSEMBLY_PLAN",),
-            }
+            },
+            "optional": {
+                "metrics": ("H3_FLOW_METRICS",),
+            },
         }
 
     INPUT_IS_LIST = True
@@ -143,10 +238,24 @@ class H3FlowAudioBoundaryAudit:
     FUNCTION = "audit"
     CATEGORY = "MiniMax H3/diagnostics"
 
-    def audit(self, audio_vae, audio_latents, audio, assembly_plan):
+    def audit(self, audio_vae, audio_latents, audio, assembly_plan, metrics=None):
         if len(audio_vae) != 1 or len(assembly_plan) != 1:
             raise ValueError("audio audit requires one VAE and one assembly plan")
-        reports = audit_audio_boundaries(audio_vae[0], audio_latents, audio, assembly_plan[0])
+        stage_witnesses = ()
+        if metrics:
+            if len(metrics) != 1:
+                raise ValueError("audio audit accepts at most one Flow metrics object")
+            getter = getattr(metrics[0], "transient_witnesses", None)
+            if not callable(getter):
+                raise ValueError("audio audit metrics input does not expose transient witnesses")
+            stage_witnesses = getter(LOW_PROBE_AUDIO_WITNESS_KIND)
+        reports = audit_audio_boundaries(
+            audio_vae[0],
+            audio_latents,
+            audio,
+            assembly_plan[0],
+            stage_witnesses=stage_witnesses,
+        )
         return audio, json.dumps(reports, indent=2, sort_keys=True)
 
 
