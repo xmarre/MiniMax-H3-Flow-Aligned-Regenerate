@@ -51,12 +51,13 @@ suffix, and right context. One prepends 32 actual earlier latent ticks. The
 comparison measures the same 500 ms suffix in both outputs. It therefore tests
 left-context dependence without changing generated content or production audio.
 
-When the Flow node's `H3_FLOW_METRICS` output is also connected to the audit's
-optional `metrics` input, partitioned sampling retains one bounded in-memory
-caller-domain audio witness from the completed low/probe stage. The witness is
-kept on CPU, excluded from metrics JSON, and matched to each physical boundary
-by physical order, audio geometry, exact-prefix width, and a SHA-256 digest of
-the final authoritative carried prefix. A stale or mismatched witness is rejected.
+On the main/main partitioned audio diagnostic path, Flow retains one bounded
+in-memory caller-domain audio witness from the completed low/probe stage. The
+witness is kept on CPU and excluded from metrics JSON. Connecting the Flow
+node's `H3_FLOW_METRICS` output to the audit's optional `metrics` input lets
+the audit consume that witness. It is matched to each physical boundary by
+physical order, audio geometry, exact-prefix width, and a SHA-256 digest of the
+final authoritative carried prefix. A stale or mismatched witness is rejected.
 
 For a matched witness, the audit performs one additional bounded AudioVAE decode.
 It constructs a counterfactual latent with the **final authoritative prefix**
