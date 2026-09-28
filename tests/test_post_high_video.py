@@ -130,7 +130,11 @@ def test_repair_trials_both_signs_and_accepts_only_measured_improvement(monkeypa
         ),
     }
     receipts = iter((post_high, improved, worsened))
-    monkeypatch.setattr(post_high_video, "_measure", lambda _video, _prefix_t: next(receipts))
+    monkeypatch.setattr(
+        post_high_video,
+        "measure_post_high_video_trajectory",
+        lambda _video, _prefix_t: next(receipts),
+    )
 
     torch.manual_seed(42)
     video = torch.randn(1, 4, 10, 12, 12)
