@@ -4378,10 +4378,30 @@ def run_partitioned_progressive(
                     raise RuntimeError("post-high video residual repair modified audio")
                 final_video = corrected_caller_video
                 result = corrected_result
-                final_internal_video = corrected_internal_video
-                final_internal = pack_streams((final_internal_video, final_internal_audio))[0]
+
+                # Caller-domain output is authoritative. Re-enter through the
+                # model's latent-input contract instead of assuming that a
+                # spatial interpolation commutes bit-for-bit with H3 latent
+                # scaling/normalization.
+                recomputed_internal = _process_latent_in(base_model, result, target_shapes)
+                recomputed_internal_video, recomputed_internal_audio = unpack_streams(
+                    recomputed_internal,
+                    target_shapes,
+                )
+                if not torch.equal(recomputed_internal_audio, final_internal_audio):
+                    raise RuntimeError("post-high video residual repair changed internal audio state")
+                if not torch.equal(
+                    recomputed_internal_video[:, :, : stage_plan.prefix_t],
+                    exact_prefix.to(device=recomputed_internal_video.device),
+                ):
+                    raise RuntimeError("post-high video residual repair changed the internal exact prefix")
+                final_internal = recomputed_internal
+                final_internal_video = recomputed_internal_video
+                final_internal_audio = recomputed_internal_audio
                 post_high_video_repair["caller_audio_exact"] = True
                 post_high_video_repair["caller_prefix_exact"] = True
+                post_high_video_repair["internal_audio_exact"] = True
+                post_high_video_repair["internal_prefix_exact"] = True
         elif config.frame_gauge_repair:
             post_high_video_repair["reason"] = "safe_video_topology_not_active"
             post_high_video_repair["safe_video_topology"] = False
