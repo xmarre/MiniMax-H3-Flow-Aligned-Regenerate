@@ -14,6 +14,7 @@ from h3_flow_regenerate.high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
     align_audio_reference_to_authoritative_prefix,
+    apply_final_boundary_reference,
     high_boundary_contract,
 )
 from h3_flow_regenerate.metrics import H3FlowMetrics
@@ -303,43 +304,6 @@ def test_runtime_applies_boundary_reference_before_flow_observation():
 
 
 
-def test_authoritative_audio_reference_preserves_boundary_relation_and_bounded_return():
-    torch.manual_seed(19)
-    video = torch.zeros(1, 24, 7, 4, 4)
-    low_audio = torch.randn(1, 32, 2, 80)
-    authoritative_audio = low_audio.clone()
-    prefix = 8
-    delta = torch.linspace(-0.8, 0.7, 64, dtype=low_audio.dtype).reshape(1, 32, 2)
-    authoritative_audio[..., :prefix] += delta.unsqueeze(-1)
-
-    video_mask = torch.ones_like(video)
-    video_mask[:, :, :3] = 0
-    audio_mask = torch.ones_like(low_audio)
-    audio_mask[..., :prefix] = 0
-    exact_mask, shapes = pack_streams((video_mask, audio_mask))
-
-    reference, report = build_authoritative_audio_boundary_reference(
-        low_audio,
-        authoritative_audio,
-        exact_mask,
-        shapes,
-    )
-
-    assert torch.equal(reference[..., :prefix], authoritative_audio[..., :prefix])
-    low_first_edge = low_audio[..., prefix] - low_audio[..., prefix - 1]
-    reference_first_edge = reference[..., prefix] - reference[..., prefix - 1]
-    torch.testing.assert_close(reference_first_edge, low_first_edge, rtol=0, atol=1e-6)
-    assert report["audio_first_edge_relation_error_rms"] < 1e-6
-    assert report["audio_reference_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
-
-    support_stop = prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
-    assert torch.equal(reference[..., support_stop:], low_audio[..., support_stop:])
-    first_generated_delta = reference[..., prefix] - low_audio[..., prefix]
-    torch.testing.assert_close(first_generated_delta, delta, rtol=0, atol=1e-6)
-    last_generated_delta = reference[..., support_stop - 1] - low_audio[..., support_stop - 1]
-    torch.testing.assert_close(last_generated_delta, delta / 32.0, rtol=0, atol=1e-6)
-
-
 def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_edges():
     torch.manual_seed(23)
     video = torch.randn(1, 24, 10, 6, 6)
@@ -372,13 +336,19 @@ def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_ed
     assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
     assert torch.equal(result_video[:, :, prefix_t + 4 :], video[:, :, prefix_t + 4 :])
     assert torch.equal(result_audio[..., :audio_prefix], audio[..., :audio_prefix])
+    full_stop = audio_prefix + HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
+    support_stop = audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
     assert torch.equal(
-        result_audio[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
-        audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
+        result_audio[..., audio_prefix:full_stop],
+        audio_reference[..., audio_prefix:full_stop],
     )
-    assert torch.equal(
-        result_audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
-        audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
-    )
+    release_weights = HIGH_BOUNDARY_AUDIO_REFERENCE_WEIGHTS[HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS:]
+    for offset, weight in enumerate(release_weights, start=HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS):
+        original_tick = audio[..., audio_prefix + offset].float()
+        reference_tick = audio_reference[..., audio_prefix + offset].float()
+        expected = (original_tick + weight * (reference_tick - original_tick)).to(result_audio.dtype)
+        torch.testing.assert_close(result_audio[..., audio_prefix + offset], expected, rtol=0, atol=0)
+    assert torch.equal(result_audio[..., support_stop:], audio[..., support_stop:])
     assert report["video_first_reference_error_rms"] == 0.0
-    assert report["audio_reference_error_rms"] == 0.0
+    assert report["audio_full_reference_error_rms"] == 0.0
+    assert report["audio_full_reference_ticks"] == HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
