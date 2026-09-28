@@ -4343,7 +4343,7 @@ def run_partitioned_progressive(
         if post_high_video_repair_armed:
             if final_internal_video is None or final_internal_audio is None:
                 raise RuntimeError("post-high video residual repair lost the common-domain final state")
-            corrected_internal_video, repair_receipt = repair_post_high_vertical_residual(
+            _corrected_internal_video, repair_receipt = repair_post_high_vertical_residual(
                 pre_high_trajectory_receipts,
                 final_internal_video,
                 prefix_t=stage_plan.prefix_t,
