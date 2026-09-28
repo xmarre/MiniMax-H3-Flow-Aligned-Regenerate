@@ -894,13 +894,14 @@ def test_exact_timestep_restore_support_is_bounded_by_generated_audio_suffix(mon
             upscale_clean_video=lambda *args, **kwargs: None,
         ),
     )
+    transformer_options = {}
     guider = SimpleNamespace(
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 4,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
-            "transformer_options": {},
+            "transformer_options": transformer_options,
         }
     )
 
@@ -923,10 +924,19 @@ def test_exact_timestep_restore_support_is_bounded_by_generated_audio_suffix(mon
         latent_shapes,
         exact_denoise_mask=None,
     ):
-        del call_guider, call_binding, config, noise, sampler, sigmas, call_mask, callback, disable_pbar, seed
+        del call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(exact_denoise_mask, exact_mask)
         assert adapted._audio_exact_restore_successor_ticks == 10
+        runtime_audio = unpack_streams(call_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
+        context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
+        assert isinstance(context, PartitionedAudioModelTimestepContext)
+        forwarded = _audio_model_timestep_kwargs(
+            transformer_options,
+            {"audio_denoise_mask": runtime_audio},
+        )
+        exact_audio = unpack_streams(exact_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
+        assert torch.equal(forwarded["audio_denoise_mask"], exact_audio)
         return latent_image.clone()
 
     monkeypatch.setattr(
