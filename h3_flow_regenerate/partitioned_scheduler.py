@@ -3759,9 +3759,7 @@ def run_partitioned_progressive(
                 stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
             )
             guard_internal_video[:, :, guard_slice] = restored_clean[:, :, guard_slice].to(guard_internal_video)
-            guard_internal_packed, guard_internal_shapes = pack_streams(
-                (guard_internal_video, caller_internal_audio)
-            )
+            guard_internal_packed, guard_internal_shapes = pack_streams((guard_internal_video, caller_internal_audio))
             if guard_internal_shapes != target_shapes:
                 raise RuntimeError("high-stage video guard changed internal packed geometry")
             guard_caller_packed = _process_latent_out(
@@ -3823,9 +3821,7 @@ def run_partitioned_progressive(
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
             high_video_guard_enabled=high_video_guard_enabled,
-            high_video_guard_tokens=(
-                HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0
-            ),
+            high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             video_reference_domain="disabled",
             video_support_tokens=(
                 int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
@@ -4206,9 +4202,7 @@ def run_partitioned_progressive(
             video_high_clean_reference_enabled=high_video_reference_enabled,
             video_high_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
             video_high_guard_enabled=high_video_guard_enabled,
-            video_high_guard_tokens=(
-                HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0
-            ),
+            video_high_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
             audio_high_clean_reference_enabled=high_audio_reference_enabled,
             audio_exact_restore_successor_bridge_enabled=False,
@@ -4293,19 +4287,12 @@ def run_partitioned_progressive(
             )
             model_sampling = getattr(base_model, "model_sampling", None)
             model_noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
-            reconstructed_guard_state = (
-                (1.0 - float(sigma))
-                * high_internal_video[:, :, guard_slice].to(
-                    device=merged_video_noise.device,
-                    dtype=torch.float32,
-                )
-                + float(sigma)
-                * model_noise_scale
-                * merged_video_noise[:, :, guard_slice].to(torch.float32)
-            )
-            guard_state_delta = (
+            reconstructed_guard_state = (1.0 - float(sigma)) * high_internal_video[:, :, guard_slice].to(
+                device=merged_video_noise.device,
+                dtype=torch.float32,
+            ) + float(sigma) * model_noise_scale * merged_video_noise[:, :, guard_slice].to(torch.float32)
+            guard_state_delta = reconstructed_guard_state - target_raw_video[:, :, guard_slice].to(
                 reconstructed_guard_state
-                - target_raw_video[:, :, guard_slice].to(reconstructed_guard_state)
             )
             guard_target_state_max_abs_delta = float(guard_state_delta.abs().max().item())
             guard_target_state_rms_delta = float(guard_state_delta.square().mean().sqrt().item())
@@ -4492,13 +4479,9 @@ def run_partitioned_progressive(
             if not high_guard_final_exact:
                 guard_endpoint_delta = observed_guard.to(torch.float32) - expected_guard.to(torch.float32)
                 high_guard_endpoint_max_abs_delta = float(guard_endpoint_delta.abs().max().item())
-                high_guard_endpoint_rms_delta = float(
-                    guard_endpoint_delta.square().mean().sqrt().item()
-                )
+                high_guard_endpoint_rms_delta = float(guard_endpoint_delta.square().mean().sqrt().item())
                 if high_guard_endpoint_max_abs_delta > HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA:
-                    raise RuntimeError(
-                        "target-high protected guard token drift exceeded numerical roundoff"
-                    )
+                    raise RuntimeError("target-high protected guard token drift exceeded numerical roundoff")
                 final_video = final_video.clone()
                 final_video[:, :, guard_slice] = expected_guard
                 result, result_shapes = pack_streams((final_video, final_audio))
@@ -4876,9 +4859,7 @@ def run_partitioned_progressive(
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
             high_video_guard_enabled=high_video_guard_enabled,
-            high_video_guard_tokens=(
-                HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0
-            ),
+            high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             high_video_guard_final_exact=high_guard_final_exact,
             high_video_guard_endpoint_canonicalized=high_guard_endpoint_canonicalized,
         )
@@ -4892,9 +4873,7 @@ def run_partitioned_progressive(
             history_boundary_count=history_boundary_count,
             exact_probe_performed=True,
             high_stage_exact_prefix_requested=1,
-            high_stage_video_guard_requested=(
-                HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0
-            ),
+            high_stage_video_guard_requested=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             high_stage_first_call_actual=first_high_actual,
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
