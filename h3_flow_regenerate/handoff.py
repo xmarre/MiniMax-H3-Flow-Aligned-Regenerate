@@ -327,11 +327,11 @@ def refine_h3_patch_lattice_residual(
 
         target_j = source / sqrt(n) + eps_j - mean(eps_group).
 
-    The normalized group sum is exactly the source residual while the added
-    target-resolution innovation has zero coarse-group sum. If the source residual
-    is iid standard Gaussian, the refined field is also iid standard Gaussian. A
-    model-derived residual retains its measured coarse mode rather than being
-    replaced with an independent realization.
+    The normalized group sum is exactly the source effective flow residual while
+    the added target-resolution innovation has zero coarse-group sum. If that
+    residual is iid standard Gaussian, the refined field is also iid standard
+    Gaussian. A model-derived residual retains its measured coarse mode rather
+    than being replaced with an independent realization.
     """
 
     if (
@@ -462,7 +462,6 @@ def build_handoff_state(
     transfer_metrics: dict[str, Any] | None = None,
     clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
     noise_mode: str = H3_HANDOFF_NOISE_INDEPENDENT,
-    noise_scale: float = 1.0,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -477,14 +476,15 @@ def build_handoff_state(
         return source_packed_state.clone(), list(source_shapes)
     if noise_mode not in H3_HANDOFF_NOISE_MODES:
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
-    noise_scale = float(noise_scale)
-    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
-        raise ValueError("progressive H3 handoff noise_scale must be finite and positive")
     noise_report: dict[str, Any]
     if noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+        # Preserve the effective flow residual in carried-state units. This is
+        # deliberately not divided by model_sampling.noise_scale: the handoff
+        # reconstruction below is x_t=(1-sigma)*x0+sigma*residual and therefore
+        # consumes the already-scaled residual that is actually present in x_t.
         source_residual = (
             source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)
-        ) / (float(sigma) * noise_scale)
+        ) / float(sigma)
         noise, noise_report = refine_h3_patch_lattice_residual(
             source_residual,
             target_h=target_h,
@@ -498,7 +498,7 @@ def build_handoff_state(
             source_state_reconstruction_rms_error=float(reconstruction_error.square().mean().sqrt().item()),
             source_state_reconstruction_max_abs_error=float(reconstruction_error.abs().max().item()),
             residual_source="same_sigma_source_state_minus_clean_probe",
-            noise_scale=noise_scale,
+            residual_domain="effective_flow_residual_carried_state_units",
         )
     else:
         noise = deterministic_video_noise(
@@ -512,7 +512,6 @@ def build_handoff_state(
             "source_hw": tuple(int(value) for value in source_video.shape[-2:]),
             "target_hw": (int(target_h), int(target_w)),
             "innovation_seed": int(seed),
-            "noise_scale": noise_scale,
             "extra_h3_nfe": 0,
         }
     if transfer_mode == "bicubic":
