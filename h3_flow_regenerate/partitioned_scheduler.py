@@ -133,6 +133,7 @@ from .runtime import (
     _merge_preserved_noise,
     _noise_argument,
     _process_latent_in,
+    _process_latent_out,
     _raw_sampler_state,
     _reset_guider_conds,
     _resize_packed_latent_image,
@@ -4237,6 +4238,62 @@ def run_partitioned_progressive(
             extra_sampler_lifetimes=0,
             extra_history_boundaries=0,
         )
+
+        if high_boundary_reference_expected:
+            final_internal_reference_input = _process_latent_in(base_model, result, target_shapes)
+            stabilized_internal, final_reference_report = apply_final_boundary_reference(
+                final_internal_reference_input,
+                target_shapes,
+                video_prefix_t=stage_plan.prefix_t,
+                video_reference_suffix=high_video_reference_suffix,
+                audio_reference=high_audio_reference,
+                exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
+            )
+            stabilized_caller = _process_latent_out(base_model, stabilized_internal, target_shapes)
+            result_before_final_reference = result
+            result = result.clone()
+            result_video, result_audio = unpack_streams(result, target_shapes)
+            original_result_video, original_result_audio = unpack_streams(result_before_final_reference, target_shapes)
+            stabilized_video, stabilized_audio = unpack_streams(stabilized_caller, target_shapes)
+
+            if high_video_reference_suffix is not None:
+                video_support = min(
+                    int(high_video_reference_suffix.shape[2]),
+                    len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS),
+                )
+                video_stop = stage_plan.prefix_t + video_support
+                result_video[:, :, stage_plan.prefix_t:video_stop] = stabilized_video[
+                    :, :, stage_plan.prefix_t:video_stop
+                ].to(result_video)
+                if not torch.equal(
+                    result_video[:, :, : stage_plan.prefix_t],
+                    original_result_video[:, :, : stage_plan.prefix_t],
+                ):
+                    raise RuntimeError("final video boundary stabilization modified caller-owned prefix")
+                if not torch.equal(result_video[:, :, video_stop:], original_result_video[:, :, video_stop:]):
+                    raise RuntimeError("final video boundary stabilization escaped caller bounded support")
+
+            if high_audio_reference is not None:
+                audio_prefix_ticks = int(final_reference_report["audio_prefix_ticks"])
+                audio_support_ticks = int(final_reference_report["audio_support_ticks"])
+                audio_stop = audio_prefix_ticks + audio_support_ticks
+                result_audio[..., audio_prefix_ticks:audio_stop] = stabilized_audio[
+                    ..., audio_prefix_ticks:audio_stop
+                ].to(result_audio)
+                if not torch.equal(
+                    result_audio[..., :audio_prefix_ticks],
+                    original_result_audio[..., :audio_prefix_ticks],
+                ):
+                    raise RuntimeError("final audio boundary stabilization modified caller-owned prefix")
+                if not torch.equal(result_audio[..., audio_stop:], original_result_audio[..., audio_stop:]):
+                    raise RuntimeError("final audio boundary stabilization escaped caller bounded support")
+
+            binding.metrics.event(
+                "partitioned_final_boundary_reference",
+                policy=HIGH_BOUNDARY_REFERENCE_POLICY,
+                caller_prefix_preserved=True,
+                **final_reference_report,
+            )
 
         final_video, final_audio = unpack_streams(result, target_shapes)
         final_internal = None
