@@ -245,7 +245,7 @@ class H3FlowAudioBoundaryAudit:
         if len(audio_vae) != 1 or len(assembly_plan) != 1:
             raise ValueError("audio audit requires one VAE and one assembly plan")
         stage_witnesses = None
-        if flow_model is not None:
+        if flow_model:
             if len(flow_model) != 1:
                 raise ValueError("audio audit requires at most one Flow model")
             options = getattr(flow_model[0], "model_options", None) or {}
