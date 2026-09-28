@@ -267,6 +267,191 @@ def deterministic_video_noise(
     return torch.randn(shape, generator=generator, dtype=torch.float32, device="cpu").to(device=device, dtype=dtype)
 
 
+H3_HANDOFF_NOISE_INDEPENDENT = "independent"
+H3_HANDOFF_NOISE_SOURCE_RESIDUAL = "source_residual_patch_refinement_v1"
+H3_HANDOFF_NOISE_MODES = {
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+}
+
+
+def _segment_mean_last(value: torch.Tensor, source_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Average contiguous target bins assigned by floor(target * source / target_size)."""
+
+    target_size = int(value.shape[-1])
+    source_size = int(source_size)
+    if source_size <= 0 or target_size < source_size:
+        raise ValueError("noise refinement segment geometry must be non-shrinking and positive")
+    indices = torch.arange(source_size + 1, device=value.device, dtype=torch.int64)
+    boundaries = torch.div(
+        indices * target_size + source_size - 1,
+        source_size,
+        rounding_mode="floor",
+    )
+    starts = boundaries[:-1]
+    stops = boundaries[1:]
+    counts = stops - starts
+    if bool((counts <= 0).any().item()):
+        raise RuntimeError("noise refinement produced an empty source-cell support group")
+
+    work = value.to(torch.float32)
+    prefix = torch.cat((torch.zeros_like(work[..., :1]), work.cumsum(dim=-1)), dim=-1)
+    sums = prefix.index_select(-1, stops) - prefix.index_select(-1, starts)
+    return sums / counts.to(dtype=work.dtype), counts
+
+
+def _patch_phase_group_mean(
+    value: torch.Tensor,
+    source_grid_h: int,
+    source_grid_w: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return rectangular group means and per-axis support counts."""
+
+    x_mean, count_x = _segment_mean_last(value, source_grid_w)
+    y_mean_t, count_y = _segment_mean_last(x_mean.transpose(-1, -2), source_grid_h)
+    return y_mean_t.transpose(-1, -2), count_y, count_x
+
+
+def refine_h3_patch_lattice_residual(
+    source_residual: torch.Tensor,
+    *,
+    target_h: int,
+    target_w: int,
+    seed: int,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Refine a source-grid flow residual onto a larger H3 patch lattice.
+
+    Each of H3's four latent positions inside a 2x2 transformer patch is refined
+    independently. Target cells are partitioned into contiguous physical patch-grid
+    groups owned by one source cell. For a group of size n:
+
+        target_j = source / sqrt(n) + eps_j - mean(eps_group).
+
+    The normalized group sum is exactly the source residual while the added
+    target-resolution innovation has zero coarse-group sum. If the source residual
+    is iid standard Gaussian, the refined field is also iid standard Gaussian. A
+    model-derived residual retains its measured coarse mode rather than being
+    replaced with an independent realization.
+    """
+
+    if (
+        not isinstance(source_residual, torch.Tensor)
+        or source_residual.ndim != 5
+        or not source_residual.is_floating_point()
+    ):
+        raise TypeError("H3 residual refinement requires floating BxCxTxHxW source video")
+    if not bool(torch.isfinite(source_residual).all().item()):
+        raise ValueError("H3 residual refinement requires finite source values")
+    b, channels, temporal, source_h, source_w = map(int, source_residual.shape)
+    target_h, target_w = int(target_h), int(target_w)
+    if source_h % 2 or source_w % 2 or target_h % 2 or target_w % 2:
+        raise ValueError("H3 residual refinement requires patch-safe even source/target H/W")
+    if target_h < source_h or target_w < source_w:
+        raise ValueError("H3 residual refinement target must not shrink either spatial axis")
+    if target_h == source_h and target_w == source_w:
+        source_rms = float(source_residual.float().square().mean().sqrt().item())
+        return source_residual.clone(), {
+            "policy": H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+            "source_hw": (source_h, source_w),
+            "target_hw": (target_h, target_w),
+            "identity": True,
+            "projection_rms_error": 0.0,
+            "projection_max_abs_error": 0.0,
+            "source_residual_rms": source_rms,
+            "target_residual_rms": source_rms,
+            "extra_h3_nfe": 0,
+        }
+
+    innovation = deterministic_video_noise(
+        (b, channels, temporal, target_h, target_w),
+        seed=seed,
+        device=source_residual.device,
+        dtype=torch.float32,
+    )
+    refined = torch.empty_like(innovation)
+    projection_error_sq = torch.zeros((), device=source_residual.device, dtype=torch.float64)
+    projection_elements = 0
+    projection_max = torch.zeros((), device=source_residual.device, dtype=torch.float32)
+    min_group = None
+    max_group = 0
+
+    source_grid_h = source_h // 2
+    source_grid_w = source_w // 2
+    target_grid_h = target_h // 2
+    target_grid_w = target_w // 2
+    target_y_owner = torch.div(
+        torch.arange(target_grid_h, device=source_residual.device, dtype=torch.int64) * source_grid_h,
+        target_grid_h,
+        rounding_mode="floor",
+    )
+    target_x_owner = torch.div(
+        torch.arange(target_grid_w, device=source_residual.device, dtype=torch.int64) * source_grid_w,
+        target_grid_w,
+        rounding_mode="floor",
+    )
+
+    for phase_y in range(2):
+        for phase_x in range(2):
+            source_phase = source_residual[..., phase_y::2, phase_x::2].to(torch.float32)
+            innovation_phase = innovation[..., phase_y::2, phase_x::2]
+            innovation_group_mean, count_y, count_x = _patch_phase_group_mean(
+                innovation_phase,
+                source_grid_h,
+                source_grid_w,
+            )
+            group_counts = count_y[:, None] * count_x[None, :]
+            phase_min = int(group_counts.min().item())
+            phase_max = int(group_counts.max().item())
+            min_group = phase_min if min_group is None else min(min_group, phase_min)
+            max_group = max(max_group, phase_max)
+
+            common = source_phase / group_counts.sqrt().to(source_phase)
+            common_target = common[..., target_y_owner[:, None], target_x_owner[None, :]]
+            mean_target = innovation_group_mean[
+                ..., target_y_owner[:, None], target_x_owner[None, :]
+            ]
+            refined_phase = common_target + innovation_phase - mean_target
+            refined[..., phase_y::2, phase_x::2] = refined_phase
+
+            projected_mean, projected_count_y, projected_count_x = _patch_phase_group_mean(
+                refined_phase,
+                source_grid_h,
+                source_grid_w,
+            )
+            projected_counts = projected_count_y[:, None] * projected_count_x[None, :]
+            projected = projected_mean * projected_counts.sqrt().to(projected_mean)
+            error = projected - source_phase
+            projection_error_sq += error.to(torch.float64).square().sum()
+            projection_elements += int(error.numel())
+            projection_max = torch.maximum(projection_max, error.abs().max())
+
+    refined = refined.to(dtype=source_residual.dtype)
+    projection_rms = float(
+        (projection_error_sq / max(projection_elements, 1)).sqrt().item()
+    )
+    report = {
+        "policy": H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        "source_hw": (source_h, source_w),
+        "target_hw": (target_h, target_w),
+        "source_patch_grid": (source_grid_h, source_grid_w),
+        "target_patch_grid": (target_grid_h, target_grid_w),
+        "identity": False,
+        "group_size_min": int(min_group or 0),
+        "group_size_max": int(max_group),
+        "projection_rms_error": projection_rms,
+        "projection_max_abs_error": float(projection_max.item()),
+        "source_residual_rms": float(source_residual.float().square().mean().sqrt().item()),
+        "target_residual_rms": float(refined.float().square().mean().sqrt().item()),
+        "source_residual_mean": float(source_residual.float().mean().item()),
+        "target_residual_mean": float(refined.float().mean().item()),
+        "innovation_seed": int(seed),
+        "gaussian_marginal_if_source_standard": True,
+        "innovation_coarse_group_sum_zero": True,
+        "extra_h3_nfe": 0,
+    }
+    return refined, report
+
+
 def build_handoff_state(
     *,
     source_packed_state: torch.Tensor,
@@ -280,6 +465,7 @@ def build_handoff_state(
     learned_upscaler: Any | None = None,
     transfer_metrics: dict[str, Any] | None = None,
     clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
+    noise_mode: str = H3_HANDOFF_NOISE_INDEPENDENT,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -292,12 +478,49 @@ def build_handoff_state(
         raise ValueError("source x0 video geometry does not match the handoff state")
     if (target_h, target_w) == tuple(source_video.shape[-2:]):
         return source_packed_state.clone(), list(source_shapes)
-    noise = deterministic_video_noise(
-        (source_video.shape[0], source_video.shape[1], source_video.shape[2], target_h, target_w),
-        seed=seed,
-        device=source_video.device,
-        dtype=source_video.dtype,
-    )
+    if noise_mode not in H3_HANDOFF_NOISE_MODES:
+        raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
+    noise_report: dict[str, Any]
+    if noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+        source_residual = (
+            source_video.to(torch.float32)
+            - (1.0 - float(sigma)) * x0_video.to(torch.float32)
+        ) / float(sigma)
+        noise, noise_report = refine_h3_patch_lattice_residual(
+            source_residual,
+            target_h=target_h,
+            target_w=target_w,
+            seed=seed,
+        )
+        noise = noise.to(source_video)
+        reconstruction = (
+            (1.0 - float(sigma)) * x0_video.to(torch.float32)
+            + float(sigma) * source_residual
+        )
+        reconstruction_error = reconstruction - source_video.to(torch.float32)
+        noise_report.update(
+            source_state_reconstruction_rms_error=float(
+                reconstruction_error.square().mean().sqrt().item()
+            ),
+            source_state_reconstruction_max_abs_error=float(
+                reconstruction_error.abs().max().item()
+            ),
+            residual_source="same_sigma_source_state_minus_clean_probe",
+        )
+    else:
+        noise = deterministic_video_noise(
+            (source_video.shape[0], source_video.shape[1], source_video.shape[2], target_h, target_w),
+            seed=seed,
+            device=source_video.device,
+            dtype=source_video.dtype,
+        )
+        noise_report = {
+            "policy": H3_HANDOFF_NOISE_INDEPENDENT,
+            "source_hw": tuple(int(value) for value in source_video.shape[-2:]),
+            "target_hw": (int(target_h), int(target_w)),
+            "innovation_seed": int(seed),
+            "extra_h3_nfe": 0,
+        }
     if transfer_mode == "bicubic":
         target_video = conditional_renoise_alignment(
             x0_video,
@@ -307,7 +530,7 @@ def build_handoff_state(
             noise=noise,
             transfer_mode="bicubic",
         )
-        report = {"transfer_mode": "bicubic"}
+        report = {"transfer_mode": "bicubic", "handoff_noise": noise_report}
     elif transfer_mode == "learned_3d":
         provider = validate_learned_upscaler_provider(learned_upscaler)
         learned_started = time.perf_counter()
@@ -405,6 +628,7 @@ def build_handoff_state(
             "output_dtype": str(learned_x0.dtype),
             "output_device": str(learned_x0.device),
             "clean_video_postprocess": postprocess_metadata,
+            "handoff_noise": noise_report,
         }
     else:
         raise ValueError(f"unsupported progressive handoff transfer mode {transfer_mode!r}")
