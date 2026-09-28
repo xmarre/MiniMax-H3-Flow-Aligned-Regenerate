@@ -76,11 +76,7 @@ def test_guarded_context_extends_guidance_ownership_and_trace_witness():
             actual=True,
         )
 
-    event = next(
-        event
-        for event in binding.metrics.events
-        if event.kind == "partitioned_high_boundary_prediction"
-    )
+    event = next(event for event in binding.metrics.events if event.kind == "partitioned_high_boundary_prediction")
     assert event.fields["prefix_t"] == 4
     assert event.fields["prefix_witness"] == "protected_first_generated_guard_tail_after_inpaint_restore"
     assert binding.guidance_protected_prefix_t == 0
