@@ -114,7 +114,7 @@ def build_high_stage_video_guard(
     return (
         guarded_latent,
         guarded_mask,
-    {
+        {
             "policy": HIGH_STAGE_VIDEO_GUARD_POLICY,
             "enabled": True,
             "applied": True,
@@ -142,8 +142,8 @@ def build_high_stage_video_guard(
             "extra_history_boundaries": 0,
             "extra_provider_calls": 0,
             "extra_vae_calls": 0,
-        }
-        )
+        },
+    )
 
 
 def disabled_high_stage_video_guard(*, prefix_t: int, reason: str) -> dict[str, Any]:
