@@ -4445,10 +4445,15 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **trajectory,
             )
+        post_high_after_stage = (
+            "post_high_internal_corrected"
+            if post_high_video_repair.get("applied", False)
+            else "post_high_internal_candidate_rejected"
+        )
         for roi_name, trajectory in post_high_video_repair.get("post_high_after", {}).items():
             binding.metrics.event(
                 "partitioned_multiframe_trajectory",
-                stage="post_high_internal_corrected",
+                stage=post_high_after_stage,
                 domain="model_internal_clean",
                 roi=roi_name,
                 **trajectory,
