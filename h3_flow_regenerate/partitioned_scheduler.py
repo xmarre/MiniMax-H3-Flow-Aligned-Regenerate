@@ -189,7 +189,6 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
 }
 
 
-
 class PartitionedPreflightUnsupported(RuntimeError):
     """A condition detected before sampling that must use the exact target fallback."""
 
