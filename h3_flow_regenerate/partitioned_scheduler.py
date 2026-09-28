@@ -2963,7 +2963,11 @@ def run_partitioned_progressive(
             )
 
         low_probe_caller_audio_witness = None
-        if diagnostic_audio_control:
+        if (
+            diagnostic_audio_control
+            and audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+        ):
             _low_probe_caller_video, low_probe_caller_audio = unpack_streams(source_x0, source_shapes)
             low_probe_caller_audio_witness = low_probe_caller_audio.detach().to(device="cpu").clone()
 
