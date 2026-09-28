@@ -127,6 +127,11 @@ def main() -> None:
         "noise = noise.to(device=device, dtype=torch.float32)",
         "latent_image = latent_image.to(device=device, dtype=torch.float32)",
     )
+    require_order(
+        args.comfy / "comfy/samplers.py",
+        "out = self.inner_model(x, sigma, model_options=model_options, seed=seed)",
+        "out = out * denoise_mask + self.latent_image * latent_mask",
+    )
     require(
         args.comfy / "comfy/sampler_helpers.py",
         'temp["uuid"] = uuid.uuid4()',
