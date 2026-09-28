@@ -39,8 +39,6 @@ def _comparison(reference, candidate):
     }
 
 
-
-
 def _validate_low_probe_witness(witness, right, prefix):
     """Validate one ordered witness against the exact final carried prefix."""
 
