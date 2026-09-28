@@ -60,9 +60,10 @@ physical order, audio geometry, exact-prefix width, and a SHA-256 digest of the
 final authoritative carried prefix. A stale or mismatched witness is rejected.
 
 For a matched witness, the audit performs one additional bounded AudioVAE decode.
-It constructs a counterfactual latent with the **final authoritative prefix**
-unchanged and replaces only the first 52 generated audio ticks with the
-low/probe stage's generated suffix. `low_probe_counterfactual` then reports:
+It uses the same 32 actual earlier latent ticks as the final extended-context
+decode, keeps the **final authoritative prefix** unchanged, and replaces only
+the first 52 generated audio ticks with the low/probe stage's generated suffix.
+`low_probe_counterfactual` then reports:
 
 - `low_probe_common_decode_boundary`: the 500 ms pre/post boundary ratio if
   low/probe generated audio had been retained;
