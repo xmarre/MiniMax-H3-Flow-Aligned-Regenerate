@@ -41,29 +41,22 @@ def _comparison(reference, candidate):
 
 
 
-def _match_low_probe_witness(witnesses, right, prefix, used_indices):
-    """Match the newest unconsumed witness to the exact final carried prefix."""
+def _validate_low_probe_witness(witness, right, prefix):
+    """Validate one ordered witness against the exact final carried prefix."""
 
     prefix_digest = tensor_sha256(right[..., :prefix])
-    total_ticks = int(right.shape[-1])
-    for index in range(len(witnesses) - 1, -1, -1):
-        if index in used_indices:
-            continue
-        witness = witnesses[index]
-        fields = getattr(witness, "fields", None)
-        payload = getattr(witness, "payload", None)
-        if not isinstance(fields, dict) or not torch.is_tensor(payload):
-            continue
-        if (
-            int(fields.get("audio_prefix_ticks", -1)) != prefix
-            or int(fields.get("audio_total_ticks", -1)) != total_ticks
-            or fields.get("final_prefix_sha256") != prefix_digest
-            or tuple(payload.shape) != tuple(right.shape)
-        ):
-            continue
-        used_indices.add(index)
-        return witness, prefix_digest
-    return None, prefix_digest
+    fields = getattr(witness, "fields", None)
+    payload = getattr(witness, "payload", None)
+    if not isinstance(fields, dict) or not torch.is_tensor(payload):
+        return None, prefix_digest
+    if (
+        int(fields.get("audio_prefix_ticks", -1)) != prefix
+        or int(fields.get("audio_total_ticks", -1)) != int(right.shape[-1])
+        or fields.get("final_prefix_sha256") != prefix_digest
+        or tuple(payload.shape) != tuple(right.shape)
+    ):
+        return None, prefix_digest
+    return witness, prefix_digest
 
 
 def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=None):
@@ -74,7 +67,8 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
         raise ValueError("audio audit inputs must match physical decode groups")
     reports = []
     witnesses = tuple(stage_witnesses or ())
-    used_witness_indices: set[int] = set()
+    boundary_count = max(0, len(latents) - 1)
+    ordered_witnesses = witnesses[-boundary_count:] if boundary_count and len(witnesses) >= boundary_count else ()
     for i in range(1, len(latents)):
         report = {"boundary_index": i, "policy": "audio_left_context_audit_v1", "production_audio_modified": False}
         reports.append(report)
@@ -135,11 +129,11 @@ def audit_audio_boundaries(audio_vae, latents, audios, plan, *, stage_witnesses=
         extra_vae_calls = 2
         low_probe_decoded = None
         if witnesses:
-            witness, final_prefix_digest = _match_low_probe_witness(
-                witnesses,
+            ordered_witness = ordered_witnesses[i - 1] if len(ordered_witnesses) == boundary_count else None
+            witness, final_prefix_digest = _validate_low_probe_witness(
+                ordered_witness,
                 right,
                 prefix,
-                used_witness_indices,
             )
             if witness is not None:
                 low_probe_audio = witness.payload
