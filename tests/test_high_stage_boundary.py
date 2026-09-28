@@ -161,9 +161,7 @@ def test_video_reference_covers_boundary_decode_chunk_and_overlap_release():
     assert HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS == 5
     assert HIGH_BOUNDARY_VIDEO_RELEASE_TOKENS == 2
     assert weights[:HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS] == (1.0,) * 5
-    assert weights[HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS:] == pytest.approx(
-        (2.0 / 3.0, 1.0 / 3.0)
-    )
+    assert weights[HIGH_BOUNDARY_VIDEO_FULL_REFERENCE_TOKENS:] == pytest.approx((2.0 / 3.0, 1.0 / 3.0))
 
 
 def test_audio_reference_weights_hold_decoder_window_then_release_monotonically():
