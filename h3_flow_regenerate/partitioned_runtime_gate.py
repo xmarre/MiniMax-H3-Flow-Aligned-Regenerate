@@ -1766,9 +1766,41 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
     prefix_t = int(setup.get("caller_exact_prefix_tokens", 0))
     _require(prefix_t > 0, "high-stage video guard caller prefix is invalid")
     _require(int(setup.get("guard_token_index", -1)) == prefix_t, "high-stage guard token is not first generated")
+    protected_video_tokens = prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS
     _require(
-        int(setup.get("high_protected_video_tokens", 0)) == prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+        int(setup.get("high_protected_video_tokens", 0)) == protected_video_tokens,
         "high-stage protected-video ownership width drifted",
+    )
+    _require(
+        int(setup.get("flow_guidance_protected_video_tokens", 0)) == protected_video_tokens,
+        "Flow guidance did not inherit the protected generated guard",
+    )
+    _require(
+        int(reference_plan.get("high_boundary_context_tokens", 0)) == protected_video_tokens,
+        "high-boundary reference plan did not include the guard context",
+    )
+    _require(
+        int(reference_check.get("high_boundary_context_tokens", 0)) == protected_video_tokens,
+        "high-boundary verification did not include the guard context",
+    )
+    _require(
+        int(complete.get("high_boundary_context_tokens", 0)) == protected_video_tokens,
+        "partitioned completion lost the guarded high-boundary context",
+    )
+    guarded_witness = "protected_first_generated_guard_tail_after_inpaint_restore"
+    _require(
+        reference_plan.get("high_boundary_prefix_witness") == guarded_witness
+        and reference_check.get("high_boundary_prefix_witness") == guarded_witness,
+        "high-boundary trace did not move to the guard/refined-suffix frontier",
+    )
+    guidance_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "guidance" and int(_event_fields(event).get("protected_prefix_t", 0)) > 0
+    ]
+    _require(
+        all(int(event.get("protected_prefix_t", 0)) == protected_video_tokens for event in guidance_events),
+        "Flow guidance escaped the guarded high-context prefix",
     )
     _require(
         setup.get("guard_source") == "exact_restored_pre_high_first_suffix_clean",
