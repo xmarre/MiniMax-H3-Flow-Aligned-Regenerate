@@ -300,3 +300,85 @@ def test_runtime_applies_boundary_reference_before_flow_observation():
         if event.kind == "partitioned_high_boundary_prediction" and event.fields["point"] == "before_flow"
     )
     assert before_anchor_index < anchor_index < before_flow_index
+
+
+
+def test_authoritative_audio_reference_preserves_boundary_relation_and_bounded_return():
+    torch.manual_seed(19)
+    video = torch.zeros(1, 24, 7, 4, 4)
+    low_audio = torch.randn(1, 32, 2, 80)
+    authoritative_audio = low_audio.clone()
+    prefix = 8
+    delta = torch.linspace(-0.8, 0.7, 64, dtype=low_audio.dtype).reshape(1, 32, 2)
+    authoritative_audio[..., :prefix] += delta.unsqueeze(-1)
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :3] = 0
+    audio_mask = torch.ones_like(low_audio)
+    audio_mask[..., :prefix] = 0
+    exact_mask, shapes = pack_streams((video_mask, audio_mask))
+
+    reference, report = build_authoritative_audio_boundary_reference(
+        low_audio,
+        authoritative_audio,
+        exact_mask,
+        shapes,
+    )
+
+    assert torch.equal(reference[..., :prefix], authoritative_audio[..., :prefix])
+    low_first_edge = low_audio[..., prefix] - low_audio[..., prefix - 1]
+    reference_first_edge = reference[..., prefix] - reference[..., prefix - 1]
+    torch.testing.assert_close(reference_first_edge, low_first_edge, rtol=0, atol=1e-6)
+    assert report["audio_first_edge_relation_error_rms"] < 1e-6
+    assert report["audio_reference_support_ticks"] == HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+
+    support_stop = prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS
+    assert torch.equal(reference[..., support_stop:], low_audio[..., support_stop:])
+    first_generated_delta = reference[..., prefix] - low_audio[..., prefix]
+    torch.testing.assert_close(first_generated_delta, delta, rtol=0, atol=1e-6)
+    last_generated_delta = reference[..., support_stop - 1] - low_audio[..., support_stop - 1]
+    torch.testing.assert_close(last_generated_delta, delta / 32.0, rtol=0, atol=1e-6)
+
+
+def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_edges():
+    torch.manual_seed(23)
+    video = torch.randn(1, 24, 10, 6, 6)
+    audio = torch.randn(1, 32, 2, 80)
+    packed, shapes = pack_streams((video, audio))
+    prefix_t = 3
+    audio_prefix = 7
+
+    video_reference = video[:, :, prefix_t : prefix_t + 4].clone() + 0.4
+    audio_reference = audio.clone()
+    audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS] += 0.25
+
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :prefix_t] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :audio_prefix] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    result, report = apply_final_boundary_reference(
+        packed,
+        shapes,
+        video_prefix_t=prefix_t,
+        video_reference_suffix=video_reference,
+        audio_reference=audio_reference,
+        exact_denoise_mask=exact_mask,
+    )
+    result_video, result_audio = unpack_streams(result, shapes)
+
+    assert torch.equal(result_video[:, :, :prefix_t], video[:, :, :prefix_t])
+    assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
+    assert torch.equal(result_video[:, :, prefix_t + 4 :], video[:, :, prefix_t + 4 :])
+    assert torch.equal(result_audio[..., :audio_prefix], audio[..., :audio_prefix])
+    assert torch.equal(
+        result_audio[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
+        audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS],
+    )
+    assert torch.equal(
+        result_audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
+        audio[..., audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS :],
+    )
+    assert report["video_first_reference_error_rms"] == 0.0
+    assert report["audio_reference_error_rms"] == 0.0
