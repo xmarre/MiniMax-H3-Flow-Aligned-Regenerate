@@ -519,14 +519,88 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     )
     if boundary_trace is not None:
         boundary_trace.calls += 1
-        if boundary_anchor is not None:
-            boundary_trace.observe(
-                result,
-                point="before_anchor",
-                call_index=boundary_call_index,
+        boundary_trace.observe(
+            result,
+            point="before_flow",
+            call_index=boundary_call_index,
+            sigma=sigma,
+            actual=actual,
+        )
+
+    # Flow receives the unmodified target-high prediction.  Exact-prefix
+    # reconciliation belongs after every model-output modifier and immediately
+    # before Comfy's KSamplerX0Inpaint restores mask==0 output values.
+    if binding.guidance is not None and binding.guidance.mode != "off":
+        run = binding.active_guidance_run
+        if run is not None:
+            base_model = getattr(guider, "inner_model", None)
+            shapes = getattr(base_model, "latent_shapes", None)
+            if not isinstance(shapes, list) or len(shapes) != 2:
+                raise RuntimeError("flow guidance could not resolve H3 AV latent shapes")
+            video_x0, audio_x0 = unpack_streams(result, shapes)
+            video_state, _ = unpack_streams(x, shapes)
+            guidance_started = time.perf_counter()
+            guided_video = apply_guidance(
+                video_x0,
+                run=run,
+                coordinate=coordinate,
+                config=binding.guidance,
+                state=binding.guidance_state,
+                high_state=video_state,
                 sigma=sigma,
-                actual=actual,
+                registered_reference=binding.registered_guidance_reference,
+                protected_prefix_t=binding.guidance_protected_prefix_t,
             )
+            guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
+            result, _ = pack_streams((guided_video, audio_x0))
+            binding.metrics.event(
+                "guidance",
+                coordinate=coordinate,
+                elapsed_ms=guidance_elapsed_ms,
+                mode=binding.guidance.mode,
+                schedule=binding.guidance_state.last_schedule,
+                correction_rms=binding.guidance_state.last_correction_rms,
+                baseline_rms=binding.guidance_state.last_baseline_rms,
+                correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
+                clamp_scale=binding.guidance_state.last_clamp_scale,
+                direction_rms_ratio=binding.guidance_state.last_direction_rms_ratio,
+                acceleration_rms_ratio=binding.guidance_state.last_acceleration_rms_ratio,
+                acceleration_applied=binding.guidance_state.last_acceleration_applied,
+                same_coordinate_refinement=binding.guidance_state.last_same_coordinate_refinement,
+                acceleration_anchor_coordinate=binding.guidance_state.last_acceleration_anchor_coordinate,
+                temporal_rms_ratio=binding.guidance_state.last_temporal_rms_ratio,
+                temporal_confidence_mean=binding.guidance_state.last_temporal_confidence_mean,
+                temporal_valid_fraction=binding.guidance_state.last_temporal_valid_fraction,
+                temporal_disocclusion_fraction=binding.guidance_state.last_temporal_disocclusion_fraction,
+                temporal_similarity_mean=binding.guidance_state.last_temporal_similarity_mean,
+                temporal_margin_mean=binding.guidance_state.last_temporal_margin_mean,
+                temporal_flow_magnitude_mean=binding.guidance_state.last_temporal_flow_magnitude_mean,
+                temporal_flow_magnitude_max=binding.guidance_state.last_temporal_flow_magnitude_max,
+                temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
+                temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
+                temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
+                temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
+                temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
+                registered_reference_used=binding.guidance_state.last_registered_reference_used,
+                protected_prefix_t=binding.guidance_protected_prefix_t,
+                actual=actual,
+                solver_phase=(
+                    spectrum_active_step[1]
+                    if spectrum_active_step is not None
+                    else transformer.get(SPECTRUM_PHASE_KEY)
+                ),
+                solver_outer_step=spectrum_active_step[2]
+                if spectrum_active_step is not None
+                else transformer.get(SPECTRUM_OUTER_STEP_KEY),
+            )
+    if boundary_trace is not None:
+        boundary_trace.observe(
+            result,
+            point="after_flow",
+            call_index=boundary_call_index,
+            sigma=sigma,
+            actual=actual,
+        )
     if boundary_anchor is not None:
         result = boundary_anchor.apply(
             result,
@@ -534,77 +608,14 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             sigma=sigma,
             actual=actual,
         )
-    if boundary_trace is not None:
-        boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
-
-    if binding.guidance is not None and binding.guidance.mode != "off":
-        run = binding.active_guidance_run
-        if run is None:
-            if boundary_trace is not None:
-                boundary_trace.observe(
-                    result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual
-                )
-            return result
-        base_model = getattr(guider, "inner_model", None)
-        shapes = getattr(base_model, "latent_shapes", None)
-        if not isinstance(shapes, list) or len(shapes) != 2:
-            raise RuntimeError("flow guidance could not resolve H3 AV latent shapes")
-        video_x0, audio_x0 = unpack_streams(result, shapes)
-        video_state, _ = unpack_streams(x, shapes)
-        guidance_started = time.perf_counter()
-        guided_video = apply_guidance(
-            video_x0,
-            run=run,
-            coordinate=coordinate,
-            config=binding.guidance,
-            state=binding.guidance_state,
-            high_state=video_state,
-            sigma=sigma,
-            registered_reference=binding.registered_guidance_reference,
-            protected_prefix_t=binding.guidance_protected_prefix_t,
-        )
-        guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
-        result, _ = pack_streams((guided_video, audio_x0))
-        binding.metrics.event(
-            "guidance",
-            coordinate=coordinate,
-            elapsed_ms=guidance_elapsed_ms,
-            mode=binding.guidance.mode,
-            schedule=binding.guidance_state.last_schedule,
-            correction_rms=binding.guidance_state.last_correction_rms,
-            baseline_rms=binding.guidance_state.last_baseline_rms,
-            correction_rms_ratio=binding.guidance_state.last_correction_rms_ratio,
-            clamp_scale=binding.guidance_state.last_clamp_scale,
-            direction_rms_ratio=binding.guidance_state.last_direction_rms_ratio,
-            acceleration_rms_ratio=binding.guidance_state.last_acceleration_rms_ratio,
-            acceleration_applied=binding.guidance_state.last_acceleration_applied,
-            same_coordinate_refinement=binding.guidance_state.last_same_coordinate_refinement,
-            acceleration_anchor_coordinate=binding.guidance_state.last_acceleration_anchor_coordinate,
-            temporal_rms_ratio=binding.guidance_state.last_temporal_rms_ratio,
-            temporal_confidence_mean=binding.guidance_state.last_temporal_confidence_mean,
-            temporal_valid_fraction=binding.guidance_state.last_temporal_valid_fraction,
-            temporal_disocclusion_fraction=binding.guidance_state.last_temporal_disocclusion_fraction,
-            temporal_similarity_mean=binding.guidance_state.last_temporal_similarity_mean,
-            temporal_margin_mean=binding.guidance_state.last_temporal_margin_mean,
-            temporal_flow_magnitude_mean=binding.guidance_state.last_temporal_flow_magnitude_mean,
-            temporal_flow_magnitude_max=binding.guidance_state.last_temporal_flow_magnitude_max,
-            temporal_cache_hit=binding.guidance_state.last_temporal_cache_hit,
-            temporal_reference_coordinate=binding.guidance_state.last_temporal_reference_coordinate,
-            temporal_reference_clamped=binding.guidance_state.last_temporal_reference_clamped,
-            temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
-            temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
-            registered_reference_used=binding.guidance_state.last_registered_reference_used,
-            protected_prefix_t=binding.guidance_protected_prefix_t,
-            actual=actual,
-            solver_phase=(
-                spectrum_active_step[1] if spectrum_active_step is not None else transformer.get(SPECTRUM_PHASE_KEY)
-            ),
-            solver_outer_step=spectrum_active_step[2]
-            if spectrum_active_step is not None
-            else transformer.get(SPECTRUM_OUTER_STEP_KEY),
-        )
-    if boundary_trace is not None:
-        boundary_trace.observe(result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+        if boundary_trace is not None:
+            boundary_trace.observe(
+                result,
+                point="after_bridge",
+                call_index=boundary_call_index,
+                sigma=sigma,
+                actual=actual,
+            )
     return result
 
 
