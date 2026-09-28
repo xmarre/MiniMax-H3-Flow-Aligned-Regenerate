@@ -1030,6 +1030,11 @@ def test_frame_gauge_invocation_guard_rejects_nesting_and_is_clone_local():
     with pytest.raises(RuntimeError, match="nested partitioned frame-gauge"):
         _claim_frame_gauge_invocation(binding, enabled=True)
 
+    binding.audio_stage_witnesses[("session-a", "2")] = {
+        "stage": "low_probe_clean",
+        "domain": "caller_vae_latent",
+        "audio": torch.zeros(1, 32, 2, 8),
+    }
     source = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
     clone = SimpleNamespace(model_options={})
     flow_model_clone_callback(source, clone)
@@ -1037,6 +1042,7 @@ def test_frame_gauge_invocation_guard_rejects_nesting_and_is_clone_local():
     assert cloned_binding is not binding
     assert cloned_binding.frame_gauge_invocation_active is False
     assert cloned_binding.registered_guidance_reference is None
+    assert cloned_binding.audio_stage_witnesses is binding.audio_stage_witnesses
 
     _release_frame_gauge_invocation(binding, claimed=claimed)
     assert binding.frame_gauge_invocation_active is False
