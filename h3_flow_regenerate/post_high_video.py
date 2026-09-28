@@ -48,7 +48,7 @@ def _sign(value: float) -> int:
     return 0
 
 
-def _measure(video: torch.Tensor, prefix_t: int) -> dict[str, dict[str, Any]]:
+def measure_post_high_video_trajectory(video: torch.Tensor, prefix_t: int) -> dict[str, dict[str, Any]]:
     return {
         name: measure_translation_trajectory(
             video,
@@ -355,7 +355,7 @@ def repair_post_high_vertical_residual(
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Measure, trial both signs, validate, and optionally return a corrected video."""
 
-    post_high = _measure(final_video, prefix_t)
+    post_high = measure_post_high_video_trajectory(final_video, prefix_t)
     plan = plan_post_high_vertical_residual(pre_high, post_high)
     receipt: dict[str, Any] = {
         **plan,
@@ -377,7 +377,7 @@ def repair_post_high_vertical_residual(
             prefix_t=prefix_t,
             dy=dy,
         )
-        candidate_receipts = _measure(candidate_video, prefix_t)
+        candidate_receipts = measure_post_high_video_trajectory(candidate_video, prefix_t)
         score, score_fields = score_post_high_vertical_candidate(post_high, candidate_receipts)
         trials.append((dy, candidate_video, candidate_receipts, score, score_fields))
         receipt["candidate_sign_trials"].append(
@@ -412,6 +412,7 @@ __all__ = [
     "POST_HIGH_VIDEO_RELEASE_WEIGHTS",
     "POST_HIGH_VIDEO_RESIDUAL_POLICY",
     "apply_weighted_vertical_translation",
+    "measure_post_high_video_trajectory",
     "plan_post_high_vertical_residual",
     "repair_post_high_vertical_residual",
     "score_post_high_vertical_candidate",
