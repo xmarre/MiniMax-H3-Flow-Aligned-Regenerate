@@ -26,13 +26,17 @@ actual prefix that will survive final exact restoration. Target-high model
 predictions hold that aligned trajectory exactly across the 20-tick (500 ms)
 seam window and the following 32 latent ticks required as future decoder
 context. Ownership then tapers to zero over another 32 ticks instead of
-creating a second hard boundary when the reference support ends. Final
-exact-prefix canonicalization preserves the sampled first-edge relation by
+creating a second hard boundary when the reference support ends. Final exact-prefix canonicalization preserves the sampled first-edge relation by
 distributing its restore delta across the same 52-tick
-seam-plus-decoder-context interval. The 32-tick future-context bound is tied to
-the pinned MiniMax-H3 BigVGAN decoder architecture and is source-contract
-checked. No additional H3 evaluation, sampler lifetime, provider call, or VAE
-decode is introduced.
+seam-plus-decoder-context interval. After the high-stage solver returns, the
+scheduler projects the remaining bounded solver-integration residual back onto
+the same clean reference: video uses the same 1/0.75/0.5/0.25 four-token
+weights; audio holds the full 52-tick seam-plus-decoder-context interval exactly
+and uses the existing 32-tick tapered release. The caller-owned prefix and every
+suffix value outside those supports remain byte-for-byte unchanged. The 32-tick
+future-context bound is tied to the pinned MiniMax-H3 BigVGAN decoder architecture
+and is source-contract checked. No additional H3 evaluation, sampler lifetime,
+provider call, or VAE decode is introduced.
 
 ## Video evidence
 
