@@ -18,16 +18,21 @@ the next three toward that pre-high trajectory with weights 1, 0.75, 0.5 and
 fallback and DC handling; it is not conditional on one particular frame-gauge
 transaction outcome.
 
-Audio uses a separate clean-domain reference. Target-high model predictions
-hold the low/probe clean trajectory exactly across the 20-tick (500 ms) seam
-window and the following 32 latent ticks required as future decoder context.
-Ownership then tapers to zero over another 32 ticks instead of creating a
-second hard boundary when the reference support ends. Final exact-prefix
-canonicalization preserves the sampled first-edge relation by distributing its
-restore delta across the same 52-tick seam-plus-decoder-context interval. The
-32-tick future-context bound is tied to the pinned MiniMax-H3 BigVGAN decoder
-architecture and is source-contract checked. No additional H3 evaluation,
-sampler lifetime, provider call, or VAE decode is introduced.
+Audio uses a separate clean-domain reference. The low/probe continuation is
+translated onto the caller-owned exact-prefix gauge using the difference
+between the authoritative and low/probe final protected audio tick. This keeps
+the low/probe first generated edge unchanged while making it relative to the
+actual prefix that will survive final exact restoration. Target-high model
+predictions hold that aligned trajectory exactly across the 20-tick (500 ms)
+seam window and the following 32 latent ticks required as future decoder
+context. Ownership then tapers to zero over another 32 ticks instead of
+creating a second hard boundary when the reference support ends. Final
+exact-prefix canonicalization preserves the sampled first-edge relation by
+distributing its restore delta across the same 52-tick
+seam-plus-decoder-context interval. The 32-tick future-context bound is tied to
+the pinned MiniMax-H3 BigVGAN decoder architecture and is source-contract
+checked. No additional H3 evaluation, sampler lifetime, provider call, or VAE
+decode is introduced.
 
 ## Video evidence
 
