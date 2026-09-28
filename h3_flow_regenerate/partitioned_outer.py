@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
+from .high_stage_boundary import HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -34,6 +35,21 @@ from .partitioned_scheduler import (
 from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
 
 LOG = logging.getLogger(__name__)
+
+
+def _claim_frame_gauge_invocation(binding: FlowBinding, *, enabled: bool) -> bool:
+    """Claim the transient frame-gauge transaction for one outer invocation."""
+    if not enabled:
+        return False
+    if binding.frame_gauge_invocation_active:
+        raise RuntimeError("nested partitioned frame-gauge invocation is unsupported")
+    binding.frame_gauge_invocation_active = True
+    return True
+
+
+def _release_frame_gauge_invocation(binding: FlowBinding, *, claimed: bool) -> None:
+    if claimed:
+        binding.frame_gauge_invocation_active = False
 
 
 def _source_has_audio_velocity_mask_contract(source: str) -> bool:
@@ -192,6 +208,24 @@ def partitioned_outer_wrapper(
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
+    audio_exact_restore_successor_ticks = 0
+    if (
+        guided_report is not None
+        and guided_report.get("applied") is True
+        and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
+        and guided_ticks == 4
+    ):
+        audio_prefix_ticks = int(guided_report.get("audio_prefix_ticks", 0))
+        audio_total_ticks = int(latent_shapes[1][-1])
+        generated_audio_ticks = max(0, audio_total_ticks - audio_prefix_ticks)
+        audio_exact_restore_successor_ticks = min(
+            HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS,
+            generated_audio_ticks,
+        )
+        if audio_exact_restore_successor_ticks < 2:
+            audio_exact_restore_successor_ticks = 0
+    if isinstance(guided_report, dict):
+        guided_report["exact_restore_successor_ticks"] = audio_exact_restore_successor_ticks
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
@@ -199,6 +233,8 @@ def partitioned_outer_wrapper(
         latent_image=latent_image,
         denoise_mask=denoise_mask,
         sampler=sampler,
+        latent_shapes=latent_shapes,
+        audio_exact_restore_successor_ticks=audio_exact_restore_successor_ticks,
     )
 
     transformer_options = model_options.setdefault("transformer_options", {})
@@ -212,8 +248,15 @@ def partitioned_outer_wrapper(
         context_installed = True
 
     outer_started = time.perf_counter()
+    if binding.registered_guidance_reference is not None:
+        raise RuntimeError("stale or nested partitioned frame-gauge guidance context is unsupported")
+    frame_gauge_claimed = _claim_frame_gauge_invocation(
+        binding,
+        enabled=bool(progressive.frame_gauge_repair),
+    )
     binding.guidance_state.reset()
     binding.active_guidance_run = None
+    binding.registered_guidance_reference = None
     error = None
     fallback_reason = None
     result = None
@@ -248,6 +291,8 @@ def partitioned_outer_wrapper(
             transformer_options.pop(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY, None)
         binding.guidance_state.reset()
         binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
+        _release_frame_gauge_invocation(binding, claimed=frame_gauge_claimed)
         if fallback_reason is None:
             binding.metrics.event(
                 "sampler_wall",

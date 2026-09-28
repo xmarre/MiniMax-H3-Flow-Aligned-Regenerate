@@ -44,6 +44,16 @@ def main() -> None:
     args = parser.parse_args()
 
     require(
+        args.comfy / "comfy/ldm/minimax/audio_vae.py",
+        "class BigVGAN(nn.Module):",
+        "upsample_rates=(5, 5, 2, 2, 2, 2, 2)",
+        "upsample_kernel_sizes=(9, 9, 4, 4, 4, 4, 4)",
+        "resblock_kernel_sizes=(3, 7, 11)",
+        "resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5))",
+        "def __init__(self, activation, up_ratio=2, down_ratio=2, up_kernel_size=12, down_kernel_size=12):",
+        "self.samples_per_latent = self.hop_length",
+    )
+    require(
         args.comfy / "comfy/ldm/minimax/vae.py",
         "clip_length=17",
         "token_drop=3",
