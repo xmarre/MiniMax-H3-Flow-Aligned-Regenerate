@@ -751,7 +751,10 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
-def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(monkeypatch):
+@pytest.mark.parametrize("guided_ticks", [4, 16])
+def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(
+    monkeypatch, guided_ticks
+):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
@@ -788,7 +791,7 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 16,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: guided_ticks,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
             "transformer_options": transformer_options,
         }
@@ -813,6 +816,7 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         latent_shapes,
         exact_denoise_mask=None,
     ):
+        assert adapted._audio_exact_restore_successor_ticks == 0
         del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(exact_denoise_mask, exact_mask)
