@@ -56,6 +56,7 @@ from .high_stage_boundary import (
     high_boundary_contract,
 )
 from .high_stage_guard import (
+    HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
     HIGH_STAGE_VIDEO_GUARD_POLICY,
     HIGH_STAGE_VIDEO_GUARD_TOKENS,
     build_high_stage_video_guard,
@@ -4472,6 +4473,10 @@ def run_partitioned_progressive(
                 high_guard_endpoint_rms_delta = float(
                     guard_endpoint_delta.square().mean().sqrt().item()
                 )
+                if high_guard_endpoint_max_abs_delta > HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA:
+                    raise RuntimeError(
+                        "target-high protected guard token drift exceeded numerical roundoff"
+                    )
                 final_video = final_video.clone()
                 final_video[:, :, guard_slice] = expected_guard
                 result, result_shapes = pack_streams((final_video, final_audio))
