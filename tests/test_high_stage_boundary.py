@@ -44,6 +44,48 @@ def test_boundary_trace_is_bounded_nonmutating_and_cleans_up_on_exception():
     assert binding.high_boundary_trace is None
 
 
+def test_guarded_context_extends_guidance_ownership_and_trace_witness():
+    torch.manual_seed(29)
+    video = torch.randn(1, 24, 9, 8, 8)
+    audio = torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    guarded_context = video[:, :, :4].clone()
+    binding = SimpleNamespace(
+        guidance_protected_prefix_t=0,
+        high_boundary_trace=None,
+        high_boundary_anchor=None,
+        metrics=H3FlowMetrics(),
+    )
+
+    with high_boundary_contract(
+        binding,
+        guarded_context,
+        shapes,
+        measure=True,
+        prefix_witness="protected_first_generated_guard_tail_after_inpaint_restore",
+    ):
+        assert binding.guidance_protected_prefix_t == 4
+        trace = binding.high_boundary_trace
+        assert trace is not None
+        assert trace.prefix_t == 4
+        trace.observe(
+            packed,
+            point="before_flow",
+            call_index=0,
+            sigma=0.8,
+            actual=True,
+        )
+
+    event = next(
+        event
+        for event in binding.metrics.events
+        if event.kind == "partitioned_high_boundary_prediction"
+    )
+    assert event.fields["prefix_t"] == 4
+    assert event.fields["prefix_witness"] == "protected_first_generated_guard_tail_after_inpaint_restore"
+    assert binding.guidance_protected_prefix_t == 0
+
+
 def test_ownership_without_measurement_and_nested_rejection():
     binding = SimpleNamespace(
         guidance_protected_prefix_t=0,
