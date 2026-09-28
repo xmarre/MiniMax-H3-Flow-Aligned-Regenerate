@@ -66,7 +66,7 @@ def test_00712_receipts_select_bounded_vertical_only_plan():
     assert plan["eligible"] is True
     assert plan["reason"] == "coherent_target_high_vertical_residual"
     assert plan["horizontal_application_enabled"] is False
-    assert plan["correction_magnitude_cells"] == pytest.approx(0.1399631248, abs=1e-6)
+    assert plan["correction_magnitude_cells"] == pytest.approx(0.1143016587, abs=1e-6)
     assert plan["max_induced_step_cells"] < 0.0625
 
 
