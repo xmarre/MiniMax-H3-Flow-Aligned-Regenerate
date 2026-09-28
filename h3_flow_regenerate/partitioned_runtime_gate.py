@@ -35,6 +35,7 @@ from .frame_gauge import (
 from .post_high_video import (
     POST_HIGH_VIDEO_MAX_CORRECTION_CELLS,
     POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS,
+    POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS,
     POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
     POST_HIGH_VIDEO_RELEASE_WEIGHTS,
     POST_HIGH_VIDEO_RESIDUAL_POLICY,
@@ -1791,6 +1792,20 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
         canonical.get("horizontal_phase_stable") is True,
         "post-high video residual canonical candidate perturbed horizontal phase",
     )
+    _require(
+        canonical.get("temporal_release_stable") is True,
+        "post-high video residual canonical release frontier is unstable",
+    )
+    for field in ("successor_max_x_perturbation_cells", "successor_max_y_perturbation_cells"):
+        values = canonical.get(field)
+        _require(isinstance(values, dict), f"post-high video residual canonical {field} is missing")
+        _require(
+            all(
+                _finite_number(value) <= POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS
+                for value in values.values()
+            ),
+            f"post-high video residual canonical {field} exceeded bound",
+        )
     _require(
         _finite_number(canonical.get("mean_improvement_ratio")) >= POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
         "post-high video residual canonical improvement is below gate",
