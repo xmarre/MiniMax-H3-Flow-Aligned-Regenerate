@@ -14,10 +14,10 @@ from h3_flow_regenerate.post_high_video import (
 
 def _trajectory(*, first_dx, first_dy, pre_dx, pre_dy, response=12.0):
     return {
-        "pairwise_dx": [float(first_dx), 0.0, 0.0, 0.0],
-        "pairwise_dy": [float(first_dy), 0.0, 0.0, 0.0],
-        "pairwise_response": [float(response), 12.0, 12.0, 12.0],
-        "pairwise_clipped": [False, False, False, False],
+        "pairwise_dx": [float(first_dx), 0.0, 0.0, 0.0, 0.0],
+        "pairwise_dy": [float(first_dy), 0.0, 0.0, 0.0, 0.0],
+        "pairwise_response": [float(response), 12.0, 12.0, 12.0, 12.0],
+        "pairwise_clipped": [False, False, False, False, False],
         "pre_pairwise_median_dx": float(pre_dx),
         "pre_pairwise_median_dy": float(pre_dy),
     }
@@ -140,5 +140,6 @@ def test_repair_trials_both_signs_and_accepts_only_measured_improvement(monkeypa
     assert receipt["accepted"] is True
     assert receipt["selected_dy_cells"] < 0.0
     assert receipt["selected_score"]["mean_improvement_ratio"] > 0.25
+    assert receipt["selected_score"]["temporal_release_stable"] is True
     assert torch.equal(corrected[:, :, :3], video[:, :, :3])
     assert not torch.equal(corrected[:, :, 3:7], video[:, :, 3:7])
