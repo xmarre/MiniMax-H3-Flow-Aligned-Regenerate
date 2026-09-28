@@ -153,6 +153,143 @@ def test_partitioned_runtime_gate_accepts_complete_evidence():
     assert report.audio_guided_overlap_ticks == 4
 
 
+def _metrics_with_high_video_guard(**setup_overrides):
+    metrics = _metrics()
+    policy = "first_generated_token_exact_high_context_v1"
+    for event in metrics["events"]:
+        if event["kind"] == "partitioned_transfer":
+            event["fields"].update(
+                video_high_guard_enabled=True,
+                video_high_guard_policy=policy,
+                video_high_guard_tokens=1,
+            )
+        elif event["kind"] == "partitioned_exact_prefix_complete":
+            event["fields"].update(
+                high_video_guard_enabled=True,
+                high_video_guard_policy=policy,
+                high_video_guard_tokens=1,
+                high_video_guard_final_exact=True,
+                high_video_guard_endpoint_canonicalized=False,
+            )
+        elif event["kind"] == "handoff_complete":
+            event["fields"]["high_stage_video_guard_requested"] = 1
+
+    setup = {
+        "policy": policy,
+        "enabled": True,
+        "applied": True,
+        "guard_tokens": 1,
+        "guard_token_index": 12,
+        "caller_exact_prefix_tokens": 12,
+        "high_protected_video_tokens": 13,
+        "guard_source": "exact_restored_pre_high_first_suffix_clean",
+        "guard_source_exact": True,
+        "caller_prefix_modified": False,
+        "caller_prefix_exact": True,
+        "audio_modified": False,
+        "audio_exact": True,
+        "audio_mask_modified": False,
+        "audio_mask_exact": True,
+        "later_suffix_modified": False,
+        "later_suffix_exact": True,
+        "mask_outside_guard_modified": False,
+        "mask_outside_guard_exact": True,
+        "original_guard_mask_exact_one": True,
+        "high_guard_mask_exact_zero": True,
+        "internal_guard_exact": True,
+        "internal_audio_exact": True,
+        "caller_internal_round_trip_verified": True,
+        "target_state_reconstruction_verified": True,
+        "target_state_reconstruction_max_abs_delta": 1e-7,
+        "target_state_reconstruction_rms_delta": 1e-8,
+        "preserved_noise_scope": "caller_original_exact_mask_only",
+        "extra_h3_nfe": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_history_boundaries": 0,
+        "extra_provider_calls": 0,
+        "extra_vae_calls": 0,
+    }
+    setup.update(setup_overrides)
+    complete = {
+        "policy": policy,
+        "enabled": True,
+        "applied": True,
+        "guard_token_index": 12,
+        "guard_tokens": 1,
+        "final_guard_exact": True,
+        "endpoint_canonicalized": False,
+        "endpoint_max_abs_delta": 0.0,
+        "endpoint_rms_delta": 0.0,
+        "caller_prefix_modified": False,
+        "audio_modified": False,
+        "extra_h3_nfe": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_history_boundaries": 0,
+        "extra_provider_calls": 0,
+        "extra_vae_calls": 0,
+    }
+    metrics["events"].insert(
+        -4,
+        _event(
+            "partitioned_high_boundary_reference_plan",
+            video_enabled=False,
+            video_support_tokens=0,
+            high_video_guard_enabled=True,
+            high_video_guard_policy=policy,
+        ),
+    )
+    metrics["events"].insert(
+        -3,
+        _event(
+            "partitioned_high_boundary_reference_verified",
+            video_enabled=False,
+            anchor_calls=0,
+        ),
+    )
+    metrics["events"].insert(-2, _event("partitioned_high_video_guard", **setup))
+    metrics["events"].insert(-1, _event("partitioned_high_video_guard_complete", **complete))
+    return metrics
+
+
+def test_partitioned_runtime_gate_accepts_one_token_high_video_guard():
+    report = validate_partitioned_runtime_evidence(
+        _metrics_with_high_video_guard(),
+        _log(),
+        expected_logical=5,
+        expected_actual=3,
+        expected_forecast=2,
+    )
+    assert report.logical_calls == 5
+
+
+def test_partitioned_runtime_gate_rejects_high_video_guard_ownership_drift():
+    with pytest.raises(RuntimeGateError, match="audio_mask_exact"):
+        validate_partitioned_runtime_evidence(
+            _metrics_with_high_video_guard(audio_mask_exact=False),
+            _log(),
+        )
+
+
+def test_partitioned_runtime_gate_rejects_high_clean_reference_with_guard():
+    metrics = _metrics_with_high_video_guard()
+    reference_verified = next(
+        event for event in metrics["events"] if event["kind"] == "partitioned_high_boundary_reference_verified"
+    )
+    reference_verified["fields"]["anchor_calls"] = 1
+    with pytest.raises(RuntimeGateError, match="anchor executed"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_rejects_material_high_guard_endpoint_rewrite():
+    metrics = _metrics_with_high_video_guard()
+    guard_complete = next(
+        event for event in metrics["events"] if event["kind"] == "partitioned_high_video_guard_complete"
+    )
+    guard_complete["fields"]["endpoint_max_abs_delta"] = 0.01
+    with pytest.raises(RuntimeGateError, match="numerical roundoff"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
 def test_partitioned_runtime_gate_rejects_unapplied_or_wrong_width_audio_overlap():
     with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(
