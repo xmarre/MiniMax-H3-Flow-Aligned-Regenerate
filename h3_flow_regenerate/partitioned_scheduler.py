@@ -56,6 +56,7 @@ from .high_stage_boundary import (
     HIGH_BOUNDARY_AUDIO_SEAM_TICKS,
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS,
+    align_audio_reference_to_authoritative_prefix,
     high_boundary_contract,
 )
 from .partitioned_diagnostics import (
@@ -3629,20 +3630,25 @@ def run_partitioned_progressive(
             else None
         )
 
-        high_audio_reference = low_probe_clean_audio if high_audio_reference_enabled else None
+        target_latent_internal = _process_latent_in(
+            base_model,
+            latent_image,
+            target_shapes,
+        )
+        _target_internal_video, authoritative_audio = unpack_streams(target_latent_internal, target_shapes)
+        high_audio_reference = None
+        audio_reference_report: dict[str, Any] = {}
         audio_reference_support_ticks = 0
         if high_audio_reference_enabled:
             if not isinstance(low_probe_audio_report, dict) or not low_probe_audio_report.get("available"):
                 raise RuntimeError("high-stage audio boundary reference lost exact-boundary geometry")
-            generated_audio_ticks = int(low_probe_audio_report["audio_total_ticks"]) - int(
-                low_probe_audio_report["audio_prefix_ticks"]
+            high_audio_reference, audio_reference_report = align_audio_reference_to_authoritative_prefix(
+                low_probe_clean_audio,
+                authoritative_audio,
+                diagnostic_target_mask,
+                target_shapes,
             )
-            audio_reference_support_ticks = min(
-                HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS,
-                generated_audio_ticks,
-            )
-            if audio_reference_support_ticks <= 0:
-                raise RuntimeError("high-stage audio boundary reference has no generated suffix support")
+            audio_reference_support_ticks = int(audio_reference_report["audio_support_ticks"])
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
@@ -3663,8 +3669,9 @@ def run_partitioned_progressive(
                 else "frame_gauge_repair_or_exact_context_inactive"
             ),
             audio_enabled=high_audio_reference_enabled,
-            audio_reference_domain="low_probe_clean",
+            audio_reference_domain="authoritative_prefix_aligned_low_probe_clean",
             audio_support_ticks=audio_reference_support_ticks,
+            audio_reference_report=audio_reference_report,
             audio_full_reference_ticks=min(
                 HIGH_BOUNDARY_AUDIO_FULL_REFERENCE_TICKS,
                 audio_reference_support_ticks,
@@ -4073,11 +4080,6 @@ def run_partitioned_progressive(
             **splice_diagnostics,
         )
 
-        target_latent_internal = _process_latent_in(
-            base_model,
-            latent_image,
-            target_shapes,
-        )
         target_noise = _noise_argument(
             base_model,
             target_raw,
@@ -4414,7 +4416,7 @@ def run_partitioned_progressive(
                 )
                 binding.metrics.event(
                     "partitioned_audio_boundary_reference_delta",
-                    reference_stage="low_probe_clean",
+                    reference_stage="authoritative_prefix_aligned_low_probe_clean",
                     candidate_stage="final_high_clean",
                     domain="model_internal_clean",
                     **reference_stage_delta,
