@@ -24,6 +24,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     apply_partitioned_diagnostic_controls,
@@ -82,6 +84,8 @@ class H3PartitionedExactPrefixHandoff:
         learned_upscaler,
         metrics=None,
         temporal_weight=0.20,
+        frame_gauge_repair=False,
+        frame_gauge_residual_mode="off",
     ):
         # Companion capabilities are imported lazily so ordinary Flow users do
         # not acquire cross-custom-node requirements at Comfy startup.
@@ -113,6 +117,8 @@ class H3PartitionedExactPrefixHandoff:
             # its boundary correction after learned transfer, before target-high.
             suffix_dc_bridge=False,
             suffix_geometric_bridge=False,
+            frame_gauge_repair=frame_gauge_repair,
+            frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
         if source_mode == "scale":
             progressive = ProgressiveTargetInputConfig(
@@ -185,6 +191,10 @@ class H3PartitionedExactPrefixHandoff:
             vdn_variable_grid_linear_enabled=True,
             guided_audio_overlap=True,
             partitioned_suffix_dc_bridge=True,
+            frame_gauge_repair=bool(frame_gauge_repair),
+            frame_gauge_repair_default=False,
+            frame_gauge_residual_mode=str(frame_gauge_residual_mode),
+            frame_gauge_residual_mode_default="off",
             preflight_target_grid_fallback=True,
             production_default_changed=False,
         )
@@ -313,9 +323,53 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
                 "tooltip": (
-                    "source_carrier_uniform_only is the production default: one source-uniform low/probe "
+                    "source_carrier_uniform_only is the fast single-path default: one source-uniform low/probe "
                     "pair followed by target-high, with no duplicate shadow lifetime. main_then_shadow "
-                    "remains available for historical diagnostics."
+                    "keeps the requested exact-target partitioned low/probe path and runs shadow lifetimes "
+                    "only when a shadow handoff selector is explicitly enabled."
+                ),
+            },
+        )
+        # Append after every historical selector so existing serialized widget
+        # positions remain stable. OFF is the baseline/promotion control.
+        spec["required"]["frame_gauge_repair"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Opt-in exact-prefix/suffix frame-gauge registration. OFF preserves the "
+                    "physical 00625 handoff and one-token DC bridge exactly. ON applies a "
+                    "confidence-gated rigid sub-cell suffix translation only when all paired-prefix "
+                    "and active-guidance registrations pass."
+                ),
+            },
+        )
+        # Measurement milestone only: horizontal application remains unavailable
+        # until the documented hardware/media gate is satisfied.
+        spec["required"]["frame_gauge_residual_mode"] = (
+            ["off", "measure"],
+            {
+                "default": "off",
+                "tooltip": (
+                    "off preserves rigid v2 exactly. measure records bounded regional residual "
+                    "geometry after an accepted rigid v2 transaction without changing any tensor, "
+                    "guidance reference, DC bridge, sampler work, or final output."
+                ),
+            },
+        )
+        # Append after all prior controls so saved workflow widget positions stay
+        # stable. The historical soft_support_v1 value remains loadable, but hardware
+        # validation invalidated its pre-high application; it is now diagnostic-only.
+        spec["required"]["provider_boundary_stabilization"] = (
+            list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS),
+            {
+                "default": PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+                "tooltip": (
+                    "off preserves the current provider boundary exactly. soft_support_v1 is retained "
+                    "for saved-workflow compatibility but is now fail-closed and diagnostic-only: hardware "
+                    "validation showed its pre-high correction was amplified by target-high. When selected, "
+                    "the runtime leaves sampler state unchanged and emits a bounded post-high shadow, "
+                    "including first-to-second-suffix spillover, for the next hardware gate."
                 ),
             },
         )
@@ -323,8 +377,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Production exact-prefix Continuum handoff for the coordinated Sol-H3/VDN-H3-Plus stack. "
-        "Defaults to the validated source-carrier uniform low/probe path, learned 3D transfer, "
+        "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
+        "Sol-H3/VDN-H3-Plus stack. Defaults to the fast source-carrier uniform low/probe path, "
+        "learned 3D transfer, "
         "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
@@ -354,6 +409,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
+        frame_gauge_repair=False,
+        frame_gauge_residual_mode="off",
+        provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -374,6 +432,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             learned_upscaler=learned_upscaler,
             metrics=metrics,
             temporal_weight=temporal_weight,
+            frame_gauge_repair=frame_gauge_repair,
+            frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
         return apply_partitioned_diagnostic_controls(
             patched,
@@ -387,6 +447,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             av_handoff_source=av_handoff_source,
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
+            provider_boundary_stabilization=provider_boundary_stabilization,
         )
 
 
