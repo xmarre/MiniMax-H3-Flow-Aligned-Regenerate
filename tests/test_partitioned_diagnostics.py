@@ -72,6 +72,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED,
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
+    _cache_audio_decode_witness,
     _prepare_registered_guidance_reference,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
@@ -864,6 +865,57 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
     assert context_event.fields["sampler_mask_modified"] is True
     assert context_event.fields["exact_sampler_prefix_preserved"] is False
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
+
+
+def test_low_probe_audio_decode_witness_is_output_domain_cpu_and_session_bounded():
+    video = torch.zeros(1, 24, 3, 4, 4)
+    audio = torch.arange(1 * 32 * 2 * 12, dtype=torch.float32).reshape(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+
+    class BaseModel:
+        latent_shapes = "sentinel"
+
+        def process_latent_out(self, value):
+            assert self.latent_shapes == shapes
+            return value + 3.0
+
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    binding.audio_stage_witnesses[("old-session", "9")] = {
+        "stage": "low_probe_clean",
+        "domain": "caller_vae_latent",
+        "audio": torch.zeros_like(audio),
+    }
+    model_options = {
+        "transformer_options": {
+            "h3_continuum": {
+                "active": True,
+                "session_id": "session-a",
+                "chunk_index": 2,
+            }
+        }
+    }
+
+    witness = _cache_audio_decode_witness(
+        binding,
+        model_options,
+        BaseModel(),
+        packed,
+        shapes,
+        stage="low_probe_clean",
+    )
+
+    assert witness.device.type == "cpu"
+    assert torch.equal(witness, audio + 3.0)
+    assert list(binding.audio_stage_witnesses) == [("session-a", "2")]
+    assert binding.audio_stage_witnesses[("session-a", "2")]["audio"] is witness
+    receipt = [event for event in metrics.events if event.kind == "partitioned_audio_decode_witness_cached"][-1]
+    assert receipt.fields["domain"] == "caller_vae_latent"
+    assert receipt.fields["process_latent_out_applied"] is True
+    assert receipt.fields["output_neutral"] is True
+    assert receipt.fields["extra_h3_nfe"] == 0
+    assert receipt.fields["extra_vae_calls"] == 0
 
 
 def test_audio_boundary_mutations_fail_closed_to_released_sampler_contract():
