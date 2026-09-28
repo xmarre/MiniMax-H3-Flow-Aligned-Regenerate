@@ -198,15 +198,12 @@ def _high_video_reference_eligible(
     frame_gauge_result: str,
     available_suffix_tokens: int,
 ) -> bool:
-    """Select only the first generated clean successor for target-high anchoring.
+    """Select the bounded first-successor target-high video reference.
 
-    00705 disproved holding an entire decoder window: doing so froze legitimate
-    target-high evolution and caused a decoded motion hitch. 00706 then showed
-    that preserving the same-sigma source residual removes most of the high-stage
-    boundary drift even when the video reference is accidentally disabled. The
-    remaining bounded intervention therefore owns exactly one generated token,
-    and only on the trajectory-preserving main-AV repair path after a rigid
-    transaction did not become production-owned.
+    The source-residual handoff already preserves the low-stage stochastic
+    trajectory. Keep the clean-reference intervention minimal: own only the
+    first generated successor, only on the main AV exact-prefix repair path,
+    and only when no rigid frame-gauge transform became production-owned.
     """
 
     return bool(
