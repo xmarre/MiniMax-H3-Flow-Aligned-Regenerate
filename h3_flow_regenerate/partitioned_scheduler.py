@@ -165,6 +165,7 @@ FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
+PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS = 1
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
     {
@@ -186,6 +187,36 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
     "kernel_contract": "sana-sol-engine-sol-attn-64-rect-sm120-mapped-neighbor-v4",
     "history_policy": "attention_backend_history_v1",
 }
+
+
+def _high_video_reference_eligible(
+    *,
+    frame_gauge_repair: bool,
+    prefix_transformer_context: str,
+    av_handoff_source: str,
+    handoff_noise_mode: str,
+    frame_gauge_result: str,
+    available_suffix_tokens: int,
+) -> bool:
+    """Select only the first generated clean successor for target-high anchoring.
+
+    00705 disproved holding an entire decoder window: doing so froze legitimate
+    target-high evolution and caused a decoded motion hitch. 00706 then showed
+    that preserving the same-sigma source residual removes most of the high-stage
+    boundary drift even when the video reference is accidentally disabled. The
+    remaining bounded intervention therefore owns exactly one generated token,
+    and only on the trajectory-preserving main-AV repair path after a rigid
+    transaction did not become production-owned.
+    """
+
+    return bool(
+        frame_gauge_repair
+        and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+        and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+        and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+        and frame_gauge_result in {"rejected", "shadow_only"}
+        and int(available_suffix_tokens) >= PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS
+    )
 
 
 class PartitionedPreflightUnsupported(RuntimeError):
@@ -3657,12 +3688,13 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
-        high_video_reference_enabled = bool(
-            config.frame_gauge_repair
-            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
-            and frame_gauge_transaction.get("result") == "shadow_only"
-            and exact_overlap_fallback_trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
-            and exact_overlap_successor_safe_selected
+        high_video_reference_enabled = _high_video_reference_eligible(
+            frame_gauge_repair=bool(config.frame_gauge_repair),
+            prefix_transformer_context=prefix_transformer_context,
+            av_handoff_source=av_handoff_source,
+            handoff_noise_mode=handoff_noise_mode,
+            frame_gauge_result=str(frame_gauge_transaction.get("result", "")),
+            available_suffix_tokens=int(restored_clean.shape[2]) - int(stage_plan.prefix_t),
         )
         high_audio_reference_enabled = bool(
             config.frame_gauge_repair
@@ -3678,7 +3710,7 @@ def run_partitioned_progressive(
             restored_clean[
                 :,
                 :,
-                stage_plan.prefix_t : stage_plan.prefix_t + len(HIGH_BOUNDARY_REFERENCE_WEIGHTS),
+                stage_plan.prefix_t : stage_plan.prefix_t + PARTITIONED_HIGH_VIDEO_REFERENCE_TOKENS,
             ]
             .detach()
             .clone()
@@ -3691,6 +3723,11 @@ def run_partitioned_progressive(
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
             enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
             video_enabled=high_video_reference_enabled,
+            video_selection_reason=(
+                "source_residual_first_generated_successor_v1"
+                if high_video_reference_enabled
+                else "repair_disabled_or_nonexact_or_nonmain_or_rigid_owned_or_no_suffix"
+            ),
             video_reference_domain="exact_restored_pre_high_clean",
             video_support_tokens=(
                 int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
