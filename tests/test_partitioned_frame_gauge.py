@@ -15,7 +15,6 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _emit_bicubic_transfer_shadow_trajectory,
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
-    _high_video_reference_eligible,
     _prepare_registered_guidance_reference,
 )
 from h3_flow_regenerate.sigma import H3_VIDEO_SHIFT, normalized_coordinate
@@ -89,50 +88,16 @@ def _schedule():
     return high_sigmas, split_coordinate
 
 
-def test_high_video_reference_eligibility_targets_only_nonowned_residual_handoff():
-    common = {
-        "frame_gauge_repair": True,
-        "prefix_transformer_context": partitioned_scheduler.PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-        "av_handoff_source": partitioned_scheduler.PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
-        "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
-        "exact_overlap_fallback_requested": True,
-        "exact_overlap_bridge_applied": True,
-        "available_suffix_tokens": 1,
-    }
-
-    assert _high_video_reference_eligible(frame_gauge_result="rejected", **common)
-    assert _high_video_reference_eligible(frame_gauge_result="shadow_only", **common)
-    assert not _high_video_reference_eligible(frame_gauge_result="accepted", **common)
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "frame_gauge_repair": False},
+def test_video_boundary_production_contract_fails_closed_to_residual_only():
+    assert partitioned_scheduler.PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED is False
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0,)
+    assert (
+        partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
+        == "source_residual_handoff_plus_first_suffix_overlap_v1"
     )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{
-            **common,
-            "prefix_transformer_context": partitioned_scheduler.PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
-        },
-    )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "av_handoff_source": partitioned_scheduler.PARTITIONED_AV_HANDOFF_SOURCE_SHADOW},
-    )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_INDEPENDENT},
-    )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "exact_overlap_fallback_requested": False},
-    )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "exact_overlap_bridge_applied": False},
-    )
-    assert not _high_video_reference_eligible(
-        frame_gauge_result="rejected",
-        **{**common, "available_suffix_tokens": 0},
+    assert (
+        partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY
+        == "partitioned_exact_overlap_structural_plus_dc_v1"
     )
 
 
