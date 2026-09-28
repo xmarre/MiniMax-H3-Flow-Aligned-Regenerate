@@ -85,7 +85,6 @@ class H3FlowMetrics:
         with self._lock:
             return tuple(self._transient_witnesses.get(str(kind), ()))
 
-
     def snapshot(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
