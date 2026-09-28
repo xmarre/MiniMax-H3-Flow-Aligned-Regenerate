@@ -225,11 +225,19 @@ class HighStageBoundaryTrace:
     max_calls = 16
     suffix_tokens = 4
 
-    def __init__(self, metrics, exact_prefix, shapes):
+    def __init__(
+        self,
+        metrics,
+        exact_prefix,
+        shapes,
+        *,
+        prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
+    ):
         self.metrics = metrics
         self.prefix_t = int(exact_prefix.shape[2])
         self.exact_tail = exact_prefix[:, :, -1:].detach().clone()
         self.shapes = shapes
+        self.prefix_witness = str(prefix_witness)
         self.calls = 0
         self.previous_prediction = None
 
@@ -257,7 +265,7 @@ class HighStageBoundaryTrace:
             actual=bool(actual),
             domain="model_internal_predicted_clean",
             prefix_t=self.prefix_t,
-            prefix_witness="authoritative_exact_tail_after_inpaint_restore",
+            prefix_witness=self.prefix_witness,
             suffix_tokens=int(suffix.shape[2]),
             flow_suffix_delta_rms=delta_rms,
             trajectories=trajectories,
@@ -284,6 +292,7 @@ def high_boundary_contract(
     video_reference_suffix: torch.Tensor | None = None,
     audio_reference: torch.Tensor | None = None,
     exact_denoise_mask: torch.Tensor | None = None,
+    prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -308,7 +317,12 @@ def high_boundary_contract(
             if anchor.active:
                 binding.high_boundary_anchor = anchor
         if measure:
-            binding.high_boundary_trace = HighStageBoundaryTrace(binding.metrics, exact_prefix, shapes)
+            binding.high_boundary_trace = HighStageBoundaryTrace(
+                binding.metrics,
+                exact_prefix,
+                shapes,
+                prefix_witness=prefix_witness,
+            )
         yield
     finally:
         trace = binding.high_boundary_trace
