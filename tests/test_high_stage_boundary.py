@@ -144,6 +144,49 @@ def test_boundary_reference_anchor_changes_only_bounded_generated_clean_support(
     assert binding.high_boundary_anchor is None
 
 
+def test_boundary_reference_anchor_supports_single_video_successor():
+    torch.manual_seed(19)
+    video = torch.randn(1, 24, 8, 6, 6)
+    audio = torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    original = packed.clone()
+    prefix_t = 3
+    video_reference = video[:, :, prefix_t : prefix_t + 1].clone()
+    video_reference += 0.375
+
+    binding = SimpleNamespace(
+        guidance_protected_prefix_t=0,
+        high_boundary_trace=None,
+        high_boundary_anchor=None,
+        metrics=H3FlowMetrics(),
+    )
+    with high_boundary_contract(
+        binding,
+        video[:, :, :prefix_t],
+        shapes,
+        measure=False,
+        video_reference_suffix=video_reference,
+    ):
+        anchor = binding.high_boundary_anchor
+        assert anchor is not None
+        result = anchor.apply(packed, call_index=0, sigma=0.8, actual=True)
+
+    result_video, result_audio = unpack_streams(result, shapes)
+    original_video, original_audio = unpack_streams(original, shapes)
+    assert torch.equal(result_video[:, :, :prefix_t], original_video[:, :, :prefix_t])
+    assert torch.equal(result_video[:, :, prefix_t], video_reference[:, :, 0])
+    assert torch.equal(result_video[:, :, prefix_t + 1 :], original_video[:, :, prefix_t + 1 :])
+    assert torch.equal(result_audio, original_audio)
+
+    event = next(
+        event for event in binding.metrics.events if event.kind == "partitioned_high_boundary_reference_anchor"
+    )
+    assert event.fields["video_support_tokens"] == 1
+    assert event.fields["video_temporal_weights"] == [1.0]
+    assert event.fields["video_first_reference_error_rms"] == 0.0
+    assert event.fields["suffix_outside_support_modified"] is False
+
+
 def test_boundary_reference_anchor_rejects_noncanonical_audio_mask():
     video = torch.zeros(1, 24, 7, 4, 4)
     audio = torch.zeros(1, 32, 2, 10)
