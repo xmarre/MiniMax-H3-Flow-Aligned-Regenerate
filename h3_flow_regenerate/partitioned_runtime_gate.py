@@ -1804,8 +1804,11 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
         setup.get("preserved_noise_scope") == "caller_original_exact_mask_only",
         "high-stage video guard noise ownership drifted",
     )
+    target_state_max_abs_delta = _finite_number(
+        setup.get("target_state_reconstruction_max_abs_delta")
+    )
     _require(
-        _finite_number(setup.get("target_state_reconstruction_max_abs_delta")) <= HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
+        target_state_max_abs_delta <= HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
         "high-stage video guard does not reconstruct the handoff sampler state",
     )
     _require(guard_complete.get("final_guard_exact") is True, "high-stage video guard was not exact at sampler output")
