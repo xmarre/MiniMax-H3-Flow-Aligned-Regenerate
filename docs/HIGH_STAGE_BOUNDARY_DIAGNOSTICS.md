@@ -12,11 +12,14 @@ not register or replace the low-resolution direction reference.
 
 When frame-gauge repair is enabled on the exact target-partitioned path, the
 selected pre-high production clean trajectory also owns a bounded generated
-boundary reference. Video holds the first generated token exactly and blends
-the next three toward that pre-high trajectory with weights 1, 0.75, 0.5 and
-0.25. Selection follows the production pre-high trajectory after registration,
-fallback and DC handling; it is not conditional on one particular frame-gauge
-transaction outcome.
+boundary reference. Core H3 decodes temporal chunks from five latent tokens
+with two-token overlap. At the partitioned prefix used here, the boundary decode
+chunk contains two authoritative prefix tokens followed by five generated
+tokens. Those five generated tokens are therefore held exactly on the pre-high
+trajectory; ownership then releases across the two overlap tokens with weights
+2/3 and 1/3. Selection follows the production pre-high trajectory after
+registration, fallback and DC handling; it is not conditional on one particular
+frame-gauge transaction outcome.
 
 Audio uses a separate clean-domain reference. The low/probe continuation is
 translated onto the caller-owned exact-prefix gauge using the difference
@@ -30,8 +33,8 @@ creating a second hard boundary when the reference support ends. Final exact-pre
 distributing its restore delta across the same 52-tick
 seam-plus-decoder-context interval. After the high-stage solver returns, the
 scheduler projects the remaining bounded solver-integration residual back onto
-the same clean reference: video uses the same 1/0.75/0.5/0.25 four-token
-weights; audio holds the full 52-tick seam-plus-decoder-context interval exactly
+the same clean reference: video uses the same five-token hold plus two-token
+overlap release; audio holds the full 52-tick seam-plus-decoder-context interval exactly
 and uses the existing 32-tick tapered release. The caller-owned prefix and every
 suffix value outside those supports remain byte-for-byte unchanged. The 32-tick
 future-context bound is tied to the pinned MiniMax-H3 BigVGAN decoder architecture
