@@ -324,9 +324,7 @@ def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_ed
     prefix_t = 3
     audio_prefix = 7
 
-    video_reference = (
-        video[:, :, prefix_t : prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)].clone() + 0.4
-    )
+    video_reference = video[:, :, prefix_t : prefix_t + len(HIGH_BOUNDARY_VIDEO_REFERENCE_WEIGHTS)].clone() + 0.4
     audio_reference = audio.clone()
     audio_reference[..., audio_prefix : audio_prefix + HIGH_BOUNDARY_AUDIO_REFERENCE_TICKS] += 0.25
 
