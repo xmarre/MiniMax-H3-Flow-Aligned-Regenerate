@@ -4397,7 +4397,7 @@ def run_partitioned_progressive(
                     roi_name: measure_translation_trajectory(
                         recomputed_internal_video,
                         stage_plan.prefix_t,
-                        forward_steps=4,
+                        forward_steps=5,
                         backward_steps=3,
                         roi_fraction=roi_fraction,
                         max_shift=4,
