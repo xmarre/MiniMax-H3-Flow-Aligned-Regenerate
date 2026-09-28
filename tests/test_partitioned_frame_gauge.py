@@ -95,6 +95,8 @@ def test_high_video_reference_eligibility_targets_only_nonowned_residual_handoff
         "prefix_transformer_context": partitioned_scheduler.PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
         "av_handoff_source": partitioned_scheduler.PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        "exact_overlap_fallback_requested": True,
+        "exact_overlap_bridge_applied": True,
         "available_suffix_tokens": 1,
     }
 
@@ -119,6 +121,14 @@ def test_high_video_reference_eligibility_targets_only_nonowned_residual_handoff
     assert not _high_video_reference_eligible(
         frame_gauge_result="rejected",
         **{**common, "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_INDEPENDENT},
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "exact_overlap_fallback_requested": False},
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "exact_overlap_bridge_applied": False},
     )
     assert not _high_video_reference_eligible(
         frame_gauge_result="rejected",
