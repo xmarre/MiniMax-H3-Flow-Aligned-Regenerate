@@ -1670,9 +1670,7 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
     """Validate the bounded production post-high video correction when present."""
 
     events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_post_high_video_residual_repair"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_post_high_video_residual_repair"
     ]
     # Historical evidence generated before this policy remains valid input to
     # the offline validator. New scheduler executions emit exactly one receipt.
@@ -1789,8 +1787,7 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
     selected_dy = abs(selected_dy_value)
     magnitude = _finite_number(receipt.get("correction_magnitude_cells"))
     _require(
-        selected_dy <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS
-        and magnitude <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS,
+        selected_dy <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS and magnitude <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS,
         "post-high video residual correction exceeded magnitude bound",
     )
     _require(
@@ -1835,10 +1832,7 @@ def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> N
         values = canonical.get(field)
         _require(isinstance(values, dict), f"post-high video residual canonical {field} is missing")
         _require(
-            all(
-                _finite_number(value) <= POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS
-                for value in values.values()
-            ),
+            all(_finite_number(value) <= POST_HIGH_VIDEO_MAX_SUCCESSOR_PERTURBATION_CELLS for value in values.values()),
             f"post-high video residual canonical {field} exceeded bound",
         )
     _require(
