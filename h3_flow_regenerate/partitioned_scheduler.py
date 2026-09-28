@@ -3203,9 +3203,7 @@ def run_partitioned_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         handoff_noise_mode = (
-            H3_HANDOFF_NOISE_SOURCE_RESIDUAL
-            if config.frame_gauge_repair
-            else H3_HANDOFF_NOISE_INDEPENDENT
+            H3_HANDOFF_NOISE_SOURCE_RESIDUAL if config.frame_gauge_repair else H3_HANDOFF_NOISE_INDEPENDENT
         )
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
