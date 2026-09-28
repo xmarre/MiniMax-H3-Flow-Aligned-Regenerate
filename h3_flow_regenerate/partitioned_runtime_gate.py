@@ -32,6 +32,13 @@ from .frame_gauge import (
     LEARNED_VIDEO_POLICY,
     FrameGaugePolicy,
 )
+from .post_high_video import (
+    POST_HIGH_VIDEO_MAX_CORRECTION_CELLS,
+    POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS,
+    POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
+    POST_HIGH_VIDEO_RELEASE_WEIGHTS,
+    POST_HIGH_VIDEO_RESIDUAL_POLICY,
+)
 from .residual_geometry import (
     DEFAULT_RESIDUAL_POLICY,
     RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -1658,6 +1665,138 @@ def _validate_provider_boundary_post_high_shadow(window: list[dict[str, Any]]) -
     )
 
 
+def _validate_post_high_video_residual_repair(window: list[dict[str, Any]]) -> None:
+    """Validate the bounded production post-high video correction when present."""
+
+    events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_post_high_video_residual_repair"
+    ]
+    # Historical evidence generated before this policy remains valid input to
+    # the offline validator. New scheduler executions emit exactly one receipt.
+    if not events:
+        return
+    _require(len(events) == 1, "partitioned run emitted multiple post-high video residual receipts")
+    receipt = events[0]
+    _require(
+        receipt.get("policy") == POST_HIGH_VIDEO_RESIDUAL_POLICY,
+        "post-high video residual policy drifted",
+    )
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(receipt.get(field) == 0, f"post-high video residual repair added work: {field}")
+    _require(
+        receipt.get("authoritative_prefix_modified") is False,
+        "post-high video residual repair modified authoritative prefix ownership",
+    )
+    _require(receipt.get("audio_modified") is False, "post-high video residual repair modified audio")
+
+    applied = bool(receipt.get("applied"))
+    if not applied:
+        _require(receipt.get("output_mutated") is False, "rejected post-high video residual candidate mutated output")
+        _require(receipt.get("accepted") is not True, "rejected post-high video residual candidate claims acceptance")
+        reason = str(receipt.get("reason", ""))
+        _require(
+            reason
+            in {
+                "frame_gauge_repair_disabled",
+                "safe_video_topology_not_active",
+                "missing_required_roi",
+                "upper45_first_pair_clipped",
+                "full_first_pair_clipped",
+                "upper45_low_response",
+                "full_low_response",
+                "vertical_boundary_error_not_coherent",
+                "target_high_vertical_delta_not_coherent",
+                "boundary_error_not_explained_by_target_high_delta",
+                "vertical_boundary_error_below_floor",
+                "target_high_vertical_delta_below_floor",
+                "pre_high_boundary_not_clean",
+                "target_high_delta_not_dominant_enough",
+                "vertical_roi_disagreement_over_bound",
+                "vertical_correction_over_bound",
+                "temporal_release_step_over_bound",
+                "candidate_validation_failed",
+                "caller_reentry_validation_failed",
+            },
+            "post-high video residual repair failed closed for an unknown reason",
+        )
+        return
+
+    _require(receipt.get("accepted") is True, "applied post-high video residual repair is not accepted")
+    _require(receipt.get("output_mutated") is True, "applied post-high video residual repair did not mutate output")
+    _require(receipt.get("safe_video_topology") is True, "post-high video residual repair escaped safe topology")
+    _require(
+        receipt.get("reason") == "accepted_bounded_vertical_release",
+        "applied post-high video residual repair reason drifted",
+    )
+    _require(
+        receipt.get("horizontal_application_enabled") is False
+        and math.isclose(_finite_number(receipt.get("operator_dx_cells")), 0.0, abs_tol=0.0),
+        "post-high video residual repair applied a horizontal operator",
+    )
+    _require(receipt.get("caller_audio_exact") is True, "post-high video residual repair changed caller audio")
+    _require(receipt.get("caller_prefix_exact") is True, "post-high video residual repair changed caller prefix")
+    _require(receipt.get("internal_audio_exact") is True, "post-high video residual repair changed internal audio")
+    _require(receipt.get("internal_prefix_exact") is True, "post-high video residual repair changed internal prefix")
+    _require(
+        receipt.get("canonical_candidate_accepted") is True,
+        "post-high video residual repair failed caller-domain round-trip validation",
+    )
+
+    selected_dy = abs(_finite_number(receipt.get("selected_dy_cells")))
+    magnitude = _finite_number(receipt.get("correction_magnitude_cells"))
+    _require(
+        selected_dy <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS
+        and magnitude <= POST_HIGH_VIDEO_MAX_CORRECTION_CELLS,
+        "post-high video residual correction exceeded magnitude bound",
+    )
+    _require(
+        math.isclose(selected_dy, magnitude, rel_tol=1e-6, abs_tol=1e-9),
+        "post-high video residual selected displacement differs from planned magnitude",
+    )
+    _require(
+        _finite_number(receipt.get("max_induced_step_cells")) <= POST_HIGH_VIDEO_MAX_RELEASE_STEP_CELLS,
+        "post-high video residual temporal release exceeded per-step bound",
+    )
+    weights = receipt.get("release_weights")
+    _require(
+        isinstance(weights, list)
+        and len(weights) == len(POST_HIGH_VIDEO_RELEASE_WEIGHTS)
+        and all(
+            math.isclose(_finite_number(actual), expected, rel_tol=1e-12, abs_tol=1e-12)
+            for actual, expected in zip(weights, POST_HIGH_VIDEO_RELEASE_WEIGHTS, strict=True)
+        ),
+        "post-high video residual release weights drifted",
+    )
+    corrected_tokens = int(receipt.get("corrected_tokens", -1))
+    _require(
+        0 < corrected_tokens <= len(POST_HIGH_VIDEO_RELEASE_WEIGHTS),
+        "post-high video residual corrected-token count is invalid",
+    )
+
+    canonical = receipt.get("caller_reentry_validation")
+    _require(isinstance(canonical, dict), "post-high video residual canonical validation receipt is missing")
+    _require(
+        canonical.get("no_material_roi_regression") is True,
+        "post-high video residual canonical candidate regressed an ROI",
+    )
+    _require(
+        canonical.get("horizontal_phase_stable") is True,
+        "post-high video residual canonical candidate perturbed horizontal phase",
+    )
+    _require(
+        _finite_number(canonical.get("mean_improvement_ratio")) >= POST_HIGH_VIDEO_MIN_MEAN_IMPROVEMENT,
+        "post-high video residual canonical improvement is below gate",
+    )
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
@@ -3170,6 +3309,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_soft_support_shadow(window)
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
+    _validate_post_high_video_residual_repair(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
