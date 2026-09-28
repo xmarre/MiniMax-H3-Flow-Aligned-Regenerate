@@ -15,6 +15,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _emit_bicubic_transfer_shadow_trajectory,
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
+    _high_video_reference_eligible,
     _prepare_registered_guidance_reference,
 )
 from h3_flow_regenerate.sigma import H3_VIDEO_SHIFT, normalized_coordinate
@@ -86,6 +87,43 @@ def _schedule():
     high_sigmas = torch.tensor([0.8, 0.5, 0.0], dtype=torch.float32)
     split_coordinate = float(normalized_coordinate(0.8, video_shift=H3_VIDEO_SHIFT))
     return high_sigmas, split_coordinate
+
+
+def test_high_video_reference_eligibility_targets_only_nonowned_residual_handoff():
+    common = {
+        "frame_gauge_repair": True,
+        "prefix_transformer_context": partitioned_scheduler.PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        "av_handoff_source": partitioned_scheduler.PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
+        "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        "available_suffix_tokens": 1,
+    }
+
+    assert _high_video_reference_eligible(frame_gauge_result="rejected", **common)
+    assert _high_video_reference_eligible(frame_gauge_result="shadow_only", **common)
+    assert not _high_video_reference_eligible(frame_gauge_result="accepted", **common)
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "frame_gauge_repair": False},
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{
+            **common,
+            "prefix_transformer_context": partitioned_scheduler.PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+        },
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "av_handoff_source": partitioned_scheduler.PARTITIONED_AV_HANDOFF_SOURCE_SHADOW},
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "handoff_noise_mode": partitioned_scheduler.H3_HANDOFF_NOISE_INDEPENDENT},
+    )
+    assert not _high_video_reference_eligible(
+        frame_gauge_result="rejected",
+        **{**common, "available_suffix_tokens": 0},
+    )
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
