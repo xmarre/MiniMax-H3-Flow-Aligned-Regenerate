@@ -314,7 +314,6 @@ def test_runtime_applies_boundary_reference_before_flow_observation():
     assert before_anchor_index < anchor_index < before_flow_index
 
 
-
 def test_final_boundary_reference_is_bounded_and_closes_first_video_and_audio_edges():
     torch.manual_seed(23)
     video = torch.randn(1, 24, 10, 6, 6)
