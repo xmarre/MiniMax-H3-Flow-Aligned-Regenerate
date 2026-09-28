@@ -90,6 +90,10 @@ class FlowBinding:
     frame_gauge_invocation_active: bool = False
     active_capture: _ActiveCapture | None = None
     active_guidance_run: Any = None
+    # Output-neutral, CPU-resident stage witnesses for bounded post-decode
+    # diagnostics. Clone bindings share this registry so the model returned by
+    # the node can expose witnesses produced by an execution clone.
+    audio_stage_witnesses: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
 
 def sampler_name(sampler: Any) -> str:
@@ -286,6 +290,7 @@ def flow_model_clone_callback(source_model: Any, cloned_model: Any) -> None:
         guidance_conditioning_signature=binding.guidance_conditioning_signature,
         captured_run_id=binding.captured_run_id,
         guidance_run_id=binding.guidance_run_id,
+        audio_stage_witnesses=binding.audio_stage_witnesses,
     )
 
 
@@ -748,6 +753,17 @@ def _process_latent_in(base_model: Any, value: torch.Tensor, shapes: list[tuple[
     try:
         base_model.latent_shapes = shapes
         return base_model.process_latent_in(value)
+    finally:
+        base_model.latent_shapes = previous
+
+
+def _process_latent_out(base_model: Any, value: torch.Tensor, shapes: list[tuple[int, ...]]) -> torch.Tensor:
+    """Return an internal H3 AV state to the caller/VAE latent domain."""
+
+    previous = getattr(base_model, "latent_shapes", None)
+    try:
+        base_model.latent_shapes = shapes
+        return base_model.process_latent_out(value)
     finally:
         base_model.latent_shapes = previous
 
