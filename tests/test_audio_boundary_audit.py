@@ -1,6 +1,10 @@
+import json
+from types import SimpleNamespace
+
 import torch
 
 from h3_flow_regenerate.audio_boundary_audit import H3FlowAudioBoundaryAudit, audit_audio_boundaries
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
 
 
 class Decoder:
@@ -23,7 +27,14 @@ def inputs():
     latents = [{"samples": left}, {"samples": right}]
     vae = Decoder()
     audios = [{"waveform": vae.decode(x["samples"]).movedim(-1, 1), "sample_rate": 32000} for x in latents]
-    plan = {"magic": "H3_CONTINUUM_ASSEMBLY_PLAN", "fps": 24, "chunks": [{"trim_frames": 0}, {"trim_frames": 39}]}
+    plan = {
+        "magic": "H3_CONTINUUM_ASSEMBLY_PLAN",
+        "fps": 24,
+        "chunks": [
+            {"trim_frames": 0, "chunk_index": 1},
+            {"trim_frames": 39, "chunk_index": 2},
+        ],
+    }
     return latents, audios, plan
 
 
@@ -62,3 +73,69 @@ def test_nonexact_overlap_never_decodes():
     receipt = audit_audio_boundaries(vae, latents, audios, plan)[0]
     assert receipt["reason"] == "carried_overlap_not_exact"
     assert not vae.calls
+
+
+def test_low_probe_witness_localizes_generated_stage_under_matched_decode_context():
+    latents, audios, plan = inputs()
+    saved = [x["samples"].clone() for x in latents]
+    witness = latents[1]["samples"].clone()
+    witness[..., 65:] = 0.012
+
+    binding = FlowBinding()
+    binding.audio_stage_witnesses[("session-a", "2")] = {
+        "stage": "low_probe_clean",
+        "domain": "caller_vae_latent",
+        "audio": witness,
+    }
+    flow_model = SimpleNamespace(model_options={FLOW_BINDING_KEY: binding})
+    vae = Decoder()
+
+    output, report_json = H3FlowAudioBoundaryAudit().audit(
+        [vae],
+        latents,
+        audios,
+        [plan],
+        [flow_model],
+    )
+
+    assert output is audios
+    assert len(vae.calls) == 3
+    receipt = json.loads(report_json)[0]
+    assert receipt["extra_vae_calls"] == 3
+    localizer = receipt["stage_localizer"]
+    assert localizer["status"] == "measured"
+    assert localizer["generated_suffix_replaced_only"] is True
+    assert localizer["authoritative_prefix_from_final_latent"] is True
+    assert localizer["low_probe_common_decode_boundary"]["candidate_over_reference_db"] < 4
+    assert localizer["final_common_decode_boundary"]["candidate_over_reference_db"] > 12
+    assert localizer["low_probe_vs_final_suffix"]["candidate_over_reference_db"] > 8
+    assert all(torch.equal(x["samples"], y) for x, y in zip(latents, saved, strict=True))
+
+
+def test_stage_witness_lookup_fails_closed_when_multiple_sessions_are_present():
+    latents, audios, plan = inputs()
+    witness = latents[1]["samples"].clone()
+    witnesses = {
+        ("session-a", "2"): {
+            "stage": "low_probe_clean",
+            "domain": "caller_vae_latent",
+            "audio": witness,
+        },
+        ("session-b", "2"): {
+            "stage": "low_probe_clean",
+            "domain": "caller_vae_latent",
+            "audio": witness,
+        },
+    }
+    vae = Decoder()
+    receipt = audit_audio_boundaries(
+        vae,
+        latents,
+        audios,
+        plan,
+        stage_witnesses=witnesses,
+    )[0]
+    assert receipt["extra_vae_calls"] == 2
+    assert len(vae.calls) == 2
+    assert receipt["stage_localizer"]["status"] == "not_evaluated"
+    assert receipt["stage_localizer"]["reason"] == "ambiguous_low_probe_witness"
