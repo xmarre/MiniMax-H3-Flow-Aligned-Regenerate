@@ -4319,6 +4319,7 @@ def run_partitioned_progressive(
             diagnostic_audio_control
             or (residual_mode == "measure" and frame_gauge_candidate_accepted)
             or boundary_content_diagnostic_enabled
+            or post_high_video_repair_armed
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
