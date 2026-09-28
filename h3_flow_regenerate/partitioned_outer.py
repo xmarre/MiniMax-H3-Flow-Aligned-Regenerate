@@ -207,14 +207,12 @@ def partitioned_outer_wrapper(
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
         )
 
-    audio_exact_restore_successor_ticks = (
-        guided_ticks
-        if guided_report is not None
-        and guided_report.get("applied") is True
-        and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-        and guided_ticks == 4
-        else 0
-    )
+    # Keep the shipped four-tick sampler overlap and final exact-prefix restore,
+    # but do not rewrite generated successor audio after the high sampler returns.
+    # 00709 localized the audible discontinuity upstream of decode/assembly while
+    # this PR-local successor bridge was active; released v0.3.8 did not perform
+    # this post-sampler suffix mutation.
+    audio_exact_restore_successor_ticks = 0
     adapted = _ProgressiveExactMaskExecutor(
         executor,
         binding=binding,
