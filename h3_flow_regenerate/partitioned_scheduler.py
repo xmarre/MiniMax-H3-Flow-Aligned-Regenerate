@@ -3203,8 +3203,46 @@ def run_partitioned_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         handoff_noise_mode = (
-            H3_HANDOFF_NOISE_SOURCE_RESIDUAL if config.frame_gauge_repair else H3_HANDOFF_NOISE_INDEPENDENT
+            H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            else H3_HANDOFF_NOISE_INDEPENDENT
         )
+        if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+            source_state_video, _ = unpack_streams(source_raw, source_shapes)
+            source_clean_video, _ = unpack_streams(source_x0, source_shapes)
+            source_effective_residual = (
+                source_state_video.to(torch.float32)
+                - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
+            ) / float(sigma)
+            residual_suffix = source_effective_residual[:, :, stage_plan.prefix_t :]
+            initial_suffix = source_video_noise[:, :, stage_plan.prefix_t :].to(
+                device=residual_suffix.device,
+                dtype=torch.float32,
+            )
+            residual_delta = residual_suffix - initial_suffix
+            residual_norm = float(residual_suffix.norm().item())
+            initial_norm = float(initial_suffix.norm().item())
+            residual_cosine = (
+                float(torch.dot(residual_suffix.reshape(-1), initial_suffix.reshape(-1)).item())
+                / (residual_norm * initial_norm)
+                if residual_norm > 1e-20 and initial_norm > 1e-20
+                else None
+            )
+            binding.metrics.event(
+                "partitioned_handoff_residual_provenance",
+                policy=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+                source="same_sigma_source_state_minus_clean_probe",
+                generated_suffix_only=True,
+                prefix_t=int(stage_plan.prefix_t),
+                residual_rms=float(residual_suffix.square().mean().sqrt().item()),
+                initial_source_noise_rms=float(initial_suffix.square().mean().sqrt().item()),
+                residual_vs_initial_rms=float(residual_delta.square().mean().sqrt().item()),
+                residual_vs_initial_cosine=residual_cosine,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+            )
+            del source_effective_residual, residual_suffix, initial_suffix, residual_delta
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
