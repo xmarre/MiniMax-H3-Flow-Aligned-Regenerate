@@ -2155,13 +2155,25 @@ def _validate_vae_window_video_repair(window: list[dict[str, Any]]) -> None:
         and _event_fields(event).get("stage") == "final_post_high_vae_window_release"
     ]
     _require(len(release) == 2, "VAE-window repair must emit both release-frontier ROI receipts")
-    _require({str(receipt.get("roi")) for receipt in release} == {"upper45", "full"}, "VAE-window release ROI set drifted")
+    _require(
+        {str(receipt.get("roi")) for receipt in release} == {"upper45", "full"},
+        "VAE-window release ROI set drifted",
+    )
     for receipt in release:
         _require(receipt.get("vae_window_video_policy") == VAE_WINDOW_VIDEO_POLICY, "VAE-window release policy drifted")
-        _require(int(receipt.get("plateau_tokens", -1)) == expected["plateau_tokens"], "VAE-window plateau width drifted")
-        _require(int(receipt.get("support_tokens", -1)) == expected["support_tokens"], "VAE-window support width drifted")
+        _require(
+            int(receipt.get("plateau_tokens", -1)) == expected["plateau_tokens"],
+            "VAE-window plateau width drifted",
+        )
+        _require(
+            int(receipt.get("support_tokens", -1)) == expected["support_tokens"],
+            "VAE-window support width drifted",
+        )
         _require(receipt.get("temporal_weights") == expected["weights"], "VAE-window release weights drifted")
-        _require(int(receipt.get("decoder_window_start_t", -1)) == expected["window_start_t"], "VAE-window start drifted")
+        _require(
+            int(receipt.get("decoder_window_start_t", -1)) == expected["window_start_t"],
+            "VAE-window start drifted",
+        )
         _require(int(receipt.get("decoder_window_stop_t", -1)) == expected["window_stop_t"], "VAE-window stop drifted")
         _require(
             int(receipt.get("release_boundary_t", -1)) == expected["release_frontier_t"]
