@@ -73,9 +73,7 @@ def test_phase_aligned_prefix_maps_to_native_boundary_decoder_window():
     assert window["decoder_chunk_output_start_frame"] == 34
     assert window["first_retained_local_frame"] == 5
     assert window["decoder_internal_overlap_frames"] == 5
-    assert window["weights"] == pytest.approx(
-        [1.0] * 5 + list(VAE_WINDOW_RELEASE_TAIL)
-    )
+    assert window["weights"] == pytest.approx([1.0] * 5 + list(VAE_WINDOW_RELEASE_TAIL))
     assert window["release_frontier_t"] == 20
 
 
