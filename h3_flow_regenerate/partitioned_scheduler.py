@@ -166,7 +166,9 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_plus_high_prediction_gauge_release_v1"
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = (
+    "source_residual_handoff_plus_first_suffix_overlap_plus_high_prediction_gauge_release_v1"
+)
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
