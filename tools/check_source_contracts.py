@@ -56,6 +56,8 @@ def main() -> None:
         "h = self.x_embedder(x.flatten(2).transpose(1, 2))",
         "img_ids = create_token_ids((latent_T, latent_H, latent_W)",
         "out = optimized_attention(query, key, value, self.heads, skip_reshape=True)",
+        "clip_dec_chunk = clip_dec_chunk[:, :, self.frame_pre_padding:, :, :]",
+        "dec_overlap, clip_dec_chunk, self.frame_overlap, dim=-3",
         "if i == num_chunks - 1 and dec_overlap is not None:",
     )
     require(
