@@ -4480,6 +4480,144 @@ def run_partitioned_progressive(
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+        vae_window_video_repair: dict[str, Any] = {
+            "policy": VAE_WINDOW_VIDEO_POLICY,
+            "eligible": False,
+            "accepted": False,
+            "applied": False,
+            "output_mutated": False,
+            "armed": vae_window_repair_armed,
+            "reason": vae_window_plan_reason if not vae_window_repair_armed else "not_evaluated",
+            "safe_video_topology": safe_vae_window_repair_topology,
+            "authoritative_prefix_modified": False,
+            "audio_modified": False,
+            "high_prediction_gauge_bridge_enabled": high_prediction_gauge_bridge_enabled,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        if vae_window_repair_armed:
+            if final_internal_video is None or final_internal_audio is None:
+                raise RuntimeError("VAE-window video repair lost the common-domain final state")
+            if not pre_high_vae_window_trajectories:
+                raise RuntimeError("VAE-window video repair lost the pre-high trajectory reference")
+
+            _internal_candidate, repair_receipt = repair_vae_window_vertical_residual(
+                pre_high_vae_window_trajectories,
+                final_internal_video,
+                prefix_t=stage_plan.prefix_t,
+            )
+            vae_window_video_repair = {
+                **repair_receipt,
+                "armed": True,
+                "safe_video_topology": True,
+                "audio_modified": False,
+                "high_prediction_gauge_bridge_enabled": False,
+                "extra_h3_nfe": 0,
+                "extra_sampler_lifetimes": 0,
+                "extra_history_boundaries": 0,
+                "extra_provider_calls": 0,
+                "extra_vae_calls": 0,
+            }
+            if bool(repair_receipt.get("applied")):
+                proposed_dy = float(repair_receipt["selected_dy_cells"])
+                corrected_caller_video = apply_vae_window_vertical_translation(
+                    final_video,
+                    prefix_t=stage_plan.prefix_t,
+                    dy=proposed_dy,
+                )
+                if not torch.equal(
+                    corrected_caller_video[:, :, : stage_plan.prefix_t],
+                    final_video[:, :, : stage_plan.prefix_t],
+                ):
+                    raise RuntimeError("VAE-window video repair modified the caller-owned exact prefix")
+
+                corrected_result, corrected_shapes = pack_streams((corrected_caller_video, final_audio))
+                if corrected_shapes != target_shapes:
+                    raise RuntimeError("VAE-window video repair changed packed stream geometry")
+                _corrected_video_check, corrected_audio_check = unpack_streams(corrected_result, target_shapes)
+                if not torch.equal(corrected_audio_check, final_audio):
+                    raise RuntimeError("VAE-window video repair modified caller audio")
+
+                recomputed_internal = _process_latent_in(base_model, corrected_result, target_shapes)
+                recomputed_internal_video, recomputed_internal_audio = unpack_streams(
+                    recomputed_internal,
+                    target_shapes,
+                )
+                if not torch.equal(recomputed_internal_audio, final_internal_audio):
+                    raise RuntimeError("VAE-window video repair changed internal audio")
+                if not torch.equal(
+                    recomputed_internal_video[:, :, : stage_plan.prefix_t],
+                    exact_prefix.to(device=recomputed_internal_video.device),
+                ):
+                    raise RuntimeError("VAE-window video repair changed the internal exact prefix")
+
+                canonical_receipts = measure_vae_window_video_trajectory(
+                    recomputed_internal_video,
+                    stage_plan.prefix_t,
+                )
+                canonical_accepted, canonical_validation = validate_vae_window_vertical_candidate(
+                    pre_high_vae_window_trajectories,
+                    repair_receipt["post_high_before"],
+                    canonical_receipts,
+                    prefix_t=stage_plan.prefix_t,
+                    temporal=int(recomputed_internal_video.shape[2]),
+                )
+                vae_window_video_repair["caller_reentry_validation"] = canonical_validation
+                vae_window_video_repair["canonical_candidate_accepted"] = canonical_accepted
+                vae_window_video_repair["post_high_after"] = canonical_receipts
+                if canonical_accepted:
+                    final_video = corrected_caller_video
+                    result = corrected_result
+                    final_internal = recomputed_internal
+                    final_internal_video = recomputed_internal_video
+                    final_internal_audio = recomputed_internal_audio
+                    vae_window_video_repair.update(
+                        caller_audio_exact=True,
+                        caller_prefix_exact=True,
+                        internal_audio_exact=True,
+                        internal_prefix_exact=True,
+                    )
+                else:
+                    vae_window_video_repair.update(
+                        applied=False,
+                        accepted=False,
+                        output_mutated=False,
+                        reason="caller_reentry_validation_failed",
+                    )
+
+        binding.metrics.event(
+            "partitioned_post_high_vae_window_video_repair",
+            **vae_window_video_repair,
+        )
+        for roi_name, trajectory in vae_window_video_repair.get("post_high_before", {}).items():
+            binding.metrics.event(
+                "partitioned_video_vae_boundary_window_trajectory",
+                policy=VAE_WINDOW_VIDEO_POLICY,
+                stage="post_high_internal_uncorrected",
+                domain="model_internal_clean",
+                roi=roi_name,
+                diagnostic_only=True,
+                **trajectory,
+            )
+        after_stage = (
+            "post_high_internal_corrected"
+            if vae_window_video_repair.get("applied", False)
+            else "post_high_internal_candidate_rejected"
+        )
+        for roi_name, trajectory in vae_window_video_repair.get("post_high_after", {}).items():
+            binding.metrics.event(
+                "partitioned_video_vae_boundary_window_trajectory",
+                policy=VAE_WINDOW_VIDEO_POLICY,
+                stage=after_stage,
+                domain="model_internal_clean",
+                roi=roi_name,
+                diagnostic_only=not bool(vae_window_video_repair.get("applied", False)),
+                **trajectory,
+            )
+
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
                 raise RuntimeError("residual measurement lost the common-domain final video operand")
