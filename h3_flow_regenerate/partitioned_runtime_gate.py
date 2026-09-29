@@ -2039,9 +2039,7 @@ def _validate_vae_window_video_repair(window: list[dict[str, Any]]) -> None:
     """Validate the decoder-window-aware post-high video correction."""
 
     plans = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_video_vae_boundary_window_plan"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_video_vae_boundary_window_plan"
     ]
     repairs = [
         _event_fields(event)
@@ -2116,11 +2114,7 @@ def _validate_vae_window_video_repair(window: list[dict[str, Any]]) -> None:
         "VAE-window first retained frame no longer follows the native overlap",
     )
 
-    pre = [
-        receipt
-        for receipt in trajectories
-        if receipt.get("stage") == "pre_high_exact_restored"
-    ]
+    pre = [receipt for receipt in trajectories if receipt.get("stage") == "pre_high_exact_restored"]
     _require(len(pre) == 2, "VAE-window repair requires both pre-high ROI trajectories")
     _require({str(receipt.get("roi")) for receipt in pre} == {"upper45", "full"}, "VAE-window pre-high ROI set drifted")
 
