@@ -151,6 +151,14 @@ from .tone_bridge import (
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
+from .vae_boundary_video import (
+    VAE_WINDOW_VIDEO_POLICY,
+    apply_vae_window_vertical_translation,
+    h3_vae_boundary_window,
+    measure_vae_window_video_trajectory,
+    repair_vae_window_vertical_residual,
+    validate_vae_window_vertical_candidate,
+)
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
@@ -167,7 +175,7 @@ FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
 PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = (
-    "source_residual_handoff_plus_first_suffix_overlap_plus_high_prediction_gauge_release_v1"
+    "source_residual_handoff_plus_first_suffix_overlap_plus_vae_window_vertical_plateau_release_v1"
 )
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
@@ -3740,9 +3748,37 @@ def run_partitioned_progressive(
                 ).item()
             )
             del candidate_video_mask, _candidate_audio_mask
-        high_prediction_gauge_bridge_enabled = bool(
+        # 00715 proved that the per-call model-prefix value residual is tiny
+        # (~1.4e-3 RMS) and that exact first-transition rebasing does not remove
+        # the decoded frame shift. Keep the machinery for historical evidence,
+        # but do not mutate production predictions with the falsified actuator.
+        high_prediction_gauge_bridge_enabled = False
+        high_prediction_gauge_bridge_candidate_eligible = bool(
             safe_high_prediction_bridge_topology and bridge_mask_fully_generated
         )
+
+        safe_vae_window_repair_topology = bool(
+            config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            and representation_metrics.get("suffix_representation_bridge_accepted", False)
+            and exact_overlap_corrected_tokens == 1
+            and not high_video_reference_enabled
+        )
+        vae_window_plan = None
+        vae_window_plan_reason = "safe_video_topology_not_active"
+        if safe_vae_window_repair_topology:
+            try:
+                vae_window_plan = h3_vae_boundary_window(
+                    stage_plan.prefix_t,
+                    int(target_video.shape[2]),
+                )
+                vae_window_plan_reason = "native_boundary_window_resolved"
+            except ValueError as exc:
+                vae_window_plan_reason = f"unsupported_native_vae_phase:{exc}"
+        vae_window_repair_armed = vae_window_plan is not None
         high_boundary_context = exact_prefix
         high_boundary_prefix_witness = "authoritative_exact_tail_after_inpaint_restore"
 
@@ -3755,6 +3791,12 @@ def run_partitioned_progressive(
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
             high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_candidate_eligible=high_prediction_gauge_bridge_candidate_eligible,
+            high_prediction_gauge_bridge_hardware_verdict="falsified_00715_no_decoded_frame_shift_improvement",
+            vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+            vae_window_video_repair_armed=vae_window_repair_armed,
+            vae_window_video_plan_reason=vae_window_plan_reason,
+            vae_window_video_plan=dict(vae_window_plan or {}),
             high_prediction_gauge_bridge_support_tokens=(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
