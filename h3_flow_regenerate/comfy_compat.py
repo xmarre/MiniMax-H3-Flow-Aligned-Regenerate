@@ -9,6 +9,7 @@ import torch
 
 from .attention import AttentionConfig, make_attention_override, make_layout_block_wrapper, mark_layout_wrapper
 from .audio_guided_overlap import (
+    apply_audio_exact_restore_successor_bridge,
     apply_audio_guided_overlap_mask,
     configured_audio_guided_overlap_ticks,
 )
@@ -173,6 +174,8 @@ class _ProgressiveExactMaskExecutor:
         latent_image: torch.Tensor,
         denoise_mask: torch.Tensor | None,
         sampler: Any,
+        latent_shapes: list[tuple[int, ...]] | tuple[tuple[int, ...], ...] | None = None,
+        audio_exact_restore_successor_ticks: int = 0,
     ) -> None:
         self._executor = executor
         self.class_obj = executor.class_obj
@@ -181,6 +184,8 @@ class _ProgressiveExactMaskExecutor:
         self._latent_image = latent_image
         self._denoise_mask = denoise_mask
         self._sampler = sampler
+        self._latent_shapes = latent_shapes
+        self._audio_exact_restore_successor_ticks = int(audio_exact_restore_successor_ticks)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._executor, name)
@@ -198,6 +203,22 @@ class _ProgressiveExactMaskExecutor:
         else:
             return result
 
+        if self._audio_exact_restore_successor_ticks:
+            result, bridge_stats = apply_audio_exact_restore_successor_bridge(
+                result,
+                self._latent_image,
+                self._denoise_mask,
+                self._latent_shapes,
+                support_ticks=self._audio_exact_restore_successor_ticks,
+            )
+            self._binding.metrics.event(
+                "audio_exact_restore_successor_bridge",
+                source=source,
+                final_exact_restore_follows=True,
+                **bridge_stats,
+            )
+            if bool(bridge_stats.get("applied")):
+                self._binding.metrics.increment("audio_exact_restore_successor_bridge_runs")
         result, stats = _canonicalize_exact_masked_output(
             result,
             self._latent_image,

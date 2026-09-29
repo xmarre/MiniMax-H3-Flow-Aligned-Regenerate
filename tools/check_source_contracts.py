@@ -96,6 +96,9 @@ def main() -> None:
         "class MiniMaxH3(BaseModel):",
         "return self.model_sampling.audio_scale",
         'payload["audio_scale"] = self.audio_scale()',
+        "def scale_latent_inpaint(self, sigma, noise, latent_image, x=None, denoise_mask=None, **kwargs):",
+        "cleans[0] = aug * cleans[0] + (1.0 - aug) * noises[0]",
+        "token_grid_mask = utils.pack_latents(self._token_grid_masks(denoise_mask, shapes))[0]",
     )
     require(
         args.comfy / "comfy/model_sampling.py",
@@ -121,6 +124,13 @@ def main() -> None:
         "WrappersMP.PREDICT_NOISE",
         "#Returns denoised",
         "inverse_noise_scaling(sigmas[-1], samples)",
+        "class KSamplerX0Inpaint:",
+        "latent_mask = 1. - denoise_mask",
+        "out = out * denoise_mask + self.latent_image * latent_mask",
+        (
+            "scale_latent_inpaint(x=x, sigma=sigma, noise=self.noise, "
+            "latent_image=self.latent_image, denoise_mask=denoise_mask)"
+        ),
         "preprocess_conds_hooks(self.conds)",
         "filter_registered_hooks_on_conds(self.conds, self.model_options)",
         "self.conds = process_conds(",
