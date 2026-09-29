@@ -4448,30 +4448,25 @@ def run_partitioned_progressive(
             extra_sampler_lifetimes=0,
             extra_history_boundaries=0,
         )
-        binding.metrics.event(
-            "partitioned_high_prediction_gauge_bridge_verified",
-            policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
-            expected=high_prediction_gauge_bridge_enabled,
-            model_calls=len(high_model_calls),
-            bridge_calls=high_prediction_bridge_calls,
-            all_model_calls_covered=(
-                high_prediction_bridge_calls == len(high_model_calls)
-                if high_prediction_gauge_bridge_enabled
-                else high_prediction_bridge_calls == 0
-            ),
-            support_tokens=(bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0),
-            temporal_weights=(
-                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
-            ),
-            sampler_mask_modified=False,
-            sampler_entry_state_modified=False,
-            fixed_clean_reference_used=False,
-            extra_h3_nfe=0,
-            extra_provider_calls=0,
-            extra_vae_calls=0,
-            extra_sampler_lifetimes=0,
-            extra_history_boundaries=0,
-        )
+        if high_prediction_gauge_bridge_enabled:
+            binding.metrics.event(
+                "partitioned_high_prediction_gauge_bridge_verified",
+                policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+                expected=True,
+                model_calls=len(high_model_calls),
+                bridge_calls=high_prediction_bridge_calls,
+                all_model_calls_covered=high_prediction_bridge_calls == len(high_model_calls),
+                support_tokens=bridge_support_tokens,
+                temporal_weights=list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS),
+                sampler_mask_modified=False,
+                sampler_entry_state_modified=False,
+                fixed_clean_reference_used=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+            )
 
         final_video, final_audio = unpack_streams(result, target_shapes)
         final_internal = None
@@ -4481,6 +4476,7 @@ def run_partitioned_progressive(
             diagnostic_audio_control
             or (residual_mode == "measure" and frame_gauge_candidate_accepted)
             or boundary_content_diagnostic_enabled
+            or vae_window_repair_armed
         ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
             final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
