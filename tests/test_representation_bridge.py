@@ -71,6 +71,49 @@ def test_bridge_has_no_unmeasured_temporal_fade():
     assert torch.equal(corrected[:, :, 3:], learned[:, :, 3:])
 
 
+def test_successor_safe_bridge_preserves_boundary_and_bounds_relocated_residual():
+    torch.manual_seed(92)
+    learned = torch.randn(1, 24, 8, 8, 10, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    yy = torch.linspace(-1.0, 1.0, 8).view(1, 1, 1, 8, 1)
+    xx = torch.linspace(-1.0, 1.0, 10).view(1, 1, 1, 1, 10)
+    exact = exact + 0.14 + 0.07 * yy - 0.04 * xx
+    weights = (1.0, 0.75, 0.5, 0.25)
+    before = learned.clone()
+
+    structured, report = apply_suffix_representation_bridge(
+        learned,
+        exact,
+        requested=True,
+        weights=weights,
+    )
+    combined, dc = apply_suffix_dc_bridge(structured, exact, weights=weights)
+
+    prefix = 2
+    delta = exact[:, :, -1].float() - before[:, :, prefix - 1].float()
+    native_boundary = before[:, :, prefix].float() - before[:, :, prefix - 1].float()
+    corrected_boundary = combined[:, :, prefix].float() - exact[:, :, -1].float()
+    torch.testing.assert_close(corrected_boundary, native_boundary, rtol=0.0, atol=2e-6)
+
+    expected_step = -0.25 * delta
+    for offset in range(1, 4):
+        corrected_step = combined[:, :, prefix + offset].float() - combined[:, :, prefix + offset - 1].float()
+        native_step = before[:, :, prefix + offset].float() - before[:, :, prefix + offset - 1].float()
+        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=0.0, atol=2e-6)
+    corrected_exit = combined[:, :, prefix + 4].float() - combined[:, :, prefix + 3].float()
+    native_exit = before[:, :, prefix + 4].float() - before[:, :, prefix + 3].float()
+    torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=0.0, atol=2e-6)
+
+    assert torch.equal(combined[:, :, :prefix], before[:, :, :prefix])
+    assert torch.equal(combined[:, :, prefix + 4 :], before[:, :, prefix + 4 :])
+    assert report["suffix_representation_bridge_version"] == 2
+    assert report["suffix_representation_bridge_successor_safe"] is True
+    assert report["suffix_representation_bridge_temporal_weights"] == list(weights)
+    assert report["suffix_representation_bridge_max_weight_step"] == pytest.approx(0.25)
+    assert report["suffix_representation_bridge_corrected_tokens"] == 4
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
+
+
 def test_disabled_and_already_matched_paths_are_exact_object_noops():
     learned, exact = _pair()
     disabled, report = apply_suffix_representation_bridge(learned, exact, requested=False)
