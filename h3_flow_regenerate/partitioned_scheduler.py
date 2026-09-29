@@ -53,14 +53,9 @@ from .handoff import (
 from .high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_BOUNDARY_REFERENCE_WEIGHTS,
+    HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
-)
-from .high_stage_guard import (
-    HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
-    HIGH_STAGE_VIDEO_GUARD_POLICY,
-    HIGH_STAGE_VIDEO_GUARD_TOKENS,
-    build_high_stage_video_guard,
-    disabled_high_stage_video_guard,
 )
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -172,7 +167,7 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_plus_high_guard_v1"
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_plus_high_prediction_gauge_release_v1"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -3715,141 +3710,64 @@ def run_partitioned_progressive(
         high_video_reference_suffix = None
         high_audio_reference = None
 
-        safe_high_guard_topology = bool(
+        bridge_support_tokens = len(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+        safe_high_prediction_bridge_topology = bool(
             config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
             and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
-            and exact_overlap_corrected_tokens == HIGH_STAGE_VIDEO_GUARD_TOKENS
+            and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled
+            and stage_plan.prefix_t + bridge_support_tokens <= int(target_video.shape[2])
         )
-        guard_mask_fully_generated = False
-        if denoise_mask is not None and stage_plan.prefix_t < int(target_video.shape[2]):
+        bridge_mask_fully_generated = False
+        if denoise_mask is not None and safe_high_prediction_bridge_topology:
             candidate_video_mask, _candidate_audio_mask = unpack_streams(
                 denoise_mask,
                 target_shapes,
             )
-            guard_mask_fully_generated = bool(
+            bridge_mask_fully_generated = bool(
                 torch.all(
                     candidate_video_mask[
                         :,
                         :,
-                        stage_plan.prefix_t : stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
+                        stage_plan.prefix_t : stage_plan.prefix_t + bridge_support_tokens,
                     ]
                     == 1
                 ).item()
             )
             del candidate_video_mask, _candidate_audio_mask
-        high_video_guard_enabled = bool(safe_high_guard_topology and guard_mask_fully_generated)
-        high_latent_image = latent_image
-        high_denoise_mask = denoise_mask
-        high_video_guard_receipt = disabled_high_stage_video_guard(
-            prefix_t=stage_plan.prefix_t,
-            reason=(
-                "guard_token_not_fully_generated"
-                if safe_high_guard_topology and not guard_mask_fully_generated
-                else "safe_video_topology_not_active"
-            ),
+        high_prediction_gauge_bridge_enabled = bool(
+            safe_high_prediction_bridge_topology and bridge_mask_fully_generated
         )
-        if high_video_guard_enabled:
-            caller_internal = _process_latent_in(base_model, latent_image, target_shapes)
-            caller_internal_video, caller_internal_audio = unpack_streams(caller_internal, target_shapes)
-            guard_internal_video = caller_internal_video.clone()
-            guard_slice = slice(
-                stage_plan.prefix_t,
-                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-            )
-            guard_internal_video[:, :, guard_slice] = restored_clean[:, :, guard_slice].to(guard_internal_video)
-            guard_internal_packed, guard_internal_shapes = pack_streams((guard_internal_video, caller_internal_audio))
-            if guard_internal_shapes != target_shapes:
-                raise RuntimeError("high-stage video guard changed internal packed geometry")
-            guard_caller_packed = _process_latent_out(
-                base_model,
-                guard_internal_packed,
-                target_shapes,
-            )
-            guard_caller_video, _guard_caller_audio = unpack_streams(
-                guard_caller_packed,
-                target_shapes,
-            )
-            high_latent_image, high_denoise_mask, high_video_guard_receipt = build_high_stage_video_guard(
-                latent_image,
-                denoise_mask,
-                target_shapes,
-                guard_video_caller=guard_caller_video,
-                prefix_t=stage_plan.prefix_t,
-            )
-            high_internal_check = _process_latent_in(base_model, high_latent_image, target_shapes)
-            high_internal_video_check, high_internal_audio_check = unpack_streams(
-                high_internal_check,
-                target_shapes,
-            )
-            internal_guard_exact = torch.equal(
-                high_internal_video_check[:, :, guard_slice],
-                restored_clean[:, :, guard_slice].to(high_internal_video_check),
-            )
-            internal_audio_exact = torch.equal(
-                high_internal_audio_check,
-                caller_internal_audio.to(high_internal_audio_check),
-            )
-            if not internal_guard_exact or not internal_audio_exact:
-                raise RuntimeError("high-stage video guard failed caller/internal round-trip ownership")
-            high_video_guard_receipt.update(
-                internal_guard_exact=True,
-                internal_audio_exact=True,
-                caller_internal_round_trip_verified=True,
-                flow_guidance_protected_video_tokens=stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-                reason="safe_one_token_high_context",
-            )
-            del (
-                caller_internal,
-                caller_internal_video,
-                caller_internal_audio,
-                guard_internal_video,
-                guard_internal_packed,
-                guard_caller_packed,
-                guard_caller_video,
-                _guard_caller_audio,
-                high_internal_check,
-                high_internal_video_check,
-                high_internal_audio_check,
-            )
         high_boundary_context = exact_prefix
         high_boundary_prefix_witness = "authoritative_exact_tail_after_inpaint_restore"
-        if high_video_guard_enabled:
-            guard_slice = slice(
-                stage_plan.prefix_t,
-                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-            )
-            high_boundary_context = torch.cat(
-                (
-                    exact_prefix,
-                    restored_clean[:, :, guard_slice].to(exact_prefix),
-                ),
-                dim=2,
-            )
-            high_boundary_prefix_witness = "protected_first_generated_guard_tail_after_inpaint_restore"
 
         binding.metrics.event(
             "partitioned_high_boundary_reference_plan",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
             enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
             video_enabled=high_video_reference_enabled,
-            video_selection_reason="source_residual_handoff_plus_high_guard_no_high_clean_reference",
+            video_selection_reason="model_native_prediction_gauge_bridge_no_fixed_clean_reference",
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
-            high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-            high_video_guard_enabled=high_video_guard_enabled,
-            high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            high_prediction_gauge_bridge_weights=(
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+                if high_prediction_gauge_bridge_enabled
+                else []
+            ),
+            high_prediction_gauge_bridge_mask_fully_generated=bridge_mask_fully_generated,
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
             high_boundary_prefix_witness=high_boundary_prefix_witness,
             video_reference_domain="disabled",
-            video_support_tokens=(
-                int(high_video_reference_suffix.shape[2]) if high_video_reference_suffix is not None else 0
-            ),
-            video_temporal_weights=(
-                list(HIGH_BOUNDARY_REFERENCE_WEIGHTS[: int(high_video_reference_suffix.shape[2])])
-                if high_video_reference_suffix is not None
-                else []
-            ),
+            video_support_tokens=0,
+            video_temporal_weights=[],
             audio_enabled=high_audio_reference_enabled,
             audio_selection_reason="released_sampler_overlap_exact_restore_only",
             audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
@@ -4219,9 +4137,11 @@ def run_partitioned_progressive(
             provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
             video_high_clean_reference_enabled=high_video_reference_enabled,
-            video_high_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-            video_high_guard_enabled=high_video_guard_enabled,
-            video_high_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
+            video_high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            video_high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            video_high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
             audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
             audio_high_clean_reference_enabled=high_audio_reference_enabled,
             audio_exact_restore_successor_bridge_enabled=False,
@@ -4260,7 +4180,7 @@ def run_partitioned_progressive(
 
         target_latent_internal = _process_latent_in(
             base_model,
-            high_latent_image,
+            latent_image,
             target_shapes,
         )
         target_noise = _noise_argument(
@@ -4269,9 +4189,6 @@ def run_partitioned_progressive(
             sigma,
             target_latent_internal,
         )
-        # Preserve the caller-owned original exact-prefix noise only. The guard
-        # token uses the reconstructed handoff noise so target-high starts from
-        # exactly the existing target_raw state instead of caller initialization.
         target_noise = _merge_preserved_noise(
             target_noise,
             noise,
@@ -4292,63 +4209,18 @@ def run_partitioned_progressive(
         if not protected_video_noise_exact:
             raise RuntimeError("partitioned handoff changed caller-owned protected video noise")
 
-        guard_target_state_max_abs_delta = 0.0
-        guard_target_state_rms_delta = 0.0
-        if high_video_guard_enabled:
-            high_internal_video, _high_internal_audio = unpack_streams(
-                target_latent_internal,
-                target_shapes,
-            )
-            target_raw_video, _target_raw_audio = unpack_streams(target_raw, target_shapes)
-            guard_slice = slice(
-                stage_plan.prefix_t,
-                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-            )
-            model_sampling = getattr(base_model, "model_sampling", None)
-            model_noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
-            reconstructed_guard_state = (1.0 - float(sigma)) * high_internal_video[:, :, guard_slice].to(
-                device=merged_video_noise.device,
-                dtype=torch.float32,
-            ) + float(sigma) * model_noise_scale * merged_video_noise[:, :, guard_slice].to(torch.float32)
-            guard_state_delta = reconstructed_guard_state - target_raw_video[:, :, guard_slice].to(
-                reconstructed_guard_state
-            )
-            guard_target_state_max_abs_delta = float(guard_state_delta.abs().max().item())
-            guard_target_state_rms_delta = float(guard_state_delta.square().mean().sqrt().item())
-            if not torch.allclose(
-                reconstructed_guard_state,
-                target_raw_video[:, :, guard_slice].to(reconstructed_guard_state),
-                rtol=2e-6,
-                atol=2e-6,
-            ):
-                raise RuntimeError("high-stage video guard changed the handoff state at sampler entry")
-            high_video_guard_receipt.update(
-                target_state_reconstruction_verified=True,
-                target_state_reconstruction_max_abs_delta=guard_target_state_max_abs_delta,
-                target_state_reconstruction_rms_delta=guard_target_state_rms_delta,
-                preserved_noise_scope="caller_original_exact_mask_only",
-            )
-            del (
-                high_internal_video,
-                _high_internal_audio,
-                target_raw_video,
-                _target_raw_audio,
-                reconstructed_guard_state,
-                guard_state_delta,
-            )
-
-        binding.metrics.event(
-            "partitioned_high_video_guard",
-            **high_video_guard_receipt,
-        )
         binding.metrics.event(
             "handoff_transfer_wall",
             elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0,
             protected_video_noise_exact=protected_video_noise_exact,
             partitioned_exact_prefix=True,
-            high_video_guard_enabled=high_video_guard_enabled,
-            high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-            high_video_guard_target_state_max_abs_delta=guard_target_state_max_abs_delta,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            sampler_latent_mask_unchanged=True,
+            sampler_entry_state_unchanged=True,
         )
 
         if guidance_run is not None:
@@ -4407,6 +4279,9 @@ def run_partitioned_progressive(
         high_boundary_reference_calls_before = int(
             binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0)
         )
+        high_prediction_bridge_calls_before = int(
+            binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0)
+        )
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
@@ -4423,14 +4298,19 @@ def run_partitioned_progressive(
                 audio_reference=high_audio_reference,
                 exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
                 prefix_witness=high_boundary_prefix_witness,
+                prediction_gauge_bridge_weights=(
+                    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS
+                    if high_prediction_gauge_bridge_enabled
+                    else None
+                ),
             ),
         ):
             result = executor(
                 target_noise,
-                high_latent_image,
+                latent_image,
                 sampler,
                 high_sigmas,
-                high_denoise_mask,
+                denoise_mask,
                 high_callback,
                 disable_pbar,
                 seed,
@@ -4452,11 +4332,19 @@ def run_partitioned_progressive(
             int(binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0))
             - high_boundary_reference_calls_before
         )
+        high_prediction_bridge_calls = (
+            int(binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0))
+            - high_prediction_bridge_calls_before
+        )
         high_boundary_reference_expected = bool(high_video_reference_enabled or high_audio_reference_enabled)
         if high_boundary_reference_expected and high_boundary_reference_calls != len(high_model_calls):
             raise RuntimeError("target-high clean boundary reference did not cover every high-stage model prediction")
         if not high_boundary_reference_expected and high_boundary_reference_calls != 0:
             raise RuntimeError("target-high clean boundary reference executed outside its selected plan")
+        if high_prediction_gauge_bridge_enabled and high_prediction_bridge_calls != len(high_model_calls):
+            raise RuntimeError("target-high prediction gauge bridge did not cover every high-stage model prediction")
+        if not high_prediction_gauge_bridge_enabled and high_prediction_bridge_calls != 0:
+            raise RuntimeError("target-high prediction gauge bridge executed outside its selected plan")
         binding.metrics.event(
             "partitioned_high_boundary_reference_verified",
             policy=HIGH_BOUNDARY_REFERENCE_POLICY,
@@ -4471,7 +4359,14 @@ def run_partitioned_progressive(
             first_high_actual=first_high_actual,
             video_enabled=high_video_reference_enabled,
             audio_enabled=high_audio_reference_enabled,
-            high_video_guard_enabled=high_video_guard_enabled,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_calls=high_prediction_bridge_calls,
+            high_prediction_gauge_bridge_all_model_calls_covered=(
+                high_prediction_bridge_calls == len(high_model_calls)
+                if high_prediction_gauge_bridge_enabled
+                else high_prediction_bridge_calls == 0
+            ),
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
             high_boundary_prefix_witness=high_boundary_prefix_witness,
             fail_closed=True,
@@ -4481,81 +4376,34 @@ def run_partitioned_progressive(
             extra_sampler_lifetimes=0,
             extra_history_boundaries=0,
         )
+        binding.metrics.event(
+            "partitioned_high_prediction_gauge_bridge_verified",
+            policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            expected=high_prediction_gauge_bridge_enabled,
+            model_calls=len(high_model_calls),
+            bridge_calls=high_prediction_bridge_calls,
+            all_model_calls_covered=(
+                high_prediction_bridge_calls == len(high_model_calls)
+                if high_prediction_gauge_bridge_enabled
+                else high_prediction_bridge_calls == 0
+            ),
+            support_tokens=(bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0),
+            temporal_weights=(
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+                if high_prediction_gauge_bridge_enabled
+                else []
+            ),
+            sampler_mask_modified=False,
+            sampler_entry_state_modified=False,
+            fixed_clean_reference_used=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
 
         final_video, final_audio = unpack_streams(result, target_shapes)
-        high_guard_final_exact = True
-        high_guard_endpoint_canonicalized = False
-        high_guard_endpoint_max_abs_delta = 0.0
-        high_guard_endpoint_rms_delta = 0.0
-        if high_video_guard_enabled:
-            guard_latent_video, _guard_latent_audio = unpack_streams(
-                high_latent_image,
-                target_shapes,
-            )
-            guard_slice = slice(
-                stage_plan.prefix_t,
-                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS,
-            )
-            expected_guard = guard_latent_video[:, :, guard_slice].to(final_video)
-            observed_guard = final_video[:, :, guard_slice]
-            high_guard_final_exact = torch.equal(observed_guard, expected_guard)
-            if not high_guard_final_exact:
-                guard_endpoint_delta = observed_guard.to(torch.float32) - expected_guard.to(torch.float32)
-                high_guard_endpoint_max_abs_delta = float(guard_endpoint_delta.abs().max().item())
-                high_guard_endpoint_rms_delta = float(guard_endpoint_delta.square().mean().sqrt().item())
-                if high_guard_endpoint_max_abs_delta > HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA:
-                    raise RuntimeError("target-high protected guard token drift exceeded numerical roundoff")
-                final_video = final_video.clone()
-                final_video[:, :, guard_slice] = expected_guard
-                result, result_shapes = pack_streams((final_video, final_audio))
-                if result_shapes != target_shapes:
-                    raise RuntimeError("high-stage guard endpoint canonicalization changed packed geometry")
-                high_guard_endpoint_canonicalized = True
-                high_guard_final_exact = True
-            if not torch.equal(final_video[:, :, guard_slice], expected_guard):
-                raise RuntimeError("target-high failed to preserve the protected generated guard token")
-            binding.metrics.event(
-                "partitioned_high_video_guard_complete",
-                policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-                enabled=True,
-                applied=True,
-                guard_token_index=stage_plan.prefix_t,
-                guard_tokens=HIGH_STAGE_VIDEO_GUARD_TOKENS,
-                final_guard_exact=high_guard_final_exact,
-                endpoint_canonicalized=high_guard_endpoint_canonicalized,
-                endpoint_max_abs_delta=high_guard_endpoint_max_abs_delta,
-                endpoint_rms_delta=high_guard_endpoint_rms_delta,
-                caller_prefix_modified=False,
-                audio_modified=False,
-                extra_h3_nfe=0,
-                extra_sampler_lifetimes=0,
-                extra_history_boundaries=0,
-                extra_provider_calls=0,
-                extra_vae_calls=0,
-            )
-            del guard_latent_video, _guard_latent_audio, expected_guard, observed_guard
-            if high_guard_endpoint_canonicalized:
-                del guard_endpoint_delta
-        else:
-            binding.metrics.event(
-                "partitioned_high_video_guard_complete",
-                policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-                enabled=False,
-                applied=False,
-                guard_token_index=stage_plan.prefix_t,
-                guard_tokens=0,
-                final_guard_exact=None,
-                endpoint_canonicalized=False,
-                endpoint_max_abs_delta=0.0,
-                endpoint_rms_delta=0.0,
-                caller_prefix_modified=False,
-                audio_modified=False,
-                extra_h3_nfe=0,
-                extra_sampler_lifetimes=0,
-                extra_history_boundaries=0,
-                extra_provider_calls=0,
-                extra_vae_calls=0,
-            )
         final_internal = None
         final_internal_video = None
         final_internal_audio = None
@@ -4781,7 +4629,8 @@ def run_partitioned_progressive(
                 final_exact_audio_prefix=True,
                 sampler_masks_unchanged=True,
                 source_sampler_masks_unchanged=True,
-                high_stage_guard_mask_local_override=high_video_guard_enabled,
+                high_stage_guard_mask_local_override=False,
+                high_stage_prediction_gauge_bridge_output_only=high_prediction_gauge_bridge_enabled,
                 high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
@@ -4800,10 +4649,10 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **final_trajectory,
             )
-            if high_video_guard_enabled:
-                release_boundary_t = stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS
+            if high_prediction_gauge_bridge_enabled:
+                release_boundary_t = stage_plan.prefix_t + bridge_support_tokens
                 if release_boundary_t >= int(final_video.shape[2]):
-                    raise RuntimeError("high-stage video guard has no generated suffix after its release frontier")
+                    raise RuntimeError("high-prediction gauge bridge has no suffix after its release frontier")
                 release_trajectory = measure_translation_trajectory(
                     final_video,
                     release_boundary_t,
@@ -4814,10 +4663,11 @@ def run_partitioned_progressive(
                 )
                 binding.metrics.event(
                     "partitioned_multiframe_trajectory",
-                    stage="final_post_high_guard_release",
+                    stage="final_post_high_prediction_gauge_release",
                     roi=roi_name,
-                    guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-                    guard_tokens=HIGH_STAGE_VIDEO_GUARD_TOKENS,
+                    prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+                    bridge_support_tokens=bridge_support_tokens,
+                    bridge_temporal_weights=list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS),
                     original_boundary_t=stage_plan.prefix_t,
                     release_boundary_t=release_boundary_t,
                     diagnostic_only=True,
@@ -4903,13 +4753,20 @@ def run_partitioned_progressive(
             / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
             deprecated_mixed_grid_contract_active=False,
             video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
-            high_video_guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
-            high_video_guard_enabled=high_video_guard_enabled,
-            high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
-            high_video_guard_final_exact=high_guard_final_exact,
-            high_video_guard_endpoint_canonicalized=high_guard_endpoint_canonicalized,
-            high_video_guard_release_boundary_t=(
-                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else None
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            high_prediction_gauge_bridge_weights=(
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+                if high_prediction_gauge_bridge_enabled
+                else []
+            ),
+            high_prediction_gauge_bridge_release_boundary_t=(
+                stage_plan.prefix_t + bridge_support_tokens
+                if high_prediction_gauge_bridge_enabled
+                else None
             ),
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
@@ -4923,7 +4780,10 @@ def run_partitioned_progressive(
             history_boundary_count=history_boundary_count,
             exact_probe_performed=True,
             high_stage_exact_prefix_requested=1,
-            high_stage_video_guard_requested=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
+            high_stage_video_guard_requested=0,
+            high_stage_prediction_gauge_bridge_requested=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
             high_stage_first_call_actual=first_high_actual,
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
