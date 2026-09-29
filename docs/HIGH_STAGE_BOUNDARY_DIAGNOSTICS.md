@@ -33,6 +33,60 @@ later prediction calls include solver evolution and subsequent model predictions
 these observations alone do not isolate a solver defect. A forecast label is
 provenance, not evidence that forecasting caused an error.
 
+
+## Prediction-domain exact-prefix gauge release
+
+A hard high-stage guard over generated video tokens is not the production
+boundary policy. Holding the first generated token exact can make the immediate
+splice numerically exact while moving the discontinuity to the first unguarded
+token. A fixed clean-reference anchor has the related problem that it can freeze
+generated content to an earlier clean state while target-high refinement evolves.
+
+The current candidate instead corrects the representation mismatch at the point
+where it is produced: each target-high model prediction, before Flow guidance.
+Let `P` be the model-predicted clean value of the last protected prefix token,
+`E` the authoritative exact value that native inpaint semantics will restore,
+and `S_i` the generated suffix prediction. Define `D = E - P`. The bridge
+modifies only the first four generated suffix predictions:
+
+`S'_i = S_i + w_i D`
+
+with fixed temporal weights
+`[1.0, 0.8535533906, 0.5, 0.1464466094]`.
+
+Because the first weight is exactly one,
+
+`S'_0 - E = S_0 - P`.
+
+The exact-prefix -> first-generated transition therefore matches the model's own
+native predicted transition for that model call instead of introducing a new
+jump when `P` is replaced by `E`. The remaining weights release the same
+per-call gauge residual smoothly toward zero rather than transferring the full
+jump to the next temporal token. The residual is recomputed for every high-stage
+model call; no generated clean token is pinned to a fixed pre-high reference.
+
+The bridge is output-only. It does not expand the sampler denoise mask, alter
+sampler entry state, change the caller-owned exact prefix, touch audio, modify
+video outside the four-token release support, or add an H3 evaluation, provider
+call, VAE decode, sampler lifetime, or history boundary. Flow guidance continues
+to protect only the authoritative historical prefix.
+
+Runtime evidence is fail-closed. Every selected high-stage model call emits
+`partitioned_high_prediction_gauge_bridge`; the receipt proves the caller
+prefix, audio, and suffix outside support are unchanged and checks that the
+rebased first transition equals the model-native transition within numerical
+tolerance. `partitioned_high_prediction_gauge_bridge_verified` requires bridge
+coverage for every high-stage model call and proves that no fixed clean reference
+or sampler-state mutation was used. Two
+`final_post_high_prediction_gauge_release` trajectory receipts measure the
+upper-45% and full-frame transition at the end of the four-token release so a
+delayed discontinuity cannot be hidden by the first-transition invariant.
+
+These structural and unit-test invariants do not establish decoded-video
+quality. The candidate still requires matched hardware validation of both the
+exact-prefix boundary and the release frontier before it can be treated as a
+production repair.
+
 ## Audio context intervention
 
 **MiniMax H3 Audio Boundary Audit** is an optional node after Audio VAE Decode:
