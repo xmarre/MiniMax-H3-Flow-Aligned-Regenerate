@@ -1880,9 +1880,7 @@ def _validate_high_prediction_gauge_bridge(window: list[dict[str, Any]]) -> None
     """Validate the output-only model-native high prediction gauge release."""
 
     receipts = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_prediction_gauge_bridge"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_prediction_gauge_bridge"
     ]
     completes = [
         _event_fields(event)
@@ -1950,20 +1948,14 @@ def _validate_high_prediction_gauge_bridge(window: list[dict[str, Any]]) -> None
             _require(receipt.get(field) == 0, f"high-prediction gauge bridge added work: {field}")
 
     plans = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_boundary_reference_plan"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_boundary_reference_plan"
     ]
     reference_checks = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_high_boundary_reference_verified"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_boundary_reference_verified"
     ]
     transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
     exact_completes = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_exact_prefix_complete"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"
     ]
     handoffs = [_event_fields(event) for event in window if _event_kind(event) == "handoff_complete"]
     _require(len(plans) == 1, "high-prediction bridge requires one high-boundary plan")
