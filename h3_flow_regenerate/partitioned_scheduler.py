@@ -4800,6 +4800,29 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **final_trajectory,
             )
+            if high_video_guard_enabled:
+                release_boundary_t = stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS
+                if release_boundary_t >= int(final_video.shape[2]):
+                    raise RuntimeError("high-stage video guard has no generated suffix after its release frontier")
+                release_trajectory = measure_translation_trajectory(
+                    final_video,
+                    release_boundary_t,
+                    forward_steps=4,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="final_post_high_guard_release",
+                    roi=roi_name,
+                    guard_policy=HIGH_STAGE_VIDEO_GUARD_POLICY,
+                    guard_tokens=HIGH_STAGE_VIDEO_GUARD_TOKENS,
+                    original_boundary_t=stage_plan.prefix_t,
+                    release_boundary_t=release_boundary_t,
+                    diagnostic_only=True,
+                    **release_trajectory,
+                )
         if not splice_diagnostics:
             raise RuntimeError(
                 "partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling"
@@ -4885,6 +4908,9 @@ def run_partitioned_progressive(
             high_video_guard_tokens=(HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else 0),
             high_video_guard_final_exact=high_guard_final_exact,
             high_video_guard_endpoint_canonicalized=high_guard_endpoint_canonicalized,
+            high_video_guard_release_boundary_t=(
+                stage_plan.prefix_t + HIGH_STAGE_VIDEO_GUARD_TOKENS if high_video_guard_enabled else None
+            ),
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
         binding.metrics.event(
