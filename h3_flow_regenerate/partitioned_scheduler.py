@@ -52,7 +52,6 @@ from .handoff import (
 )
 from .high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
-    HIGH_BOUNDARY_REFERENCE_WEIGHTS,
     HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
