@@ -474,7 +474,8 @@ def _metrics_with_high_prediction_gauge_bridge(**receipt_overrides):
     ]
 
     insert_at = next(
-        i for i, event in enumerate(metrics["events"])
+        i
+        for i, event in enumerate(metrics["events"])
         if event["kind"] == "model_call" and event["fields"].get("stage") == "high"
     )
     metrics["events"][insert_at:insert_at] = [plan]
@@ -507,9 +508,7 @@ def test_partitioned_runtime_gate_rejects_prediction_bridge_transition_drift():
 def test_partitioned_runtime_gate_rejects_prediction_bridge_fixed_anchor_reactivation():
     metrics = _metrics_with_high_prediction_gauge_bridge()
     verified = next(
-        event
-        for event in metrics["events"]
-        if event["kind"] == "partitioned_high_prediction_gauge_bridge_verified"
+        event for event in metrics["events"] if event["kind"] == "partitioned_high_prediction_gauge_bridge_verified"
     )
     verified["fields"]["fixed_clean_reference_used"] = True
     with pytest.raises(RuntimeGateError, match="fixed anchor"):
