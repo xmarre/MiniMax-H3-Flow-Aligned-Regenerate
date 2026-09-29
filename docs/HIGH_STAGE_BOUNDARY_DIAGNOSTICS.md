@@ -87,6 +87,63 @@ quality. The candidate still requires matched hardware validation of both the
 exact-prefix boundary and the release frontier before it can be treated as a
 production repair.
 
+
+## Decoder-window-aware post-high video repair
+
+The per-call prediction-gauge experiment is retained as historical evidence but
+is not an active production mutation. Hardware validation showed that the
+model-predicted last-prefix value already differed from the authoritative exact
+prefix by only about numerical-scale latent error, while the decoded camera
+shift remained visible. Preserving that model-native first transition therefore
+did not address the measured output defect.
+
+The relevant downstream temporal unit is the native MiniMax-H3 video-VAE decode
+window. The pinned ComfyUI implementation uses a five-latent-token temporal
+stride with two latent tokens of overlap, so each decoder call sees seven latent
+tokens. The decoder transformer attends across the whole flattened latent clip.
+After three decoded pre-padding frames are removed, the two-token latent overlap
+produces a five-frame decoded overlap.
+
+For an exact carried prefix on the native `5k+2` latent phase, a 12-token
+prefix resolves to decoder window `[10, 17)`. Its five generated tokens are
+`[12, 17)`. The corresponding decoded trim is 39 frames: the decoder chunk
+starts writing at frame 34 and its five internally blended overlap frames end at
+frame 38, making frame 39 the first retained unblended frame. Consequently, a
+latent correction that fades across tokens 12--15 can change representation
+inside the very decoder window that renders the physical continuation boundary.
+
+Policy `h3_vae_boundary_window_vertical_plateau_release_v1` therefore uses a
+different temporal ownership rule. It estimates only the coherent vertical
+motion added by target-high relative to the already measured exact-restored
+pre-high transition. If the bounded two-ROI gates pass, both correction signs
+are measured. The selected rigid Y translation is held constant across every
+generated latent token consumed by the boundary decoder window. For the
+12-token phase this means tokens 12--16 all receive weight 1.0. Only after the
+decoder window closes does the correction release with weights
+`[0.8535533906, 0.5, 0.1464466094]`, reaching an untouched token at the
+release frontier.
+
+This differs structurally from the rejected bounded post-high release: that
+experiment began decaying the correction inside the boundary decoder window.
+It also differs from the rejected high-stage guard and clean-reference anchor:
+the sampler mask, sampler entry state, model predictions, exact historical
+prefix, audio, and H3 evaluation count are unchanged. The correction is applied
+only to the returned post-high video latent after both signs have been measured,
+then re-entered through the real H3 latent-input transform and validated again
+before commit.
+
+Runtime receipts expose the native decoder-window arithmetic, the complete
+pre-high/post-high trajectories through the plateau and release, the selected
+translation, caller/internal prefix and audio equality, and a separate
+`final_post_high_vae_window_release` trajectory at the first untouched token.
+The source-contract gate pins the ComfyUI temporal chunk/overlap arithmetic,
+full decoder attention, decoded overlap blend, and the `17k+5 <-> 5k+2`
+frame/latent mapping.
+
+The structural gates do not establish visual success. A matched hardware run
+must still show that decoded boundary translation improves and that moving the
+release outside the boundary decoder window does not create a later hitch.
+
 ## Audio context intervention
 
 **MiniMax H3 Audio Boundary Audit** is an optional node after Audio VAE Decode:
