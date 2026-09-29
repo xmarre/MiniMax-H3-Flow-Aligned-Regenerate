@@ -116,9 +116,7 @@ class HighStagePredictionGaugeBridge:
         corrected_video = video.clone()
         for offset, weight in enumerate(self.weights):
             if weight:
-                corrected_video[:, :, self.prefix_t + offset].add_(
-                    (delta * weight).to(dtype=corrected_video.dtype)
-                )
+                corrected_video[:, :, self.prefix_t + offset].add_((delta * weight).to(dtype=corrected_video.dtype))
         if not bool(torch.isfinite(corrected_video).all().item()):
             raise RuntimeError("high-prediction gauge bridge produced NaN or Inf")
 
@@ -127,14 +125,10 @@ class HighStagePredictionGaugeBridge:
             corrected_video[:, :, self.prefix_t + self.support_tokens :],
             video[:, :, self.prefix_t + self.support_tokens :],
         )
-        native_transition = (
-            video[:, :, self.prefix_t].to(torch.float32)
-            - video[:, :, self.prefix_t - 1].to(torch.float32)
+        native_transition = video[:, :, self.prefix_t].to(torch.float32) - video[:, :, self.prefix_t - 1].to(
+            torch.float32
         )
-        rebased_transition = (
-            corrected_video[:, :, self.prefix_t].to(torch.float32)
-            - exact_last
-        )
+        rebased_transition = corrected_video[:, :, self.prefix_t].to(torch.float32) - exact_last
         transition_error = rebased_transition - native_transition
         transition_error_max = float(transition_error.abs().max().item())
         transition_error_rms = _rms(transition_error)
@@ -154,8 +148,7 @@ class HighStagePredictionGaugeBridge:
             raise RuntimeError("high-prediction gauge bridge modified audio")
 
         release_steps = tuple(
-            abs(right - left)
-            for left, right in zip(self.weights, (*self.weights[1:], 0.0), strict=True)
+            abs(right - left) for left, right in zip(self.weights, (*self.weights[1:], 0.0), strict=True)
         )
         self.calls += 1
         self.metrics.increment("high_prediction_gauge_bridge_calls")
