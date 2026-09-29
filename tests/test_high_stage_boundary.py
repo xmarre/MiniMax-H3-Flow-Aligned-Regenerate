@@ -413,15 +413,11 @@ def test_prediction_gauge_bridge_preserves_model_native_first_transition_and_rel
     assert torch.equal(result_audio, audio)
 
     for offset, weight in enumerate(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS):
-        expected = (
-            video[:, :, prefix_t + offset].float() + delta * float(weight)
-        ).to(result_video.dtype)
+        expected = (video[:, :, prefix_t + offset].float() + delta * float(weight)).to(result_video.dtype)
         torch.testing.assert_close(result_video[:, :, prefix_t + offset], expected, rtol=0, atol=2e-6)
 
     receipt = next(
-        event
-        for event in binding.metrics.events
-        if event.kind == "partitioned_high_prediction_gauge_bridge"
+        event for event in binding.metrics.events if event.kind == "partitioned_high_prediction_gauge_bridge"
     )
     assert receipt.fields["policy"] == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY
     assert receipt.fields["support_tokens"] == len(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
@@ -430,9 +426,7 @@ def test_prediction_gauge_bridge_preserves_model_native_first_transition_and_rel
     assert receipt.fields["suffix_outside_support_exact"] is True
     assert receipt.fields["first_transition_error_max_abs"] <= 2e-5
     complete = next(
-        event
-        for event in binding.metrics.events
-        if event.kind == "partitioned_high_prediction_gauge_bridge_complete"
+        event for event in binding.metrics.events if event.kind == "partitioned_high_prediction_gauge_bridge_complete"
     )
     assert complete.fields["calls"] == 1
 
@@ -474,10 +468,6 @@ def test_prediction_gauge_bridge_recomputes_dynamic_model_gauge_each_call():
     second_native = evolved_video[:, :, prefix_t].float() - evolved_video[:, :, prefix_t - 1].float()
     second_rebased = second_video[:, :, prefix_t].float() - exact_prefix[:, :, -1].float()
     torch.testing.assert_close(second_rebased, second_native, rtol=0, atol=2e-6)
-    receipts = [
-        event
-        for event in binding.metrics.events
-        if event.kind == "partitioned_high_prediction_gauge_bridge"
-    ]
+    receipts = [event for event in binding.metrics.events if event.kind == "partitioned_high_prediction_gauge_bridge"]
     assert [event.fields["call_index"] for event in receipts] == [0, 1]
     assert [event.fields["actual"] for event in receipts] == [True, False]
