@@ -48,6 +48,10 @@ from .residual_geometry import (
     diagnostic_model_fits,
     replay_horizontal_telemetry,
 )
+from .vae_boundary_video import (
+    VAE_WINDOW_VIDEO_POLICY,
+    h3_vae_boundary_window,
+)
 
 PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
@@ -2031,6 +2035,163 @@ def _validate_high_prediction_gauge_bridge(window: list[dict[str, Any]]) -> None
         _require(receipt.get("diagnostic_only") is True, "high-prediction release receipt became a mutation")
 
 
+def _validate_vae_window_video_repair(window: list[dict[str, Any]]) -> None:
+    """Validate the decoder-window-aware post-high video correction."""
+
+    plans = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_video_vae_boundary_window_plan"
+    ]
+    repairs = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_post_high_vae_window_video_repair"
+    ]
+    trajectories = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_video_vae_boundary_window_trajectory"
+    ]
+    if not plans and not repairs and not trajectories:
+        return
+
+    _require(len(plans) == 1, "VAE-window video repair must emit one plan receipt")
+    _require(len(repairs) == 1, "VAE-window video repair must emit one repair receipt")
+    plan = plans[0]
+    repair = repairs[0]
+    _require(plan.get("policy") == VAE_WINDOW_VIDEO_POLICY, "VAE-window video plan policy drifted")
+    _require(repair.get("policy") == VAE_WINDOW_VIDEO_POLICY, "VAE-window video repair policy drifted")
+    _require(
+        plan.get("high_prediction_gauge_bridge_enabled") is False,
+        "hardware-falsified prediction-gauge mutation was re-enabled",
+    )
+
+    for field in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(plan.get(field) == 0, f"VAE-window plan added work: {field}")
+        _require(repair.get(field) == 0, f"VAE-window repair added work: {field}")
+
+    armed = bool(plan.get("armed"))
+    _require(bool(repair.get("armed")) == armed, "VAE-window repair armed state drifted")
+    if not armed:
+        _require(repair.get("applied") is False, "unarmed VAE-window repair mutated output")
+        _require(repair.get("output_mutated") is False, "unarmed VAE-window repair reports mutation")
+        return
+
+    raw_plan = plan.get("plan")
+    _require(isinstance(raw_plan, dict), "VAE-window plan payload is missing")
+    prefix_t = int(raw_plan.get("prefix_t", -1))
+    temporal = int(raw_plan.get("temporal", -1))
+    expected = h3_vae_boundary_window(prefix_t, temporal)
+    for field in (
+        "chunk_index",
+        "window_start_t",
+        "window_stop_t",
+        "window_tokens",
+        "chunk_stride_tokens",
+        "token_overlap",
+        "generated_window_start_t",
+        "generated_window_stop_t",
+        "generated_window_tokens",
+        "plateau_tokens",
+        "release_tail_tokens",
+        "support_tokens",
+        "support_stop_t",
+        "release_frontier_t",
+        "decoded_trim_frames",
+        "decoder_chunk_output_start_frame",
+        "first_retained_local_frame",
+        "decoder_internal_overlap_frames",
+    ):
+        _require(raw_plan.get(field) == expected[field], f"VAE-window plan field drifted: {field}")
+    _require(raw_plan.get("weights") == expected["weights"], "VAE-window temporal weights drifted")
+    _require(
+        raw_plan.get("first_retained_after_internal_overlap") is True,
+        "VAE-window first retained frame no longer follows the native overlap",
+    )
+
+    pre = [
+        receipt
+        for receipt in trajectories
+        if receipt.get("stage") == "pre_high_exact_restored"
+    ]
+    _require(len(pre) == 2, "VAE-window repair requires both pre-high ROI trajectories")
+    _require({str(receipt.get("roi")) for receipt in pre} == {"upper45", "full"}, "VAE-window pre-high ROI set drifted")
+
+    applied = bool(repair.get("applied"))
+    if applied:
+        _require(repair.get("accepted") is True, "applied VAE-window repair was not accepted")
+        _require(repair.get("output_mutated") is True, "applied VAE-window repair did not report output mutation")
+        _require(repair.get("canonical_candidate_accepted") is True, "VAE-window caller re-entry was not accepted")
+        _require(repair.get("caller_prefix_exact") is True, "VAE-window repair changed caller prefix")
+        _require(repair.get("caller_audio_exact") is True, "VAE-window repair changed caller audio")
+        _require(repair.get("internal_prefix_exact") is True, "VAE-window repair changed internal prefix")
+        _require(repair.get("internal_audio_exact") is True, "VAE-window repair changed internal audio")
+        selected_dy = abs(_finite_number(repair.get("selected_dy_cells")))
+        _require(selected_dy <= 0.18, "VAE-window vertical correction exceeded bound")
+        score = repair.get("caller_reentry_validation")
+        _require(isinstance(score, dict), "VAE-window caller re-entry validation is missing")
+        _require(score.get("no_material_roi_regression") is True, "VAE-window repair regressed a boundary ROI")
+        _require(score.get("horizontal_phase_stable") is True, "VAE-window repair perturbed horizontal phase")
+        _require(score.get("vae_window_plateau_stable") is True, "VAE-window plateau changed internal motion")
+        _require(score.get("post_window_release_stable") is True, "VAE-window post-window release is unstable")
+        _require(
+            _finite_number(score.get("mean_improvement_ratio")) >= 0.25,
+            "VAE-window repair did not restore enough of the pre-high boundary motion",
+        )
+    else:
+        _require(repair.get("output_mutated") is False, "rejected VAE-window repair mutated output")
+
+    release = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_multiframe_trajectory"
+        and _event_fields(event).get("stage") == "final_post_high_vae_window_release"
+    ]
+    _require(len(release) == 2, "VAE-window repair must emit both release-frontier ROI receipts")
+    _require({str(receipt.get("roi")) for receipt in release} == {"upper45", "full"}, "VAE-window release ROI set drifted")
+    for receipt in release:
+        _require(receipt.get("vae_window_video_policy") == VAE_WINDOW_VIDEO_POLICY, "VAE-window release policy drifted")
+        _require(int(receipt.get("plateau_tokens", -1)) == expected["plateau_tokens"], "VAE-window plateau width drifted")
+        _require(int(receipt.get("support_tokens", -1)) == expected["support_tokens"], "VAE-window support width drifted")
+        _require(receipt.get("temporal_weights") == expected["weights"], "VAE-window release weights drifted")
+        _require(int(receipt.get("decoder_window_start_t", -1)) == expected["window_start_t"], "VAE-window start drifted")
+        _require(int(receipt.get("decoder_window_stop_t", -1)) == expected["window_stop_t"], "VAE-window stop drifted")
+        _require(
+            int(receipt.get("release_boundary_t", -1)) == expected["release_frontier_t"]
+            and int(receipt.get("trajectory_boundary_t", -1)) == expected["release_frontier_t"],
+            "VAE-window release trajectory measured the wrong frontier",
+        )
+        _require(receipt.get("diagnostic_only") is True, "VAE-window release receipt became a second mutation")
+
+    handoffs = [_event_fields(event) for event in window if _event_kind(event) == "handoff_complete"]
+    completes = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_exact_prefix_complete"]
+    _require(bool(handoffs) and bool(completes), "VAE-window repair lost completion evidence")
+    handoff = handoffs[-1]
+    complete = completes[-1]
+    _require(
+        int(handoff.get("high_stage_prediction_gauge_bridge_requested", -1)) == 0,
+        "hardware-falsified prediction-gauge bridge was requested",
+    )
+    _require(handoff.get("post_high_vae_window_video_repair_requested") is True, "handoff lost VAE-window repair")
+    _require(
+        bool(handoff.get("post_high_vae_window_video_repair_applied")) == applied,
+        "handoff VAE-window applied state drifted",
+    )
+    _require(complete.get("vae_window_video_policy") == VAE_WINDOW_VIDEO_POLICY, "completion VAE-window policy drifted")
+    _require(complete.get("vae_window_video_repair_armed") is True, "completion lost VAE-window armed state")
+    _require(
+        bool(complete.get("vae_window_video_repair_applied")) == applied,
+        "completion VAE-window applied state drifted",
+    )
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
@@ -3545,6 +3706,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_post_high_shadow(window)
     _validate_high_stage_video_guard(window)
     _validate_high_prediction_gauge_bridge(window)
+    _validate_vae_window_video_repair(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
