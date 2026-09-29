@@ -32,6 +32,11 @@ from .frame_gauge import (
     LEARNED_VIDEO_POLICY,
     FrameGaugePolicy,
 )
+from .high_stage_boundary import (
+    HIGH_PREDICTION_GAUGE_BRIDGE_MAX_TRANSITION_ERROR,
+    HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
+)
 from .high_stage_guard import (
     HIGH_STAGE_VIDEO_GUARD_MAX_ENDPOINT_DELTA,
     HIGH_STAGE_VIDEO_GUARD_POLICY,
@@ -1871,6 +1876,169 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
         _require(receipt.get("diagnostic_only") is True, "guard-release trajectory became a production mutation")
 
 
+def _validate_high_prediction_gauge_bridge(window: list[dict[str, Any]]) -> None:
+    """Validate the output-only model-native high prediction gauge release."""
+
+    receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_prediction_gauge_bridge"
+    ]
+    completes = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_prediction_gauge_bridge_complete"
+    ]
+    verified = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_prediction_gauge_bridge_verified"
+    ]
+    # Historical evidence predating this candidate has no bridge receipts.
+    if not receipts and not completes and not verified:
+        return
+
+    _require(len(completes) == 1, "high-prediction gauge bridge must emit one completion receipt")
+    _require(len(verified) == 1, "high-prediction gauge bridge must emit one verification receipt")
+    complete = completes[0]
+    check = verified[0]
+    _require(complete.get("policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY, "high-prediction bridge policy drifted")
+    _require(check.get("policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY, "high-prediction bridge verification drifted")
+    _require(check.get("expected") is True, "high-prediction gauge bridge was not selected")
+    _require(check.get("all_model_calls_covered") is True, "high-prediction gauge bridge did not cover all calls")
+    _require(check.get("sampler_mask_modified") is False, "high-prediction gauge bridge changed sampler mask")
+    _require(check.get("sampler_entry_state_modified") is False, "high-prediction gauge bridge changed sampler entry")
+    _require(check.get("fixed_clean_reference_used") is False, "high-prediction gauge bridge became a fixed anchor")
+
+    expected_weights = list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+    support = len(expected_weights)
+    _require(int(complete.get("support_tokens", 0)) == support, "high-prediction bridge support width drifted")
+    _require(complete.get("temporal_weights") == expected_weights, "high-prediction bridge release weights drifted")
+    _require(int(check.get("support_tokens", 0)) == support, "high-prediction verification support drifted")
+    _require(check.get("temporal_weights") == expected_weights, "high-prediction verification weights drifted")
+    _require(int(complete.get("calls", -1)) == len(receipts), "high-prediction bridge call count drifted")
+    _require(int(check.get("bridge_calls", -1)) == len(receipts), "high-prediction verified call count drifted")
+    _require(int(check.get("model_calls", -1)) == len(receipts), "high-prediction bridge/model call count differs")
+    _require(bool(receipts), "high-prediction gauge bridge emitted no model-call receipts")
+
+    for index, receipt in enumerate(receipts):
+        _require(receipt.get("policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY, "high-prediction call policy drifted")
+        _require(int(receipt.get("call_index", -1)) == index, "high-prediction bridge call order drifted")
+        _require(int(receipt.get("support_tokens", 0)) == support, "high-prediction call support drifted")
+        _require(receipt.get("temporal_weights") == expected_weights, "high-prediction call weights drifted")
+        _require(receipt.get("caller_prefix_modified") is False, "high-prediction bridge modified caller prefix")
+        _require(receipt.get("predicted_prefix_exact") is True, "high-prediction bridge modified predicted prefix")
+        _require(receipt.get("audio_modified") is False, "high-prediction bridge modified audio")
+        _require(receipt.get("audio_exact") is True, "high-prediction bridge audio equality failed")
+        _require(
+            receipt.get("suffix_outside_support_modified") is False
+            and receipt.get("suffix_outside_support_exact") is True,
+            "high-prediction bridge escaped bounded suffix support",
+        )
+        transition_error = _finite_number(receipt.get("first_transition_error_max_abs"))
+        _require(
+            transition_error <= HIGH_PREDICTION_GAUGE_BRIDGE_MAX_TRANSITION_ERROR,
+            "high-prediction bridge did not preserve the model-native first transition",
+        )
+        for field in (
+            "extra_h3_nfe",
+            "extra_sampler_lifetimes",
+            "extra_history_boundaries",
+            "extra_provider_calls",
+            "extra_vae_calls",
+        ):
+            _require(receipt.get(field) == 0, f"high-prediction gauge bridge added work: {field}")
+
+    plans = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_boundary_reference_plan"
+    ]
+    reference_checks = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_high_boundary_reference_verified"
+    ]
+    transfers = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_transfer"]
+    exact_completes = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_exact_prefix_complete"
+    ]
+    handoffs = [_event_fields(event) for event in window if _event_kind(event) == "handoff_complete"]
+    _require(len(plans) == 1, "high-prediction bridge requires one high-boundary plan")
+    _require(len(reference_checks) == 1, "high-prediction bridge requires one reference verification")
+    _require(len(transfers) == 1, "high-prediction bridge requires one transfer receipt")
+    _require(bool(exact_completes), "high-prediction bridge requires exact-prefix completion")
+    _require(bool(handoffs), "high-prediction bridge requires handoff completion")
+    plan = plans[0]
+    reference_check = reference_checks[0]
+    transfer = transfers[0]
+    exact_complete = exact_completes[-1]
+    handoff = handoffs[-1]
+
+    _require(plan.get("video_enabled") is False, "fixed high-stage clean-video reference was re-enabled")
+    _require(int(plan.get("video_support_tokens", -1)) == 0, "fixed high-stage clean-video support is non-zero")
+    _require(reference_check.get("video_enabled") is False, "fixed high-stage video verification was re-enabled")
+    _require(int(reference_check.get("anchor_calls", -1)) == 0, "fixed high-stage clean anchor executed")
+    _require(
+        plan.get("high_prediction_gauge_bridge_policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY
+        and transfer.get("video_high_prediction_gauge_bridge_policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY
+        and exact_complete.get("high_prediction_gauge_bridge_policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+        "high-prediction gauge bridge provenance drifted",
+    )
+    _require(plan.get("high_prediction_gauge_bridge_enabled") is True, "high-prediction bridge plan is disabled")
+    _require(transfer.get("video_high_prediction_gauge_bridge_enabled") is True, "transfer lost prediction bridge")
+    _require(exact_complete.get("high_prediction_gauge_bridge_enabled") is True, "completion lost prediction bridge")
+    _require(plan.get("high_prediction_gauge_bridge_mask_fully_generated") is True, "bridge support is not generated")
+    prefix_t = int(plan.get("high_boundary_context_tokens", 0))
+    _require(prefix_t > 0, "high-prediction bridge exact-prefix context is invalid")
+    _require(
+        reference_check.get("high_boundary_context_tokens") == prefix_t
+        and exact_complete.get("high_boundary_context_tokens") == prefix_t,
+        "high-prediction bridge changed protected-prefix width",
+    )
+    _require(
+        int(handoff.get("high_stage_video_guard_requested", -1)) == 0,
+        "hardware-falsified high-stage guard was re-enabled",
+    )
+    _require(
+        int(handoff.get("high_stage_prediction_gauge_bridge_requested", 0)) == support,
+        "handoff lost high-prediction bridge support",
+    )
+
+    release_boundary_t = prefix_t + support
+    _require(
+        int(exact_complete.get("high_prediction_gauge_bridge_release_boundary_t", -1)) == release_boundary_t,
+        "high-prediction bridge release boundary drifted",
+    )
+    release_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_multiframe_trajectory"
+        and _event_fields(event).get("stage") == "final_post_high_prediction_gauge_release"
+    ]
+    _require(len(release_receipts) == 2, "high-prediction bridge must emit both release-frontier ROI receipts")
+    _require(
+        {str(receipt.get("roi")) for receipt in release_receipts} == {"upper45", "full"},
+        "high-prediction bridge release ROI set drifted",
+    )
+    for receipt in release_receipts:
+        _require(
+            receipt.get("prediction_gauge_bridge_policy") == HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            "high-prediction release policy drifted",
+        )
+        _require(int(receipt.get("bridge_support_tokens", 0)) == support, "high-prediction release support drifted")
+        _require(receipt.get("bridge_temporal_weights") == expected_weights, "high-prediction release weights drifted")
+        _require(int(receipt.get("original_boundary_t", -1)) == prefix_t, "high-prediction original boundary drifted")
+        _require(
+            int(receipt.get("release_boundary_t", -1)) == release_boundary_t
+            and int(receipt.get("trajectory_boundary_t", -1)) == release_boundary_t,
+            "high-prediction release trajectory measured the wrong frontier",
+        )
+        _require(receipt.get("diagnostic_only") is True, "high-prediction release receipt became a mutation")
+
+
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
     """Validate optional observation-only content-continuity receipts."""
 
@@ -3384,6 +3552,7 @@ def validate_partitioned_runtime_evidence(
     _validate_provider_boundary_stabilization(window)
     _validate_provider_boundary_post_high_shadow(window)
     _validate_high_stage_video_guard(window)
+    _validate_high_prediction_gauge_bridge(window)
 
     plan = next(event for event in window if _event_kind(event) == "partitioned_stage_plan")
     plan_fields = _event_fields(plan)
