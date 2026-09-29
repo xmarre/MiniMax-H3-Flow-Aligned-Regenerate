@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import json
 import math
 import time
 from typing import Any
@@ -16,9 +17,45 @@ from typing import Any
 import torch
 
 from .audio_guided_overlap import compare_audio_latent_stages, measure_audio_latent_boundary
+from .boundary_content_diagnostics import (
+    compare_boundary_content_stages,
+    measure_boundary_content_continuity,
+    measure_learned_transfer_residual_diagnostic,
+    measure_provider_boundary_post_high_shadow,
+    measure_provider_boundary_soft_support_shadow,
+    measure_provider_boundary_stabilization_shadow,
+    measure_provider_boundary_temporal_calibration,
+    measure_provider_boundary_temporal_predictor,
+)
 from .contracts import H3FlowTrajectory
-from .geometry import pack_streams, resize_spatial_5d, unpack_streams
-from .handoff import ProgressiveTargetInputConfig, build_handoff_state, deterministic_video_noise
+from .frame_gauge import (
+    FRAME_GAUGE_POLICY_VERSION,
+    GUIDANCE_REFERENCE_POLICY,
+    LEARNED_VIDEO_POLICY,
+    estimate_paired_prefix_translation,
+    translate_video_cells,
+)
+from .geometry import (
+    pack_streams,
+    resize_spatial_5d_h3_patch_lattice,
+    resize_video,
+    unpack_streams,
+)
+from .guidance import RegisteredGuidanceReference, time_matched_reference_info
+from .handoff import (
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    CleanVideoPostprocessResult,
+    ProgressiveTargetInputConfig,
+    build_handoff_state,
+    deterministic_video_noise,
+)
+from .high_stage_boundary import (
+    HIGH_BOUNDARY_REFERENCE_POLICY,
+    HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
+    high_boundary_contract,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
@@ -43,6 +80,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -55,6 +95,7 @@ from .partitioned_diagnostics import (
     normalize_guidance_trajectory_source,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
+    normalize_provider_boundary_stabilization,
     normalize_vdn_linear_diagnostic,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -66,6 +107,16 @@ from .partitioned_stage import (
     tensor_sha256,
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
+from .representation_bridge import (
+    apply_suffix_representation_bridge,
+    disabled_suffix_representation_bridge_metrics,
+)
+from .residual_evidence import export_residual_geometry_evidence
+from .residual_geometry import (
+    RESIDUAL_GEOMETRY_POLICY_VERSION,
+    measure_residual_geometry,
+    normalize_residual_geometry_mode,
+)
 from .runtime import (
     FLOW_STAGE_KEY,
     PROBE_CONTEXT_KEY,
@@ -80,6 +131,7 @@ from .runtime import (
     _merge_preserved_noise,
     _noise_argument,
     _process_latent_in,
+    _process_latent_out,
     _raw_sampler_state,
     _reset_guider_conds,
     _resize_packed_latent_image,
@@ -99,9 +151,96 @@ from .tone_bridge import (
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
+from .vae_boundary_video import (
+    VAE_WINDOW_VIDEO_POLICY,
+    apply_vae_window_vertical_translation,
+    h3_vae_boundary_window,
+    measure_vae_window_video_trajectory,
+    repair_vae_window_vertical_residual,
+    validate_vae_window_vertical_candidate,
+)
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
+FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
+FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS = 0.125
+FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT = 0.25
+FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
+# The rigid estimator itself resolves translations on a 1/16-cell fine grid.
+# Boundary-motion phase estimates can therefore move by less than one estimator
+# quantum even when the held-out prefix registration is coherent. Treat at most
+# one fine-search quantum as measurement-floor degradation, never as evidence
+# strong enough to veto an otherwise strongly supported transaction.
+FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
+PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
+PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = (
+    "source_residual_handoff_plus_first_suffix_overlap_plus_vae_window_vertical_plateau_release_v1"
+)
+PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
+PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
+PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
+FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
+
+
+def _cache_audio_decode_witness(
+    binding,
+    model_options,
+    base_model,
+    internal_state: torch.Tensor,
+    shapes: list[tuple[int, ...]],
+    *,
+    stage: str,
+) -> torch.Tensor:
+    """Cache one output-domain audio stage witness without affecting sampling."""
+
+    caller_state = _process_latent_out(base_model, internal_state, shapes)
+    _caller_video, caller_audio = unpack_streams(caller_state, shapes)
+    del _caller_video, caller_state
+    witness = caller_audio.detach().to(device="cpu").clone()
+    session_id, chunk_id = _interop_identity(model_options)
+    registry = binding.audio_stage_witnesses
+    resident_sessions = {key[0] for key in registry}
+    if resident_sessions and session_id not in resident_sessions:
+        registry.clear()
+    witness_key = (str(session_id), str(chunk_id))
+    registry[witness_key] = {
+        "stage": str(stage),
+        "domain": "caller_vae_latent",
+        "audio": witness,
+        "source_shapes": tuple(tuple(int(v) for v in shape) for shape in shapes),
+    }
+    while len(registry) > 16:
+        registry.pop(next(iter(registry)))
+    binding.metrics.event(
+        "partitioned_audio_decode_witness_cached",
+        session_id=str(session_id),
+        chunk_id=str(chunk_id),
+        stage=str(stage),
+        domain="caller_vae_latent",
+        audio_shape=tuple(int(v) for v in witness.shape),
+        storage_device=str(witness.device),
+        process_latent_out_applied=True,
+        output_neutral=True,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+        extra_vae_calls=0,
+    )
+    return witness
+
+
+FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
+    {
+        "boundary_upper45_not_improved",
+        "boundary_full_not_improved",
+        "boundary_upper45_degraded_over_bound",
+        "boundary_full_degraded_over_bound",
+        "boundary_upper45_insufficient_improvement",
+        "boundary_full_insufficient_improvement",
+        "boundary_no_informative_roi_strong_improvement",
+    }
+)
 PARTITIONED_SOL_REQUIRED_METADATA = {
     "api": 1,
     "owner": "comfyui_sol_h3",
@@ -950,6 +1089,1125 @@ def _apply_partitioned_suffix_dc_bridge(
     return mapped_state, corrected_clean, bridge_metrics
 
 
+def _partitioned_exact_overlap_fallback_eligibility(
+    transaction: dict[str, Any],
+) -> tuple[bool, str]:
+    """Authorize the structural overlap bridge from validated rigid evidence.
+
+    Two fail-closed arms are eligible:
+
+    1. the historical rigid boundary-motion veto, where registration accepted
+       but the proposed rigid transform failed the native-motion preservation
+       gate; and
+    2. the 00687 hardware-invalidated rigid arm, where the complete v4 rigid
+       candidate passed numerically but production mutation is deliberately
+       shadow-only because decoded media disproved the global warp itself.
+
+    The second arm is not permission to resurrect the rigid transform. It only
+    permits the independent exact-overlap bridge that restores the provider's
+    measured native prefix->suffix transition after authoritative prefix
+    replacement. Ambiguous/clipped evidence remains ineligible.
+    """
+
+    result = str(transaction.get("result", ""))
+    reason = str(transaction.get("reason", ""))
+    if result == "rejected":
+        if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
+            return False, "frame_gauge_rejection_not_structural_overlap_eligible"
+        expected_boundary_status = "rejected"
+    elif result == "shadow_only":
+        if reason != FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON:
+            return False, "frame_gauge_shadow_not_hardware_invalidated_rigid"
+        if transaction.get("candidate_accepted") is not True:
+            return False, "frame_gauge_shadow_candidate_not_accepted"
+        if transaction.get("production_mutation_allowed") is not False:
+            return False, "frame_gauge_shadow_production_mutation_not_disabled"
+        if transaction.get("spatial_warp_applied") is not False:
+            return False, "frame_gauge_shadow_spatial_warp_was_applied"
+        expected_boundary_status = "accepted"
+    else:
+        return False, "frame_gauge_not_structural_overlap_eligible"
+
+    video_registration = transaction.get("video_registration")
+    if not isinstance(video_registration, dict) or video_registration.get("status") != "accepted":
+        return False, "video_registration_not_accepted"
+    boundary = transaction.get("boundary_motion")
+    if (
+        not isinstance(boundary, dict)
+        or boundary.get("status") != expected_boundary_status
+        or boundary.get("policy")
+        not in {
+            "native_boundary_motion_preservation_v2",
+            "native_boundary_motion_consensus_v3",
+            "native_boundary_motion_consensus_v4",
+        }
+    ):
+        return False, "boundary_receipt_inconsistent"
+    if result == "rejected" and str(boundary.get("reason", "")) != reason:
+        return False, "boundary_receipt_inconsistent"
+
+    checks = boundary.get("checks")
+    if not isinstance(checks, dict) or set(checks) != {"upper45", "full"}:
+        return False, "boundary_receipt_incomplete"
+    for roi in ("upper45", "full"):
+        check = checks.get(roi)
+        if not isinstance(check, dict):
+            return False, f"boundary_{roi}_receipt_missing"
+        for variant in ("native", "transformed_native", "exact_restored", "candidate"):
+            receipt = check.get(variant)
+            if not isinstance(receipt, dict):
+                return False, f"boundary_{roi}_{variant}_missing"
+            try:
+                response = float(receipt.get("response"))
+            except (TypeError, ValueError):
+                return False, f"boundary_{roi}_{variant}_response_invalid"
+            if not math.isfinite(response) or response < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
+                return False, f"boundary_{roi}_{variant}_ambiguous"
+            if bool(receipt.get("clipped")):
+                return False, f"boundary_{roi}_{variant}_clipped"
+    return True, reason
+
+
+def _apply_partitioned_exact_overlap_bridge(
+    target_video: torch.Tensor,
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    *,
+    sigma: float,
+    weights: tuple[float, ...] = (1.0,),
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
+    """Reconcile the measured exact/learned overlap before authoritative restore.
+
+    The existing representation primitive transfers only the zero-spatial-mean
+    overlap residual onto the first generated suffix token.  The existing DC
+    bridge then transfers the spatial mean.  Their sum is exactly the measured
+    same-time residual E_p-L_p, so the immediate exact-prefix -> suffix clean
+    transition equals the learned provider's native L_p -> L_s transition
+    algebraically.  No later suffix token is extrapolated.
+    """
+
+    prefix_t = int(exact_prefix.shape[2])
+    structured_clean, representation_metrics = apply_suffix_representation_bridge(
+        learned_clean,
+        exact_prefix,
+        requested=True,
+        weights=weights,
+    )
+    corrected_clean, dc_metrics = apply_suffix_dc_bridge(
+        structured_clean,
+        exact_prefix,
+        weights=weights,
+    )
+    corrected_tokens = max(
+        int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
+        int(dc_metrics["suffix_dc_bridge_corrected_tokens"]),
+    )
+    if corrected_tokens < 1:
+        return target_video.clone(), corrected_clean, representation_metrics, dc_metrics
+    mapped_state = map_clean_bridge_to_conditional_state(
+        target_video,
+        learned_clean,
+        corrected_clean,
+        sigma=float(sigma),
+        prefix_t=prefix_t,
+        corrected_tokens=corrected_tokens,
+    )
+    return mapped_state, corrected_clean, representation_metrics, dc_metrics
+
+
+def _prepare_registered_guidance_reference(
+    *,
+    run: Any,
+    guidance: Any,
+    exact_prefix: torch.Tensor,
+    target_h: int,
+    target_w: int,
+    prefix_t: int,
+    split_coordinate: float,
+    high_sigmas: torch.Tensor,
+    video_shift: float,
+    residual_mode: str = "off",
+    residual_witnesses: dict[str, torch.Tensor] | None = None,
+) -> tuple[RegisteredGuidanceReference | None, dict[str, Any], str | None]:
+    """Register the active target-grid Flow reference without mutating its trajectory."""
+
+    if guidance.mode == "downsample_consistency":
+        return (
+            None,
+            {"status": "rejected", "reason": "unsupported_guidance_operator"},
+            ("unsupported_guidance_operator"),
+        )
+
+    sampler = str(getattr(run, "sampler", ""))
+    if sampler not in FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS:
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "unsupported_sampler_contract",
+                "sampler": sampler,
+                "supported_samplers": tuple(sorted(FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS)),
+            },
+            "unsupported_sampler_contract",
+        )
+
+    coordinate_tolerance = 1e-7
+    exact_probe = any(
+        sample.phase == "handoff_probe"
+        and math.isclose(
+            float(sample.coordinate),
+            float(split_coordinate),
+            rel_tol=0.0,
+            abs_tol=coordinate_tolerance,
+        )
+        for sample in run.exact_samples()
+    )
+    source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(
+        run,
+        split_coordinate,
+    )
+    if (
+        not exact_probe
+        or reference_clamped
+        or not math.isclose(
+            float(reference_coordinate),
+            float(split_coordinate),
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+    ):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "missing_exact_probe_endpoint",
+                "reference_coordinate": float(reference_coordinate),
+                "split_coordinate": float(split_coordinate),
+            },
+            "missing_exact_probe_endpoint",
+        )
+
+    high_coordinates = [
+        float(normalized_coordinate(float(value), video_shift=video_shift))
+        for value in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist()
+    ]
+    if any(value > float(reference_coordinate) + coordinate_tolerance for value in high_coordinates):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "high_schedule_exceeds_probe_endpoint",
+                "reference_coordinate": float(reference_coordinate),
+                "high_coordinate_max": max(high_coordinates),
+            },
+            "high_schedule_exceeds_probe_endpoint",
+        )
+    resolved_high_coordinates = []
+    for value in high_coordinates:
+        _, resolved, _ = time_matched_reference_info(run, value)
+        resolved_high_coordinates.append(float(resolved))
+    if any(
+        not math.isclose(
+            value,
+            float(reference_coordinate),
+            rel_tol=0.0,
+            abs_tol=coordinate_tolerance,
+        )
+        for value in resolved_high_coordinates
+    ):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "high_schedule_changes_reference_identity",
+                "reference_coordinate": float(reference_coordinate),
+                "resolved_high_coordinates": tuple(resolved_high_coordinates),
+            },
+            "high_schedule_changes_reference_identity",
+        )
+
+    source_ref = source_ref.to(device=exact_prefix.device, dtype=exact_prefix.dtype)
+    if int(source_ref.shape[2]) < prefix_t:
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "guidance_target_geometry_mismatch",
+            },
+            "guidance_target_geometry_mismatch",
+        )
+
+    # Registration only needs the bounded authoritative prefix. Resize that
+    # first so rejected candidates do not pay for a full trajectory transfer.
+    # If registration succeeds, resize the suffix exactly once and concatenate
+    # the already-resized prefix. This preserves the numerical transfer while
+    # bounding rejected-path work to the prefix needed for registration.
+    prefix_resize_started = time.perf_counter()
+    target_prefix = resize_video(
+        source_ref[:, :, :prefix_t],
+        target_h,
+        target_w,
+        mode=guidance.transfer_mode,
+    )
+    prefix_resize_elapsed_ms = (time.perf_counter() - prefix_resize_started) * 1000.0
+    if tuple(target_prefix.shape) != tuple(exact_prefix.shape):
+        return (
+            None,
+            {
+                "status": "rejected",
+                "reason": "guidance_target_geometry_mismatch",
+                "prefix_resize_elapsed_ms": prefix_resize_elapsed_ms,
+            },
+            "guidance_target_geometry_mismatch",
+        )
+
+    estimate = estimate_paired_prefix_translation(
+        target_prefix,
+        exact_prefix,
+        policy=GUIDANCE_REFERENCE_POLICY,
+    )
+    estimate_fields = estimate.telemetry()
+    estimate_fields["prefix_resize_elapsed_ms"] = prefix_resize_elapsed_ms
+    if estimate.rejected:
+        return None, estimate_fields, f"guidance_{estimate.reason}"
+
+    # Identity is an exact no-resample path. The estimator may return a
+    # sub-grid optimum inside the identity tolerance; that value remains
+    # diagnostic only and must not become a spatial interpolation.
+    applied_dx = 0.0 if estimate.identity else float(estimate.dx)
+    applied_dy = 0.0 if estimate.identity else float(estimate.dy)
+    residual_mode = normalize_residual_geometry_mode(residual_mode)
+    if residual_mode == "measure" and estimate.accepted:
+        guidance_residual = measure_residual_geometry(
+            target_prefix,
+            exact_prefix,
+            rigid_dx=applied_dx,
+            rigid_dy=applied_dy,
+        )
+    elif residual_mode == "measure":
+        guidance_residual = {
+            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+            "status": "not_evaluated",
+            "reason": "rigid_not_accepted",
+            "eligible": False,
+        }
+    else:
+        guidance_residual = {
+            "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+            "status": "off",
+            "reason": "disabled",
+            "eligible": False,
+        }
+
+    temporal_radius = int(guidance.temporal_search_radius)
+    if guidance.mode == "direction+temporal":
+        spatial_scale = max(
+            target_h / int(run.geometry.latent_h),
+            target_w / int(run.geometry.latent_w),
+        )
+        temporal_radius = math.ceil(int(guidance.temporal_search_radius) * spatial_scale)
+        if temporal_radius > 8:
+            fields = dict(estimate_fields)
+            fields.update(
+                status="rejected",
+                reason="target_temporal_radius_over_bound",
+                target_temporal_radius=temporal_radius,
+            )
+            return None, fields, "target_temporal_radius_over_bound"
+
+    suffix_resize_started = time.perf_counter()
+    if prefix_t < int(source_ref.shape[2]):
+        target_suffix = resize_video(
+            source_ref[:, :, prefix_t:],
+            target_h,
+            target_w,
+            mode=guidance.transfer_mode,
+        )
+        target_ref = torch.cat((target_prefix, target_suffix), dim=2)
+    else:
+        target_ref = target_prefix
+    suffix_resize_elapsed_ms = (time.perf_counter() - suffix_resize_started) * 1000.0
+    if tuple(target_ref.shape) != (
+        int(exact_prefix.shape[0]),
+        int(exact_prefix.shape[1]),
+        int(run.geometry.latent_t),
+        int(target_h),
+        int(target_w),
+    ):
+        fields = dict(estimate_fields)
+        fields.update(
+            status="rejected",
+            reason="guidance_target_geometry_mismatch",
+            suffix_resize_elapsed_ms=suffix_resize_elapsed_ms,
+        )
+        return None, fields, "guidance_target_geometry_mismatch"
+
+    if residual_mode == "measure" and residual_witnesses is not None:
+        witness_start = max(0, prefix_t - 6)
+        witness_end = min(int(target_ref.shape[2]), prefix_t + 4)
+        residual_witnesses["guidance_native_bounded"] = target_ref[:, :, witness_start:witness_end].detach().clone()
+
+    translation_started = time.perf_counter()
+    application = translate_video_cells(
+        target_ref,
+        dx=applied_dx,
+        dy=applied_dy,
+        start_frame=prefix_t,
+        batch_frames=4,
+    )
+    translation_elapsed_ms = (time.perf_counter() - translation_started) * 1000.0
+    if residual_mode == "measure" and residual_witnesses is not None:
+        witness_start = max(0, prefix_t - 6)
+        witness_end = min(int(application.video.shape[2]), prefix_t + 4)
+        residual_witnesses["guidance_aligned_bounded"] = (
+            application.video[:, :, witness_start:witness_end].detach().clone()
+        )
+
+    if application.invalid_fraction > 0.08:
+        fields = dict(estimate_fields)
+        fields.update(
+            status="rejected",
+            reason="guidance_invalid_area_over_bound",
+            invalid_fraction=application.invalid_fraction,
+        )
+        return None, fields, "guidance_invalid_area_over_bound"
+
+    # application.video can alias target_ref for an identity registration.
+    # Always clone before restoring the caller-owned prefix so the captured
+    # trajectory and its time-matched tensor remain read-only.
+    registered_video = application.video.clone()
+    registered_video[:, :, :prefix_t] = exact_prefix.to(registered_video)
+    cache_key = (
+        f"{run.run_id}:{run.session_id}:{run.chunk_id}:handoff_probe:"
+        f"{prefix_t}:{target_h}x{target_w}:"
+        f"{applied_dx:.8f}:{applied_dy:.8f}:"
+        f"{float(reference_coordinate):.12f}:"
+        f"translation_validity_v1:{FRAME_GAUGE_POLICY_VERSION}"
+    )
+    registered = RegisteredGuidanceReference(
+        video=registered_video,
+        validity=application.valid_mask.detach(),
+        prefix_t=prefix_t,
+        run_id=str(run.run_id),
+        reference_coordinate=float(reference_coordinate),
+        dx=applied_dx,
+        dy=applied_dy,
+        cache_key=cache_key,
+        temporal_search_radius=temporal_radius,
+    )
+    fields = dict(estimate_fields)
+    fields.update(
+        estimated_dx=float(estimate.dx),
+        estimated_dy=float(estimate.dy),
+        dx=applied_dx,
+        dy=applied_dy,
+        identity_no_resample=bool(estimate.identity),
+        reference_coordinate=float(reference_coordinate),
+        reference_clamped=False,
+        target_temporal_radius=temporal_radius,
+        cache_key=cache_key,
+        trajectory_mutated=False,
+        exact_prefix_restored=True,
+        invalid_fraction=float(application.invalid_fraction),
+        residual_geometry=guidance_residual,
+        prefix_resize_elapsed_ms=prefix_resize_elapsed_ms,
+        suffix_resize_elapsed_ms=suffix_resize_elapsed_ms,
+        translation_elapsed_ms=translation_elapsed_ms,
+    )
+    return registered, fields, None
+
+
+def _frame_gauge_boundary_motion_check(
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    aligned_clean: torch.Tensor,
+    *,
+    prefix_t: int,
+) -> tuple[bool, dict[str, Any], str]:
+    """Verify that the proposed rigid shift repairs the actual splice motion.
+
+    Prefix-wide residual fit can be diluted by learned synthesis differences.
+    This gate instead asks whether replacing the provider prefix with the exact
+    prefix introduces a boundary-motion error relative to the provider's own
+    native transition in each corresponding coordinate domain, and whether the
+    proposed suffix translation removes a substantial fraction of that error
+    in at least one informative ROI. Every ROI still has veto power for a
+    material regression, but a degradation no larger than one 1/16-cell
+    frame-gauge fine-search quantum is treated as phase-estimator resolution
+    noise rather than as an exact zero-tolerance cliff. The full-frame and
+    upper-region witnesses therefore remain symmetric safety checks without
+    requiring both crops to clear the same strong-improvement threshold.
+    """
+
+    if not 0 < int(prefix_t) < int(learned_clean.shape[2]):
+        raise RuntimeError("frame-gauge boundary check requires a non-empty prefix and suffix")
+    if tuple(exact_prefix.shape) != tuple(learned_clean[:, :, : int(prefix_t)].shape):
+        raise RuntimeError("frame-gauge boundary check exact-prefix geometry drifted")
+
+    learned_last = learned_clean[:, :, int(prefix_t) - 1]
+    exact_last = exact_prefix[:, :, -1].to(learned_clean)
+    native_first = learned_clean[:, :, int(prefix_t)]
+    if tuple(aligned_clean.shape) == tuple(learned_clean.shape):
+        aligned_last = aligned_clean[:, :, int(prefix_t) - 1]
+        aligned_first = aligned_clean[:, :, int(prefix_t)]
+    else:
+        compact_shape = (
+            int(learned_clean.shape[0]),
+            int(learned_clean.shape[1]),
+            2,
+            int(learned_clean.shape[-2]),
+            int(learned_clean.shape[-1]),
+        )
+        if tuple(aligned_clean.shape) != compact_shape:
+            raise RuntimeError("frame-gauge boundary check geometry drifted")
+        aligned_last = aligned_clean[:, :, 0]
+        aligned_first = aligned_clean[:, :, 1]
+
+    def shift(left: torch.Tensor, right: torch.Tensor, roi_fraction: float) -> dict[str, Any]:
+        pair = torch.stack((left, right), dim=2)
+        fields = measure_translation_trajectory(
+            pair,
+            1,
+            forward_steps=1,
+            backward_steps=0,
+            roi_fraction=roi_fraction,
+            max_shift=4,
+        )
+        return {
+            "dx": float(fields["pairwise_dx"][0]),
+            "dy": float(fields["pairwise_dy"][0]),
+            "response": float(fields["pairwise_response"][0]),
+            "clipped": bool(fields["pairwise_clipped"][0]),
+        }
+
+    checks: dict[str, Any] = {}
+    for name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+        native = shift(learned_last, native_first, roi_fraction)
+        # A cropped/windowed phase estimate is not invariant to jointly warping
+        # both frames. Compare the candidate against the same transformed
+        # provider transition, so only exact-prefix replacement contributes to
+        # its error. The aligned prefix remains a witness, never output state.
+        transformed_native = shift(aligned_last, aligned_first, roi_fraction)
+        restored = shift(exact_last, native_first, roi_fraction)
+        candidate = shift(exact_last, aligned_first, roi_fraction)
+        before_error = math.hypot(
+            restored["dx"] - native["dx"],
+            restored["dy"] - native["dy"],
+        )
+        after_error = math.hypot(
+            candidate["dx"] - transformed_native["dx"],
+            candidate["dy"] - transformed_native["dy"],
+        )
+        improvement = (before_error - after_error) / max(before_error, 1e-12)
+        error_delta = after_error - before_error
+        checks[name] = {
+            "roi_fraction": roi_fraction,
+            "native": native,
+            "transformed_native": transformed_native,
+            "exact_restored": restored,
+            "candidate": candidate,
+            "before_error_cells": before_error,
+            "after_error_cells": after_error,
+            "error_improvement_ratio": improvement,
+            "error_delta_cells": error_delta,
+            "within_degradation_bound": bool(error_delta <= FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12),
+            "informative": bool(before_error >= FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS),
+        }
+
+    fields: dict[str, Any] = {
+        "policy": "native_boundary_motion_consensus_v4",
+        "min_error_cells": FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS,
+        "min_improvement_ratio": FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT,
+        "min_response": FRAME_GAUGE_BOUNDARY_MIN_RESPONSE,
+        "max_degradation_cells": FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS,
+        "degradation_bound_basis": "frame_gauge_fine_search_quantum_1_over_16_cell",
+        "acceptance_rule": "all_rois_within_one_fine_search_tick_and_any_informative_roi_strong_v1",
+        "checks": checks,
+    }
+
+    informative_rois: list[str] = []
+    strong_improvement_rois: list[str] = []
+    for name in ("upper45", "full"):
+        check = checks[name]
+        for variant in ("native", "transformed_native", "exact_restored", "candidate"):
+            receipt = check[variant]
+            if receipt["clipped"] or receipt["response"] < FRAME_GAUGE_BOUNDARY_MIN_RESPONSE:
+                fields["status"] = "rejected"
+                fields["reason"] = f"boundary_{name}_{variant}_ambiguous"
+                return False, fields, str(fields["reason"])
+        # Every ROI remains a material-degradation veto. The phase-estimator
+        # boundary witness is continuous-valued while the authoritative rigid
+        # registration is selected on a 1/16-cell fine grid, so an error increase
+        # no larger than one fine-search quantum is treated as measurement-floor
+        # disagreement. Anything larger still fails closed.
+        if (
+            check["after_error_cells"] - check["before_error_cells"]
+            > FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS + 1e-12
+        ):
+            fields["status"] = "rejected"
+            fields["reason"] = f"boundary_{name}_degraded_over_bound"
+            return False, fields, str(fields["reason"])
+        if check["informative"]:
+            informative_rois.append(name)
+            if check["error_improvement_ratio"] >= FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT:
+                strong_improvement_rois.append(name)
+
+    fields["informative_rois"] = informative_rois
+    fields["strong_improvement_rois"] = strong_improvement_rois
+    if informative_rois and not strong_improvement_rois:
+        fields["status"] = "rejected"
+        fields["reason"] = "boundary_no_informative_roi_strong_improvement"
+        return False, fields, str(fields["reason"])
+
+    fields["status"] = "accepted"
+    fields["reason"] = "accepted"
+    return True, fields, "accepted"
+
+
+def _regional_boundary_motion_receipts(
+    learned_clean: torch.Tensor,
+    exact_prefix: torch.Tensor,
+    aligned_witness: torch.Tensor,
+    corrected_clean: torch.Tensor,
+    *,
+    prefix_t: int,
+    tile_bounds: dict[str, list[int]],
+) -> dict[str, Any]:
+    """Measure the rigid-v2 boundary transaction on each disjoint residual tile."""
+
+    if prefix_t < 1 or prefix_t >= int(learned_clean.shape[2]):
+        raise RuntimeError("regional boundary receipt requires a prefix/suffix boundary")
+    exact_last = exact_prefix[:, :, -1].to(learned_clean)
+
+    def shift(left: torch.Tensor, right: torch.Tensor, bounds: list[int]) -> dict[str, Any]:
+        y0, y1, x0, x1 = (int(value) for value in bounds)
+        pair = torch.stack(
+            (
+                left[:, :, y0:y1, x0:x1],
+                right[:, :, y0:y1, x0:x1],
+            ),
+            dim=2,
+        )
+        fields = measure_translation_trajectory(
+            pair,
+            1,
+            forward_steps=1,
+            backward_steps=0,
+            roi_fraction=1.0,
+            max_shift=2,
+        )
+        return {
+            "dx": float(fields["pairwise_dx"][0]),
+            "dy": float(fields["pairwise_dy"][0]),
+            "response": float(fields["pairwise_response"][0]),
+            "clipped": bool(fields["pairwise_clipped"][0]),
+        }
+
+    learned_last = learned_clean[:, :, prefix_t - 1]
+    learned_first = learned_clean[:, :, prefix_t]
+    aligned_last = aligned_witness[:, :, prefix_t - 1]
+    aligned_first = aligned_witness[:, :, prefix_t]
+    corrected_first = corrected_clean[:, :, prefix_t]
+    receipts: dict[str, Any] = {}
+    for tile_id, bounds in tile_bounds.items():
+        native = shift(learned_last, learned_first, bounds)
+        exact_unregistered = shift(exact_last, learned_first, bounds)
+        transformed_native = shift(aligned_last, aligned_first, bounds)
+        exact_rigid_pre_dc = shift(exact_last, aligned_first, bounds)
+        exact_rigid_post_dc = shift(exact_last, corrected_first, bounds)
+        receipts[str(tile_id)] = {
+            "bounds": list(bounds),
+            "native": native,
+            "exact_unregistered": exact_unregistered,
+            "transformed_native": transformed_native,
+            "exact_rigid_pre_dc": exact_rigid_pre_dc,
+            "exact_rigid_post_dc": exact_rigid_post_dc,
+            "pre_dc_native_error": math.hypot(
+                exact_rigid_pre_dc["dx"] - transformed_native["dx"],
+                exact_rigid_pre_dc["dy"] - transformed_native["dy"],
+            ),
+            "post_dc_native_error": math.hypot(
+                exact_rigid_post_dc["dx"] - transformed_native["dx"],
+                exact_rigid_post_dc["dy"] - transformed_native["dy"],
+            ),
+        }
+    return {
+        "policy": "paired_prefix_residual_boundary_regions_v1",
+        "coordinate_units": "target_latent_cells",
+        "comparison": (
+            "exact-restored boundary versus rigid-transformed native motion; "
+            "pre-DC and actual post-DC are reported separately"
+        ),
+        "tiles": receipts,
+    }
+
+
+def _frame_gauge_clean_postprocess(
+    learned_clean: torch.Tensor,
+    *,
+    exact_prefix: torch.Tensor,
+    guidance_run: Any,
+    guidance: Any,
+    target_h: int,
+    target_w: int,
+    prefix_t: int,
+    split_coordinate: float,
+    high_sigmas: torch.Tensor,
+    video_shift: float,
+    residual_mode: str = "off",
+) -> tuple[
+    CleanVideoPostprocessResult,
+    RegisteredGuidanceReference | None,
+    dict[str, torch.Tensor],
+    dict[str, Any],
+]:
+    """Run the all-or-nothing clean-domain frame-gauge registration transaction."""
+
+    started = time.perf_counter()
+    residual_mode = normalize_residual_geometry_mode(residual_mode)
+    exact_prefix = exact_prefix.to(
+        device=learned_clean.device,
+        dtype=learned_clean.dtype,
+    )
+    video_estimate = estimate_paired_prefix_translation(
+        learned_clean[:, :, :prefix_t],
+        exact_prefix,
+        policy=LEARNED_VIDEO_POLICY,
+    )
+    guidance_active = guidance is not None and guidance.mode != "off"
+    residual_witnesses: dict[str, torch.Tensor] = {}
+    residual_geometry: dict[str, Any] = {
+        "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+        "requested_mode": residual_mode,
+        "measured": False,
+        "measurement_status": "off" if residual_mode == "off" else "not_evaluated",
+        "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+        "selected_model": "none",
+        "decision": "not_evaluated",
+        "applied": False,
+        "final_path": "baseline",
+        "video": {
+            "status": "off" if residual_mode == "off" else "not_evaluated",
+            "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+        },
+        "guidance": (
+            {"status": "off", "reason": "guidance_off"}
+            if not guidance_active
+            else {
+                "status": "off" if residual_mode == "off" else "not_evaluated",
+                "reason": "disabled" if residual_mode == "off" else "rigid_not_accepted",
+            }
+        ),
+    }
+    transaction: dict[str, Any] = {
+        "policy_version": FRAME_GAUGE_POLICY_VERSION,
+        "video_registration": video_estimate.telemetry(),
+        "guidance_registration": (
+            {"status": "not_evaluated", "reason": "pending_video_acceptance"}
+            if guidance_active
+            else {"status": "off", "reason": "guidance_off"}
+        ),
+        "boundary_motion": {"status": "not_evaluated", "reason": "pending_video_acceptance"},
+        "result": "baseline",
+        "reason": video_estimate.reason,
+        "dc_applied_in_clean_hook": False,
+        "spatial_warp_applied": False,
+        "residual_geometry": residual_geometry,
+    }
+    if not video_estimate.accepted:
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "video_registration_not_accepted",
+            }
+        transaction["boundary_motion"] = {
+            "status": "not_evaluated",
+            "reason": "video_registration_not_accepted",
+        }
+        transaction["result"] = video_estimate.status
+        transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
+    # The boundary gate only consumes the last learned-prefix frame and the
+    # first suffix frame. Translate that two-frame witness first; do not clone
+    # and warp the complete trajectory until every fail-closed gate (including
+    # guidance registration) has accepted.
+    boundary_translation_started = time.perf_counter()
+    boundary_application = translate_video_cells(
+        learned_clean[:, :, prefix_t - 1 : prefix_t + 1],
+        dx=float(video_estimate.dx),
+        dy=float(video_estimate.dy),
+        start_frame=0,
+        batch_frames=2,
+    )
+    boundary_translation_elapsed_ms = (time.perf_counter() - boundary_translation_started) * 1000.0
+    transaction["boundary_translation_elapsed_ms"] = boundary_translation_elapsed_ms
+    if boundary_application.invalid_fraction > 0.08:
+        transaction.update(
+            result="rejected",
+            reason="video_invalid_area_over_bound",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        transaction["boundary_motion"] = {
+            "status": "not_evaluated",
+            "reason": "video_invalid_area_over_bound",
+        }
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "video_invalid_area_over_bound",
+            }
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        return result, None, {}, transaction
+
+    boundary_ok, boundary_fields, boundary_reason = _frame_gauge_boundary_motion_check(
+        learned_clean,
+        exact_prefix,
+        boundary_application.video,
+        prefix_t=prefix_t,
+    )
+    transaction["boundary_motion"] = boundary_fields
+    if not boundary_ok:
+        transaction.update(
+            result="rejected",
+            reason=boundary_reason,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        if guidance_active:
+            transaction["guidance_registration"] = {
+                "status": "not_evaluated",
+                "reason": "boundary_motion_rejected",
+            }
+        result = CleanVideoPostprocessResult(
+            clean_video=learned_clean,
+            protected_prefix_t=prefix_t,
+            metadata=transaction,
+        )
+        witnesses = {"learned_boundary_pair": learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()}
+        return result, None, witnesses, transaction
+
+    registered_reference = None
+    if guidance_active:
+        guidance_registration_started = time.perf_counter()
+        registered_reference, guidance_fields, guidance_error = _prepare_registered_guidance_reference(
+            run=guidance_run,
+            guidance=guidance,
+            exact_prefix=exact_prefix,
+            target_h=target_h,
+            target_w=target_w,
+            prefix_t=prefix_t,
+            split_coordinate=split_coordinate,
+            high_sigmas=high_sigmas,
+            video_shift=video_shift,
+            residual_mode=residual_mode,
+            residual_witnesses=residual_witnesses,
+        )
+        transaction["guidance_registration_elapsed_ms"] = (time.perf_counter() - guidance_registration_started) * 1000.0
+        transaction["guidance_registration"] = guidance_fields
+        if guidance_error is not None:
+            transaction["result"] = "rejected"
+            transaction["reason"] = guidance_error
+            transaction["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
+            result = CleanVideoPostprocessResult(
+                clean_video=learned_clean,
+                protected_prefix_t=prefix_t,
+                metadata=transaction,
+            )
+            return result, None, {}, transaction
+
+    if residual_mode == "measure":
+        video_residual = measure_residual_geometry(
+            learned_clean[:, :, :prefix_t],
+            exact_prefix,
+            rigid_dx=float(video_estimate.dx),
+            rigid_dy=float(video_estimate.dy),
+        )
+        guidance_residual = (
+            transaction["guidance_registration"].get(
+                "residual_geometry",
+                {
+                    "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                    "status": "not_evaluated",
+                    "reason": "guidance_residual_missing",
+                    "eligible": False,
+                },
+            )
+            if guidance_active
+            else {"status": "off", "reason": "guidance_off"}
+        )
+        residual_geometry.update(
+            measured=True,
+            measurement_status="measured",
+            reason="measurement_only",
+            selected_model=str(video_residual.get("selected_model", "none")),
+            decision="not_evaluated",
+            applied=False,
+            final_path="rigid_v2",
+            video=video_residual,
+            guidance=guidance_residual,
+        )
+    else:
+        residual_geometry.update(final_path="rigid_v2")
+
+    # Materialize the rigid candidate only as a bounded shadow witness. Run
+    # 00687 proved that a fully accepted/applied whole-suffix rigid transaction
+    # can still retain the user-visible frame shift. Do not let paired-prefix
+    # calibration mutate production video or Flow guidance until a regional
+    # boundary model is validated against decoded media.
+    aligned_start_frame = max(0, prefix_t - 6) if residual_mode == "measure" else prefix_t - 1
+    aligned_translation_started = time.perf_counter()
+    aligned_application = translate_video_cells(
+        learned_clean,
+        dx=float(video_estimate.dx),
+        dy=float(video_estimate.dy),
+        start_frame=aligned_start_frame,
+        batch_frames=4,
+    )
+    aligned_translation_elapsed_ms = (time.perf_counter() - aligned_translation_started) * 1000.0
+    transaction["aligned_translation_elapsed_ms"] = aligned_translation_elapsed_ms
+    transaction["aligned_translation_start_frame"] = aligned_start_frame
+    if aligned_application.invalid_fraction > 0.08:
+        raise RuntimeError("frame-gauge accepted boundary witness but shadow translation exceeded invalid-area bound")
+    aligned_full = aligned_application.video
+
+    diagnostic_end = min(
+        int(learned_clean.shape[2]),
+        prefix_t + 4,
+    )
+    selected_prefix_frames = min(prefix_t, 6)
+    registration_pair_f64_bytes = (
+        2
+        * selected_prefix_frames
+        * int(learned_clean.shape[1])
+        * int(learned_clean.shape[-2])
+        * int(learned_clean.shape[-1])
+        * 8
+    )
+    registration_pair_f32_bytes = registration_pair_f64_bytes // 2
+    translation_output_bytes = learned_clean.numel() * learned_clean.element_size()
+    translation_batch_f32_bytes = (
+        int(learned_clean.shape[0])
+        * int(learned_clean.shape[1])
+        * min(4, int(learned_clean.shape[2]))
+        * int(learned_clean.shape[-2])
+        * int(learned_clean.shape[-1])
+        * 4
+    )
+    translation_grid_bytes = int(learned_clean.shape[-2]) * int(learned_clean.shape[-1]) * 2 * 4
+    aligned_witness = aligned_full[:, :, :diagnostic_end].detach().clone()
+    candidate_corrected_clean, candidate_dc_metrics = apply_suffix_dc_bridge(
+        aligned_full,
+        exact_prefix,
+        weights=(1.0,),
+        clone_output=False,
+    )
+    # The shifted prefix is a disposable shadow witness only.
+    candidate_corrected_clean[:, :, :prefix_t] = learned_clean[:, :, :prefix_t]
+    if not torch.equal(
+        candidate_corrected_clean[:, :, :prefix_t],
+        learned_clean[:, :, :prefix_t],
+    ):
+        raise RuntimeError("frame-gauge shadow candidate altered learned prefix ownership")
+
+    if residual_mode == "measure":
+        video_residual = residual_geometry.get("video", {})
+        tile_bounds = video_residual.get("tile_bounds")
+        if isinstance(tile_bounds, dict):
+            residual_geometry["boundary_regional"] = _regional_boundary_motion_receipts(
+                learned_clean,
+                exact_prefix,
+                aligned_witness,
+                candidate_corrected_clean,
+                prefix_t=prefix_t,
+                tile_bounds=tile_bounds,
+            )
+        else:
+            residual_geometry["boundary_regional"] = {
+                "policy": "paired_prefix_residual_boundary_regions_v1",
+                "status": "not_evaluated",
+                "reason": "regional_measurement_unavailable",
+            }
+
+    residual_geometry.update(
+        final_path="production_baseline_rigid_shadow_only",
+        rigid_candidate_evaluated=True,
+        rigid_candidate_production_applied=False,
+    )
+    video_registration = dict(transaction["video_registration"])
+    video_registration["invalid_fraction"] = float(aligned_application.invalid_fraction)
+    transaction["video_registration"] = video_registration
+    transaction.update(
+        result="shadow_only",
+        reason="hardware_invalidated_global_rigid_application_00687",
+        candidate_accepted=True,
+        production_mutation_allowed=False,
+        candidate_spatial_warp_computed=True,
+        candidate_guidance_reference_computed=bool(registered_reference is not None),
+        candidate_dc_applied=True,
+        candidate_dc_metrics=candidate_dc_metrics,
+        dc_applied_in_clean_hook=False,
+        spatial_warp_applied=False,
+        invalid_fraction=aligned_application.invalid_fraction,
+        dc_policy="existing_one_token_spatial_mean_v1",
+        dc_order="production_baseline_after_shadow_candidate",
+        workspace_upper_bound_bytes=(
+            registration_pair_f64_bytes
+            + registration_pair_f32_bytes
+            + translation_output_bytes
+            + translation_batch_f32_bytes
+            + translation_grid_bytes
+        ),
+        workspace_components={
+            "registration_pair_f64_bytes": registration_pair_f64_bytes,
+            "registration_pair_f32_bytes": registration_pair_f32_bytes,
+            "translation_output_bytes": translation_output_bytes,
+            "translation_batch_f32_bytes": translation_batch_f32_bytes,
+            "translation_grid_bytes": translation_grid_bytes,
+        },
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+    )
+    witnesses = {
+        "learned_native": (learned_clean[:, :, :diagnostic_end].detach().clone()),
+        "learned_boundary_pair": (learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()),
+        "paired_prefix_aligned_witness": aligned_witness,
+        "candidate_corrected_clean": (candidate_corrected_clean[:, :, :diagnostic_end].detach().clone()),
+    }
+    witnesses.update(residual_witnesses)
+    result = CleanVideoPostprocessResult(
+        clean_video=learned_clean,
+        protected_prefix_t=prefix_t,
+        metadata=transaction,
+    )
+    return result, None, witnesses, transaction
+
+
+def _emit_bicubic_transfer_shadow_trajectory(
+    metrics,
+    clean_video: torch.Tensor,
+    *,
+    prefix_t: int,
+    source_h: int,
+    source_w: int,
+    target_h: int,
+    target_w: int,
+) -> torch.Tensor:
+    """Measure a spatial-only transfer shadow without changing production state."""
+
+    shadow = resize_video(clean_video, target_h, target_w, mode="bicubic")
+    expected_shape = (*clean_video.shape[:-2], int(target_h), int(target_w))
+    if tuple(shadow.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"bicubic transfer shadow returned shape {tuple(shadow.shape)}; expected {tuple(expected_shape)}"
+        )
+    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+        trajectory = measure_translation_trajectory(
+            shadow,
+            prefix_t,
+            forward_steps=4,
+            backward_steps=3,
+            roi_fraction=roi_fraction,
+            max_shift=4,
+        )
+        metrics.event(
+            "partitioned_multiframe_trajectory",
+            stage="source_low_exact_context_bicubic_shadow",
+            roi=roi_name,
+            source_hw=(int(source_h), int(source_w)),
+            target_hw=(int(target_h), int(target_w)),
+            transfer_mode="bicubic",
+            diagnostic_only=True,
+            production_gate=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            **trajectory,
+        )
+    return shadow
+
+
+def _bounded_residual_stage_slice(
+    video: torch.Tensor,
+    *,
+    prefix_t: int,
+    temporal_offset: int = 0,
+) -> tuple[torch.Tensor, int, int, int]:
+    local_prefix = int(prefix_t) - int(temporal_offset)
+    if not 0 <= local_prefix <= int(video.shape[2]):
+        raise RuntimeError("residual stage witness does not contain the declared prefix boundary")
+    local_start = max(0, local_prefix - 6)
+    local_stop = min(int(video.shape[2]), local_prefix + 4)
+    return (
+        video[:, :, local_start:local_stop].detach(),
+        int(temporal_offset) + local_start,
+        int(temporal_offset) + local_stop,
+        local_prefix - local_start,
+    )
+
+
+def _emit_residual_geometry_stage(
+    metrics,
+    *,
+    stage: str,
+    video: torch.Tensor,
+    prefix_t: int,
+    session_id: str,
+    chunk_id: str,
+    domain: str,
+    owner_before: str,
+    owner_after: str,
+    temporal_relation: str,
+    applied_transform: str,
+    provenance: str,
+    temporal_offset: int = 0,
+) -> dict[str, Any]:
+    bounded, start, stop, local_prefix = _bounded_residual_stage_slice(
+        video,
+        prefix_t=prefix_t,
+        temporal_offset=temporal_offset,
+    )
+    boundary = measure_video_boundary(bounded, local_prefix) if 0 < local_prefix < int(bounded.shape[2]) else {}
+    fields: dict[str, Any] = {
+        "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+        "stage": stage,
+        "session_id": str(session_id),
+        "chunk_id": str(chunk_id),
+        "domain": domain,
+        "owner_before": owner_before,
+        "owner_after": owner_after,
+        "temporal_relation": temporal_relation,
+        "temporal_start": start,
+        "temporal_stop": stop,
+        "prefix_boundary_index": int(prefix_t),
+        "dtype": str(video.dtype),
+        "device": str(video.device),
+        "height": int(video.shape[-2]),
+        "width": int(video.shape[-1]),
+        "normalization": "none_stage_receipt",
+        "downsample": "none",
+        "applied_transform": applied_transform,
+        "provenance": provenance,
+        "tensor_sha256": tensor_sha256(bounded),
+        "bounded_prefix_frames": min(int(prefix_t), 6),
+        "bounded_suffix_frames": max(0, stop - int(prefix_t)),
+        "valid_support": "full_tensor_receipt",
+        "caller_domain_comparison_allowed": domain == "model_internal_clean",
+        **boundary,
+    }
+    metrics.event("partitioned_residual_geometry_stage", **fields)
+    return fields
+
+
 def _measure_partitioned_transfer_splice(
     target_video: torch.Tensor,
     exact_prefix: torch.Tensor,
@@ -980,6 +2238,7 @@ def _measure_partitioned_transfer_splice(
     fields.update(
         splice_diagnostic_elapsed_ms=(time.perf_counter() - diagnostic_started) * 1000.0,
         splice_recovery="inverse_conditional_renoise",
+        splice_clean_source="inverse_recovered",
         splice_scope="learned_clean_before_exact_prefix_restore",
     )
     return fields
@@ -1051,6 +2310,12 @@ def run_partitioned_progressive(
         initial_transformer.get(
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
+        )
+    )
+    provider_boundary_stabilization = normalize_provider_boundary_stabilization(
+        initial_transformer.get(
+            PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
+            PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         )
     )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
@@ -1255,6 +2520,38 @@ def run_partitioned_progressive(
     )
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
+    low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
+    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
+        stage_plan.prefix.to(low_video),
+        source_h,
+        source_w,
+    )
+    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
+    generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
+    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
+    prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
+    low_video = low_video.clone()
+    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_latent_image = pack_streams((low_video, low_audio))[0]
+    binding.metrics.event(
+        "partitioned_prefix_source_resample",
+        policy="h3_physical_patch_lattice_v1",
+        prefix_source="authoritative_exact_target_prefix",
+        prefix_t=int(stage_plan.prefix_t),
+        target_hw=(int(target_h), int(target_w)),
+        source_hw=(int(source_h), int(source_w)),
+        generic_half_pixel_prefix_replaced=True,
+        generic_vs_physical_delta_rms=prefix_resample_delta_rms,
+        generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
+        numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
+        extra_h3_nfe=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    del prefix_resample_delta
+    del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
 
     diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
@@ -1735,6 +3032,8 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+        # Retain the clean low/probe audio only for output-neutral stage
+        # diagnostics. Production target-high no longer consumes this witness.
         low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
         if diagnostic_audio_control:
             low_probe_audio_report = measure_audio_latent_boundary(
@@ -1748,6 +3047,19 @@ def run_partitioned_progressive(
                 stage="low_probe_clean",
                 domain="model_internal_clean",
                 **low_probe_audio_report,
+            )
+
+            # The low/probe tensor above is in MiniMax-H3's model-internal
+            # packed domain. AudioVAE consumes the caller latent domain, and H3
+            # process_latent_in/out also owns sampler audio scaling. Cache a
+            # converted CPU copy for the downstream decode-matched audit only.
+            _cache_audio_decode_witness(
+                binding,
+                model_options,
+                base_model,
+                source_x0,
+                source_shapes,
+                stage="low_probe_clean",
             )
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_native_trajectory = measure_translation_trajectory(
@@ -1771,12 +3083,7 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
-        exact_prefix_source = resize_spatial_5d(
-            stage_plan.prefix.to(clean_video),
-            source_h,
-            source_w,
-            mode="bicubic",
-        )
+        exact_prefix_source = physical_prefix_source.to(clean_video)
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
                 raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
@@ -1840,6 +3147,18 @@ def run_partitioned_progressive(
                 ),
             )
 
+        bicubic_transfer_shadow: torch.Tensor | None = None
+        if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
+            bicubic_transfer_shadow = _emit_bicubic_transfer_shadow_trajectory(
+                binding.metrics,
+                clean_video,
+                prefix_t=stage_plan.prefix_t,
+                source_h=source_h,
+                source_w=source_w,
+                target_h=target_h,
+                target_w=target_w,
+            )
+
         if audio_handoff_source == PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW:
             if shadow_source_raw is None:
                 raise RuntimeError("source-uniform audio handoff shadow lost its sampler state")
@@ -1859,8 +3178,153 @@ def run_partitioned_progressive(
                 binding.metrics,
             )
 
+        session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+        guidance_run = None
+        if binding.guidance is not None and binding.guidance.mode != "off":
+            if binding.trajectory is None:
+                raise RuntimeError("partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY")
+            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
+            if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
+                guidance_run = shadow_guidance_run
+                if guidance_run is None:
+                    raise RuntimeError("source-uniform shadow guidance trajectory is unavailable")
+                if guidance_run.chunk_id != str(chunk_id) or guidance_run.session_id != str(session_id):
+                    raise RuntimeError("source-uniform shadow guidance trajectory identity drifted")
+                if guidance_run.conditioning_signature != expected_signature:
+                    raise RuntimeError("source-uniform shadow guidance trajectory conditioning drifted")
+            else:
+                guidance_run = binding.trajectory.select(
+                    chunk_id=chunk_id,
+                    session_id=session_id,
+                    conditioning_signature=expected_signature,
+                )
+            if guidance_run.geometry.latent_t != int(target_shapes[0][2]):
+                raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
+
+        split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+        residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
+        boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
+        boundary_content_pre_high_receipt: dict[str, Any] | None = None
+        pending_registered_reference = None
+        frame_gauge_witnesses: dict[str, torch.Tensor] = {}
+        residual_evidence_tensors: dict[str, torch.Tensor] = {}
+        residual_stage_receipts: list[dict[str, Any]] = []
+        frame_gauge_transaction: dict[str, Any] = {
+            "policy_version": FRAME_GAUGE_POLICY_VERSION,
+            "result": "off",
+            "reason": "disabled",
+            "video_registration": {
+                "status": "off",
+                "reason": "disabled",
+            },
+            "guidance_registration": {
+                "status": "off",
+                "reason": (
+                    "guidance_off" if binding.guidance is None or binding.guidance.mode == "off" else "repair_disabled"
+                ),
+            },
+            "dc_applied_in_clean_hook": False,
+            "spatial_warp_applied": False,
+            "residual_geometry": {
+                "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                "requested_mode": residual_mode,
+                "measured": False,
+                "measurement_status": "off" if residual_mode == "off" else "not_evaluated",
+                "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                "selected_model": "none",
+                "decision": "not_evaluated",
+                "applied": False,
+                "final_path": "baseline",
+                "video": {
+                    "status": "off" if residual_mode == "off" else "not_evaluated",
+                    "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                },
+                "guidance": (
+                    {"status": "off", "reason": "guidance_off"}
+                    if binding.guidance is None or binding.guidance.mode == "off"
+                    else {
+                        "status": "off" if residual_mode == "off" else "not_evaluated",
+                        "reason": "disabled" if residual_mode == "off" else "frame_gauge_repair_disabled",
+                    }
+                ),
+            },
+        }
+
+        clean_video_postprocess = None
+        if config.frame_gauge_repair:
+
+            def clean_video_postprocess(learned_clean):
+                nonlocal pending_registered_reference
+                nonlocal frame_gauge_witnesses
+                nonlocal frame_gauge_transaction
+
+                result, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
+                    learned_clean,
+                    exact_prefix=stage_plan.prefix,
+                    guidance_run=guidance_run,
+                    guidance=binding.guidance,
+                    target_h=target_h,
+                    target_w=target_w,
+                    prefix_t=stage_plan.prefix_t,
+                    split_coordinate=split_coordinate,
+                    high_sigmas=high_sigmas,
+                    video_shift=video_shift,
+                    residual_mode=config.frame_gauge_residual_mode,
+                )
+                pending_registered_reference = registered
+                frame_gauge_witnesses = witnesses
+                frame_gauge_transaction = transaction
+                return result
+
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
+        handoff_noise_mode = (
+            H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            else H3_HANDOFF_NOISE_INDEPENDENT
+        )
+        if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+            source_state_video, _ = unpack_streams(source_raw, source_shapes)
+            source_clean_video, _ = unpack_streams(source_x0, source_shapes)
+            source_effective_residual = (
+                source_state_video.to(torch.float32) - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
+            ) / float(sigma)
+            residual_suffix = source_effective_residual[:, :, stage_plan.prefix_t :]
+            model_noise_scale = float(getattr(base_model.model_sampling, "noise_scale", 1.0))
+            if not math.isfinite(model_noise_scale) or model_noise_scale <= 0.0:
+                raise ValueError("partitioned H3 handoff requires a finite positive model noise_scale")
+            initial_suffix = source_video_noise[:, :, stage_plan.prefix_t :].to(
+                device=residual_suffix.device,
+                dtype=torch.float32,
+            )
+            initial_effective_suffix = initial_suffix * model_noise_scale
+            residual_delta = residual_suffix - initial_effective_suffix
+            residual_norm = float(residual_suffix.norm().item())
+            initial_norm = float(initial_effective_suffix.norm().item())
+            residual_cosine = (
+                float(torch.dot(residual_suffix.reshape(-1), initial_effective_suffix.reshape(-1)).item())
+                / (residual_norm * initial_norm)
+                if residual_norm > 1e-20 and initial_norm > 1e-20
+                else None
+            )
+            binding.metrics.event(
+                "partitioned_handoff_residual_provenance",
+                policy=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+                source="same_sigma_source_state_minus_clean_probe",
+                generated_suffix_only=True,
+                prefix_t=int(stage_plan.prefix_t),
+                residual_rms=float(residual_suffix.square().mean().sqrt().item()),
+                initial_source_noise_rms=float(initial_suffix.square().mean().sqrt().item()),
+                initial_effective_residual_rms=float(initial_effective_suffix.square().mean().sqrt().item()),
+                residual_vs_initial_rms=float(residual_delta.square().mean().sqrt().item()),
+                residual_vs_initial_cosine=residual_cosine,
+                model_noise_scale=model_noise_scale,
+                residual_domain="effective_flow_residual_carried_state_units",
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+            )
+            del source_effective_residual, residual_suffix, initial_suffix, initial_effective_suffix, residual_delta
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -1872,13 +3336,34 @@ def run_partitioned_progressive(
             transfer_mode="learned_3d",
             learned_upscaler=config.learned_upscaler,
             transfer_metrics=transfer_metrics,
+            clean_video_postprocess=clean_video_postprocess,
+            noise_mode=handoff_noise_mode,
+        )
+        handoff_noise_report = transfer_metrics.get("handoff_noise")
+        if not isinstance(handoff_noise_report, dict):
+            raise RuntimeError("partitioned handoff did not report its target-grid noise contract")
+        if handoff_noise_report.get("policy") != handoff_noise_mode:
+            raise RuntimeError("partitioned handoff noise policy drifted from the selected contract")
+        binding.metrics.event(
+            "partitioned_handoff_noise",
+            frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
+            **handoff_noise_report,
         )
         if rebuilt_shapes != target_shapes:
             raise RuntimeError("partitioned exact-prefix handoff changed caller-visible AV geometry")
-        target_video, target_audio = unpack_streams(target_raw, target_shapes)
+        target_video, target_audio = unpack_streams(
+            target_raw,
+            target_shapes,
+        )
         if diagnostic_audio_control:
-            _source_state_video, source_state_audio = unpack_streams(source_raw, source_shapes)
-            audio_copy_exact = torch.equal(source_state_audio, target_audio)
+            _source_state_video, source_state_audio = unpack_streams(
+                source_raw,
+                source_shapes,
+            )
+            audio_copy_exact = torch.equal(
+                source_state_audio,
+                target_audio,
+            )
             audio_copy_delta = target_audio.to(torch.float32) - source_state_audio.to(
                 device=target_audio.device,
                 dtype=torch.float32,
@@ -1894,24 +3379,145 @@ def run_partitioned_progressive(
             )
             if not audio_copy_exact:
                 raise RuntimeError("learned video handoff mutated the carried H3 audio sampler state")
+
         diagnostic_seed = int(seed or 0) + config.seed_offset
-        learned_clean = _recover_partitioned_transfer_clean(
-            target_video,
-            sigma=sigma,
-            seed=diagnostic_seed,
+        exact_prefix = stage_plan.prefix.to(
+            device=target_video.device,
+            dtype=target_video.dtype,
+        )
+        frame_gauge_accepted = frame_gauge_transaction.get("result") == "accepted"
+        frame_gauge_candidate_accepted = bool(
+            frame_gauge_accepted or frame_gauge_transaction.get("candidate_accepted") is True
+        )
+        exact_overlap_fallback_requested, exact_overlap_fallback_trigger = (
+            _partitioned_exact_overlap_fallback_eligibility(frame_gauge_transaction)
+            if config.frame_gauge_repair and not frame_gauge_accepted
+            else (
+                False,
+                "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled",
+            )
+        )
+        representation_metrics = disabled_suffix_representation_bridge_metrics(
+            prefix_t=stage_plan.prefix_t,
+            requested=False,
         )
         splice_started = time.perf_counter()
-        exact_prefix = stage_plan.prefix.to(
-            device=learned_clean.device,
-            dtype=learned_clean.dtype,
+        aligned_witness = None
+        provider_native_clean: torch.Tensor | None = None
+        provider_boundary_stabilization_receipt: dict[str, Any] = {
+            "requested": provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+            "mode": provider_boundary_stabilization,
+            "applied": False,
+            "reason": (
+                "off"
+                if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
+                else "not_evaluated"
+            ),
+            "authoritative_prefix_modified": False,
+            "later_suffix_extrapolated": False,
+            "corrected_tokens": 0,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        if frame_gauge_accepted:
+            required_witnesses = {
+                "learned_native",
+                "paired_prefix_aligned_witness",
+                "corrected_clean",
+            }
+            if not required_witnesses.issubset(frame_gauge_witnesses):
+                raise RuntimeError("accepted frame-gauge transaction lost required clean-domain witnesses")
+            learned_clean = frame_gauge_witnesses["learned_native"]
+            provider_native_clean = learned_clean
+            if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                provider_boundary_stabilization_receipt["reason"] = "frame_gauge_selected"
+            aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
+            corrected_clean = frame_gauge_witnesses["corrected_clean"]
+            dc_metrics = frame_gauge_transaction.get("dc_metrics")
+            if not isinstance(dc_metrics, dict):
+                raise RuntimeError("accepted frame-gauge transaction lost the existing DC bridge receipt")
+            dc_metrics = dict(dc_metrics)
+            splice_recovery = "actual_provider_clean_postprocess"
+        else:
+            if pending_registered_reference is not None:
+                raise RuntimeError("rejected frame-gauge transaction published a guidance reference")
+            learned_clean = _recover_partitioned_transfer_clean(
+                target_video,
+                sigma=sigma,
+                seed=diagnostic_seed,
+            )
+            provider_native_clean = learned_clean
+            if exact_overlap_fallback_requested:
+                learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
+                if learned_boundary_pair is None:
+                    raise RuntimeError("eligible exact-overlap fallback lost the actual provider boundary witness")
+                expected_boundary_shape = (
+                    int(learned_clean.shape[0]),
+                    int(learned_clean.shape[1]),
+                    2,
+                    int(learned_clean.shape[-2]),
+                    int(learned_clean.shape[-1]),
+                )
+                if tuple(learned_boundary_pair.shape) != expected_boundary_shape:
+                    raise RuntimeError("eligible exact-overlap fallback provider boundary witness geometry drifted")
+                learned_clean = learned_clean.clone()
+                learned_clean[:, :, stage_plan.prefix_t - 1 : stage_plan.prefix_t + 1] = learned_boundary_pair.to(
+                    learned_clean
+                )
+                provider_native_clean = learned_clean
+
+                if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
+                    # Hardware validation disproved the pre-high-only promotion gate: the same
+                    # provider/shadow state improved before target-high, then target-high
+                    # amplified the selected tile and decoded-media validation regressed.
+                    # Preserve the serialized selector for old workflows but fail closed.
+                    # The same requested run now emits a post-high shadow below instead.
+                    provider_boundary_stabilization_receipt.update(
+                        reason="disabled_pending_post_high_validation",
+                        exact_overlap_fallback_required=True,
+                        historical_candidate_policy="partitioned_provider_boundary_soft_support_production_v1",
+                        historical_candidate_mutation_disabled=True,
+                        production_mutation_allowed=False,
+                    )
+
+                target_video, corrected_clean, representation_metrics, dc_metrics = (
+                    _apply_partitioned_exact_overlap_bridge(
+                        target_video,
+                        learned_clean,
+                        exact_prefix,
+                        sigma=sigma,
+                        weights=PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
+                    )
+                )
+            else:
+                if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                    provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
+                target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
+                    target_video,
+                    learned_clean,
+                    exact_prefix,
+                    sigma=sigma,
+                    enabled=True,
+                )
+            splice_recovery = (
+                "inverse_conditional_renoise_with_actual_provider_boundary_pair"
+                if exact_overlap_fallback_requested
+                else "inverse_conditional_renoise"
+            )
+
+        if provider_native_clean is None:
+            raise RuntimeError("partitioned provider-native clean witness was not established")
+        exact_overlap_policy = PARTITIONED_EXACT_OVERLAP_POLICY
+        binding.metrics.event(
+            "partitioned_provider_boundary_stabilization",
+            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+            exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
+            **provider_boundary_stabilization_receipt,
         )
-        target_video, corrected_clean, dc_bridge_metrics = _apply_partitioned_suffix_dc_bridge(
-            target_video,
-            learned_clean,
-            exact_prefix,
-            sigma=sigma,
-            enabled=True,
-        )
+
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
             exact_prefix,
@@ -1919,35 +3525,587 @@ def run_partitioned_progressive(
         )
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
-            splice_recovery="inverse_conditional_renoise",
+            splice_recovery=splice_recovery,
+            splice_clean_source=(
+                "actual_provider"
+                if frame_gauge_accepted
+                else "actual_provider_boundary_pair_plus_inverse_recovered"
+                if exact_overlap_fallback_requested
+                else "inverse_recovered"
+            ),
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
-        binding.metrics.event(
-            "partitioned_suffix_dc_bridge",
-            source="learned_3d_exact_prefix_handoff",
-            state_mapping="conditional_renoise_affine",
-            authoritative_prefix_modified=False,
-            later_suffix_modified=False,
-            **dc_bridge_metrics,
-        )
-        if bool(dc_bridge_metrics["suffix_dc_bridge_enabled"]):
-            binding.metrics.increment("partitioned_suffix_dc_bridge_runs")
 
-        # Splice diagnostics above require the learned prefix.  From here on the
-        # clean diagnostic tensor mirrors the actual high-stage state: corrected
-        # first suffix token plus the authoritative exact target-grid prefix.
-        corrected_clean[:, :, : stage_plan.prefix_t] = exact_prefix
-        for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
-            native_trajectory = measure_translation_trajectory(
-                learned_clean,
-                stage_plan.prefix_t,
-                forward_steps=4,
-                backward_steps=3,
-                roi_fraction=roi_fraction,
-                max_shift=4,
+        video_registration = frame_gauge_transaction.get(
+            "video_registration",
+            {},
+        )
+        guidance_registration = frame_gauge_transaction.get(
+            "guidance_registration",
+            {},
+        )
+        postprocess_report = transfer_metrics.get("clean_video_postprocess")
+        if not isinstance(postprocess_report, dict):
+            postprocess_report = {}
+        residual_geometry_receipt = frame_gauge_transaction.get(
+            "residual_geometry",
+            {
+                "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                "requested_mode": residual_mode,
+                "measured": False,
+                "measurement_status": "not_evaluated",
+                "reason": "missing_transaction_receipt",
+                "decision": "not_evaluated",
+                "applied": False,
+                "final_path": "baseline",
+            },
+        )
+        residual_telemetry_bytes = len(
+            json.dumps(
+                residual_geometry_receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        if residual_telemetry_bytes > 128 * 1024:
+            raise RuntimeError("residual geometry telemetry exceeded the 128 KiB transaction bound")
+        binding.metrics.event(
+            "partitioned_frame_gauge",
+            mode="on" if config.frame_gauge_repair else "off",
+            enabled=bool(config.frame_gauge_repair),
+            eligible=bool(
+                config.frame_gauge_repair
+                and frame_gauge_transaction.get("result") in {"accepted", "identity", "rejected", "shadow_only"}
+            ),
+            result=str(frame_gauge_transaction.get("result", "off")),
+            reason=str(frame_gauge_transaction.get("reason", "unknown")),
+            policy_version=FRAME_GAUGE_POLICY_VERSION,
+            split_coordinate=split_coordinate,
+            video_dx=float(video_registration.get("dx", 0.0)),
+            video_dy=float(video_registration.get("dy", 0.0)),
+            guidance_dx=float(guidance_registration.get("dx", 0.0)),
+            guidance_dy=float(guidance_registration.get("dy", 0.0)),
+            video_registration=video_registration,
+            guidance_registration=guidance_registration,
+            boundary_motion=frame_gauge_transaction.get(
+                "boundary_motion",
+                {"status": "off", "reason": "disabled"},
+            ),
+            spatial_warp_applied=bool(
+                frame_gauge_transaction.get(
+                    "spatial_warp_applied",
+                    False,
+                )
+            ),
+            candidate_accepted=bool(frame_gauge_transaction.get("candidate_accepted", False)),
+            candidate_spatial_warp_computed=bool(frame_gauge_transaction.get("candidate_spatial_warp_computed", False)),
+            candidate_guidance_reference_computed=bool(
+                frame_gauge_transaction.get("candidate_guidance_reference_computed", False)
+            ),
+            production_mutation_allowed=bool(frame_gauge_transaction.get("production_mutation_allowed", False)),
+            hardware_invalidation=(
+                "00687_visible_frame_shift_after_applied_rigid_v4"
+                if frame_gauge_transaction.get("result") == "shadow_only"
+                else None
+            ),
+            dc_bridge_applied=True,
+            dc_policy="existing_one_token_spatial_mean_v1",
+            dc_order=(
+                "after_spatial_registration_before_conditional_renoise"
+                if frame_gauge_accepted
+                else "historical_post_renoise_affine_mapping"
+            ),
+            deterministic_noise_seed=diagnostic_seed,
+            deterministic_noise_seed_offset=int(config.seed_offset),
+            mask_classification="exact_protected_video_prefix",
+            exact_prefix_sha256=tensor_sha256(stage_plan.prefix),
+            authoritative_prefix_modified=False,
+            registration_domain=("actual_clean_target_video" if config.frame_gauge_repair else "off"),
+            transform_domain=("actual_clean_target_video" if frame_gauge_accepted else "none"),
+            transformed_states=(
+                ["learned_suffix", "derived_guidance_suffix"]
+                if frame_gauge_accepted and pending_registered_reference is not None
+                else ["learned_suffix"]
+                if frame_gauge_accepted
+                else []
+            ),
+            provider_output_observed_before_noise=bool(config.frame_gauge_repair),
+            provider_api_version=transfer_metrics.get("provider_api_version"),
+            provider_kind=transfer_metrics.get("provider_kind"),
+            provider_model_name=transfer_metrics.get("model_name"),
+            actual_clean_dtype=postprocess_report.get("clean_dtype"),
+            actual_clean_device=postprocess_report.get("clean_device"),
+            guidance_mode=(binding.guidance.mode if binding.guidance is not None else "off"),
+            registered_guidance_reference=bool(pending_registered_reference is not None),
+            target_temporal_search_radius=guidance_registration.get("target_temporal_radius"),
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            auto_strength_owner="dora_dynamic_lora_loader",
+            auto_strength_receipt_status="unknown",
+            auto_strength_resolved_off=None,
+            auto_strength_validation_required=True,
+            workspace_upper_bound_bytes=frame_gauge_transaction.get("workspace_upper_bound_bytes"),
+            workspace_components=frame_gauge_transaction.get(
+                "workspace_components",
+                {},
+            ),
+            transaction_elapsed_ms=float(frame_gauge_transaction.get("elapsed_ms", 0.0)),
+            boundary_translation_elapsed_ms=float(frame_gauge_transaction.get("boundary_translation_elapsed_ms", 0.0)),
+            guidance_registration_elapsed_ms=float(
+                frame_gauge_transaction.get("guidance_registration_elapsed_ms", 0.0)
+            ),
+            aligned_translation_elapsed_ms=float(frame_gauge_transaction.get("aligned_translation_elapsed_ms", 0.0)),
+            aligned_translation_start_frame=frame_gauge_transaction.get("aligned_translation_start_frame"),
+            residual_geometry=residual_geometry_receipt,
+            residual_geometry_telemetry_bytes=residual_telemetry_bytes,
+            exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
+            exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
+            exact_overlap_fallback_applied=bool(
+                representation_metrics.get("suffix_representation_bridge_accepted", False)
+            ),
+            exact_overlap_fallback_policy=exact_overlap_policy,
+            exact_overlap_fallback_source=(
+                "actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"
+            ),
+            exact_overlap_fallback_transformed_states=(
+                [
+                    f"learned_suffix_{offset}"
+                    for offset in range(
+                        int(representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0))
+                    )
+                ]
+                if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                else []
+            ),
+        )
+
+        exact_overlap_corrected_tokens = int(
+            representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)
+        )
+        exact_overlap_bounded_successor_support = False
+        binding.metrics.event(
+            "partitioned_exact_overlap_bridge",
+            policy=exact_overlap_policy,
+            requested=bool(exact_overlap_fallback_requested),
+            trigger=str(exact_overlap_fallback_trigger),
+            applied=bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
+            state_mapping=(
+                "conditional_renoise_affine"
+                if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                else "disabled_or_noop"
+            ),
+            authoritative_prefix_modified=False,
+            later_suffix_extrapolated=exact_overlap_bounded_successor_support,
+            suffix_support_policy=(
+                "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
+            ),
+            suffix_support_tokens=exact_overlap_corrected_tokens,
+            suffix_outside_support_modified=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            **representation_metrics,
+        )
+
+        restored_clean = corrected_clean.clone()
+        restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
+
+        high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
+        high_audio_reference_enabled = PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED
+        high_video_reference_suffix = None
+        high_audio_reference = None
+
+        bridge_support_tokens = len(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+        safe_high_prediction_bridge_topology = bool(
+            config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            and representation_metrics.get("suffix_representation_bridge_accepted", False)
+            and exact_overlap_corrected_tokens == 1
+            and not high_video_reference_enabled
+            and stage_plan.prefix_t + bridge_support_tokens <= int(target_video.shape[2])
+        )
+        bridge_mask_fully_generated = False
+        if denoise_mask is not None and safe_high_prediction_bridge_topology:
+            candidate_video_mask, _candidate_audio_mask = unpack_streams(
+                denoise_mask,
+                target_shapes,
             )
-            restored_trajectory = measure_translation_trajectory(
-                corrected_clean,
+            bridge_mask_fully_generated = bool(
+                torch.all(
+                    candidate_video_mask[
+                        :,
+                        :,
+                        stage_plan.prefix_t : stage_plan.prefix_t + bridge_support_tokens,
+                    ]
+                    == 1
+                ).item()
+            )
+            del candidate_video_mask, _candidate_audio_mask
+        # 00715 proved that the per-call model-prefix value residual is tiny
+        # (~1.4e-3 RMS) and that exact first-transition rebasing does not remove
+        # the decoded frame shift. Keep the machinery for historical evidence,
+        # but do not mutate production predictions with the falsified actuator.
+        high_prediction_gauge_bridge_enabled = False
+        high_prediction_gauge_bridge_candidate_eligible = bool(
+            safe_high_prediction_bridge_topology and bridge_mask_fully_generated
+        )
+
+        safe_vae_window_repair_topology = bool(
+            config.frame_gauge_repair
+            and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            and representation_metrics.get("suffix_representation_bridge_accepted", False)
+            and exact_overlap_corrected_tokens == 1
+            and not high_video_reference_enabled
+        )
+        vae_window_plan = None
+        vae_window_plan_reason = "safe_video_topology_not_active"
+        if safe_vae_window_repair_topology:
+            try:
+                vae_window_plan = h3_vae_boundary_window(
+                    stage_plan.prefix_t,
+                    int(target_video.shape[2]),
+                )
+                vae_window_plan_reason = "native_boundary_window_resolved"
+            except ValueError as exc:
+                vae_window_plan_reason = f"unsupported_native_vae_phase:{exc}"
+        vae_window_repair_armed = vae_window_plan is not None
+        high_boundary_context = exact_prefix
+        high_boundary_prefix_witness = "authoritative_exact_tail_after_inpaint_restore"
+
+        binding.metrics.event(
+            "partitioned_high_boundary_reference_plan",
+            policy=HIGH_BOUNDARY_REFERENCE_POLICY,
+            enabled=bool(high_video_reference_enabled or high_audio_reference_enabled),
+            video_enabled=high_video_reference_enabled,
+            video_selection_reason="model_native_prediction_gauge_bridge_no_fixed_clean_reference",
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_candidate_eligible=high_prediction_gauge_bridge_candidate_eligible,
+            high_prediction_gauge_bridge_hardware_verdict="falsified_00715_no_decoded_frame_shift_improvement",
+            vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+            vae_window_video_repair_armed=vae_window_repair_armed,
+            vae_window_video_plan_reason=vae_window_plan_reason,
+            vae_window_video_plan=dict(vae_window_plan or {}),
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            high_prediction_gauge_bridge_weights=(
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
+            ),
+            high_prediction_gauge_bridge_mask_fully_generated=bridge_mask_fully_generated,
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
+            high_boundary_prefix_witness=high_boundary_prefix_witness,
+            video_reference_domain="disabled",
+            video_support_tokens=0,
+            video_temporal_weights=[],
+            audio_enabled=high_audio_reference_enabled,
+            audio_selection_reason="released_sampler_overlap_exact_restore_only",
+            audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
+            audio_reference_domain="disabled",
+            audio_support_ticks=0,
+            audio_temporal_weights=[],
+            authoritative_prefix_modified=False,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
+
+        if boundary_content_diagnostic_enabled:
+            boundary_content_started = time.perf_counter()
+            provider_receipt = measure_boundary_content_continuity(
+                provider_native_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="provider_native",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_receipt,
+            )
+            if residual_mode == "measure" and frame_gauge_candidate_accepted:
+                if bicubic_transfer_shadow is None:
+                    raise RuntimeError("residual measurement lost the bicubic transfer shadow")
+                actual_provider_witness = frame_gauge_witnesses.get("learned_native")
+                if actual_provider_witness is None:
+                    raise RuntimeError("learned-transfer residual diagnostic lost the actual provider clean witness")
+                shadow_witness = bicubic_transfer_shadow[:, :, : int(actual_provider_witness.shape[2])]
+                if tuple(shadow_witness.shape) != tuple(actual_provider_witness.shape):
+                    raise RuntimeError("learned-transfer residual witness geometry drifted")
+                learned_residual_started = time.perf_counter()
+                learned_residual_receipt = measure_learned_transfer_residual_diagnostic(
+                    actual_provider_witness,
+                    shadow_witness,
+                    stage_plan.prefix_t,
+                )
+                binding.metrics.event(
+                    "partitioned_learned_transfer_residual",
+                    domain="model_internal_clean",
+                    owner_before="source_low_exact_context_bicubic_shadow",
+                    owner_after="actual_provider_clean_postprocess",
+                    provenance="actual_provider_clean_minus_same_source_bicubic_shadow",
+                    elapsed_ms=(time.perf_counter() - learned_residual_started) * 1000.0,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_provider_calls=0,
+                    extra_vae_calls=0,
+                    **learned_residual_receipt,
+                )
+                del shadow_witness
+                del bicubic_transfer_shadow
+                bicubic_transfer_shadow = None
+
+            predictor_started = time.perf_counter()
+            provider_predictor_receipt = measure_provider_boundary_temporal_predictor(
+                provider_native_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_predictor",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - predictor_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_predictor_receipt,
+            )
+            calibration_started = time.perf_counter()
+            provider_calibration_receipt = measure_provider_boundary_temporal_calibration(
+                provider_native_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_predictor_calibration",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - calibration_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_calibration_receipt,
+            )
+            stabilization_shadow_started = time.perf_counter()
+            provider_stabilization_shadow_receipt = measure_provider_boundary_stabilization_shadow(
+                provider_native_clean,
+                stage_plan.prefix_t,
+                calibration_receipt=provider_calibration_receipt,
+                provider_content_receipt=provider_receipt,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_stabilization_shadow",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - stabilization_shadow_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_stabilization_shadow_receipt,
+            )
+            soft_support_shadow_started = time.perf_counter()
+            provider_soft_support_shadow_receipt = measure_provider_boundary_soft_support_shadow(
+                provider_native_clean,
+                stage_plan.prefix_t,
+                calibration_receipt=provider_calibration_receipt,
+                provider_content_receipt=provider_receipt,
+                hard_shadow_receipt=provider_stabilization_shadow_receipt,
+            )
+            binding.metrics.event(
+                "partitioned_provider_boundary_soft_support_shadow",
+                domain="model_internal_clean",
+                owner_before="learned_provider_prefix",
+                owner_after="learned_provider_suffix",
+                elapsed_ms=(time.perf_counter() - soft_support_shadow_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **provider_soft_support_shadow_receipt,
+            )
+            boundary_content_started = time.perf_counter()
+            boundary_content_pre_high_receipt = measure_boundary_content_continuity(
+                restored_clean,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="pre_high_exact_restored",
+                domain="model_internal_clean",
+                owner_before="authoritative_exact_prefix",
+                owner_after="corrected_learned_suffix",
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **boundary_content_pre_high_receipt,
+            )
+            binding.metrics.increment("partitioned_boundary_content_diagnostic_runs")
+
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            measurement_learned_native = frame_gauge_witnesses.get("learned_native")
+            if measurement_learned_native is None:
+                raise RuntimeError("residual measurement lost the actual provider clean witness")
+            if aligned_witness is None:
+                aligned_witness = frame_gauge_witnesses.get("paired_prefix_aligned_witness")
+            if aligned_witness is None:
+                raise RuntimeError("residual measurement lost the rigid shadow witness")
+            evidence_start = max(0, stage_plan.prefix_t - 6)
+            evidence_stop = min(int(measurement_learned_native.shape[2]), stage_plan.prefix_t + 4)
+            residual_evidence_tensors["exact_prefix_last6"] = exact_prefix[
+                :, :, evidence_start : stage_plan.prefix_t
+            ].detach()
+            residual_evidence_tensors["learned_native_prefix_suffix"] = measurement_learned_native[
+                :, :, evidence_start:evidence_stop
+            ].detach()
+            residual_evidence_tensors["learned_rigid_aligned_prefix_suffix"] = aligned_witness[
+                :, :, evidence_start:evidence_stop
+            ].detach()
+            residual_evidence_tensors["pre_high_exact_restored_dc"] = restored_clean[
+                :, :, evidence_start:evidence_stop
+            ].detach()
+            residual_stage_receipts.extend(
+                [
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="learned_native_same_time",
+                        video=measurement_learned_native,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="learned_provider_clean_L",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="none",
+                        provenance="actual_provider_clean_postprocess",
+                    ),
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="learned_rigid_aligned_same_time",
+                        video=aligned_witness,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="rigid_aligned_learned_L",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration_and_native_boundary",
+                        applied_transform=(
+                            "paired_prefix_rigid_v2"
+                            if frame_gauge_accepted
+                            else "shadow_candidate_paired_prefix_rigid_v2"
+                        ),
+                        provenance="actual_provider_clean_postprocess_shadow_candidate",
+                    ),
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="exact_restored_pre_high_dc",
+                        video=restored_clean,
+                        prefix_t=stage_plan.prefix_t,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="authoritative_exact_prefix_E",
+                        owner_after="rigid_aligned_learned_suffix_plus_single_dc",
+                        temporal_relation="adjacent_time_boundary",
+                        applied_transform=(
+                            "paired_prefix_rigid_v2_then_one_token_dc"
+                            if frame_gauge_accepted
+                            else "production_baseline_then_one_token_dc"
+                        ),
+                        provenance="actual_pre_high_clean",
+                    ),
+                ]
+            )
+            guidance_native = frame_gauge_witnesses.get("guidance_native_bounded")
+            guidance_aligned = frame_gauge_witnesses.get("guidance_aligned_bounded")
+            guidance_offset = max(0, stage_plan.prefix_t - 6)
+            if guidance_native is not None:
+                residual_evidence_tensors["guidance_native_prefix_suffix"] = guidance_native.detach()
+                residual_stage_receipts.append(
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="guidance_native_same_time",
+                        video=guidance_native,
+                        prefix_t=stage_plan.prefix_t,
+                        temporal_offset=guidance_offset,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="time_matched_guidance_G",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="none",
+                        provenance="independent_guidance_registration_input",
+                    )
+                )
+            if guidance_aligned is not None:
+                residual_evidence_tensors["guidance_rigid_aligned_prefix_suffix"] = guidance_aligned.detach()
+                residual_stage_receipts.append(
+                    _emit_residual_geometry_stage(
+                        binding.metrics,
+                        stage="guidance_rigid_aligned_same_time",
+                        video=guidance_aligned,
+                        prefix_t=stage_plan.prefix_t,
+                        temporal_offset=guidance_offset,
+                        session_id=session_id,
+                        chunk_id=chunk_id,
+                        domain="model_internal_clean",
+                        owner_before="independently_rigid_aligned_guidance_G",
+                        owner_after="authoritative_exact_prefix_E",
+                        temporal_relation="same_time_prefix_calibration",
+                        applied_transform="paired_prefix_rigid_v2_guidance_independent",
+                        provenance="independent_guidance_registration_output",
+                    )
+                )
+
+        pre_high_vae_window_trajectories: dict[str, dict[str, Any]] = {}
+
+        provider_native_trajectory_source = (
+            frame_gauge_witnesses.get("learned_native") if frame_gauge_candidate_accepted else provider_native_clean
+        )
+        if provider_native_trajectory_source is None:
+            provider_native_trajectory_source = provider_native_clean
+
+        for roi_name, roi_fraction in (
+            ("upper45", 0.45),
+            ("full", 1.0),
+        ):
+            native_trajectory = measure_translation_trajectory(
+                provider_native_trajectory_source,
                 stage_plan.prefix_t,
                 forward_steps=4,
                 backward_steps=3,
@@ -1960,6 +4118,35 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **native_trajectory,
             )
+            if aligned_witness is not None:
+                aligned_trajectory = measure_translation_trajectory(
+                    aligned_witness,
+                    stage_plan.prefix_t,
+                    forward_steps=4,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="paired_prefix_aligned_witness",
+                    roi=roi_name,
+                    **aligned_trajectory,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="suffix_aligned_before_dc",
+                    roi=roi_name,
+                    **aligned_trajectory,
+                )
+            restored_trajectory = measure_translation_trajectory(
+                restored_clean,
+                stage_plan.prefix_t,
+                forward_steps=4,
+                backward_steps=3,
+                roi_fraction=roi_fraction,
+                max_shift=4,
+            )
             binding.metrics.event(
                 "partitioned_multiframe_trajectory",
                 stage="exact_restored_pre_high",
@@ -1968,7 +4155,40 @@ def run_partitioned_progressive(
             )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
-        del corrected_clean, learned_clean
+
+        binding.metrics.event(
+            "partitioned_video_vae_boundary_window_plan",
+            policy=VAE_WINDOW_VIDEO_POLICY,
+            armed=vae_window_repair_armed,
+            reason=vae_window_plan_reason,
+            safe_video_topology=safe_vae_window_repair_topology,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_candidate_eligible=high_prediction_gauge_bridge_candidate_eligible,
+            plan=dict(vae_window_plan or {}),
+            authoritative_prefix_modified=False,
+            audio_modified=False,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+        )
+        if vae_window_repair_armed:
+            pre_high_vae_window_trajectories = measure_vae_window_video_trajectory(
+                restored_clean,
+                stage_plan.prefix_t,
+            )
+            for roi_name, trajectory in pre_high_vae_window_trajectories.items():
+                binding.metrics.event(
+                    "partitioned_video_vae_boundary_window_trajectory",
+                    policy=VAE_WINDOW_VIDEO_POLICY,
+                    stage="pre_high_exact_restored",
+                    domain="model_internal_clean",
+                    roi=roi_name,
+                    diagnostic_only=True,
+                    **trajectory,
+                )
+
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
@@ -1979,8 +4199,49 @@ def run_partitioned_progressive(
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
-            suffix_dc_bridge_state_mapping="conditional_renoise_affine",
-            **dc_bridge_metrics,
+            frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
+            frame_gauge_result=str(frame_gauge_transaction.get("result", "baseline")),
+            frame_gauge_reason=str(frame_gauge_transaction.get("reason", "unknown")),
+            suffix_dc_bridge_state_mapping=(
+                "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
+            ),
+            suffix_dc_bridge_policy=(
+                "successor_safe_linear_v2"
+                if int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)) > 1
+                else "one_token_spatial_mean_v1"
+            ),
+            provider_boundary_stabilization=dict(provider_boundary_stabilization_receipt),
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            video_high_clean_reference_enabled=high_video_reference_enabled,
+            video_high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            video_high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            video_high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            audio_boundary_repair_contract=PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT,
+            audio_high_clean_reference_enabled=high_audio_reference_enabled,
+            audio_exact_restore_successor_bridge_enabled=False,
+            partitioned_exact_overlap_bridge={
+                "policy": exact_overlap_policy,
+                "requested": bool(exact_overlap_fallback_requested),
+                "trigger": str(exact_overlap_fallback_trigger),
+                "applied": bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
+                "state_mapping": (
+                    "conditional_renoise_affine"
+                    if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                    else "disabled_or_noop"
+                ),
+                "source": ("actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"),
+                "authoritative_prefix_modified": False,
+                "later_suffix_extrapolated": exact_overlap_bounded_successor_support,
+                "suffix_support_policy": (
+                    "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
+                ),
+                "suffix_support_tokens": exact_overlap_corrected_tokens,
+                "suffix_outside_support_modified": False,
+                **representation_metrics,
+            },
+            **dc_metrics,
             provider_api_version=transfer_metrics.get("provider_api_version"),
             provider_kind=transfer_metrics.get("provider_kind"),
             model_name=transfer_metrics.get("model_name"),
@@ -1988,52 +4249,99 @@ def run_partitioned_progressive(
             target_hw=transfer_metrics.get("target_hw"),
             temporal_length=transfer_metrics.get("temporal_length"),
             learned_upscale_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
+            clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
+            handoff_noise=transfer_metrics.get("handoff_noise"),
             **splice_diagnostics,
         )
 
-        target_latent_internal = _process_latent_in(base_model, latent_image, target_shapes)
-        target_noise = _noise_argument(base_model, target_raw, sigma, target_latent_internal)
-        target_noise = _merge_preserved_noise(target_noise, noise, denoise_mask)
+        target_latent_internal = _process_latent_in(
+            base_model,
+            latent_image,
+            target_shapes,
+        )
+        target_noise = _noise_argument(
+            base_model,
+            target_raw,
+            sigma,
+            target_latent_internal,
+        )
+        target_noise = _merge_preserved_noise(
+            target_noise,
+            noise,
+            denoise_mask,
+        )
+        merged_video_noise, _merged_audio_noise = unpack_streams(
+            target_noise,
+            target_shapes,
+        )
+        original_video_noise, _original_audio_noise = unpack_streams(
+            noise,
+            target_shapes,
+        )
+        protected_video_noise_exact = torch.equal(
+            merged_video_noise[:, :, : stage_plan.prefix_t],
+            original_video_noise[:, :, : stage_plan.prefix_t].to(merged_video_noise),
+        )
+        if not protected_video_noise_exact:
+            raise RuntimeError("partitioned handoff changed caller-owned protected video noise")
+
         binding.metrics.event(
             "handoff_transfer_wall",
             elapsed_ms=(time.perf_counter() - transfer_started) * 1000.0,
+            protected_video_noise_exact=protected_video_noise_exact,
             partitioned_exact_prefix=True,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            sampler_latent_mask_unchanged=True,
+            sampler_entry_state_unchanged=True,
         )
 
-        if binding.guidance is not None and binding.guidance.mode != "off":
-            if binding.trajectory is None:
-                raise RuntimeError("partitioned exact-prefix Flow guidance requires an H3_FLOW_TRAJECTORY")
-            session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
-            expected_signature = binding.guidance_conditioning_signature or _conditioning_signature(guider)
-            if guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW:
-                run = shadow_guidance_run
-                if run is None:
-                    raise RuntimeError("source-uniform shadow guidance trajectory is unavailable")
-                if run.chunk_id != str(chunk_id) or run.session_id != str(session_id):
-                    raise RuntimeError("source-uniform shadow guidance trajectory identity drifted")
-                if run.conditioning_signature != expected_signature:
-                    raise RuntimeError("source-uniform shadow guidance trajectory conditioning drifted")
+        if guidance_run is not None:
+            if frame_gauge_accepted:
+                if pending_registered_reference is None:
+                    raise RuntimeError("accepted frame-gauge transaction lost registered Flow guidance")
+                binding.registered_guidance_reference = pending_registered_reference
             else:
-                run = binding.trajectory.select(
-                    chunk_id=chunk_id,
-                    session_id=session_id,
-                    conditioning_signature=expected_signature,
-                )
-            if run.geometry.latent_t != int(target_shapes[0][2]):
-                raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
-            binding.active_guidance_run = run
+                binding.registered_guidance_reference = None
+            binding.active_guidance_run = guidance_run
+            binding.guidance_state.reset()
             binding.metrics.event(
                 "partitioned_guidance_trajectory_selection",
                 source=guidance_trajectory_source,
-                run_id=run.run_id,
-                exact_samples=len(run.exact_samples()),
-                source_hw=(run.geometry.latent_h, run.geometry.latent_w),
+                run_id=guidance_run.run_id,
+                exact_samples=len(guidance_run.exact_samples()),
+                source_hw=(
+                    guidance_run.geometry.latent_h,
+                    guidance_run.geometry.latent_w,
+                ),
                 target_hw=(target_h, target_w),
                 main_captured_run_id=(committed_low_run.run_id if committed_low_run is not None else None),
                 shared_trajectory_handle_preserved=True,
                 audio_latent_trajectory_present=False,
+                frame_gauge_registered=bool(binding.registered_guidance_reference is not None),
+                guidance_state_reset_before_high=True,
                 diagnostic_only=(guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW),
             )
+        else:
+            if pending_registered_reference is not None:
+                raise RuntimeError("frame-gauge transaction published guidance while guidance is off")
+            binding.registered_guidance_reference = None
+            binding.guidance_state.reset()
+
+        # Release full clean-domain registration witnesses before target-high.
+        del restored_clean
+        del corrected_clean
+        del learned_clean
+        del provider_native_clean
+        del provider_native_trajectory_source
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            del measurement_learned_native
+        if aligned_witness is not None:
+            del aligned_witness
+        frame_gauge_witnesses.clear()
 
         def high_callback(step, x0, x, _total):
             if callback is not None:
@@ -2044,11 +4352,31 @@ def run_partitioned_progressive(
         _reset_guider_conds(guider, template=conditioning_template)
         high_started = time.perf_counter()
         high_event_start = len(binding.metrics.events)
+        high_boundary_reference_calls_before = int(
+            binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0)
+        )
+        high_prediction_bridge_calls_before = int(binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0))
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
         binding.metrics.increment("progressive_history_boundaries")
-        with _flow_stage_contract(guider, "high"), _high_stage_contract(guider):
+        with (
+            _flow_stage_contract(guider, "high"),
+            _high_stage_contract(guider),
+            high_boundary_contract(
+                binding,
+                high_boundary_context,
+                target_shapes,
+                measure=residual_mode == "measure",
+                video_reference_suffix=high_video_reference_suffix,
+                audio_reference=high_audio_reference,
+                exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
+                prefix_witness=high_boundary_prefix_witness,
+                prediction_gauge_bridge_weights=(
+                    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS if high_prediction_gauge_bridge_enabled else None
+                ),
+            ),
+        ):
             result = executor(
                 target_noise,
                 latent_image,
@@ -2072,11 +4400,367 @@ def run_partitioned_progressive(
         first_high_actual = bool(high_model_calls[0].fields.get("actual"))
         if not first_high_actual:
             raise RuntimeError("partitioned exact-prefix high stage did not begin with an exact H3 evaluation")
+        high_boundary_reference_calls = (
+            int(binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0))
+            - high_boundary_reference_calls_before
+        )
+        high_prediction_bridge_calls = (
+            int(binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0))
+            - high_prediction_bridge_calls_before
+        )
+        high_boundary_reference_expected = bool(high_video_reference_enabled or high_audio_reference_enabled)
+        if high_boundary_reference_expected and high_boundary_reference_calls != len(high_model_calls):
+            raise RuntimeError("target-high clean boundary reference did not cover every high-stage model prediction")
+        if not high_boundary_reference_expected and high_boundary_reference_calls != 0:
+            raise RuntimeError("target-high clean boundary reference executed outside its selected plan")
+        if high_prediction_gauge_bridge_enabled and high_prediction_bridge_calls != len(high_model_calls):
+            raise RuntimeError("target-high prediction gauge bridge did not cover every high-stage model prediction")
+        if not high_prediction_gauge_bridge_enabled and high_prediction_bridge_calls != 0:
+            raise RuntimeError("target-high prediction gauge bridge executed outside its selected plan")
+        binding.metrics.event(
+            "partitioned_high_boundary_reference_verified",
+            policy=HIGH_BOUNDARY_REFERENCE_POLICY,
+            expected=high_boundary_reference_expected,
+            model_calls=len(high_model_calls),
+            anchor_calls=high_boundary_reference_calls,
+            all_model_calls_covered=(
+                high_boundary_reference_calls == len(high_model_calls)
+                if high_boundary_reference_expected
+                else high_boundary_reference_calls == 0
+            ),
+            first_high_actual=first_high_actual,
+            video_enabled=high_video_reference_enabled,
+            audio_enabled=high_audio_reference_enabled,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_calls=high_prediction_bridge_calls,
+            high_prediction_gauge_bridge_all_model_calls_covered=(
+                high_prediction_bridge_calls == len(high_model_calls)
+                if high_prediction_gauge_bridge_enabled
+                else high_prediction_bridge_calls == 0
+            ),
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
+            high_boundary_prefix_witness=high_boundary_prefix_witness,
+            fail_closed=True,
+            extra_h3_nfe=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+        )
+        if high_prediction_gauge_bridge_enabled:
+            binding.metrics.event(
+                "partitioned_high_prediction_gauge_bridge_verified",
+                policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+                expected=True,
+                model_calls=len(high_model_calls),
+                bridge_calls=high_prediction_bridge_calls,
+                all_model_calls_covered=high_prediction_bridge_calls == len(high_model_calls),
+                support_tokens=bridge_support_tokens,
+                temporal_weights=list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS),
+                sampler_mask_modified=False,
+                sampler_entry_state_modified=False,
+                fixed_clean_reference_used=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+            )
 
         final_video, final_audio = unpack_streams(result, target_shapes)
-        if diagnostic_audio_control:
+        final_internal = None
+        final_internal_video = None
+        final_internal_audio = None
+        if (
+            diagnostic_audio_control
+            or (residual_mode == "measure" and frame_gauge_candidate_accepted)
+            or boundary_content_diagnostic_enabled
+            or vae_window_repair_armed
+        ):
             final_internal = _process_latent_in(base_model, result, target_shapes)
-            _final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+            final_internal_video, final_internal_audio = unpack_streams(final_internal, target_shapes)
+        vae_window_video_repair: dict[str, Any] = {
+            "policy": VAE_WINDOW_VIDEO_POLICY,
+            "eligible": False,
+            "accepted": False,
+            "applied": False,
+            "output_mutated": False,
+            "armed": vae_window_repair_armed,
+            "reason": vae_window_plan_reason if not vae_window_repair_armed else "not_evaluated",
+            "safe_video_topology": safe_vae_window_repair_topology,
+            "authoritative_prefix_modified": False,
+            "audio_modified": False,
+            "high_prediction_gauge_bridge_enabled": high_prediction_gauge_bridge_enabled,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        if vae_window_repair_armed:
+            if final_internal_video is None or final_internal_audio is None:
+                raise RuntimeError("VAE-window video repair lost the common-domain final state")
+            if not pre_high_vae_window_trajectories:
+                raise RuntimeError("VAE-window video repair lost the pre-high trajectory reference")
+
+            _internal_candidate, repair_receipt = repair_vae_window_vertical_residual(
+                pre_high_vae_window_trajectories,
+                final_internal_video,
+                prefix_t=stage_plan.prefix_t,
+            )
+            vae_window_video_repair = {
+                **repair_receipt,
+                "armed": True,
+                "safe_video_topology": True,
+                "audio_modified": False,
+                "high_prediction_gauge_bridge_enabled": False,
+                "extra_h3_nfe": 0,
+                "extra_sampler_lifetimes": 0,
+                "extra_history_boundaries": 0,
+                "extra_provider_calls": 0,
+                "extra_vae_calls": 0,
+            }
+            if bool(repair_receipt.get("applied")):
+                proposed_dy = float(repair_receipt["selected_dy_cells"])
+                corrected_caller_video = apply_vae_window_vertical_translation(
+                    final_video,
+                    prefix_t=stage_plan.prefix_t,
+                    dy=proposed_dy,
+                )
+                if not torch.equal(
+                    corrected_caller_video[:, :, : stage_plan.prefix_t],
+                    final_video[:, :, : stage_plan.prefix_t],
+                ):
+                    raise RuntimeError("VAE-window video repair modified the caller-owned exact prefix")
+
+                corrected_result, corrected_shapes = pack_streams((corrected_caller_video, final_audio))
+                if corrected_shapes != target_shapes:
+                    raise RuntimeError("VAE-window video repair changed packed stream geometry")
+                _corrected_video_check, corrected_audio_check = unpack_streams(corrected_result, target_shapes)
+                if not torch.equal(corrected_audio_check, final_audio):
+                    raise RuntimeError("VAE-window video repair modified caller audio")
+
+                recomputed_internal = _process_latent_in(base_model, corrected_result, target_shapes)
+                recomputed_internal_video, recomputed_internal_audio = unpack_streams(
+                    recomputed_internal,
+                    target_shapes,
+                )
+                if not torch.equal(recomputed_internal_audio, final_internal_audio):
+                    raise RuntimeError("VAE-window video repair changed internal audio")
+                if not torch.equal(
+                    recomputed_internal_video[:, :, : stage_plan.prefix_t],
+                    exact_prefix.to(device=recomputed_internal_video.device),
+                ):
+                    raise RuntimeError("VAE-window video repair changed the internal exact prefix")
+
+                canonical_receipts = measure_vae_window_video_trajectory(
+                    recomputed_internal_video,
+                    stage_plan.prefix_t,
+                )
+                canonical_accepted, canonical_validation = validate_vae_window_vertical_candidate(
+                    pre_high_vae_window_trajectories,
+                    repair_receipt["post_high_before"],
+                    canonical_receipts,
+                    prefix_t=stage_plan.prefix_t,
+                    temporal=int(recomputed_internal_video.shape[2]),
+                )
+                vae_window_video_repair["caller_reentry_validation"] = canonical_validation
+                vae_window_video_repair["canonical_candidate_accepted"] = canonical_accepted
+                vae_window_video_repair["post_high_after"] = canonical_receipts
+                if canonical_accepted:
+                    final_video = corrected_caller_video
+                    result = corrected_result
+                    final_internal = recomputed_internal
+                    final_internal_video = recomputed_internal_video
+                    final_internal_audio = recomputed_internal_audio
+                    vae_window_video_repair.update(
+                        caller_audio_exact=True,
+                        caller_prefix_exact=True,
+                        internal_audio_exact=True,
+                        internal_prefix_exact=True,
+                    )
+                else:
+                    vae_window_video_repair.update(
+                        applied=False,
+                        accepted=False,
+                        output_mutated=False,
+                        reason="caller_reentry_validation_failed",
+                    )
+
+        binding.metrics.event(
+            "partitioned_post_high_vae_window_video_repair",
+            **vae_window_video_repair,
+        )
+        for roi_name, trajectory in vae_window_video_repair.get("post_high_before", {}).items():
+            binding.metrics.event(
+                "partitioned_video_vae_boundary_window_trajectory",
+                policy=VAE_WINDOW_VIDEO_POLICY,
+                stage="post_high_internal_uncorrected",
+                domain="model_internal_clean",
+                roi=roi_name,
+                diagnostic_only=True,
+                **trajectory,
+            )
+        after_stage = (
+            "post_high_internal_corrected"
+            if vae_window_video_repair.get("applied", False)
+            else "post_high_internal_candidate_rejected"
+        )
+        for roi_name, trajectory in vae_window_video_repair.get("post_high_after", {}).items():
+            binding.metrics.event(
+                "partitioned_video_vae_boundary_window_trajectory",
+                policy=VAE_WINDOW_VIDEO_POLICY,
+                stage=after_stage,
+                domain="model_internal_clean",
+                roi=roi_name,
+                diagnostic_only=not bool(vae_window_video_repair.get("applied", False)),
+                **trajectory,
+            )
+
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            if final_internal_video is None:
+                raise RuntimeError("residual measurement lost the common-domain final video operand")
+            final_internal_prefix = final_internal_video[:, :, : stage_plan.prefix_t]
+            if (
+                final_internal_prefix.shape != exact_prefix.shape
+                or final_internal_prefix.dtype != exact_prefix.dtype
+                or not torch.equal(
+                    final_internal_prefix,
+                    exact_prefix.to(device=final_internal_prefix.device),
+                )
+            ):
+                raise RuntimeError(
+                    "post-high latent-input conversion does not reproduce the authoritative internal exact prefix"
+                )
+            final_bounded, _final_start, _final_stop, _final_local_prefix = _bounded_residual_stage_slice(
+                final_internal_video,
+                prefix_t=stage_plan.prefix_t,
+            )
+            residual_evidence_tensors["final_post_high_internal_clean"] = final_bounded.detach()
+            residual_stage_receipts.append(
+                _emit_residual_geometry_stage(
+                    binding.metrics,
+                    stage="final_post_high_internal_clean",
+                    video=final_internal_video,
+                    prefix_t=stage_plan.prefix_t,
+                    session_id=session_id,
+                    chunk_id=chunk_id,
+                    domain="model_internal_clean",
+                    owner_before="authoritative_exact_prefix_E",
+                    owner_after="post_high_generated_suffix",
+                    temporal_relation="adjacent_time_boundary_and_next_three_suffix_pairs",
+                    applied_transform=(
+                        VAE_WINDOW_VIDEO_POLICY
+                        if vae_window_video_repair.get("applied", False)
+                        else "none_post_high_observation"
+                    ),
+                    provenance=(
+                        "post_high_output_after_vae_window_vertical_plateau_release"
+                        if vae_window_video_repair.get("applied", False)
+                        else "existing_post_high_output_via_model_latent_input_conversion"
+                    ),
+                )
+            )
+            residual_stage_receipts.append(
+                _emit_residual_geometry_stage(
+                    binding.metrics,
+                    stage="final_post_high_caller_domain",
+                    video=final_video,
+                    prefix_t=stage_plan.prefix_t,
+                    session_id=session_id,
+                    chunk_id=chunk_id,
+                    domain="caller_output_latent",
+                    owner_before="caller_owned_exact_prefix",
+                    owner_after="returned_generated_suffix",
+                    temporal_relation="adjacent_time_boundary_receipt_only",
+                    applied_transform=(
+                        VAE_WINDOW_VIDEO_POLICY if vae_window_video_repair.get("applied", False) else "none"
+                    ),
+                    provenance=(
+                        "returned_post_high_output_after_vae_window_vertical_plateau_release"
+                        if vae_window_video_repair.get("applied", False)
+                        else "existing_post_high_output"
+                    ),
+                )
+            )
+        if boundary_content_diagnostic_enabled:
+            if final_internal_video is None or boundary_content_pre_high_receipt is None:
+                raise RuntimeError("boundary-content diagnostic lost its common-domain operands")
+            post_high_diagnostic_video = final_internal_video
+            final_internal_prefix = post_high_diagnostic_video[:, :, : stage_plan.prefix_t]
+            prefix_recanonicalized = not (
+                final_internal_prefix.shape == exact_prefix.shape
+                and final_internal_prefix.dtype == exact_prefix.dtype
+                and torch.equal(
+                    final_internal_prefix,
+                    exact_prefix.to(device=final_internal_prefix.device),
+                )
+            )
+            if prefix_recanonicalized:
+                post_high_diagnostic_video = post_high_diagnostic_video.clone()
+                post_high_diagnostic_video[:, :, : stage_plan.prefix_t] = exact_prefix.to(post_high_diagnostic_video)
+            boundary_content_started = time.perf_counter()
+            post_high_receipt = measure_boundary_content_continuity(
+                post_high_diagnostic_video,
+                stage_plan.prefix_t,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_continuity",
+                stage="post_high_internal_clean",
+                domain="model_internal_clean",
+                owner_before="authoritative_exact_prefix",
+                owner_after="post_high_generated_suffix",
+                prefix_recanonicalized_for_diagnostic=prefix_recanonicalized,
+                elapsed_ms=(time.perf_counter() - boundary_content_started) * 1000.0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **post_high_receipt,
+            )
+            binding.metrics.event(
+                "partitioned_boundary_content_stage_delta",
+                pre_stage="pre_high_exact_restored",
+                post_stage="post_high_internal_clean",
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                **compare_boundary_content_stages(
+                    boundary_content_pre_high_receipt,
+                    post_high_receipt,
+                ),
+            )
+
+            if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
+                post_high_shadow_started = time.perf_counter()
+                post_high_shadow = measure_provider_boundary_post_high_shadow(
+                    post_high_diagnostic_video,
+                    stage_plan.prefix_t,
+                    post_high_content_receipt=post_high_receipt,
+                )
+                binding.metrics.event(
+                    "partitioned_provider_boundary_post_high_shadow",
+                    mode=provider_boundary_stabilization,
+                    domain="model_internal_clean",
+                    owner_before="authoritative_exact_prefix",
+                    owner_after="post_high_generated_suffix",
+                    legacy_pre_high_mutation_disabled=True,
+                    extra_h3_nfe=0,
+                    extra_sampler_lifetimes=0,
+                    extra_history_boundaries=0,
+                    extra_provider_calls=0,
+                    extra_vae_calls=0,
+                    elapsed_ms=(time.perf_counter() - post_high_shadow_started) * 1000.0,
+                    **post_high_shadow,
+                )
+
+        if diagnostic_audio_control:
+            if final_internal is None or final_internal_audio is None:
+                raise RuntimeError("audio diagnostics lost the converted final sampler state")
             final_audio_report = measure_audio_latent_boundary(
                 final_internal,
                 target_shapes,
@@ -2129,13 +4813,18 @@ def run_partitioned_progressive(
                         )
                     ),
                 )
-            del final_internal
         original_video, original_audio = unpack_streams(latent_image, target_shapes)
-        if not torch.equal(
-            final_video[:, :, : stage_plan.prefix_t],
-            original_video[:, :, : stage_plan.prefix_t].to(final_video),
+        final_prefix = final_video[:, :, : stage_plan.prefix_t]
+        original_prefix = original_video[:, :, : stage_plan.prefix_t]
+        if (
+            final_prefix.shape != original_prefix.shape
+            or final_prefix.dtype != original_prefix.dtype
+            or not torch.equal(
+                final_prefix,
+                original_prefix.to(device=final_prefix.device),
+            )
         ):
-            raise RuntimeError("partitioned exact-prefix high stage violated exact original-prefix preservation")
+            raise RuntimeError("partitioned exact-prefix high stage violated byte-exact original-prefix preservation")
         if audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
             if tensor_sha256(denoise_mask) != candidate_high_mask_digest:
                 raise RuntimeError("source-carrier audio-position candidate mutated the high-stage sampler mask")
@@ -2143,9 +4832,9 @@ def run_partitioned_progressive(
             protected_audio = audio_mask == 0
             if not bool(protected_audio.any().item()):
                 raise RuntimeError("source-carrier audio-position candidate found no protected carried-audio prefix")
-            audio_exact = torch.equal(
+            audio_exact = final_audio.dtype == original_audio.dtype and torch.equal(
                 final_audio[protected_audio],
-                original_audio.to(final_audio)[protected_audio],
+                original_audio.to(device=final_audio.device)[protected_audio],
             )
             if not audio_exact:
                 raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
@@ -2157,6 +4846,11 @@ def run_partitioned_progressive(
                 final_exact_video_prefix=True,
                 final_exact_audio_prefix=True,
                 sampler_masks_unchanged=True,
+                source_sampler_masks_unchanged=True,
+                high_stage_guard_mask_local_override=False,
+                high_stage_prediction_gauge_bridge_output_only=high_prediction_gauge_bridge_enabled,
+                post_high_vae_window_video_output_only=bool(vae_window_video_repair.get("applied", False)),
+                high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
@@ -2174,10 +4868,91 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **final_trajectory,
             )
+            if vae_window_repair_armed and vae_window_plan is not None:
+                release_boundary_t = int(vae_window_plan["release_frontier_t"])
+                if release_boundary_t >= int(final_video.shape[2]):
+                    raise RuntimeError("VAE-window video repair has no suffix after its release frontier")
+                release_trajectory = measure_translation_trajectory(
+                    final_video,
+                    release_boundary_t,
+                    forward_steps=4,
+                    backward_steps=3,
+                    roi_fraction=roi_fraction,
+                    max_shift=4,
+                )
+                binding.metrics.event(
+                    "partitioned_multiframe_trajectory",
+                    stage="final_post_high_vae_window_release",
+                    roi=roi_name,
+                    vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+                    repair_applied=bool(vae_window_video_repair.get("applied", False)),
+                    plateau_tokens=int(vae_window_plan["plateau_tokens"]),
+                    support_tokens=int(vae_window_plan["support_tokens"]),
+                    temporal_weights=list(vae_window_plan["weights"]),
+                    original_boundary_t=stage_plan.prefix_t,
+                    decoder_window_start_t=int(vae_window_plan["window_start_t"]),
+                    decoder_window_stop_t=int(vae_window_plan["window_stop_t"]),
+                    release_boundary_t=release_boundary_t,
+                    diagnostic_only=True,
+                    **release_trajectory,
+                )
         if not splice_diagnostics:
             raise RuntimeError(
                 "partitioned exact-prefix splice diagnostics were not recorded before high-stage sampling"
             )
+
+        residual_evidence_receipt: dict[str, Any] | None = None
+        if residual_mode == "measure" and frame_gauge_candidate_accepted:
+            video_registration = frame_gauge_transaction.get("video_registration", {})
+            guidance_registration = frame_gauge_transaction.get("guidance_registration", {})
+            residual_evidence_receipt = export_residual_geometry_evidence(
+                residual_evidence_tensors,
+                session_id=str(session_id),
+                chunk_id=str(chunk_id),
+                seed=int(seed or 0),
+                sigma=float(sigma),
+                metadata={
+                    "policy": RESIDUAL_GEOMETRY_POLICY_VERSION,
+                    "rigid_policy": FRAME_GAUGE_POLICY_VERSION,
+                    "prefix_t": int(stage_plan.prefix_t),
+                    "fit_indices": residual_geometry_receipt.get("video", {}).get("fit_indices", []),
+                    "holdout_indices": residual_geometry_receipt.get("video", {}).get("holdout_indices", []),
+                    "video_rigid_dx": float(video_registration.get("dx", 0.0)),
+                    "video_rigid_dy": float(video_registration.get("dy", 0.0)),
+                    "guidance_rigid_dx": float(guidance_registration.get("dx", 0.0)),
+                    "guidance_rigid_dy": float(guidance_registration.get("dy", 0.0)),
+                    "target_hw": [int(target_h), int(target_w)],
+                    "dtype": str(exact_prefix.dtype),
+                    "video_validity_policy": "translation_validity_v1",
+                    "video_invalid_fraction": float(video_registration.get("invalid_fraction", 0.0)),
+                    "guidance_invalid_fraction": float(guidance_registration.get("invalid_fraction", 0.0)),
+                    "exact_prefix_sha256": tensor_sha256(exact_prefix),
+                    "protected_noise_exact": bool(protected_video_noise_exact),
+                    "dc_policy": "existing_one_token_spatial_mean_v1",
+                    "dc_corrected_tokens": int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
+                    "stage_receipts": residual_stage_receipts,
+                    "extra_h3_nfe": 0,
+                    "extra_sampler_lifetimes": 0,
+                    "extra_history_boundaries": 0,
+                    "extra_provider_calls": 0,
+                    "extra_vae_calls": 0,
+                    "horizontal_application_enabled": False,
+                },
+            )
+            binding.metrics.event(
+                "partitioned_residual_geometry_evidence",
+                policy=RESIDUAL_GEOMETRY_POLICY_VERSION,
+                requested_mode=residual_mode,
+                decision="not_evaluated",
+                applied=False,
+                horizontal_application_enabled=False,
+                session_id=str(session_id),
+                chunk_id=str(chunk_id),
+                **residual_evidence_receipt,
+            )
+
+        if final_internal is not None:
+            del final_internal
         binding.metrics.event(
             "partitioned_exact_prefix_complete",
             final_prefix_exact=True,
@@ -2200,6 +4975,26 @@ def run_partitioned_progressive(
             final_over_transfer_exact_seam_spatial_mean_ratio=boundary["seam_spatial_mean_rms"]
             / max(float(splice_diagnostics["exact_restored_seam_spatial_mean_rms"]), 1e-12),
             deprecated_mixed_grid_contract_active=False,
+            video_boundary_repair_contract=PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT,
+            high_prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_support_tokens=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            high_prediction_gauge_bridge_weights=(
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
+            ),
+            high_prediction_gauge_bridge_release_boundary_t=(
+                stage_plan.prefix_t + bridge_support_tokens if high_prediction_gauge_bridge_enabled else None
+            ),
+            high_prediction_gauge_bridge_hardware_verdict="falsified_00715_no_decoded_frame_shift_improvement",
+            vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+            vae_window_video_repair_armed=vae_window_repair_armed,
+            vae_window_video_repair_applied=bool(vae_window_video_repair.get("applied", False)),
+            vae_window_video_repair_reason=str(vae_window_video_repair.get("reason", "unknown")),
+            vae_window_video_selected_dy_cells=vae_window_video_repair.get("selected_dy_cells"),
+            vae_window_video_plan=dict(vae_window_plan or {}),
+            high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
         binding.metrics.event(
             "handoff_complete",
@@ -2211,6 +5006,13 @@ def run_partitioned_progressive(
             history_boundary_count=history_boundary_count,
             exact_probe_performed=True,
             high_stage_exact_prefix_requested=1,
+            high_stage_video_guard_requested=0,
+            high_stage_prediction_gauge_bridge_requested=(
+                bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
+            ),
+            post_high_vae_window_video_repair_requested=bool(vae_window_repair_armed),
+            post_high_vae_window_video_repair_applied=bool(vae_window_video_repair.get("applied", False)),
+            post_high_vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
             high_stage_first_call_actual=first_high_actual,
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
