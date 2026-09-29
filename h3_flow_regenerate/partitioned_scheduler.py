@@ -4650,8 +4650,16 @@ def run_partitioned_progressive(
                     owner_before="authoritative_exact_prefix_E",
                     owner_after="post_high_generated_suffix",
                     temporal_relation="adjacent_time_boundary_and_next_three_suffix_pairs",
-                    applied_transform="none_post_high_observation",
-                    provenance="existing_post_high_output_via_model_latent_input_conversion",
+                    applied_transform=(
+                        VAE_WINDOW_VIDEO_POLICY
+                        if vae_window_video_repair.get("applied", False)
+                        else "none_post_high_observation"
+                    ),
+                    provenance=(
+                        "post_high_output_after_vae_window_vertical_plateau_release"
+                        if vae_window_video_repair.get("applied", False)
+                        else "existing_post_high_output_via_model_latent_input_conversion"
+                    ),
                 )
             )
             residual_stage_receipts.append(
@@ -4666,8 +4674,14 @@ def run_partitioned_progressive(
                     owner_before="caller_owned_exact_prefix",
                     owner_after="returned_generated_suffix",
                     temporal_relation="adjacent_time_boundary_receipt_only",
-                    applied_transform="none",
-                    provenance="existing_post_high_output",
+                    applied_transform=(
+                        VAE_WINDOW_VIDEO_POLICY if vae_window_video_repair.get("applied", False) else "none"
+                    ),
+                    provenance=(
+                        "returned_post_high_output_after_vae_window_vertical_plateau_release"
+                        if vae_window_video_repair.get("applied", False)
+                        else "existing_post_high_output"
+                    ),
                 )
             )
         if boundary_content_diagnostic_enabled:
@@ -4835,6 +4849,7 @@ def run_partitioned_progressive(
                 source_sampler_masks_unchanged=True,
                 high_stage_guard_mask_local_override=False,
                 high_stage_prediction_gauge_bridge_output_only=high_prediction_gauge_bridge_enabled,
+                post_high_vae_window_video_output_only=bool(vae_window_video_repair.get("applied", False)),
                 high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
@@ -4853,10 +4868,10 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **final_trajectory,
             )
-            if high_prediction_gauge_bridge_enabled:
-                release_boundary_t = stage_plan.prefix_t + bridge_support_tokens
+            if vae_window_repair_armed and vae_window_plan is not None:
+                release_boundary_t = int(vae_window_plan["release_frontier_t"])
                 if release_boundary_t >= int(final_video.shape[2]):
-                    raise RuntimeError("high-prediction gauge bridge has no suffix after its release frontier")
+                    raise RuntimeError("VAE-window video repair has no suffix after its release frontier")
                 release_trajectory = measure_translation_trajectory(
                     final_video,
                     release_boundary_t,
@@ -4867,12 +4882,16 @@ def run_partitioned_progressive(
                 )
                 binding.metrics.event(
                     "partitioned_multiframe_trajectory",
-                    stage="final_post_high_prediction_gauge_release",
+                    stage="final_post_high_vae_window_release",
                     roi=roi_name,
-                    prediction_gauge_bridge_policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
-                    bridge_support_tokens=bridge_support_tokens,
-                    bridge_temporal_weights=list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS),
+                    vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+                    repair_applied=bool(vae_window_video_repair.get("applied", False)),
+                    plateau_tokens=int(vae_window_plan["plateau_tokens"]),
+                    support_tokens=int(vae_window_plan["support_tokens"]),
+                    temporal_weights=list(vae_window_plan["weights"]),
                     original_boundary_t=stage_plan.prefix_t,
+                    decoder_window_start_t=int(vae_window_plan["window_start_t"]),
+                    decoder_window_stop_t=int(vae_window_plan["window_stop_t"]),
                     release_boundary_t=release_boundary_t,
                     diagnostic_only=True,
                     **release_trajectory,
