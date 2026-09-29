@@ -14,6 +14,7 @@ audio, sampler state, or model execution.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from typing import Any
@@ -257,7 +258,7 @@ def plan_vae_window_vertical_residual(
 
     weights = [float(value) for value in window["weights"]]
     extended = (*weights, 0.0)
-    max_weight_step = max(abs(right - left) for left, right in zip(extended, extended[1:], strict=False))
+    max_weight_step = max(abs(right - left) for left, right in itertools.pairwise(extended))
     max_induced_step = magnitude * max_weight_step
     if max_induced_step > VAE_WINDOW_MAX_RELEASE_STEP_CELLS:
         receipt["reason"] = "post_window_release_step_over_bound"
@@ -350,7 +351,17 @@ def score_vae_window_vertical_candidate(
         candidate_dy = [float(value) for value in candidate[roi]["pairwise_dy"]]
         responses = [float(value) for value in candidate[roi]["pairwise_response"]]
         clipped = [bool(value) for value in candidate[roi]["pairwise_clipped"]]
-        if min(len(original_dx), len(original_dy), len(candidate_dx), len(candidate_dy), len(responses), len(clipped)) < support + 1:
+        if (
+            min(
+                len(original_dx),
+                len(original_dy),
+                len(candidate_dx),
+                len(candidate_dy),
+                len(responses),
+                len(clipped),
+            )
+            < support + 1
+        ):
             raise ValueError("VAE-window candidate lost the complete release frontier")
 
         # Pair index 0 is prefix -> suffix0.  Pair indices 1..plateau-1
