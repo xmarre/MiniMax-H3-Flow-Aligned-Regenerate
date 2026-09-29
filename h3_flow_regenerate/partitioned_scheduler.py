@@ -614,10 +614,13 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         )
     )
+    from .boundary_witness import configured_boundary_witness
+
     transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
+        boundary_witness=configured_boundary_witness(metrics),
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
     )
@@ -743,6 +746,10 @@ def _validate_partitioned_vdn_compat(
         if not getattr(owner, "_vdn_forward", False):
             continue
         matched += 1
+        from .boundary_witness import witness_requested
+
+        if witness_requested() and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
+            raise PartitionedPreflightUnsupported("requested boundary witness requires paired VDN witness API 1")
         if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
             raise PartitionedPreflightUnsupported(
                 f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"
