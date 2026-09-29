@@ -1843,6 +1843,32 @@ def _validate_high_stage_video_guard(window: list[dict[str, Any]]) -> None:
         complete.get("high_video_guard_final_exact") is True,
         "partitioned completion lost exact high-stage guard ownership",
     )
+    release_boundary_t = protected_video_tokens
+    _require(
+        int(complete.get("high_video_guard_release_boundary_t", -1)) == release_boundary_t,
+        "partitioned completion lost the high-stage guard release frontier",
+    )
+    release_receipts = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_multiframe_trajectory"
+        and _event_fields(event).get("stage") == "final_post_high_guard_release"
+    ]
+    _require(len(release_receipts) == 2, "high-stage video guard must emit both release-frontier ROI receipts")
+    _require(
+        {str(receipt.get("roi")) for receipt in release_receipts} == {"upper45", "full"},
+        "high-stage video guard release-frontier ROI set drifted",
+    )
+    for receipt in release_receipts:
+        _require(receipt.get("guard_policy") == HIGH_STAGE_VIDEO_GUARD_POLICY, "guard-release policy drifted")
+        _require(int(receipt.get("guard_tokens", 0)) == HIGH_STAGE_VIDEO_GUARD_TOKENS, "guard-release width drifted")
+        _require(int(receipt.get("original_boundary_t", -1)) == prefix_t, "guard-release original boundary drifted")
+        _require(int(receipt.get("release_boundary_t", -1)) == release_boundary_t, "guard-release boundary drifted")
+        _require(
+            int(receipt.get("trajectory_boundary_t", -1)) == release_boundary_t,
+            "guard-release trajectory measured the wrong temporal frontier",
+        )
+        _require(receipt.get("diagnostic_only") is True, "guard-release trajectory became a production mutation")
 
 
 def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None:
