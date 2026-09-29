@@ -174,9 +174,7 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = (
-    "source_residual_handoff_plus_first_suffix_overlap_plus_vae_window_vertical_plateau_release_v1"
-)
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_first_suffix_overlap_v1"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -3778,7 +3776,14 @@ def run_partitioned_progressive(
                 vae_window_plan_reason = "native_boundary_window_resolved"
             except ValueError as exc:
                 vae_window_plan_reason = f"unsupported_native_vae_phase:{exc}"
-        vae_window_repair_armed = vae_window_plan is not None
+        # 00716 did not satisfy the cross-ROI gate and the rendered frame
+        # shift remained. Retain the native-window plan as diagnostic provenance,
+        # but do not permit this latent actuator to become production-active on
+        # another resolution/scene while decoded-space localization is under test.
+        vae_window_repair_candidate_eligible = vae_window_plan is not None
+        vae_window_repair_armed = False
+        if vae_window_repair_candidate_eligible:
+            vae_window_plan_reason = "hardware_falsified_00716_candidate_disabled"
         high_boundary_context = exact_prefix
         high_boundary_prefix_witness = "authoritative_exact_tail_after_inpaint_restore"
 
@@ -3795,6 +3800,8 @@ def run_partitioned_progressive(
             high_prediction_gauge_bridge_hardware_verdict="falsified_00715_no_decoded_frame_shift_improvement",
             vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
             vae_window_video_repair_armed=vae_window_repair_armed,
+            vae_window_video_repair_candidate_eligible=vae_window_repair_candidate_eligible,
+            vae_window_video_hardware_verdict="falsified_00716_visible_frame_shift_remained",
             vae_window_video_plan_reason=vae_window_plan_reason,
             vae_window_video_plan=dict(vae_window_plan or {}),
             high_prediction_gauge_bridge_support_tokens=(
