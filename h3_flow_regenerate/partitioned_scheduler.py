@@ -4987,6 +4987,13 @@ def run_partitioned_progressive(
             high_prediction_gauge_bridge_release_boundary_t=(
                 stage_plan.prefix_t + bridge_support_tokens if high_prediction_gauge_bridge_enabled else None
             ),
+            high_prediction_gauge_bridge_hardware_verdict="falsified_00715_no_decoded_frame_shift_improvement",
+            vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
+            vae_window_video_repair_armed=vae_window_repair_armed,
+            vae_window_video_repair_applied=bool(vae_window_video_repair.get("applied", False)),
+            vae_window_video_repair_reason=str(vae_window_video_repair.get("reason", "unknown")),
+            vae_window_video_selected_dy_cells=vae_window_video_repair.get("selected_dy_cells"),
+            vae_window_video_plan=dict(vae_window_plan or {}),
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
         binding.metrics.event(
@@ -5003,6 +5010,9 @@ def run_partitioned_progressive(
             high_stage_prediction_gauge_bridge_requested=(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
+            post_high_vae_window_video_repair_requested=bool(vae_window_repair_armed),
+            post_high_vae_window_video_repair_applied=bool(vae_window_video_repair.get("applied", False)),
+            post_high_vae_window_video_policy=VAE_WINDOW_VIDEO_POLICY,
             high_stage_first_call_actual=first_high_actual,
             high_stage_model_calls=len(high_model_calls),
             conditioning_rebuilt_for_high_grid=True,
