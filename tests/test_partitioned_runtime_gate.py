@@ -170,6 +170,7 @@ def _metrics_with_high_video_guard(**setup_overrides):
                 high_video_guard_tokens=1,
                 high_video_guard_final_exact=True,
                 high_video_guard_endpoint_canonicalized=False,
+                high_video_guard_release_boundary_t=13,
                 high_boundary_context_tokens=13,
             )
         elif event["kind"] == "handoff_complete":
@@ -261,6 +262,27 @@ def _metrics_with_high_video_guard(**setup_overrides):
         ),
     )
     metrics["events"].insert(-2, _event("partitioned_high_video_guard", **setup))
+    for roi in ("upper45", "full"):
+        metrics["events"].insert(
+            -1,
+            _event(
+                "partitioned_multiframe_trajectory",
+                stage="final_post_high_guard_release",
+                roi=roi,
+                guard_policy=policy,
+                guard_tokens=1,
+                original_boundary_t=12,
+                release_boundary_t=13,
+                diagnostic_only=True,
+                trajectory_boundary_t=13,
+                pairwise_dx=[0.0],
+                pairwise_dy=[0.0],
+                pairwise_response=[10.0],
+                pairwise_clipped=[False],
+                pre_pairwise_median_dx=0.0,
+                pre_pairwise_median_dy=0.0,
+            ),
+        )
     metrics["events"].insert(-1, _event("partitioned_high_video_guard_complete", **complete))
     return metrics
 
@@ -291,6 +313,21 @@ def test_partitioned_runtime_gate_rejects_high_clean_reference_with_guard():
     )
     reference_verified["fields"]["anchor_calls"] = 1
     with pytest.raises(RuntimeGateError, match="anchor executed"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_rejects_missing_high_guard_release_frontier():
+    metrics = _metrics_with_high_video_guard()
+    metrics["events"] = [
+        event
+        for event in metrics["events"]
+        if not (
+            event["kind"] == "partitioned_multiframe_trajectory"
+            and event["fields"].get("stage") == "final_post_high_guard_release"
+            and event["fields"].get("roi") == "full"
+        )
+    ]
+    with pytest.raises(RuntimeGateError, match="both release-frontier ROI"):
         validate_partitioned_runtime_evidence(metrics, _log())
 
 
