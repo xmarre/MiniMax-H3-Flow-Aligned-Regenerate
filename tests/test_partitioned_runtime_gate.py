@@ -7,6 +7,10 @@ import torch
 
 from h3_flow_regenerate.boundary_content_diagnostics import measure_learned_transfer_residual_diagnostic
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
+from h3_flow_regenerate.high_stage_boundary import (
+    HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
+)
 from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
     AUDIO_POSITION_DOMAIN_SOURCE,
@@ -338,6 +342,192 @@ def test_partitioned_runtime_gate_rejects_material_high_guard_endpoint_rewrite()
     )
     guard_complete["fields"]["endpoint_max_abs_delta"] = 0.01
     with pytest.raises(RuntimeGateError, match="numerical roundoff"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def _metrics_with_high_prediction_gauge_bridge(**receipt_overrides):
+    metrics = _metrics()
+    policy = HIGH_PREDICTION_GAUGE_BRIDGE_POLICY
+    weights = list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
+    support = len(weights)
+    prefix_t = 12
+    for event in metrics["events"]:
+        if event["kind"] == "partitioned_transfer":
+            event["fields"].update(
+                video_high_prediction_gauge_bridge_enabled=True,
+                video_high_prediction_gauge_bridge_policy=policy,
+                video_high_prediction_gauge_bridge_support_tokens=support,
+            )
+        elif event["kind"] == "partitioned_exact_prefix_complete":
+            event["fields"].update(
+                high_prediction_gauge_bridge_enabled=True,
+                high_prediction_gauge_bridge_policy=policy,
+                high_prediction_gauge_bridge_support_tokens=support,
+                high_prediction_gauge_bridge_weights=weights,
+                high_prediction_gauge_bridge_release_boundary_t=prefix_t + support,
+                high_boundary_context_tokens=prefix_t,
+            )
+        elif event["kind"] == "handoff_complete":
+            event["fields"].update(
+                high_stage_video_guard_requested=0,
+                high_stage_prediction_gauge_bridge_requested=support,
+            )
+
+    plan = _event(
+        "partitioned_high_boundary_reference_plan",
+        video_enabled=False,
+        video_support_tokens=0,
+        high_prediction_gauge_bridge_enabled=True,
+        high_prediction_gauge_bridge_policy=policy,
+        high_prediction_gauge_bridge_support_tokens=support,
+        high_prediction_gauge_bridge_weights=weights,
+        high_prediction_gauge_bridge_mask_fully_generated=True,
+        high_boundary_context_tokens=prefix_t,
+        high_boundary_prefix_witness="authoritative_exact_tail_after_inpaint_restore",
+    )
+    reference_verified = _event(
+        "partitioned_high_boundary_reference_verified",
+        video_enabled=False,
+        anchor_calls=0,
+        high_prediction_gauge_bridge_enabled=True,
+        high_prediction_gauge_bridge_policy=policy,
+        high_prediction_gauge_bridge_calls=2,
+        high_prediction_gauge_bridge_all_model_calls_covered=True,
+        high_boundary_context_tokens=prefix_t,
+        high_boundary_prefix_witness="authoritative_exact_tail_after_inpaint_restore",
+    )
+    per_call = []
+    for call_index, actual in enumerate((True, False)):
+        fields = {
+            "policy": policy,
+            "call_index": call_index,
+            "sigma": 0.8 - 0.2 * call_index,
+            "actual": actual,
+            "prefix_t": prefix_t,
+            "support_tokens": support,
+            "temporal_weights": weights,
+            "max_release_weight_step": 0.3535533906,
+            "model_prefix_to_exact_delta_rms": 0.25,
+            "model_prefix_to_exact_delta_abs_max": 0.75,
+            "model_native_first_transition_rms": 0.4,
+            "exact_rebased_first_transition_rms": 0.4,
+            "first_transition_error_rms": 1e-7,
+            "first_transition_error_max_abs": 1e-6,
+            "caller_prefix_modified": False,
+            "predicted_prefix_exact": True,
+            "audio_modified": False,
+            "audio_exact": True,
+            "suffix_outside_support_modified": False,
+            "suffix_outside_support_exact": True,
+            "extra_h3_nfe": 0,
+            "extra_sampler_lifetimes": 0,
+            "extra_history_boundaries": 0,
+            "extra_provider_calls": 0,
+            "extra_vae_calls": 0,
+        }
+        fields.update(receipt_overrides)
+        per_call.append(_event("partitioned_high_prediction_gauge_bridge", **fields))
+    bridge_complete = _event(
+        "partitioned_high_prediction_gauge_bridge_complete",
+        policy=policy,
+        calls=2,
+        support_tokens=support,
+        temporal_weights=weights,
+        extra_h3_nfe=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    bridge_verified = _event(
+        "partitioned_high_prediction_gauge_bridge_verified",
+        policy=policy,
+        expected=True,
+        model_calls=2,
+        bridge_calls=2,
+        all_model_calls_covered=True,
+        support_tokens=support,
+        temporal_weights=weights,
+        sampler_mask_modified=False,
+        sampler_entry_state_modified=False,
+        fixed_clean_reference_used=False,
+        extra_h3_nfe=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
+    )
+    release = [
+        _event(
+            "partitioned_multiframe_trajectory",
+            stage="final_post_high_prediction_gauge_release",
+            roi=roi,
+            prediction_gauge_bridge_policy=policy,
+            bridge_support_tokens=support,
+            bridge_temporal_weights=weights,
+            original_boundary_t=prefix_t,
+            release_boundary_t=prefix_t + support,
+            diagnostic_only=True,
+            trajectory_boundary_t=prefix_t + support,
+        )
+        for roi in ("upper45", "full")
+    ]
+
+    insert_at = next(
+        i for i, event in enumerate(metrics["events"])
+        if event["kind"] == "model_call" and event["fields"].get("stage") == "high"
+    )
+    metrics["events"][insert_at:insert_at] = [plan]
+    # Per-call receipts are output-side and may be interleaved with model calls in
+    # production; ordering is not material to the offline ownership validator.
+    metrics["events"].extend(per_call)
+    metrics["events"].extend([reference_verified, bridge_complete, bridge_verified, *release])
+    return metrics
+
+
+def test_partitioned_runtime_gate_accepts_high_prediction_gauge_bridge():
+    report = validate_partitioned_runtime_evidence(
+        _metrics_with_high_prediction_gauge_bridge(),
+        _log(),
+        expected_logical=5,
+        expected_actual=3,
+        expected_forecast=2,
+    )
+    assert report.high_logical == 2
+
+
+def test_partitioned_runtime_gate_rejects_prediction_bridge_transition_drift():
+    with pytest.raises(RuntimeGateError, match="model-native first transition"):
+        validate_partitioned_runtime_evidence(
+            _metrics_with_high_prediction_gauge_bridge(first_transition_error_max_abs=0.01),
+            _log(),
+        )
+
+
+def test_partitioned_runtime_gate_rejects_prediction_bridge_fixed_anchor_reactivation():
+    metrics = _metrics_with_high_prediction_gauge_bridge()
+    verified = next(
+        event
+        for event in metrics["events"]
+        if event["kind"] == "partitioned_high_prediction_gauge_bridge_verified"
+    )
+    verified["fields"]["fixed_clean_reference_used"] = True
+    with pytest.raises(RuntimeGateError, match="fixed anchor"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_partitioned_runtime_gate_rejects_missing_prediction_bridge_release_roi():
+    metrics = _metrics_with_high_prediction_gauge_bridge()
+    metrics["events"] = [
+        event
+        for event in metrics["events"]
+        if not (
+            event["kind"] == "partitioned_multiframe_trajectory"
+            and event["fields"].get("stage") == "final_post_high_prediction_gauge_release"
+            and event["fields"].get("roi") == "full"
+        )
+    ]
+    with pytest.raises(RuntimeGateError, match="both release-frontier ROI"):
         validate_partitioned_runtime_evidence(metrics, _log())
 
 
