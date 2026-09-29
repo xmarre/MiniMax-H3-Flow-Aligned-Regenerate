@@ -7,10 +7,45 @@ from __future__ import annotations
 import argparse
 import inspect
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import torch
+
+
+def _validate_boundary_witness_transport() -> None:
+    from h3_flow_regenerate.boundary_witness import BoundaryWitness, WITNESS_API, WITNESS_KEY
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from vdn_h3.boundary_witness import (
+        WITNESS_API as VDN_WITNESS_API,
+        WITNESS_KEY as VDN_WITNESS_KEY,
+        claim_feature_witness,
+    )
+    from vdn_h3.partitioned_linear import _frame_offsets, _variable_features
+
+    if (WITNESS_API, WITNESS_KEY) != (VDN_WITNESS_API, VDN_WITNESS_KEY):
+        raise SystemExit("Flow/VDN bounded witness ABI differs")
+    sizes = ((4, 5),) * 4 + ((3, 4),) * 5
+    offsets = _frame_offsets(sizes)
+    tokens = torch.arange(offsets[-1][1], dtype=torch.float32).reshape(-1, 1, 1) / 100
+    weights = {
+        "short_conv.k_sp.weight": torch.ones(1, 1, 5, 5) / 25,
+        "short_conv.k_tm.weight": torch.ones(1, 1, 5) / 5,
+    }
+    branch = SimpleNamespace(short_conv=("k",))
+    with tempfile.TemporaryDirectory() as directory:
+        metrics = H3FlowMetrics()
+        sink = BoundaryWitness(directory, metrics)
+        options = {WITNESS_KEY: sink, "h3_flow_stage": "low"}
+        observation = claim_feature_witness(options, block_index=0, plan_digest="a" * 64, mode="normal")
+        reference = _variable_features(branch, weights, tokens, tokens, tokens, sizes, offsets)
+        observed = _variable_features(branch, weights, tokens, tokens, tokens, sizes, offsets, observation=observation)
+        if not all(torch.equal(old, new) for old, new in zip(reference, observed, strict=True)):
+            raise SystemExit("Flow/VDN observation mutated actual features")
+        observation.finish()
+        if not sink.completed or len(metrics.events) != 1:
+            raise SystemExit("Flow/VDN bounded witness did not finish")
 
 
 def _root(value: str) -> Path:
@@ -110,6 +145,7 @@ def _validate_preprocess_transport() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--require-boundary-witness", action="store_true")
     parser.add_argument("--sol", required=True)
     parser.add_argument("--vdn", required=True)
     args = parser.parse_args()
@@ -198,6 +234,8 @@ def main() -> None:
         raise SystemExit("Flow/VDN partitioned linear diagnostic contract diverged")
 
     _validate_preprocess_transport()
+    if args.require_boundary_witness:
+        _validate_boundary_witness_transport()
     history_source = inspect.getsource(_partitioned_flow_replacement_identity)
     if "repr(partitioned_layout.signature)" not in history_source:
         raise SystemExit("Sol history no longer keys partitioned numerical identity by full layout signature")

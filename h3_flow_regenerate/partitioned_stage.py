@@ -137,6 +137,7 @@ class PartitionedStageRuntime:
     attention_provider_identity: tuple[object, ...] | None = None
     # Captured once at stage entry and republished explicitly to each VDN block call.
     vdn_linear_diagnostic: str = "normal"
+    boundary_witness: object = None
     # Diagnostic-only structural A/B. The ordinary node always uses the exact
     # target-grid prefix inside the heterogeneous low/probe transformer.
     prefix_transformer_context: str = "exact_target_partitioned"
