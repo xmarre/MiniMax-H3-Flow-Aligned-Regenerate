@@ -268,6 +268,10 @@ def _partitioned_transformer_options(
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
         raise RuntimeError("partitioned exact-prefix VDN linear diagnostic transport drifted")
     block_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = linear_mode
+    if runtime.boundary_witness is not None:
+        from .boundary_witness import WITNESS_KEY
+
+        block_options[WITNESS_KEY] = runtime.boundary_witness
     expected_vdn = _vdn_external_contract(
         validate_partitioned_contract(
             partition_contract,

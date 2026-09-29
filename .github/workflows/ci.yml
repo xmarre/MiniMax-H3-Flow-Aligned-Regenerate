@@ -88,7 +88,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout da3627f85d494bdf4213251deb3ba2a94b8a2f36
+          git -C .contracts/VDNPartitioned checkout cae13fb5e8d71b93ee3134b629d23fec7c819c5b
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -117,4 +117,4 @@ jobs:
         run: |
           python tools/check_partitioned_exact_prefix_contracts.py \
             --sol .contracts/SolPartitioned \
-            --vdn .contracts/VDNPartitioned
+            --vdn .contracts/VDNPartitioned --require-boundary-witness
