@@ -16,11 +16,14 @@ from typing import Any
 
 import torch
 
-from .geometry import unpack_streams
+from .geometry import pack_streams, unpack_streams
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
 HIGH_BOUNDARY_REFERENCE_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
+HIGH_PREDICTION_GAUGE_BRIDGE_POLICY = "model_native_prefix_gauge_release_v1"
+HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS = (1.0, 0.8535533906, 0.5, 0.1464466094)
+HIGH_PREDICTION_GAUGE_BRIDGE_MAX_TRANSITION_ERROR = 2e-5
 
 
 def _rms(value: torch.Tensor) -> float:
@@ -45,6 +48,146 @@ def _exact_audio_prefix_ticks(mask_audio: torch.Tensor) -> int:
             "high-boundary audio reference requires a contiguous exact prefix followed by generated suffix"
         )
     return prefix
+
+
+class HighStagePredictionGaugeBridge:
+    """Rebase generated high-stage predictions onto the authoritative prefix.
+
+    H3 predicts the protected prefix and generated suffix in one model-native
+    clean representation, but native inpaint semantics later restore the caller-
+    owned exact prefix.  Replacing that predicted prefix can therefore create a
+    representation-gauge discontinuity even when the model-native transition is
+    smooth.  This bridge measures the per-call last-prefix residual and adds it
+    to a short generated suffix release.  The first exact-prefix -> suffix
+    transition is thereby identical to the model-native predicted transition,
+    while the correction decays smoothly to zero without freezing any generated
+    token to a fixed pre-high value.
+    """
+
+    def __init__(
+        self,
+        metrics,
+        exact_prefix: torch.Tensor,
+        shapes,
+        *,
+        weights: tuple[float, ...] = HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
+    ):
+        if exact_prefix.ndim != 5 or not exact_prefix.is_floating_point():
+            raise ValueError("high-prediction gauge bridge requires floating BxCxTxHxW exact prefix")
+        if not weights or float(weights[0]) != 1.0:
+            raise ValueError("high-prediction gauge bridge requires a unit first release weight")
+        normalized = tuple(float(weight) for weight in weights)
+        if any(not 0.0 <= weight <= 1.0 for weight in normalized):
+            raise ValueError("high-prediction gauge bridge weights must be in [0, 1]")
+        if any(left < right for left, right in itertools.pairwise(normalized)):
+            raise ValueError("high-prediction gauge bridge weights must be monotonically non-increasing")
+        self.metrics = metrics
+        self.exact_prefix = exact_prefix.detach().clone()
+        self.prefix_t = int(exact_prefix.shape[2])
+        self.shapes = shapes
+        self.weights = normalized
+        self.calls = 0
+
+    @property
+    def support_tokens(self) -> int:
+        return len(self.weights)
+
+    def apply(self, packed: torch.Tensor, *, call_index: int, sigma: float, actual: bool) -> torch.Tensor:
+        """Apply one model-native gauge rebase to an existing high prediction."""
+
+        started = time.perf_counter()
+        video, audio = unpack_streams(packed, self.shapes)
+        if (
+            video.ndim != 5
+            or video.shape[:2] != self.exact_prefix.shape[:2]
+            or video.shape[-2:] != self.exact_prefix.shape[-2:]
+            or self.prefix_t <= 0
+            or self.prefix_t + self.support_tokens > int(video.shape[2])
+        ):
+            raise RuntimeError("high-prediction gauge bridge geometry drifted")
+
+        exact_last = self.exact_prefix[:, :, -1].to(device=video.device, dtype=torch.float32)
+        predicted_last = video[:, :, self.prefix_t - 1].to(torch.float32)
+        delta = exact_last - predicted_last
+        if not bool(torch.isfinite(delta).all().item()):
+            raise RuntimeError("high-prediction gauge bridge residual contains NaN or Inf")
+
+        corrected_video = video.clone()
+        for offset, weight in enumerate(self.weights):
+            if weight:
+                corrected_video[:, :, self.prefix_t + offset].add_(
+                    (delta * weight).to(dtype=corrected_video.dtype)
+                )
+        if not bool(torch.isfinite(corrected_video).all().item()):
+            raise RuntimeError("high-prediction gauge bridge produced NaN or Inf")
+
+        prefix_exact = torch.equal(corrected_video[:, :, : self.prefix_t], video[:, :, : self.prefix_t])
+        outside_exact = torch.equal(
+            corrected_video[:, :, self.prefix_t + self.support_tokens :],
+            video[:, :, self.prefix_t + self.support_tokens :],
+        )
+        native_transition = (
+            video[:, :, self.prefix_t].to(torch.float32)
+            - video[:, :, self.prefix_t - 1].to(torch.float32)
+        )
+        rebased_transition = (
+            corrected_video[:, :, self.prefix_t].to(torch.float32)
+            - exact_last
+        )
+        transition_error = rebased_transition - native_transition
+        transition_error_max = float(transition_error.abs().max().item())
+        transition_error_rms = _rms(transition_error)
+        if (
+            not prefix_exact
+            or not outside_exact
+            or transition_error_max > HIGH_PREDICTION_GAUGE_BRIDGE_MAX_TRANSITION_ERROR
+        ):
+            raise RuntimeError("high-prediction gauge bridge violated its exact-transition contract")
+
+        result, result_shapes = pack_streams((corrected_video, audio))
+        if result_shapes != self.shapes:
+            raise RuntimeError("high-prediction gauge bridge changed packed AV geometry")
+        _checked_video, checked_audio = unpack_streams(result, self.shapes)
+        audio_exact = torch.equal(checked_audio, audio)
+        if not audio_exact:
+            raise RuntimeError("high-prediction gauge bridge modified audio")
+
+        release_steps = tuple(
+            abs(right - left)
+            for left, right in zip(self.weights, (*self.weights[1:], 0.0), strict=True)
+        )
+        self.calls += 1
+        self.metrics.increment("high_prediction_gauge_bridge_calls")
+        self.metrics.event(
+            "partitioned_high_prediction_gauge_bridge",
+            policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+            call_index=int(call_index),
+            sigma=float(sigma),
+            actual=bool(actual),
+            prefix_t=self.prefix_t,
+            support_tokens=self.support_tokens,
+            temporal_weights=list(self.weights),
+            max_release_weight_step=max(release_steps),
+            model_prefix_to_exact_delta_rms=_rms(delta),
+            model_prefix_to_exact_delta_abs_max=float(delta.abs().max().item()),
+            model_native_first_transition_rms=_rms(native_transition),
+            exact_rebased_first_transition_rms=_rms(rebased_transition),
+            first_transition_error_rms=transition_error_rms,
+            first_transition_error_max_abs=transition_error_max,
+            caller_prefix_modified=False,
+            predicted_prefix_exact=prefix_exact,
+            audio_modified=False,
+            audio_exact=audio_exact,
+            suffix_outside_support_modified=False,
+            suffix_outside_support_exact=outside_exact,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        return result
 
 
 class HighStageBoundaryReferenceAnchor:
@@ -293,6 +436,7 @@ def high_boundary_contract(
     audio_reference: torch.Tensor | None = None,
     exact_denoise_mask: torch.Tensor | None = None,
     prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
+    prediction_gauge_bridge_weights: tuple[float, ...] | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -300,11 +444,21 @@ def high_boundary_contract(
         binding.guidance_protected_prefix_t
         or binding.high_boundary_trace is not None
         or binding.high_boundary_anchor is not None
+        or binding.high_prediction_bridge is not None
     ):
         raise RuntimeError("nested high-stage boundary ownership is unsupported")
     binding.guidance_protected_prefix_t = int(exact_prefix.shape[2])
     anchor = None
+    prediction_bridge = None
     try:
+        if prediction_gauge_bridge_weights is not None:
+            prediction_bridge = HighStagePredictionGaugeBridge(
+                binding.metrics,
+                exact_prefix,
+                shapes,
+                weights=prediction_gauge_bridge_weights,
+            )
+            binding.high_prediction_bridge = prediction_bridge
         if video_reference_suffix is not None or audio_reference is not None:
             anchor = HighStageBoundaryReferenceAnchor(
                 binding.metrics,
@@ -327,8 +481,10 @@ def high_boundary_contract(
     finally:
         trace = binding.high_boundary_trace
         active_anchor = binding.high_boundary_anchor
+        active_prediction_bridge = binding.high_prediction_bridge
         binding.high_boundary_trace = None
         binding.high_boundary_anchor = None
+        binding.high_prediction_bridge = None
         binding.guidance_protected_prefix_t = 0
         if trace is not None:
             binding.metrics.event(
@@ -337,6 +493,19 @@ def high_boundary_contract(
                 observed_calls=min(trace.calls, trace.max_calls),
                 truncated=trace.calls > trace.max_calls,
                 max_calls=trace.max_calls,
+            )
+        if active_prediction_bridge is not None:
+            binding.metrics.event(
+                "partitioned_high_prediction_gauge_bridge_complete",
+                policy=HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
+                calls=active_prediction_bridge.calls,
+                support_tokens=active_prediction_bridge.support_tokens,
+                temporal_weights=list(active_prediction_bridge.weights),
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
             )
         if active_anchor is not None:
             binding.metrics.event(
