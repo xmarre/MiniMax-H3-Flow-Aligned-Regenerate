@@ -53,7 +53,16 @@ def main() -> None:
         "self.token_overlap = (-token_drop) % self.tokens_chunk_size",
         "self.frame_overlap = max(self.token_overlap * self.vae_ratio_t - self.frame_pre_padding, 0)",
         "t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap",
+        "h = self.x_embedder(x.flatten(2).transpose(1, 2))",
+        "img_ids = create_token_ids((latent_T, latent_H, latent_W)",
+        "out = optimized_attention(query, key, value, self.heads, skip_reshape=True)",
         "if i == num_chunks - 1 and dec_overlap is not None:",
+    )
+    require(
+        args.comfy / "comfy/sd.py",
+        "frames 17k+5 <-> latents 5k+2, 16x spatial",
+        "self.upscale_ratio = (lambda a: max(1, (a - 2) // 5 * 17 + 5), 16, 16)",
+        "self.upscale_index_formula = (4, 16, 16)",
     )
     require(
         args.continuum / "v3/assembly.py",
