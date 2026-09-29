@@ -4092,6 +4092,8 @@ def run_partitioned_progressive(
                     )
                 )
 
+        pre_high_vae_window_trajectories: dict[str, dict[str, Any]] = {}
+
         provider_native_trajectory_source = (
             frame_gauge_witnesses.get("learned_native") if frame_gauge_candidate_accepted else provider_native_clean
         )
@@ -4153,6 +4155,39 @@ def run_partitioned_progressive(
             )
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
+
+        binding.metrics.event(
+            "partitioned_video_vae_boundary_window_plan",
+            policy=VAE_WINDOW_VIDEO_POLICY,
+            armed=vae_window_repair_armed,
+            reason=vae_window_plan_reason,
+            safe_video_topology=safe_vae_window_repair_topology,
+            high_prediction_gauge_bridge_enabled=high_prediction_gauge_bridge_enabled,
+            high_prediction_gauge_bridge_candidate_eligible=high_prediction_gauge_bridge_candidate_eligible,
+            plan=dict(vae_window_plan or {}),
+            authoritative_prefix_modified=False,
+            audio_modified=False,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+        )
+        if vae_window_repair_armed:
+            pre_high_vae_window_trajectories = measure_vae_window_video_trajectory(
+                restored_clean,
+                stage_plan.prefix_t,
+            )
+            for roi_name, trajectory in pre_high_vae_window_trajectories.items():
+                binding.metrics.event(
+                    "partitioned_video_vae_boundary_window_trajectory",
+                    policy=VAE_WINDOW_VIDEO_POLICY,
+                    stage="pre_high_exact_restored",
+                    domain="model_internal_clean",
+                    roi=roi_name,
+                    diagnostic_only=True,
+                    **trajectory,
+                )
 
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         target_raw = pack_streams((target_video, target_audio))[0]
