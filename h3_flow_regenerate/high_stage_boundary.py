@@ -1,10 +1,11 @@
 """Bounded high-stage boundary ownership and model-output observations.
 
 The exact-prefix continuation owns the caller prefix at the framework boundary.
-When a handoff clean-reference is supplied, this module also keeps the first
-generated clean-domain suffix values on that handoff trajectory while target-
-high refinement takes over progressively. The correction is applied to existing
-model predictions only; it adds no model, sampler, provider, or VAE work.
+High-stage corrections, when selected, operate only on existing model
+predictions: fixed-reference anchors remain available for historical evidence,
+while the production candidate rebases each model-native prediction onto the
+authoritative prefix and releases that gauge correction across bounded generated
+suffix support. No model, sampler, provider, or VAE work is added.
 """
 
 from __future__ import annotations
