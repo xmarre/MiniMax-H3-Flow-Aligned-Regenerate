@@ -3759,9 +3759,7 @@ def run_partitioned_progressive(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
             high_prediction_gauge_bridge_weights=(
-                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
-                if high_prediction_gauge_bridge_enabled
-                else []
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
             ),
             high_prediction_gauge_bridge_mask_fully_generated=bridge_mask_fully_generated,
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
@@ -4280,9 +4278,7 @@ def run_partitioned_progressive(
         high_boundary_reference_calls_before = int(
             binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0)
         )
-        high_prediction_bridge_calls_before = int(
-            binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0)
-        )
+        high_prediction_bridge_calls_before = int(binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0))
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
@@ -4300,9 +4296,7 @@ def run_partitioned_progressive(
                 exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
                 prefix_witness=high_boundary_prefix_witness,
                 prediction_gauge_bridge_weights=(
-                    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS
-                    if high_prediction_gauge_bridge_enabled
-                    else None
+                    HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS if high_prediction_gauge_bridge_enabled else None
                 ),
             ),
         ):
@@ -4390,9 +4384,7 @@ def run_partitioned_progressive(
             ),
             support_tokens=(bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0),
             temporal_weights=(
-                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
-                if high_prediction_gauge_bridge_enabled
-                else []
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
             ),
             sampler_mask_modified=False,
             sampler_entry_state_modified=False,
@@ -4760,14 +4752,10 @@ def run_partitioned_progressive(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
             high_prediction_gauge_bridge_weights=(
-                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS)
-                if high_prediction_gauge_bridge_enabled
-                else []
+                list(HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS) if high_prediction_gauge_bridge_enabled else []
             ),
             high_prediction_gauge_bridge_release_boundary_t=(
-                stage_plan.prefix_t + bridge_support_tokens
-                if high_prediction_gauge_bridge_enabled
-                else None
+                stage_plan.prefix_t + bridge_support_tokens if high_prediction_gauge_bridge_enabled else None
             ),
             high_boundary_context_tokens=int(high_boundary_context.shape[2]),
         )
