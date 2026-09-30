@@ -943,6 +943,7 @@ def _verify_partitioned_vdn_temporal_carrier_policy(
     taps_before: int,
     carriers_before: int,
     rows_before: int,
+    events_before: int,
 ) -> None:
     policy = normalize_vdn_temporal_carrier_policy(policy)
     if policy == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
@@ -956,8 +957,10 @@ def _verify_partitioned_vdn_temporal_carrier_policy(
         raise RuntimeError(
             "destination-grid temporal stencil was requested but no verified cross-grid carrier work was observed"
         )
+    events = getattr(metrics, "events", ())
     receipts = [
-        event for event in getattr(metrics, "events", ())
+        event
+        for event in events[int(events_before) :]
         if getattr(event, "kind", None) == "partitioned_vdn_temporal_carrier_stage"
         and getattr(event, "fields", {}).get("policy") == policy
     ]
@@ -2801,6 +2804,7 @@ def run_partitioned_progressive(
     temporal_carrier_rows_before = int(
         binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_rows", 0)
     )
+    temporal_carrier_events_before = len(binding.metrics.events)
     source_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
     )
@@ -2947,6 +2951,7 @@ def run_partitioned_progressive(
                 taps_before=temporal_carrier_taps_before,
                 carriers_before=temporal_carrier_carriers_before,
                 rows_before=temporal_carrier_rows_before,
+                events_before=temporal_carrier_events_before,
             )
 
         shadow_source_raw = None
