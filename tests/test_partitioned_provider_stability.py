@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import torch
 
 from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
 from h3_flow_regenerate.partitioned_scheduler import _partitioned_stage_contract
 from h3_flow_regenerate.partitioned_stage import (
     PARTITIONED_STAGE_KEY,
@@ -157,6 +158,24 @@ def test_temporal_carrier_digest_changes_provider_object_without_changing_native
     assert candidate._h3_flow_partitioned_provider_identity == inherited_identity
 
     runtime.vdn_temporal_carrier_contract = None
+    native_again = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    assert native_again is native
+    assert len(runtime.attention_provider_cache) == 2
+
+
+def test_dense_suffix_diagnostic_changes_provider_object_without_changing_inherited_identity_metadata():
+    metrics = H3FlowMetrics()
+    runtime = PartitionedStageRuntime(plan=_plan(), metrics=metrics)
+
+    native = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    inherited_identity = native._h3_flow_partitioned_provider_identity
+
+    runtime.softmax_diagnostic = PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+    diagnostic = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    assert diagnostic is not native
+    assert diagnostic._h3_flow_partitioned_provider_identity == inherited_identity
+
+    runtime.softmax_diagnostic = "normal"
     native_again = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
     assert native_again is native
     assert len(runtime.attention_provider_cache) == 2
