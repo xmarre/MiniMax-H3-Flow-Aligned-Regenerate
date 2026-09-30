@@ -157,19 +157,27 @@ unchanged. Do not select a source-uniform shadow path. Run:
 * A: `vdn_linear_diagnostic=normal`.
 * B: `vdn_linear_diagnostic=suppress_cross_grid_temporal_taps`.
 
-For each observed arm, set an absolute writable directory before the ordinary
-ComfyUI launcher starts, for example:
+For each observed arm, set the node's `capture_boundary_witness=true`.
+This is a per-run control and does **not** require an environment variable or a
+ComfyUI restart. Artifacts use unique filenames under
+`ComfyUI/output/h3-flow-boundary-witness`; the receipt records the active
+`vdn_linear_diagnostic` mode, so A and B remain attributable without separate
+process launches. Set it independently for:
 
-```bash
-export H3_FLOW_BOUNDARY_WITNESS_DIR=/home/toor/ComfyUI/output/boundary-ab/A
-```
+* A: `vdn_linear_diagnostic=normal`, `capture_boundary_witness=true`.
+* B: `vdn_linear_diagnostic=suppress_cross_grid_temporal_taps`,
+  `capture_boundary_witness=true`.
 
-Use a separate directory for B. This is a new default-off observer switch,
-not a stencil selection or a dense-attention switch. It creates one paired
-`.pt`/`.json` artifact for each observed continuation low lifetime and publishes
-`partitioned_boundary_witness` in Flow metrics. The `.json` contains loaded
-module paths/hashes, actual precision settings, frame/head indices and tensor
-SHA256. Requested observation requires the paired VDN draft before sampling.
+The historical `H3_FLOW_BOUNDARY_WITNESS_DIR` process variable remains only as
+a headless/backward-compatible fallback when no explicit node selection is
+present. An explicit node OFF overrides a stale environment value.
+
+Witness capture is a default-off observer, not a stencil selection or a
+dense-attention switch. It creates one paired `.pt`/`.json` artifact for each
+observed continuation low lifetime and publishes `partitioned_boundary_witness`
+in Flow metrics. The `.json` contains loaded module paths/hashes, actual
+precision settings, frame/head indices and tensor SHA256. Requested observation
+requires the paired VDN draft before sampling.
 
 Verify actual suppression counters and
 `partitioned_vdn_linear_diagnostic_verified`; a widget label is insufficient.
