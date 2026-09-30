@@ -50,8 +50,8 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS,
     PartitionedAudioModelTimestepContext,
-    build_vdn_temporal_carrier_contract,
     apply_partitioned_diagnostic_controls,
+    build_vdn_temporal_carrier_contract,
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
@@ -1039,7 +1039,10 @@ def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_clo
         short_conv_spec="vdn_solve_short_conv_v1|test",
     )
     assert len(contract["numerical_digest"]) == 64
-    assert normalize_vdn_temporal_carrier_policy(PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION) == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    assert (
+        normalize_vdn_temporal_carrier_policy(PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION)
+        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
 
     metrics = H3FlowMetrics()
     with pytest.raises(RuntimeError, match="no verified cross-grid carrier work"):
