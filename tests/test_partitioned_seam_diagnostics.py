@@ -6,14 +6,76 @@ import pytest
 import torch
 
 from h3_flow_regenerate.guidance import conditional_renoise_target
-from h3_flow_regenerate.handoff import deterministic_video_noise
+from h3_flow_regenerate.handoff import (
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    deterministic_video_noise,
+)
 from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
     _partitioned_exact_overlap_fallback_eligibility,
+    _resolve_partitioned_transfer_clean,
 )
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+
+
+def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residual():
+    torch.manual_seed(1201)
+    target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    actual = torch.randn_like(target)
+
+    resolved, source, recovery = _resolve_partitioned_transfer_clean(
+        target,
+        actual,
+        handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        sigma=0.4,
+        seed=123,
+    )
+
+    assert resolved.data_ptr() == actual.data_ptr()
+    assert source == "actual_clean_postprocess"
+    assert recovery == "actual_clean_postprocess_no_inverse"
+
+
+def test_partitioned_transfer_clean_refuses_gaussian_inverse_for_source_residual_without_capture():
+    target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="refusing deterministic-noise inverse recovery"):
+        _resolve_partitioned_transfer_clean(
+            target,
+            None,
+            handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+            sigma=0.4,
+            seed=123,
+        )
+
+
+def test_partitioned_transfer_clean_keeps_independent_noise_inverse_contract():
+    torch.manual_seed(1202)
+    learned = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    sigma = 0.4
+    seed = 123
+    noise = deterministic_video_noise(
+        tuple(learned.shape),
+        seed=seed,
+        device=learned.device,
+        dtype=learned.dtype,
+    )
+    target = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+
+    resolved, source, recovery = _resolve_partitioned_transfer_clean(
+        target,
+        None,
+        handoff_noise_mode=H3_HANDOFF_NOISE_INDEPENDENT,
+        sigma=sigma,
+        seed=seed,
+    )
+
+    torch.testing.assert_close(resolved, learned, rtol=0.0, atol=2e-6)
+    assert source == "inverse_recovered"
+    assert recovery == "inverse_conditional_renoise"
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
