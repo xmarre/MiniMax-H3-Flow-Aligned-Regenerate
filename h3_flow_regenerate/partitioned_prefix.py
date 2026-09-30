@@ -50,6 +50,7 @@ class PartitionedExactPrefixPlan:
     source_grid_w: int
     target_grid_h: int
     target_grid_w: int
+    same_grid_control: bool = False
 
     def __post_init__(self) -> None:
         _positive_int(self.video_start, "video_start")
