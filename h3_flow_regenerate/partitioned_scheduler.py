@@ -2795,15 +2795,11 @@ def run_partitioned_progressive(
     temporal_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_calls", 0)
     )
-    temporal_carrier_taps_before = int(
-        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_taps", 0)
-    )
+    temporal_carrier_taps_before = int(binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_taps", 0))
     temporal_carrier_carriers_before = int(
         binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_carriers", 0)
     )
-    temporal_carrier_rows_before = int(
-        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_rows", 0)
-    )
+    temporal_carrier_rows_before = int(binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_rows", 0))
     temporal_carrier_events_before = len(binding.metrics.events)
     source_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
