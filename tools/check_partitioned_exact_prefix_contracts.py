@@ -163,6 +163,10 @@ def main() -> None:
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL as FLOW_VDN_LINEAR_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE as FLOW_VDN_LINEAR_RAW_MEASURE,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL as FLOW_VDN_LINEAR_SUPPRESS,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_API as FLOW_SOFTMAX_DIAGNOSTIC_API,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX as FLOW_SOFTMAX_DENSE_SUFFIX,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY as FLOW_SOFTMAX_DIAGNOSTIC_KEY,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL as FLOW_SOFTMAX_NORMAL,
         PARTITIONED_VDN_TEMPORAL_CARRIER_API as FLOW_CARRIER_API,
         PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION as FLOW_CARRIER_DESTINATION,
         PARTITIONED_VDN_TEMPORAL_CARRIER_KEY as FLOW_CARRIER_KEY,
@@ -190,7 +194,7 @@ def main() -> None:
         VDN_PARTITIONED_SEQUENCE_MODE as SOL_VDN_MODE,
         _partitioned_history_layout_valid,
     )
-    from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
+    from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI, partitioned_request_attention
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
     from vdn_h3.partitioned_linear import partitioned_frame_contract
     from vdn_h3.partitioned_runtime import (
@@ -200,6 +204,11 @@ def main() -> None:
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_NORMAL,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_API,
+        VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+        VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+        _partitioned_local_force_dense,
     )
     from vdn_h3.partitioned_sequence import (
         PARTITIONED_PREFIX_KEY as VDN_FLOW_KEY,
@@ -236,6 +245,8 @@ def main() -> None:
         raise SystemExit("Flow/Sol/VDN partitioned external-sequence API or mode identity diverged")
     if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
         raise SystemExit("Sol partitioned request ABI is missing")
+    if "force_dense" not in inspect.signature(partitioned_request_attention).parameters:
+        raise SystemExit("Sol partitioned request no longer exposes the force_dense discriminator")
     if (
         FLOW_VDN_LINEAR_DIAGNOSTIC_API != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API
         or FLOW_VDN_LINEAR_DIAGNOSTIC_KEY != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_KEY
@@ -245,6 +256,14 @@ def main() -> None:
         or FLOW_VDN_LINEAR_SUPPRESS != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL
     ):
         raise SystemExit("Flow/VDN partitioned linear diagnostic contract diverged")
+
+    if (
+        FLOW_SOFTMAX_DIAGNOSTIC_API != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_API
+        or FLOW_SOFTMAX_DIAGNOSTIC_KEY != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY
+        or FLOW_SOFTMAX_NORMAL != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+        or FLOW_SOFTMAX_DENSE_SUFFIX != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+    ):
+        raise SystemExit("Flow/VDN partitioned softmax diagnostic contract diverged")
 
     if (
         FLOW_CARRIER_API != VDN_TEMPORAL_CARRIER_API
@@ -404,8 +423,17 @@ def main() -> None:
         descriptor = compile_descriptor(validated)
         if group.prefix_k_range is not None and group.prefix_k_range[0] != group.sink_rows:
             raise SystemExit("biased target-prefix K rows are not contiguous with the global sink")
-        if not group.query_prefix_domain:
+        if group.query_prefix_domain:
+            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_NORMAL) != (True, False):
+                raise SystemExit("normal partitioned prefix group lost its existing dense ownership")
+            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_DENSE_SUFFIX) != (True, False):
+                raise SystemExit("dense-suffix diagnostic changed prefix-query ownership")
+        else:
             saw_suffix_group = True
+            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_NORMAL) != (False, False):
+                raise SystemExit("normal generated-suffix group no longer uses sparse Sol selection")
+            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_DENSE_SUFFIX) != (True, True):
+                raise SystemExit("dense-suffix diagnostic did not force only the existing suffix group dense")
             if descriptor is not None:
                 saw_mapped_descriptor = True
     if not saw_suffix_group:
