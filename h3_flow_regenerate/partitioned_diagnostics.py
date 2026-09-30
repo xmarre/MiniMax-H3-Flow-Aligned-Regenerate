@@ -140,8 +140,7 @@ def normalize_vdn_temporal_carrier_policy(value: str) -> str:
     value = str(value)
     if value not in PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS:
         raise ValueError(
-            "VDN temporal-carrier policy must be one of "
-            f"{PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS!r}, got {value!r}"
+            f"VDN temporal-carrier policy must be one of {PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS!r}, got {value!r}"
         )
     return value
 
