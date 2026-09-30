@@ -2554,6 +2554,13 @@ def run_partitioned_progressive(
         raise PartitionedPreflightUnsupported(
             "same-grid spatial-stage control requires handoff_transfer_control='learned_3d'"
         )
+    if (
+        spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        and vdn_temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
+    ):
+        raise PartitionedPreflightUnsupported(
+            "same-grid spatial-stage control requires vdn_temporal_carrier_policy='native_grid_then_map_v1'"
+        )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
