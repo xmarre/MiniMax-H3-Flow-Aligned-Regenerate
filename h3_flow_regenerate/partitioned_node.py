@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 
+from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
@@ -373,6 +374,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append only: never shift historical serialized widget positions.
+        spec["required"]["capture_boundary_witness"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Capture the bounded actual-feature VDN boundary witness for this execution. "
+                    "Artifacts are written under ComfyUI's output/h3-flow-boundary-witness directory. "
+                    "This is per-run and does not require an environment variable or ComfyUI restart."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -412,6 +425,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         frame_gauge_repair=False,
         frame_gauge_residual_mode="off",
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+        capture_boundary_witness=False,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -434,6 +448,28 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             temporal_weight=temporal_weight,
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
+        )
+        witness_directory = ""
+        if capture_boundary_witness:
+            try:
+                import folder_paths
+            except ImportError as exc:
+                raise RuntimeError(
+                    "boundary witness capture requires ComfyUI folder_paths at node execution"
+                ) from exc
+            witness_directory = str(
+                folder_paths.get_output_directory() + "/h3-flow-boundary-witness"
+            )
+        # Store an explicit per-model value even when disabled so stale process
+        # environment cannot silently override the node on subsequent runs.
+        patched.model_options[WITNESS_DIRECTORY_OPTION] = witness_directory
+        metrics.event(
+            "partitioned_boundary_witness_control",
+            enabled=bool(capture_boundary_witness),
+            directory=witness_directory or None,
+            source="node",
+            restart_required=False,
+            output_mutated=False,
         )
         return apply_partitioned_diagnostic_controls(
             patched,
