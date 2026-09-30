@@ -28,6 +28,74 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00731: normal learned-linear execution restored
+
+The same-grid restoration run completed in 576.06 seconds with normal VDN
+learned-linear execution. This establishes that the equal-grid validity guard
+correction permits the intended hardware path. No rendered verdict was supplied
+with this evidence; output-quality qualification remains pending.
+
+Evidence SHA256:
+- metrics: `400dffcdf05aabbcfef7907bb29b35a015342a18cfd0c2b72460a0393d1b95b8`
+- runtime log: `0f622b74a4b608ddd699b42345f9e62f4184ada8ac097863c3fe913c586b7dbd`
+
+The diagnostic controls and stage plan differ from 00729 only in
+`vdn_linear_diagnostic`: `bypass_partitioned_linear` becomes `normal`. The log
+contains 50 block-local active-linear markers and no diagnostic-bypass markers.
+The six partitioned transformer calls publish 300 block contracts. Dense suffix
+again verifies 3,300 calls / 8,467,200 Q rows / 45,230,700 KV rows with the same
+gathered-domain, prefix-measure and grouped-ownership guarantees. The per-event
+stage/actual/sigma model-call sequence matches 00729; aggregate counters are
+18 logical calls, 15 actual calls and three forecasts.
+
+The completed JSON now contains `partitioned_exact_audio_mask_verified`.
+The existing coherent exact-audio evidence validator passes: nine model entries,
+binary authoritative sampler/timestep/velocity masks, zero effective overlap,
+no timestep override and no regenerated-prefix restoration. Low/high mask
+digests match; final audio and video prefixes are exact. Protected audio
+low/probe-to-high difference remains max 4.768e-7 / RMS 2.620e-8.
+
+The measured loud boundary burst does not return: matched low/probe decode is
+-15.5700 dB and final-high is -13.9562 dB; production pre-seam is -14.2845 dB.
+Extra left decode context changes the suffix by exactly zero, and both
+production normalizers remain provably inactive. These values describe a quieter
+generated boundary window, not constant loudness or acceptance of the complete
+soundtrack.
+
+Upper45 latent successor-pair estimates remain small in the low/probe result and
+survive high refinement. Source-low X is (0.175719, 0.070158, -0.084077, -0.017367)
+and Y is (0.169830, 0.107721, 0.070430, 0.001224); final-high X is
+(0.170640, 0.071526, -0.133896, -0.007813) and Y is
+(0.194475, 0.120680, 0.052957, 0.011766) target latent cells. The decoded first
+upper45 pair still measures approximately (-3.9904, +3.6290) pixels. These
+estimates do not establish elimination of the visible chunk-to-chunk change.
+
+This is not a tensor-matched causal A/B despite the matching recorded controls.
+The authoritative carried-video prefix SHA256 changes from
+`9f76b8337b500a0eaa26b4e19dbfaf42e4199c2a5b55207b50264a71a2552f18` to
+`0aa7e745f9869047ee236d948fa4fe798308e12d17ee964837b80a454eac1178`.
+Production preceding-audio RMS changes from 0.004993902 to 0.008718249, while
+generated RMS changes from 0.001798426 to 0.001683459. Prompt-routing digests,
+logged Core/Torch/Kitchen/Aimdo versions and the continuation noise seed match;
+the reason the carried input changed is not established by these files. Neither
+the apparent motion change nor the cross-run dB difference can be attributed
+solely to restoring learned-linear execution.
+
+The broad production runtime gate remains inapplicable to this same-grid arm:
+it requires a learned cross-grid transfer that intentionally does not execute
+under the identity control. Its frame-gauge qualification also requires resolved
+DoRA auto-strength reports absent from this evidence. The positive exact-audio
+validator and explicit diagnostic receipts pass independently; do not label this
+run a complete production-gate pass.
+
+First obtain the rendered verdict for raw/assembled video and audio. If this
+normal-linear arm is acceptable, retain 00731's inputs and change only
+`softmax_diagnostic=normal` for the next sparse-suffix restoration arm. Keep
+same-grid target control, `vdn_linear_diagnostic=normal`, native temporal carrier,
+coherent exact audio, source-carrier audio positions and witness off. Restore
+cross-grid learned transfer separately after sparse attention is accepted.
+No runtime arithmetic change or spatial correction is justified by these files.
+
 ## Learned-linear restoration: equal-grid guard correction
 
 The subsequent restoration attempt aborted after 406.87 seconds when the first
