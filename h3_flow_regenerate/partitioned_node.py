@@ -454,12 +454,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             try:
                 import folder_paths
             except ImportError as exc:
-                raise RuntimeError(
-                    "boundary witness capture requires ComfyUI folder_paths at node execution"
-                ) from exc
-            witness_directory = str(
-                folder_paths.get_output_directory() + "/h3-flow-boundary-witness"
-            )
+                raise RuntimeError("boundary witness capture requires ComfyUI folder_paths at node execution") from exc
+            witness_directory = str(folder_paths.get_output_directory() + "/h3-flow-boundary-witness")
         # Store an explicit per-model value even when disabled so stale process
         # environment cannot silently override the node on subsequent runs.
         patched.model_options[WITNESS_DIRECTORY_OPTION] = witness_directory
