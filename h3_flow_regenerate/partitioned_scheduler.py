@@ -91,6 +91,10 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_API,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -110,6 +114,7 @@ from .partitioned_diagnostics import (
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
     normalize_spatial_stage_control,
+    normalize_partitioned_softmax_diagnostic,
     normalize_vdn_linear_diagnostic,
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -669,6 +674,9 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
     linear_mode = normalize_vdn_linear_diagnostic(
         transformer.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY, PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL)
     )
+    softmax_mode = normalize_partitioned_softmax_diagnostic(
+        transformer.get(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL)
+    )
     prefix_context = normalize_prefix_transformer_context(
         transformer.get(
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
@@ -701,6 +709,7 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
+        softmax_diagnostic=softmax_mode,
         vdn_temporal_carrier_policy=temporal_carrier_policy,
         vdn_temporal_carrier_short_conv_spec=temporal_carrier_spec,
         boundary_witness=configured_boundary_witness(metrics, directory=witness_directory),
@@ -838,6 +847,7 @@ def _validate_partitioned_vdn_compat(
     *,
     required_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     required_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
 ) -> str | None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
@@ -848,6 +858,7 @@ def _validate_partitioned_vdn_compat(
     witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION, None) if isinstance(model_options, dict) else None
     boundary_witness_requested = witness_requested(witness_directory)
     required_temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(required_temporal_carrier_policy)
+    required_softmax_diagnostic = normalize_partitioned_softmax_diagnostic(required_softmax_diagnostic)
     carrier_specs: set[str] = set()
     matched = 0
     for key, owner in object_patches.items():
@@ -881,6 +892,23 @@ def _validate_partitioned_vdn_compat(
                 raise PartitionedPreflightUnsupported(
                     f"partitioned VDN diagnostic {required_linear_diagnostic!r} was requested but "
                     "the installed VDN bridge does not publish that diagnostic capability"
+                )
+        if required_softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+            if (
+                int(getattr(owner, "_vdn_partitioned_softmax_diagnostic_api", 0))
+                != PARTITIONED_SOFTMAX_DIAGNOSTIC_API
+            ):
+                raise PartitionedPreflightUnsupported(
+                    "same-domain dense suffix diagnostic requires paired VDN softmax diagnostic "
+                    f"API v{PARTITIONED_SOFTMAX_DIAGNOSTIC_API}"
+                )
+            supported_softmax = tuple(
+                getattr(owner, "_vdn_partitioned_softmax_diagnostic_modes", ())
+            )
+            if required_softmax_diagnostic not in supported_softmax:
+                raise PartitionedPreflightUnsupported(
+                    f"partitioned softmax diagnostic {required_softmax_diagnostic!r} was requested but "
+                    "the installed VDN bridge does not advertise that mode"
                 )
         if required_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
             if int(getattr(owner, "_vdn_partitioned_temporal_carrier_api", 0)) != PARTITIONED_VDN_TEMPORAL_CARRIER_API:
@@ -993,6 +1021,43 @@ def _verify_partitioned_vdn_linear_diagnostic(
             cross_grid_temporal_suppression_calls=delta_calls,
             suppressed_taps=delta_taps,
             suppressed_rows=delta_rows,
+            fail_closed=True,
+        )
+
+
+def _verify_partitioned_softmax_diagnostic(
+    metrics,
+    mode: str,
+    *,
+    calls_before: int,
+    q_rows_before: int,
+    kv_rows_before: int,
+) -> None:
+    """Fail closed when the same-domain dense suffix discriminator did not execute."""
+
+    mode = normalize_partitioned_softmax_diagnostic(mode)
+    if mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        return
+    counters = getattr(metrics, "counters", {})
+    calls = int(counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0)) - int(calls_before)
+    q_rows = int(counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0)) - int(q_rows_before)
+    kv_rows = int(counters.get("partitioned_vdn_dense_suffix_same_domain_kv_rows", 0)) - int(kv_rows_before)
+    if min(calls, q_rows, kv_rows) <= 0:
+        raise RuntimeError(
+            "same-domain dense suffix diagnostic was requested but no verified suffix local-query "
+            "dense work was observed; refusing this diagnostic sample"
+        )
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_softmax_diagnostic_verified",
+            mode=mode,
+            dense_suffix_calls=calls,
+            dense_suffix_q_rows=q_rows,
+            dense_suffix_kv_rows=kv_rows,
+            same_gathered_domain=True,
+            prefix_measure_unchanged=True,
+            grouped_ownership_unchanged=True,
             fail_closed=True,
         )
 
@@ -1178,6 +1243,7 @@ def _preflight(
     *,
     required_vdn_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     required_vdn_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
 ):
     if len(latent_shapes) != 2:
@@ -1201,6 +1267,7 @@ def _preflight(
         guider.model_patcher,
         required_linear_diagnostic=required_vdn_linear_diagnostic,
         required_temporal_carrier_policy=required_vdn_temporal_carrier_policy,
+        required_softmax_diagnostic=required_softmax_diagnostic,
     )
     _validate_partitioned_sol_compat(guider)
 
@@ -2517,6 +2584,12 @@ def run_partitioned_progressive(
             PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         )
     )
+    softmax_diagnostic = normalize_partitioned_softmax_diagnostic(
+        initial_transformer.get(
+            PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+            PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+        )
+    )
     prefix_transformer_context = normalize_prefix_transformer_context(
         initial_transformer.get(
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
@@ -2565,6 +2638,15 @@ def run_partitioned_progressive(
         if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
             raise PartitionedPreflightUnsupported(
                 "destination-grid temporal stencil requires the exact-partitioned low/probe execution path"
+            )
+    if softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            raise PartitionedPreflightUnsupported(
+                "same-domain dense suffix diagnostic requires prefix_transformer_context='exact_target_partitioned'"
+            )
+        if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+            raise PartitionedPreflightUnsupported(
+                "same-domain dense suffix diagnostic requires the exact-partitioned low/probe execution path"
             )
     provider_boundary_stabilization = normalize_provider_boundary_stabilization(
         initial_transformer.get(
@@ -2753,6 +2835,7 @@ def run_partitioned_progressive(
         latent_shapes,
         required_vdn_linear_diagnostic=vdn_linear_diagnostic,
         required_vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
+        required_softmax_diagnostic=softmax_diagnostic,
         spatial_stage_control=spatial_stage_control,
     )
 
@@ -2940,6 +3023,15 @@ def run_partitioned_progressive(
     raw_measure_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
     )
+    dense_suffix_calls_before = int(
+        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0)
+    )
+    dense_suffix_q_rows_before = int(
+        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0)
+    )
+    dense_suffix_kv_rows_before = int(
+        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_kv_rows", 0)
+    )
     temporal_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_calls", 0)
     )
@@ -3087,6 +3179,13 @@ def run_partitioned_progressive(
                 suppressed_rows_before=suppressed_rows_before,
                 raw_measure_calls_before=raw_measure_calls_before,
                 raw_measure_prefix_frames_before=raw_measure_prefix_frames_before,
+            )
+            _verify_partitioned_softmax_diagnostic(
+                binding.metrics,
+                softmax_diagnostic,
+                calls_before=dense_suffix_calls_before,
+                q_rows_before=dense_suffix_q_rows_before,
+                kv_rows_before=dense_suffix_kv_rows_before,
             )
             _verify_partitioned_vdn_temporal_carrier_policy(
                 binding.metrics,
