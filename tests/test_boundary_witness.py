@@ -3,7 +3,11 @@ import json
 import pytest
 import torch
 
-from h3_flow_regenerate.boundary_witness import BoundaryWitness, configured_boundary_witness
+from h3_flow_regenerate.boundary_witness import (
+    WITNESS_DIRECTORY_OPTION,
+    BoundaryWitness,
+    configured_boundary_witness,
+)
 from h3_flow_regenerate.metrics import H3FlowMetrics
 
 
@@ -11,6 +15,10 @@ def test_witness_default_off_and_stage_claim_is_single_use(monkeypatch, tmp_path
     monkeypatch.delenv("H3_FLOW_BOUNDARY_WITNESS_DIR", raising=False)
     metrics = H3FlowMetrics()
     assert configured_boundary_witness(metrics) is None
+    assert configured_boundary_witness(metrics, directory="") is None
+    explicit = configured_boundary_witness(metrics, directory=str(tmp_path))
+    assert explicit is not None
+    assert explicit.directory == tmp_path.resolve()
     sink = BoundaryWitness(tmp_path, metrics)
     assert not sink.claim({"stage": "probe"})
     assert sink.claim({"stage": "low"})
@@ -49,9 +57,15 @@ def test_requested_witness_missing_capability_fails_before_sampling(monkeypatch,
 
     from h3_flow_regenerate.partitioned_scheduler import _validate_partitioned_vdn_compat
 
-    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
+    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path / "stale-env"))
     owner = SimpleNamespace(_vdn_forward=True, _vdn_external_sequence_api=4)
-    patcher = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": owner})
+    patcher = SimpleNamespace(
+        object_patches={"diffusion_model.blocks.0.attn.forward": owner},
+        model_options={WITNESS_DIRECTORY_OPTION: ""},
+    )
+    # An explicit node OFF must override a stale process environment.
+    _validate_partitioned_vdn_compat(patcher)
+    patcher.model_options[WITNESS_DIRECTORY_OPTION] = str(tmp_path)
     with pytest.raises(RuntimeError, match="before sampling"):
         _validate_partitioned_vdn_compat(patcher)
     owner._vdn_partitioned_boundary_witness_api = 1
@@ -64,10 +78,15 @@ def test_requested_low_witness_must_complete_and_owner_is_removed(monkeypatch, t
     from h3_flow_regenerate.partitioned_scheduler import _partitioned_stage_contract
     from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
 
-    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
+    monkeypatch.delenv("H3_FLOW_BOUNDARY_WITNESS_DIR", raising=False)
     prefix = torch.zeros(1, 24, 2, 4, 4)
     plan = PartitionedStagePlan(prefix=prefix, temporal=4, source_h=2, source_w=2, prefix_noise=prefix.clone())
-    guider = SimpleNamespace(model_options={"transformer_options": {"h3_flow_stage": "low"}})
+    guider = SimpleNamespace(
+        model_options={
+            WITNESS_DIRECTORY_OPTION: str(tmp_path),
+            "transformer_options": {"h3_flow_stage": "low"},
+        }
+    )
     with (
         pytest.raises(RuntimeError, match="not completed"),
         _partitioned_stage_contract(guider, plan, H3FlowMetrics()),
@@ -83,15 +102,20 @@ def test_observation_selection_survives_options_copy_and_has_stage_lifetime(monk
     from h3_flow_regenerate.partitioned_scheduler import _partitioned_stage_contract
     from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
 
-    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
+    monkeypatch.delenv("H3_FLOW_BOUNDARY_WITNESS_DIR", raising=False)
     prefix = torch.zeros(1, 24, 2, 4, 4)
     plan = PartitionedStagePlan(prefix=prefix, temporal=4, source_h=2, source_w=2, prefix_noise=prefix.clone())
-    guider = SimpleNamespace(model_options={"transformer_options": {"h3_flow_stage": "probe"}})
+    guider = SimpleNamespace(
+        model_options={
+            WITNESS_DIRECTORY_OPTION: str(tmp_path),
+            "transformer_options": {"h3_flow_stage": "probe"},
+        }
+    )
     with _partitioned_stage_contract(guider, plan, H3FlowMetrics()):
         owner = guider.model_options["transformer_options"][PARTITIONED_STAGE_KEY]
         copied = guider.model_options["transformer_options"].copy()
         assert copied[PARTITIONED_STAGE_KEY].boundary_witness is owner.boundary_witness
-        monkeypatch.delenv("H3_FLOW_BOUNDARY_WITNESS_DIR")
+        guider.model_options[WITNESS_DIRECTORY_OPTION] = ""
         assert owner.boundary_witness is not None
     with _partitioned_stage_contract(guider, plan, H3FlowMetrics()):
         assert guider.model_options["transformer_options"][PARTITIONED_STAGE_KEY].boundary_witness is None
