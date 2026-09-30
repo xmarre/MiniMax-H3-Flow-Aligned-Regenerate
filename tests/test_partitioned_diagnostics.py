@@ -488,6 +488,24 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
     )
     assert spec == "vdn_solve_short_conv_v1|test"
 
+    with pytest.raises(PartitionedPreflightUnsupported, match="softmax diagnostic API"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        )
+    current._vdn_partitioned_softmax_diagnostic_api = 1
+    current._vdn_partitioned_softmax_diagnostic_modes = (PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,)
+    with pytest.raises(PartitionedPreflightUnsupported, match="does not advertise"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        )
+    current._vdn_partitioned_softmax_diagnostic_modes = tuple(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
+    _validate_partitioned_vdn_compat(
+        patcher,
+        required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    )
+
 
 def test_source_carrier_transformer_verification_fails_closed_then_reports_counts():
     metrics = _Metrics()
