@@ -31,6 +31,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
@@ -435,6 +438,22 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after the 00726/00727 spatial selector. This discriminator
+        # changes only suffix local-query Sol selection; grouped domains and
+        # target-prefix measure remain unchanged.
+        spec["required"]["softmax_diagnostic"] = (
+            list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS),
+            {
+                "default": PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+                "tooltip": (
+                    "normal preserves sparse Sol selection for generated-suffix query groups. "
+                    f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX} forces only those same gathered "
+                    "suffix groups through Sol's weighted dense path while preserving the identical "
+                    "Q/K/V domain, target-prefix bias, grouped ownership and VDN linear setting. "
+                    "Diagnostic only."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -478,6 +497,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -535,6 +555,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             provider_boundary_stabilization=provider_boundary_stabilization,
             handoff_transfer_control=handoff_transfer_control,
             spatial_stage_control=spatial_stage_control,
+            softmax_diagnostic=softmax_diagnostic,
         )
 
 
