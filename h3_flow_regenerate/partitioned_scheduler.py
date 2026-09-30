@@ -88,6 +88,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -106,6 +109,7 @@ from .partitioned_diagnostics import (
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
+    normalize_spatial_stage_control,
     normalize_vdn_linear_diagnostic,
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
@@ -215,6 +219,33 @@ class _BicubicSameSourceTransferProvider:
     ) -> torch.Tensor:
         self.calls += 1
         return resize_video(video, int(target_h), int(target_w), mode="bicubic")
+
+
+class _IdentitySameGridTransferProvider:
+    """Provider-contract shim for a no-resize low/probe -> high handoff control."""
+
+    api_version = H3_LATENT_UPSCALER_API_VERSION
+    kind = H3_LATENT_UPSCALER_KIND
+    model_name = "diagnostic:same_grid_target_identity"
+    offload_after_upscale = False
+
+    def __init__(self, template) -> None:
+        self.device = str(getattr(template, "device", "cuda"))
+        self.inference_device = self.device
+        self.precision = str(getattr(template, "precision", "bf16"))
+        self.calls = 0
+
+    def upscale_clean_video(
+        self,
+        video: torch.Tensor,
+        *,
+        target_h: int,
+        target_w: int,
+    ) -> torch.Tensor:
+        self.calls += 1
+        if tuple(map(int, video.shape[-2:])) != (int(target_h), int(target_w)):
+            raise RuntimeError("same-grid identity transfer received a spatial resize request")
+        return video.clone()
 
 
 def _cache_audio_decode_witness(
@@ -1147,6 +1178,7 @@ def _preflight(
     *,
     required_vdn_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     required_vdn_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
 ):
     if len(latent_shapes) != 2:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
@@ -1173,7 +1205,11 @@ def _preflight(
     _validate_partitioned_sol_compat(guider)
 
     try:
-        source_h, source_w = config.resolve_source(target_h, target_w)
+        spatial_stage_control = normalize_spatial_stage_control(spatial_stage_control)
+        if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID:
+            source_h, source_w = target_h, target_w
+        else:
+            source_h, source_w = config.resolve_source(target_h, target_w)
         internal = _process_latent_in(guider.model_patcher.model, latent_image, latent_shapes)
         stage_plan = build_partitioned_stage_plan(
             denoise_mask,
@@ -1182,6 +1218,7 @@ def _preflight(
             noise,
             source_h=source_h,
             source_w=source_w,
+            allow_same_grid=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
     except (TypeError, ValueError, RuntimeError) as exc:
         raise PartitionedPreflightUnsupported(str(exc)) from exc
@@ -2504,6 +2541,19 @@ def run_partitioned_progressive(
             PARTITIONED_HANDOFF_TRANSFER_LEARNED,
         )
     )
+    spatial_stage_control = normalize_spatial_stage_control(
+        initial_transformer.get(
+            PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+            PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        )
+    )
+    if (
+        spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    ):
+        raise PartitionedPreflightUnsupported(
+            "same-grid spatial-stage control requires handoff_transfer_control='learned_3d'"
+        )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -2576,7 +2626,11 @@ def run_partitioned_progressive(
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
             handoff_transfer_control=handoff_transfer_control,
-            learned_transfer_unchanged=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+            spatial_stage_control=spatial_stage_control,
+            learned_transfer_unchanged=(
+                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            ),
             target_high_unchanged=True,
             diagnostic_only=True,
         )
@@ -2655,6 +2709,7 @@ def run_partitioned_progressive(
         latent_shapes,
         required_vdn_linear_diagnostic=vdn_linear_diagnostic,
         required_vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
+        spatial_stage_control=spatial_stage_control,
     )
 
     # All unsupported conditions above are checked before any sampler lifetime.
@@ -2684,7 +2739,13 @@ def run_partitioned_progressive(
         for key, entries in current_conds.items()
     }
     video_shift = float(transformer.get("minimax_h3_sigma_shift_video", H3_VIDEO_SHIFT))
-    selected_coordinate = config.resolve_coordinate(source_h, source_w, target_h, target_w)
+    configured_source_h, configured_source_w = config.resolve_source(target_h, target_w)
+    selected_coordinate = config.resolve_coordinate(
+        configured_source_h,
+        configured_source_w,
+        target_h,
+        target_w,
+    )
     from .handoff import select_handoff_index
 
     index = select_handoff_index(
@@ -2766,6 +2827,10 @@ def run_partitioned_progressive(
         suffix_source_hw=(source_h, source_w),
         source_shape=source_shapes[0],
         target_hw=(target_h, target_w),
+        configured_progressive_source_hw=(configured_source_h, configured_source_w),
+        spatial_stage_control=spatial_stage_control,
+        same_grid_control_active=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        handoff_split_preserved_from_configured_source=True,
         prefix_video_rows=stage_plan.prefix_rows,
         suffix_video_rows=stage_plan.suffix_rows,
         partitioned_video_rows=stage_plan.partitioned_rows,
@@ -3535,13 +3600,16 @@ def run_partitioned_progressive(
         effective_upscaler = config.learned_upscaler
         spatial_transfer_control = None
         source_clean_sha256 = None
-        if handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL:
+        if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID:
+            spatial_transfer_control = _IdentitySameGridTransferProvider(config.learned_upscaler)
+            effective_upscaler = spatial_transfer_control
+        elif handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL:
             # Keep the exact learned-handoff plumbing (postprocess, residual/noise
             # transport, exact-prefix restoration and target-high stage) but replace
             # the checkpoint transform itself with deterministic spatial bicubic.
-            # This is the direct same-source discriminator for 00724.
             spatial_transfer_control = _BicubicSameSourceTransferProvider(config.learned_upscaler)
             effective_upscaler = spatial_transfer_control
+        if spatial_transfer_control is not None:
             source_clean_control, _source_clean_audio_control = unpack_streams(source_x0, source_shapes)
             source_clean_sha256 = tensor_sha256(source_clean_control)
             del source_clean_control, _source_clean_audio_control
@@ -3562,16 +3630,19 @@ def run_partitioned_progressive(
         )
         if spatial_transfer_control is not None:
             if spatial_transfer_control.calls != 1:
-                raise RuntimeError("same-source bicubic transfer control did not execute exactly once")
+                raise RuntimeError("diagnostic spatial transfer control did not execute exactly once")
             if transfer_metrics.get("model_name") != spatial_transfer_control.model_name:
-                raise RuntimeError("same-source bicubic transfer control lost its runtime identity")
+                raise RuntimeError("diagnostic spatial transfer control lost its runtime identity")
             binding.metrics.increment("partitioned_handoff_spatial_control_calls")
             binding.metrics.event(
                 "partitioned_handoff_transfer_control",
                 mode=handoff_transfer_control,
+                spatial_stage_control=spatial_stage_control,
+                operator=spatial_transfer_control.model_name,
                 source_clean_sha256=source_clean_sha256,
                 source_hw=tuple(int(value) for value in source_shapes[0][-2:]),
                 target_hw=(int(target_h), int(target_w)),
+                configured_progressive_source_hw=(configured_source_h, configured_source_w),
                 temporal_length=int(source_shapes[0][2]),
                 spatial_control_calls=int(spatial_transfer_control.calls),
                 actual_learned_checkpoint_provider_calls=0,
@@ -4452,12 +4523,23 @@ def run_partitioned_progressive(
         binding.metrics.event(
             "partitioned_transfer",
             handoff_transfer_control=handoff_transfer_control,
-            learned_transfer_performed=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
-            spatial_transfer_control_applied=(handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL),
+            spatial_stage_control=spatial_stage_control,
+            learned_transfer_performed=(
+                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            ),
+            spatial_transfer_control_applied=spatial_transfer_control is not None,
+            same_grid_identity_transfer_applied=(
+                spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+            ),
             actual_learned_checkpoint_provider_invoked=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
             ),
-            upscaler_prefix_context_used=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+            upscaler_prefix_context_used=(
+                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            ),
             transferred_prefix_output_discarded=True,
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
@@ -4515,6 +4597,7 @@ def run_partitioned_progressive(
             learned_upscale_elapsed_ms=(
                 transfer_metrics.get("learned_upscale_elapsed_ms")
                 if handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
                 else None
             ),
             clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
