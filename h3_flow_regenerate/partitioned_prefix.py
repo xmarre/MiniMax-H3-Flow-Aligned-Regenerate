@@ -64,10 +64,7 @@ class PartitionedExactPrefixPlan:
             raise ValueError("source grid must not exceed target grid on either spatial axis")
         if not isinstance(self.same_grid_control, bool):
             raise TypeError("same_grid_control must be boolean")
-        grids_equal = (
-            self.source_grid_h == self.target_grid_h
-            and self.source_grid_w == self.target_grid_w
-        )
+        grids_equal = self.source_grid_h == self.target_grid_h and self.source_grid_w == self.target_grid_w
         if self.same_grid_control:
             if not grids_equal:
                 raise ValueError("same-grid control requires equal source and target grids")
