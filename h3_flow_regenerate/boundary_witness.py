@@ -16,6 +16,7 @@ import torch
 WITNESS_KEY = "h3_flow_partitioned_boundary_witness_v1"
 WITNESS_API = 1
 WITNESS_ENV = "H3_FLOW_BOUNDARY_WITNESS_DIR"
+WITNESS_DIRECTORY_OPTION = "h3_flow_partitioned_boundary_witness_directory_v1"
 
 
 class BoundaryWitness:
@@ -114,10 +115,16 @@ class BoundaryWitness:
             self._tensors.clear()
 
 
-def configured_boundary_witness(metrics):
-    directory = os.environ.get(WITNESS_ENV, "").strip()
+def _configured_directory(directory=None):
+    if directory is None:
+        directory = os.environ.get(WITNESS_ENV, "")
+    return str(directory).strip()
+
+
+def configured_boundary_witness(metrics, directory=None):
+    directory = _configured_directory(directory)
     return BoundaryWitness(directory, metrics) if directory else None
 
 
-def witness_requested():
-    return bool(os.environ.get(WITNESS_ENV, "").strip())
+def witness_requested(directory=None):
+    return bool(_configured_directory(directory))
