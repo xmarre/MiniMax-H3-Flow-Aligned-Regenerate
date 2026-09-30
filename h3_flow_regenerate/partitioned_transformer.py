@@ -243,13 +243,13 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
         if getattr(cached, "_h3_flow_partitioned_previous", None) is not previous:
             metrics.increment("partitioned_attention_equivalent_provider_rebindings")
         cached._h3_flow_partitioned_previous = previous
-        cached._h3_flow_partitioned_provider_identity = cache_identity
+        cached._h3_flow_partitioned_provider_identity = identity
         metrics.increment("partitioned_attention_provider_reuses")
         return cached
 
     override = make_partitioned_attention_override(runtime, metrics)
     override._h3_flow_partitioned_previous = previous
-    override._h3_flow_partitioned_provider_identity = cache_identity
+    override._h3_flow_partitioned_provider_identity = identity
     cache[cache_identity] = override
     metrics.increment("partitioned_attention_provider_creations")
     return override
