@@ -446,6 +446,7 @@ def partitioned_diffusion_wrapper(
         source_grid_w=int(plan.source_grid[1]),
         target_grid_h=int(plan.target_grid[0]),
         target_grid_w=int(plan.target_grid[1]),
+        same_grid_control=plan.source_grid == plan.target_grid,
     )
     partition_contract = partition_plan.to_contract()
     if runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
