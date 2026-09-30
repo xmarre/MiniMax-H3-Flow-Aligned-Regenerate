@@ -131,7 +131,7 @@ class PartitionedExactPrefixPlan:
             "suffix_log_key_measure": 0.0,
             "exact_prefix_queries_preserved": True,
             "generated_suffix_queries_preserved": True,
-            "heterogeneous_spatial_domains": True,
+            "heterogeneous_spatial_domains": not self.same_grid_control,
         }
         if include_digest:
             payload["semantic_digest"] = _digest(payload)
