@@ -1,10 +1,13 @@
 # Heterogeneous boundary observation: qualification handoff
 
-Status: matched SM120 A/B discrimination is complete. The suppression arm
-materially changed the inherited pre-high successor geometry, so the conditional
-destination-grid stencil candidate C is now implemented behind an explicit
-diagnostic selector. Candidate-C rendered-media qualification is pending. The
-default arithmetic is unchanged and no production fix is promoted.
+Status: matched SM120 A/B/C discrimination is complete. The suppression arm
+materially changed the inherited pre-high successor geometry and candidate C
+reproduced that internal improvement while retaining learned cross-grid taps,
+but **00722 still shows the visible frame shift under user inspection**.
+Candidate C therefore fails the authoritative rendered-media acceptance gate and
+is rejected for production promotion. The default arithmetic is unchanged and no
+production fix is promoted. The next discriminator is the existing
+`bypass_partitioned_linear` control.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -223,34 +226,66 @@ upper45 net displacement is worse than A. No rendered A/B movies were supplied
 with 00721, so background-retention/media acceptance cannot be inferred from
 metrics alone.
 
-### Candidate C hardware qualification
+### Candidate C result: 00722 rejected by rendered-media gate
 
-Candidate C is now implemented but remains default-off and unqualified. For the
-next matched run use:
+00722 executed candidate C exactly as intended on SM120:
 
 * `vdn_linear_diagnostic=normal`
 * `vdn_temporal_carrier_policy=destination_grid_stencil_v1`
-* `capture_boundary_witness=true`
+* 250 verified destination-stencil calls
+* 3,000 cross-grid taps
+* 2,000 mapped carriers / 865,000 mapped carrier rows
+* stable numerical digest
+  `82fd2c133290aece625eb432cee2764be70d73a7f0e68b17bc5b3306f7025547`
+  across low/probe and final verification
+* unchanged 14 actual H3 NFE / 18 logical calls / six sampler invocations /
+  four history boundaries.
 
-Keep every other 00719/00721 selector, seed, workflow, provider, Spectrum,
-LoRA/DoRA, learned upscaler and Continuum Analyze-Only setting frozen. Candidate
-C must publish positive
-`partitioned_vdn_destination_grid_stencil_calls/taps/carriers/rows` counters
-and `partitioned_vdn_temporal_carrier_verified` with one stable numerical
-digest. The transformer receipt must identify
-`destination_grid_stencil_v1` with the same digest.
+The actual low-stage witness records block 0, heads 0/55, K/V short conv,
+destination-grid policy and the same numerical digest with zero extra
+H3/provider/VAE calls.
 
-Save metrics, full log, witness JSON/PT, raw decoded physical-group frames and
-assembled movie. Acceptance is the **whole boundary window**, not pair0: exact
-background continuity must remain, successor motion must not show a displaced
-jump/freeze/compensation drift, and NFE/provider/VAE/sampler/history topology
-must remain unchanged.
+C materially improves the internal inherited pre-high transition:
+upper45 successor pair1 changes from A/native
+`(-3.89833,-3.80939)` to B/suppression
+`(-0.94051,-0.32042)` and C
+`(-0.70003,-0.07865)`. C therefore reproduces the causal B-arm effect without
+deleting the learned cross-grid contribution.
 
-If C does not resolve the rendered whole-window defect, stop the stencil
-promotion path and continue with the prescribed
-`bypass_partitioned_linear` discriminator, then same-domain weighted-dense
-suffix attention if needed, before implicating provider transfer. The old Sol
-dense environment switch does not exist on these refs.
+That internal improvement is **not sufficient**. User inspection of the actual
+00722 rendered output reports that the same frame shift is still visible. This
+fails the design's explicit whole-window rendered-media criterion. The
+destination-stencil path must not be tuned further or promoted from these
+metrics. Preserve VDN #35 and the 00722 artifacts as rejected diagnostic
+evidence only.
+
+### Next discriminator: bypass the partitioned learned-linear branch
+
+Run one matched hardware arm with the existing control:
+
+* `vdn_linear_diagnostic=bypass_partitioned_linear`
+* `vdn_temporal_carrier_policy=native_grid_then_map_v1`
+* `capture_boundary_witness=false`
+
+Keep VDN #35 installed so source topology remains frozen; the native carrier
+selection makes its candidate-C arithmetic inert. Keep every other 00722
+selector, seed, workflow, provider, Spectrum, LoRA/DoRA, learned upscaler,
+frame-gauge settings and Continuum Analyze-Only setting unchanged. Do not request
+the boundary witness in this arm: bypassing the learned-linear branch removes
+the execution path that completes that witness.
+
+Require positive `partitioned_vdn_linear_bypass_calls` and
+`partitioned_vdn_linear_bypass_video_rows` plus the existing
+`partitioned_vdn_linear_diagnostic_verified` receipt. NFE, sampler/history
+topology and provider/VAE call counts must remain matched.
+
+Interpret this arm as a discriminator, not a fix. If bypass materially changes
+the rendered frame shift, inspect learned-linear frame writes, gates and
+recurrence before proposing any new architecture. If the visible defect remains,
+the design next requires a same-gathered-domain, same-prefix-bias weighted-dense
+suffix-attention diagnostic under a distinct history identity. Only after that
+may provider transfer be implicated. The old Sol dense environment switch does
+not exist on these refs.
 
 ## Source and checkpoint provenance
 
@@ -338,18 +373,18 @@ CPU environment: Torch2.14.0+cpu, no CUDA. Results:
 | VDN current-Core node/compiler smoke | passed |
 | Flow Ruff/format; VDN CI-selected Ruff; compileall | passed |
 
-Completed gates now include the actual SM120 feature witness and matched A/B
-suppression discriminator. Remaining gates are candidate-C installed provenance
-and SM120 execution, raw and assembled rendered media with final user
-inspection, then (only after a successful C) two-boundary/non-square/history and
-performance/VRAM qualification. If C fails, the next discriminator is
-partitioned-linear bypass, followed conditionally by same-domain weighted-dense
-attention. Audio remains independently unresolved. No first-pair metric, source
-test or green CI can substitute for rendered whole-window acceptance.
+Completed gates now include the actual SM120 feature witness, matched A/B
+suppression discriminator, and 00722 candidate-C SM120 execution. Candidate C
+failed the final rendered-media gate because the visible frame shift persists.
+The next open gate is the matched partitioned-linear bypass discriminator,
+followed conditionally by same-domain weighted-dense attention and then provider
+transfer attribution if still required. Audio remains independently unresolved.
+No first-pair metric, source test or green CI can substitute for rendered
+whole-window acceptance.
 
-Rollback candidate C by removing VDN #35 and returning the Flow selector to
-`native_grid_then_map_v1`; the observer stack #34/#93 can remain for evidence
-capture. Full rollback uses Patcher's paired diagnostic-overlay removal to the
-frozen #89/#33 baseline, retaining exact-main semantics. Verify effective source
-hashes again. Sol/Continuum stay unchanged. Production consolidation into #89
-and any release remain unqualified.
+Candidate C is retained only as rejected diagnostic evidence in VDN #35. For
+subsequent discriminators keep #35 installed but return the Flow selector to
+`native_grid_then_map_v1` so the candidate arithmetic is inert and source
+topology remains frozen. Full rollback can remove #35 and the #34/#93 diagnostic
+overlays to the frozen #89/#33 baseline. Sol/Continuum stay unchanged.
+Production consolidation into #89 and any release remain unqualified.
