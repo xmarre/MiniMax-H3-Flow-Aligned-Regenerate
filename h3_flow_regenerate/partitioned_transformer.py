@@ -235,7 +235,7 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
 
     carrier_contract = runtime.vdn_temporal_carrier_contract
     carrier_digest = None if carrier_contract is None else carrier_contract.get("numerical_digest")
-    cache_identity = (carrier_digest, identity)
+    cache_identity = identity if carrier_digest is None else (("vdn_temporal_carrier_v1", carrier_digest), identity)
     cached = cache.get(cache_identity)
     if cached is not None:
         if not callable(cached) or not getattr(cached, "_h3_flow_partitioned_attention_override", False):
