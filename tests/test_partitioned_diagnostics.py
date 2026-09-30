@@ -1019,13 +1019,9 @@ def test_handoff_transfer_control_is_model_local_default_absent_and_fail_closed(
         control.model_options["transformer_options"][PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY]
         == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
     )
+    assert control_metrics.events[-1][1]["handoff_transfer_control"] == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
     assert (
-        control_metrics.events[-1][1]["handoff_transfer_control"]
-        == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
-    )
-    assert (
-        normalize_handoff_transfer_control(PARTITIONED_HANDOFF_TRANSFER_LEARNED)
-        == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+        normalize_handoff_transfer_control(PARTITIONED_HANDOFF_TRANSFER_LEARNED) == PARTITIONED_HANDOFF_TRANSFER_LEARNED
     )
     with pytest.raises(ValueError, match="handoff transfer control"):
         normalize_handoff_transfer_control("invented")
