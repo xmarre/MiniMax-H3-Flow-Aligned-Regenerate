@@ -462,6 +462,7 @@ def build_handoff_state(
     transfer_metrics: dict[str, Any] | None = None,
     clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
     noise_mode: str = H3_HANDOFF_NOISE_INDEPENDENT,
+    run_same_grid_handoff: bool = False,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
