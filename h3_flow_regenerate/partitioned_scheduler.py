@@ -2575,7 +2575,8 @@ def run_partitioned_progressive(
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
             exact_target_prefix_restore_unchanged=True,
-            learned_transfer_unchanged=True,
+            handoff_transfer_control=handoff_transfer_control,
+            learned_transfer_unchanged=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
             target_high_unchanged=True,
             diagnostic_only=True,
         )
@@ -4456,8 +4457,8 @@ def run_partitioned_progressive(
             actual_learned_checkpoint_provider_invoked=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
             ),
-            upscaler_prefix_context_used=True,
-            upscaler_prefix_output_discarded=True,
+            upscaler_prefix_context_used=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+            transferred_prefix_output_discarded=True,
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
