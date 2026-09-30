@@ -1,13 +1,23 @@
 # Heterogeneous boundary observation: qualification handoff
 
-Status: matched SM120 A/B/C discrimination is complete. The suppression arm
-materially changed the inherited pre-high successor geometry and candidate C
-reproduced that internal improvement while retaining learned cross-grid taps,
-but **00722 still shows the visible frame shift under user inspection**.
-Candidate C therefore fails the authoritative rendered-media acceptance gate and
-is rejected for production promotion. The default arithmetic is unchanged and no
-production fix is promoted. The next discriminator is the existing
-`bypass_partitioned_linear` control.
+Status: matched SM120 A/B/C plus complete partitioned learned-linear bypass
+discrimination is complete. Candidate C changed the internal pre-high trajectory
+but **00722 still rendered the frame shift**. 00724 then bypassed the complete
+VDN learned-linear complement for 250 verified calls and **the visible frame
+shift still remained under user inspection**. The VDN stencil/linear path is
+therefore not sufficient to explain the rendered defect and no VDN production
+fix is promoted.
+
+The leading remaining hypothesis is now the low-resolution -> high-resolution
+Flow handoff itself, especially the learned 3D latent transfer. Across the
+matched runs the source-low successor motion is comparatively small while the
+post-transfer clean witness repeatedly develops a much larger successor
+displacement. A direct same-source transfer discriminator is implemented on
+Flow #93: keep the exact same low/probe state, residual/noise transport,
+postprocess controls, exact-prefix restoration and target-high stage, but replace
+only the learned checkpoint transform with deterministic bicubic spatial
+transfer. This distinguishes "learned upscaler is causal" from "any low->high
+handoff/high-refine transition is causal." No production fix is promoted.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -259,33 +269,77 @@ destination-stencil path must not be tuned further or promoted from these
 metrics. Preserve VDN #35 and the 00722 artifacts as rejected diagnostic
 evidence only.
 
-### Next discriminator: bypass the partitioned learned-linear branch
+### 00724 result: complete learned-linear bypass also fails rendered acceptance
 
-Run one matched hardware arm with the existing control:
+00724 is a valid bypass arm:
 
 * `vdn_linear_diagnostic=bypass_partitioned_linear`
 * `vdn_temporal_carrier_policy=native_grid_then_map_v1`
-* `capture_boundary_witness=false`
+* 250 fail-closed verified bypass calls / 5,340,500 video rows
+* unchanged 14 actual H3 NFE / 18 logical calls / six sampler invocations /
+  four history boundaries
+* source-carrier audio-position execution verified and the run completed.
 
-Keep VDN #35 installed so source topology remains frozen; the native carrier
-selection makes its candidate-C arithmetic inert. Keep every other 00722
-selector, seed, workflow, provider, Spectrum, LoRA/DoRA, learned upscaler,
-frame-gauge settings and Continuum Analyze-Only setting unchanged. Do not request
-the boundary witness in this arm: bypassing the learned-linear branch removes
-the execution path that completes that witness.
+The bypass strongly changes internal geometry but does not remove the rendered
+defect. Upper45 `exact_restored_pre_high` successor pair1 becomes
+`(+2.97523,-0.24417)`, i.e. it reverses direction relative to A/native rather
+than simply shrinking. After target-high the upper45 net is
+`(-0.37610,+0.28953)`. Despite that numerical change, user inspection reports
+that the same visible frame shift remains. This rejects the complete partitioned
+VDN learned-linear complement as a sufficient cause of the rendered artifact.
 
-Require positive `partitioned_vdn_linear_bypass_calls` and
-`partitioned_vdn_linear_bypass_video_rows` plus the existing
-`partitioned_vdn_linear_diagnostic_verified` receipt. NFE, sampler/history
-topology and provider/VAE call counts must remain matched.
+The more important localization is earlier in the handoff. In 00724 the
+source-low upper45 successor pair1 is only about
+`(-0.12913,+0.01193)` target-equivalent cells. Immediately after the learned
+34x34 -> 48x48 clean-video transfer it is about
+`(+3.08880,-0.35257)`, roughly 24x larger in vector magnitude. Exact-prefix
+restoration then changes pair0 as intended but leaves the successor jump at
+`(+2.97523,-0.24417)`. Similar source->learned amplification occurs in the
+other matched arms despite their different VDN interventions. This makes the
+low->high transfer the leading current suspect.
 
-Interpret this arm as a discriminator, not a fix. If bypass materially changes
-the rendered frame shift, inspect learned-linear frame writes, gates and
-recurrence before proposing any new architecture. If the visible defect remains,
-the design next requires a same-gathered-domain, same-prefix-bias weighted-dense
-suffix-attention diagnostic under a distinct history identity. Only after that
-may provider transfer be implicated. The old Sol dense environment switch does
-not exist on these refs.
+This is not yet proof that the learned checkpoint itself is the sole cause:
+the remaining alternatives are (a) the learned 3D upscaler introduces the
+spatial/temporal gauge change, or (b) the broader low->high resolution
+handoff plus target-high response does so even with a simple spatial transfer.
+
+### Revised next discriminator: same-source spatial transfer control
+
+The authoritative design explicitly requires revision rather than another
+production correction when A/B/C fail to isolate/remove the rendered defect.
+Given C and the complete VDN-linear bypass both fail media acceptance, the
+previously ordered weighted-dense attention arm is deferred while the already
+implicated handoff is isolated directly.
+
+Flow #93 now exposes an appended diagnostic selector
+`handoff_transfer_control`:
+
+* `learned_3d` — historical/default path; absence leaves existing model options
+  unchanged.
+* `bicubic_same_source_control` — retains the exact learned-handoff plumbing
+  but replaces only the checkpoint's `upscale_clean_video` transform with
+  deterministic bicubic spatial resize.
+
+The bicubic control deliberately runs through the same postprocess hook,
+source-residual/noise transport, exact-prefix restoration, DC/overlap logic,
+audio state, guidance, Spectrum history and target-high sampler. It performs
+zero actual learned-checkpoint provider calls and emits
+`partitioned_handoff_transfer_control` with a source-clean tensor digest,
+source/target geometry, one spatial-control call and zero extra H3/provider/VAE
+or sampler/history work.
+
+For the next matched hardware run keep the **00724** workflow and every control
+frozen, including the VDN linear bypass, and change only:
+
+* `handoff_transfer_control=bicubic_same_source_control`
+* keep `capture_boundary_witness=false`
+* keep `vdn_temporal_carrier_policy=native_grid_then_map_v1`.
+
+If the visible shift disappears or materially collapses, the learned 3D
+upscaler is causally implicated. If the visible shift remains with comparable
+character, the cause is broader than the learned checkpoint: the low->high
+resolution handoff / target-high transition itself becomes the next owner to
+isolate. Rendered whole-window inspection remains decisive.
 
 ## Source and checkpoint provenance
 
@@ -374,13 +428,14 @@ CPU environment: Torch2.14.0+cpu, no CUDA. Results:
 | Flow Ruff/format; VDN CI-selected Ruff; compileall | passed |
 
 Completed gates now include the actual SM120 feature witness, matched A/B
-suppression discriminator, and 00722 candidate-C SM120 execution. Candidate C
-failed the final rendered-media gate because the visible frame shift persists.
-The next open gate is the matched partitioned-linear bypass discriminator,
-followed conditionally by same-domain weighted-dense attention and then provider
-transfer attribution if still required. Audio remains independently unresolved.
-No first-pair metric, source test or green CI can substitute for rendered
-whole-window acceptance.
+suppression discriminator, 00722 candidate-C execution, and 00724 complete
+partitioned learned-linear bypass. Both C and bypass fail the rendered-media
+gate: the visible frame shift persists. The next open gate is the direct
+same-source learned-vs-bicubic handoff transfer discriminator. Same-domain
+weighted-dense attention is intentionally deferred pending that result because
+the transfer boundary is now directly implicated by repeated source->learned
+amplification. Audio remains independently unresolved. No first-pair metric,
+source test or green CI can substitute for rendered whole-window acceptance.
 
 Candidate C is retained only as rejected diagnostic evidence in VDN #35. For
 subsequent discriminators keep #35 installed but return the Flow selector to
