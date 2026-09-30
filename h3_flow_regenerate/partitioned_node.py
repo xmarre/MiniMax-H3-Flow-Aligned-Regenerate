@@ -29,6 +29,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS,
     apply_partitioned_diagnostic_controls,
 )
 from .partitioned_outer import partitioned_outer_wrapper
@@ -386,6 +388,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after the witness toggle so every existing serialized widget index
+        # remains stable. The candidate is hardware-gated and never the default.
+        spec["required"]["vdn_temporal_carrier_policy"] = (
+            list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS),
+            {
+                "default": PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+                "tooltip": (
+                    "native_grid_then_map_v1 preserves the current VDN short-conv arithmetic. "
+                    "destination_grid_stencil_v1 is the qualified candidate C: only cross-grid "
+                    "temporal taps map the raw projected feature to the receiving frame lattice "
+                    "before the checkpoint spatial stencil; same-grid work is unchanged."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -426,6 +442,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         frame_gauge_residual_mode="off",
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         capture_boundary_witness=False,
+        vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -472,6 +489,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             prefix_transformer_context=prefix_transformer_context,
             audio_position_domain=audio_position_domain,
