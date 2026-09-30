@@ -3,19 +3,20 @@
 Status: matched SM120 A/B/C plus complete partitioned learned-linear bypass
 discrimination is complete. Candidate C changed the internal pre-high trajectory
 but **00722 still rendered the frame shift**. 00724 then bypassed the complete
-VDN learned-linear complement for 250 verified calls and **the visible frame
-shift still remained under user inspection**. The VDN stencil/linear path is
-therefore not sufficient to explain the rendered defect and no VDN production
-fix is promoted.
+VDN learned-linear complement and **the visible frame shift still remained**.
+No VDN production fix is promoted.
 
-The leading remaining hypothesis is now the low-resolution -> high-resolution
-Flow stage transition itself. Across the matched runs the source-low successor
-motion is comparatively small while the post-transfer target-grid witness
-develops a much larger successor displacement. Flow #93 therefore now includes
-a direct same-grid target control: low/probe executes at the target resolution,
-the handoff keeps the same split but performs no spatial resize, and target-high
-then proceeds normally. This removes the resolution transition itself rather
-than comparing two different resize operators. No production fix is promoted.
+00726 successfully executed the direct same-grid target control. The user still
+observed a slight frame shift, but reported that it was **substantially less
+prominent**. This is partial rendered evidence that the low-resolution ->
+high-resolution stage transition is materially involved, not evidence that it
+is the sole cause. The run also exposed a separate Flow clean-state ownership
+bug: a source-residual handoff was later inverted as though it had used the
+deterministic Gaussian-noise contract, producing a synthetic clean mismatch and
+a nonzero first-suffix DC mutation even though the same-grid provider and frame
+gauge both reported identity. Flow #93 now preserves the actual clean
+postprocess tensor and refuses that invalid inverse. A same-grid rerun after
+this correction is the next qualification gate. No production fix is promoted.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -31,7 +32,7 @@ does not establish that cross-grid taps cause the rendered artifact.
 | VDN Plus main | `b78e94d0365ffc5059924a048af707e565d0380e` |
 | VDN Plus #33 | `da3627f85d494bdf4213251deb3ba2a94b8a2f36` |
 | VDN Plus #34 observer | `cae13fb5e8d71b93ee3134b629d23fec7c819c5b` |
-| VDN Plus #35 destination-stencil candidate | `312a036139ba7422e9122ea418e13ac7cf3ee23e` |
+| VDN Plus #35 diagnostic head (candidate-C retained; equal-grid contract added) | `109e75c3fb9f97815504d41226dd4c853cd434c0` |
 | Sol main / v0.1.6 | `bef9b300275a89290ca2d53eafff79af06f5e0ef` |
 | Sol source-contract pin | `93b3e03f2b7b579aaf55fa0f87f55083b259e25c` |
 | Continuum Plus main | `e870875b1a29968d39d72ba304e9f2b05544c015` |
@@ -327,6 +328,68 @@ The fix is now coordinated across both repositories:
 
 The failed attempt produced no rendered discriminator result and must not be
 counted as evidence for or against the resolution-transition hypothesis.
+
+### 00726 same-grid hardware result and clean-state ownership defect
+
+00726 is the first successful execution of the direct same-grid control. Runtime
+receipts prove that configured progressive source intent remained 34x34 while
+continuation low/probe actually ran at 48x48, target-high remained 48x48, the
+handoff operator was `diagnostic:same_grid_target_identity`, it executed once,
+and the actual learned-checkpoint provider was not called. The complete
+partitioned VDN learned-linear bypass also remained active.
+
+Rendered-media inspection remains authoritative: the user reports that a
+**slight frame shift still happens, but it is much less prominent**. Removing
+the low->high spatial transition therefore materially changes the visible
+defect, but does not eliminate it.
+
+The pair is not perfectly controlled. 00726 recorded 15 actual H3 NFE
+(low9/probe2/high4) and three Spectrum forecasts, whereas 00724 recorded 14
+actual H3 NFE (low8/probe2/high4) and four forecasts. 00726 also ran a newer
+ComfyUI/Patcher Core. Those differences prevent assigning the entire visible
+improvement to resolution alone from this single comparison.
+
+00726 additionally exposed a concrete Flow ownership bug. The handoff noise
+policy was `source_residual_patch_refinement_v1`; at equal 48x48 geometry that
+residual transport itself was identity, and frame-gauge registration returned
+`identity/already_aligned`. Despite that, downstream splice logic reported
+`splice_clean_source=inverse_recovered` and
+`splice_recovery=inverse_conditional_renoise`: it reconstructed clean video
+with deterministic Gaussian noise even though the conditional state had been
+built from the carried source residual.
+
+At the 00726 split sigma (~0.8780488), that incorrect inverse strongly amplifies
+the residual-vs-Gaussian difference. The synthetic clean tensor then drove a
+production one-token DC bridge: one suffix token was changed with delta RMS
+~0.231223 and max absolute delta ~0.455920 even though the same-grid provider
+prefix was already aligned with the authoritative prefix. Consequently the
+00726 `learned_native` / `exact_restored_pre_high` diagnostics are
+contaminated by this reconstruction error and are not reliable evidence of a
+real identity-handoff spatial jump.
+
+Flow #93 now fixes ownership at the source:
+
+* the clean postprocess hook retains the exact clean tensor that actually feeds
+  conditional re-noising;
+* downstream splice/bridge logic uses that tensor directly;
+* source-residual mode fails closed if that tensor is missing instead of
+  falling back to Gaussian inverse recovery;
+* deterministic inverse recovery remains available only for the independent
+  deterministic-noise contract;
+* regression tests prove that an identity same-grid handoff cannot manufacture
+  a suffix DC correction from this mismatch.
+
+The corrected Flow head is
+`53e99780c3379e2d7606c2cf0de2b0b6eb1252dc`. CI run `36739778101`
+completed successfully across source-contracts and Python 3.10/3.11/3.12/3.13.
+Checkpoints preserve both the pre-fix 00726 state and the CI-green correction.
+
+The next hardware run must repeat 00726's same-grid settings. It should report
+`splice_clean_source=actual_clean_postprocess` and
+`splice_recovery=actual_clean_postprocess_no_inverse`. With identity same-grid
+transfer and identity frame gauge, the one-token DC delta should collapse to
+zero; any nonzero DC correction in that exact condition is a fail-closed
+ownership violation.
 
 ### Revised next discriminator: remove the spatial grid transition itself
 
