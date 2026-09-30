@@ -45,6 +45,8 @@ from .guidance import RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    H3_LATENT_UPSCALER_API_VERSION,
+    H3_LATENT_UPSCALER_KIND,
     CleanVideoPostprocessResult,
     ProgressiveTargetInputConfig,
     build_handoff_state,
@@ -74,6 +76,9 @@ from .partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+    PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY,
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
@@ -97,6 +102,7 @@ from .partitioned_diagnostics import (
     normalize_audio_position_domain,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
+    normalize_handoff_transfer_control,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
@@ -184,6 +190,31 @@ PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_res
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
+
+
+class _BicubicSameSourceTransferProvider:
+    """Provider-contract shim that replaces only the learned clean-video operator."""
+
+    api_version = H3_LATENT_UPSCALER_API_VERSION
+    kind = H3_LATENT_UPSCALER_KIND
+    model_name = "diagnostic:bicubic_same_source_control"
+    offload_after_upscale = False
+
+    def __init__(self, template) -> None:
+        self.device = str(getattr(template, "device", "cuda"))
+        self.inference_device = self.device
+        self.precision = str(getattr(template, "precision", "bf16"))
+        self.calls = 0
+
+    def upscale_clean_video(
+        self,
+        video: torch.Tensor,
+        *,
+        target_h: int,
+        target_w: int,
+    ) -> torch.Tensor:
+        self.calls += 1
+        return resize_video(video, int(target_h), int(target_w), mode="bicubic")
 
 
 def _cache_audio_decode_witness(
@@ -2467,6 +2498,12 @@ def run_partitioned_progressive(
             PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         )
     )
+    handoff_transfer_control = normalize_handoff_transfer_control(
+        initial_transformer.get(
+            PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY,
+            PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+        )
+    )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
@@ -3494,6 +3531,20 @@ def run_partitioned_progressive(
                 extra_history_boundaries=0,
             )
             del source_effective_residual, residual_suffix, initial_suffix, initial_effective_suffix, residual_delta
+        effective_upscaler = config.learned_upscaler
+        spatial_transfer_control = None
+        source_clean_sha256 = None
+        if handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL:
+            # Keep the exact learned-handoff plumbing (postprocess, residual/noise
+            # transport, exact-prefix restoration and target-high stage) but replace
+            # the checkpoint transform itself with deterministic spatial bicubic.
+            # This is the direct same-source discriminator for 00724.
+            spatial_transfer_control = _BicubicSameSourceTransferProvider(config.learned_upscaler)
+            effective_upscaler = spatial_transfer_control
+            source_clean_control, _source_clean_audio_control = unpack_streams(source_x0, source_shapes)
+            source_clean_sha256 = tensor_sha256(source_clean_control)
+            del source_clean_control, _source_clean_audio_control
+
         target_raw, rebuilt_shapes = build_handoff_state(
             source_packed_state=source_raw,
             source_x0_packed=source_x0,
@@ -3503,11 +3554,40 @@ def run_partitioned_progressive(
             target_w=target_w,
             seed=int(seed or 0) + config.seed_offset,
             transfer_mode="learned_3d",
-            learned_upscaler=config.learned_upscaler,
+            learned_upscaler=effective_upscaler,
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
         )
+        if spatial_transfer_control is not None:
+            if spatial_transfer_control.calls != 1:
+                raise RuntimeError(
+                    "same-source bicubic transfer control did not execute exactly once"
+                )
+            if transfer_metrics.get("model_name") != spatial_transfer_control.model_name:
+                raise RuntimeError("same-source bicubic transfer control lost its runtime identity")
+            binding.metrics.increment("partitioned_handoff_spatial_control_calls")
+            binding.metrics.event(
+                "partitioned_handoff_transfer_control",
+                mode=handoff_transfer_control,
+                source_clean_sha256=source_clean_sha256,
+                source_hw=tuple(int(value) for value in source_shapes[0][-2:]),
+                target_hw=(int(target_h), int(target_w)),
+                temporal_length=int(source_shapes[0][2]),
+                spatial_control_calls=int(spatial_transfer_control.calls),
+                actual_learned_checkpoint_provider_calls=0,
+                clean_video_postprocess_preserved=clean_video_postprocess is not None,
+                handoff_noise_policy=handoff_noise_mode,
+                authoritative_prefix_restore_preserved=True,
+                target_high_preserved=True,
+                diagnostic_only=True,
+                production_default_changed=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+            )
         handoff_noise_report = transfer_metrics.get("handoff_noise")
         if not isinstance(handoff_noise_report, dict):
             raise RuntimeError("partitioned handoff did not report its target-grid noise contract")
@@ -3544,10 +3624,11 @@ def run_partitioned_progressive(
                 rms_delta=float(audio_copy_delta.square().mean().sqrt().item()),
                 source_ticks=int(source_state_audio.shape[-1]),
                 target_ticks=int(target_audio.shape[-1]),
-                learned_video_transfer_audio_mutation=False,
+                video_transfer_audio_mutation=False,
+                handoff_transfer_control=handoff_transfer_control,
             )
             if not audio_copy_exact:
-                raise RuntimeError("learned video handoff mutated the carried H3 audio sampler state")
+                raise RuntimeError("video handoff mutated the carried H3 audio sampler state")
 
         diagnostic_seed = int(seed or 0) + config.seed_offset
         exact_prefix = stage_plan.prefix.to(
@@ -4371,7 +4452,14 @@ def run_partitioned_progressive(
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
             "partitioned_transfer",
-            learned_transfer_performed=True,
+            handoff_transfer_control=handoff_transfer_control,
+            learned_transfer_performed=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+            spatial_transfer_control_applied=(
+                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+            ),
+            actual_learned_checkpoint_provider_invoked=(
+                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+            ),
             upscaler_prefix_context_used=True,
             upscaler_prefix_output_discarded=True,
             authoritative_target_prefix_restored=True,
