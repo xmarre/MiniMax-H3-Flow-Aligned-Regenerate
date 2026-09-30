@@ -965,28 +965,24 @@ return out
     assert _source_has_audio_velocity_mask_contract(fixed_source) is True
 
 
-def test_source_carrier_audio_position_allows_cross_grid_suppression_ab_arm():
-    _validate_audio_position_candidate_configuration(
-        PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+def test_source_carrier_audio_position_allows_linear_discriminator_arms():
+    for compatible in (
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-    )
-    _validate_audio_position_candidate_configuration(
-        PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
-    )
-
-    for incompatible in (
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
-        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     ):
-        with pytest.raises(PartitionedPreflightUnsupported, match="source_carrier audio-position candidate"):
-            _validate_audio_position_candidate_configuration(
-                PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-                PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-                incompatible,
-            )
+        _validate_audio_position_candidate_configuration(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            compatible,
+        )
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="source_carrier audio-position candidate"):
+        _validate_audio_position_candidate_configuration(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+        )
 
 
 def test_temporal_carrier_selector_is_model_local_and_default_absent():
