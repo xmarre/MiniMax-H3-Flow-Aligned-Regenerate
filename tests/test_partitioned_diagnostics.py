@@ -45,7 +45,12 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS,
     PartitionedAudioModelTimestepContext,
+    build_vdn_temporal_carrier_contract,
     apply_partitioned_diagnostic_controls,
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
@@ -53,6 +58,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
+    normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -77,6 +83,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _validate_audio_position_candidate_configuration,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
+    _verify_partitioned_vdn_temporal_carrier_policy,
     _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
@@ -118,6 +125,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "low_probe_execution_source" not in ordinary
     assert "frame_gauge_repair" not in ordinary
     assert "provider_boundary_stabilization" not in ordinary
+    assert "vdn_temporal_carrier_policy" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -152,6 +160,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
     assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["vdn_temporal_carrier_policy"][0] == list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
+    assert diagnostic["vdn_temporal_carrier_policy"][1]["default"] == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
     assert diagnostic["provider_boundary_stabilization"][0] == list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS)
     assert (
         diagnostic["provider_boundary_stabilization"][1]["default"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
@@ -186,6 +196,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("low_probe_execution_source") < keys.index("frame_gauge_repair")
     assert keys.index("frame_gauge_repair") < keys.index("frame_gauge_residual_mode")
     assert keys.index("frame_gauge_residual_mode") < keys.index("provider_boundary_stabilization")
+    assert keys.index("provider_boundary_stabilization") < keys.index("capture_boundary_witness")
+    assert keys.index("capture_boundary_witness") < keys.index("vdn_temporal_carrier_policy")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -431,6 +443,20 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
         patcher,
         required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     )
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="temporal-carrier API"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        )
+    current._vdn_partitioned_temporal_carrier_api = 1
+    current._vdn_partitioned_temporal_carrier_policies = tuple(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
+    current._vdn_partitioned_temporal_carrier_short_conv_spec = "vdn_solve_short_conv_v1|test"
+    spec = _validate_partitioned_vdn_compat(
+        patcher,
+        required_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    )
+    assert spec == "vdn_solve_short_conv_v1|test"
 
 
 def test_source_carrier_transformer_verification_fails_closed_then_reports_counts():
@@ -961,6 +987,89 @@ def test_source_carrier_audio_position_allows_cross_grid_suppression_ab_arm():
                 PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
                 incompatible,
             )
+
+
+def test_temporal_carrier_selector_is_model_local_and_default_absent():
+    default_model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_VDN_TEMPORAL_CARRIER_KEY not in default_model.model_options["transformer_options"]
+    assert default_metrics.events[-1][1]["vdn_temporal_carrier_policy"] == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
+
+    candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
+    candidate_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        candidate_model,
+        candidate_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    )
+    assert (
+        candidate_model.model_options["transformer_options"][PARTITIONED_VDN_TEMPORAL_CARRIER_KEY]
+        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
+    with pytest.raises(ValueError, match="requires vdn_linear_diagnostic='normal'"):
+        apply_partitioned_diagnostic_controls(
+            SimpleNamespace(model_options={"transformer_options": {}}),
+            _Metrics(),
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+            audio_guided_overlap_ticks=4,
+            vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        )
+
+
+def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_closed():
+    digest = "a" * 64
+    contract = build_vdn_temporal_carrier_contract(
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        flow_semantic_digest=digest,
+        diagnostic_mode=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        short_conv_spec="vdn_solve_short_conv_v1|test",
+    )
+    assert contract == build_vdn_temporal_carrier_contract(
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        flow_semantic_digest=digest,
+        diagnostic_mode=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        short_conv_spec="vdn_solve_short_conv_v1|test",
+    )
+    assert len(contract["numerical_digest"]) == 64
+    assert normalize_vdn_temporal_carrier_policy(PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION) == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+
+    metrics = H3FlowMetrics()
+    with pytest.raises(RuntimeError, match="no verified cross-grid carrier work"):
+        _verify_partitioned_vdn_temporal_carrier_policy(
+            metrics,
+            PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+            calls_before=0,
+            taps_before=0,
+            carriers_before=0,
+            rows_before=0,
+        )
+    metrics.increment("partitioned_vdn_destination_grid_stencil_calls", 5)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_taps", 60)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_carriers", 40)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_rows", 1000)
+    metrics.event(
+        "partitioned_vdn_temporal_carrier_stage",
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        numerical_digest=contract["numerical_digest"],
+    )
+    _verify_partitioned_vdn_temporal_carrier_policy(
+        metrics,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        calls_before=0,
+        taps_before=0,
+        carriers_before=0,
+        rows_before=0,
+    )
+    assert metrics.events[-1].kind == "partitioned_vdn_temporal_carrier_verified"
+    assert metrics.events[-1].fields["numerical_digest"] == contract["numerical_digest"]
 
 
 def test_source_carrier_audio_position_control_is_opt_in_and_model_local():
