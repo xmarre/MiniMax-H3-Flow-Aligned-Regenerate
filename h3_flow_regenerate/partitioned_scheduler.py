@@ -1244,6 +1244,43 @@ def _recover_partitioned_transfer_clean(
     )
 
 
+def _resolve_partitioned_transfer_clean(
+    target_video: torch.Tensor,
+    actual_handoff_clean: torch.Tensor | None,
+    *,
+    handoff_noise_mode: str,
+    sigma: float,
+    seed: int,
+) -> tuple[torch.Tensor, str, str]:
+    """Resolve the clean tensor from the noise contract that actually built target_video."""
+
+    if actual_handoff_clean is not None:
+        if (
+            tuple(actual_handoff_clean.shape) != tuple(target_video.shape)
+            or actual_handoff_clean.device != target_video.device
+            or actual_handoff_clean.dtype != target_video.dtype
+        ):
+            raise RuntimeError("captured handoff clean tensor does not match target video geometry/device/dtype")
+        if not actual_handoff_clean.is_floating_point() or not bool(torch.isfinite(actual_handoff_clean).all().item()):
+            raise RuntimeError("captured handoff clean tensor is not finite floating-point video")
+        return actual_handoff_clean, "actual_clean_postprocess", "actual_clean_postprocess_no_inverse"
+
+    if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+        raise RuntimeError(
+            "source-residual handoff lost the actual clean postprocess tensor; "
+            "refusing deterministic-noise inverse recovery"
+        )
+    if handoff_noise_mode != H3_HANDOFF_NOISE_INDEPENDENT:
+        raise RuntimeError(f"unsupported partitioned handoff noise mode {handoff_noise_mode!r}")
+
+    recovered = _recover_partitioned_transfer_clean(
+        target_video,
+        sigma=sigma,
+        seed=seed,
+    )
+    return recovered, "inverse_recovered", "inverse_conditional_renoise"
+
+
 def _apply_partitioned_suffix_dc_bridge(
     target_video: torch.Tensor,
     learned_clean: torch.Tensor,
@@ -3776,29 +3813,13 @@ def run_partitioned_progressive(
         else:
             if pending_registered_reference is not None:
                 raise RuntimeError("rejected frame-gauge transaction published a guidance reference")
-            if actual_handoff_clean is not None:
-                if (
-                    tuple(actual_handoff_clean.shape) != tuple(target_video.shape)
-                    or actual_handoff_clean.device != target_video.device
-                    or actual_handoff_clean.dtype != target_video.dtype
-                ):
-                    raise RuntimeError("captured handoff clean tensor does not match target video geometry/device/dtype")
-                learned_clean = actual_handoff_clean
-                splice_recovery = "actual_clean_postprocess_no_inverse"
-                splice_clean_source = "actual_clean_postprocess"
-            else:
-                if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
-                    raise RuntimeError(
-                        "source-residual handoff lost the actual clean postprocess tensor; "
-                        "refusing deterministic-noise inverse recovery"
-                    )
-                learned_clean = _recover_partitioned_transfer_clean(
-                    target_video,
-                    sigma=sigma,
-                    seed=diagnostic_seed,
-                )
-                splice_recovery = "inverse_conditional_renoise"
-                splice_clean_source = "inverse_recovered"
+            learned_clean, splice_clean_source, splice_recovery = _resolve_partitioned_transfer_clean(
+                target_video,
+                actual_handoff_clean,
+                handoff_noise_mode=handoff_noise_mode,
+                sigma=sigma,
+                seed=diagnostic_seed,
+            )
             provider_native_clean = learned_clean
             if exact_overlap_fallback_requested:
                 learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
