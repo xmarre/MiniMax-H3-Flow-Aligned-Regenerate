@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -881,7 +882,7 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     "mode", [PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT, PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP]
 )
 def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent(
-    monkeypatch, guided_ticks, mode, outcome
+    monkeypatch, tmp_path, guided_ticks, mode, outcome
 ):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
@@ -902,6 +903,7 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
     exact_mask = pack_streams((video_mask, audio_mask))[0]
 
     metrics = H3FlowMetrics()
+    saved_metrics = metrics.enable_autosave(tmp_path / "metrics.json")
     binding = FlowBinding(metrics=metrics)
     progressive = ProgressiveTargetInputConfig(
         source_latent_h=4,
@@ -1049,6 +1051,7 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
     assert verified.fields["effective_overlap_ticks"] == 0
     assert verified.fields["regenerated_prefix_restored"] is False
     assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
+    assert json.loads(saved_metrics.read_text()) == metrics.snapshot()
 
 
 def test_low_probe_audio_decode_witness_is_output_domain_cpu_and_session_bounded():

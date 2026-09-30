@@ -431,6 +431,10 @@ def partitioned_outer_wrapper(
             latent_audio_report.get("reason"),
             latent_audio_report.get("windows"),
         )
+    # sampler_wall autosaves before the outer audio receipts above are emitted.
+    # Persist the completed invocation so file-based gates see those receipts.
+    if binding.metrics.autosave_path is not None:
+        binding.metrics.write_json(binding.metrics.autosave_path)
     return result
 
 

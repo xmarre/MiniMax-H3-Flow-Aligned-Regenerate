@@ -28,7 +28,57 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
-## 00728: coherent exact-audio correction and next qualification
+## 00729: audio improvement in the frozen diagnostic arm
+
+User inspection reports that the audio issue appears gone and the frame shift is
+pretty much gone, with a slight change between chunks still visible. This is
+qualified evidence for this same-grid, learned-linear-bypass, dense-suffix arm;
+it does not qualify restored production attention or cross-grid learned transfer.
+
+Evidence SHA256:
+- metrics: `496c1c2df344e4aee3276580381e31e1e065429bf8a55a7f473a820e7821165b`
+- runtime log: `53de2985bdac0c090a2bba917c873b999a410e51be6369a0d426d1d24c27d3aa`
+
+The diagnostic control fields, same-grid geometry and per-event logical/actual
+model-call sequence match 00728. The complete learned-linear bypass again records
+300 calls / 10,713,600 video rows; dense suffix again records 3,300 calls /
+8,467,200 Q rows / 45,230,700 KV rows. The authoritative low/high audio masks now
+match, nine native-mask verifications execute, and inner timestep overrides are
+zero. The stored legacy selector remains unchanged with 16 requested ticks; its
+sampler ramp is inactive. The low/probe-versus-high protected-audio difference
+falls from max 11.1940 / RMS 0.874204 to max 4.768e-7 / RMS 2.416e-8.
+
+The matched low/probe decode boundary changes from +6.5377 dB to -9.6175 dB;
+final-high changes from +7.1323 dB to -8.6536 dB. Production PT213 changes from
++7.0079 dB to -8.8709 dB before seam processing. The preceding production RMS is
+identical at 0.004993902; generated RMS falls from 0.011190105 to 0.001798426.
+This supports removal of the loud burst, rather than a downstream normalizer or
+seam repair. It does not establish constant audio loudness across the boundary.
+
+Video phase estimates do not show a corresponding disappearance of displacement.
+Upper45 final-high X pairs change from (-0.108105, -0.390088, -0.128388, -0.018460)
+to (-0.145154, -0.429790, -0.093538, -0.017967) cells; decoded first-pair motion
+remains approximately (-6.31, +4.16) pixels. These estimates are not a reliable
+proxy for the user's rendered assessment. No further spatial actuator is
+authorized by these measurements. The remaining chunk-to-chunk appearance change
+and general video causality are unresolved.
+
+An export-order defect was also found: `sampler_wall` triggers autosave before
+the outer audio verification events are emitted, so the saved 00729 JSON omits
+the final exact-audio receipt even though its nine verification calls and the
+corrected runtime logs are present. Flow now persists the completed invocation
+after those events. This changes evidence export only and adds no sampling,
+provider or VAE work. The saved-file regression covers the actual autosave order.
+The original 00729 evidence remains intact; do not invent its missing receipt.
+
+The next production-restoration discriminator should keep 00729 frozen and
+change only `vdn_linear_diagnostic=normal`, retaining same-grid geometry, dense
+suffix and coherent exact audio. Qualify complete raw/assembled media and the
+positive final mask receipt before separately restoring sparse suffix selection
+or cross-grid learned transfer. No unchanged diagnostic rerun is needed merely
+to reconfirm the already observed audio improvement.
+
+## 00728: coherent exact-audio correction
 
 Evidence SHA256:
 - metrics: `36b43d3bdaa418aacec9a1c75b5e443fd6c1e1594eb51d26bbe42f33a9a2220d`
