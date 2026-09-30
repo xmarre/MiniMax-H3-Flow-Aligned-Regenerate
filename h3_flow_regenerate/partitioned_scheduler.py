@@ -750,11 +750,7 @@ def _validate_partitioned_vdn_compat(
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
 
     model_options = getattr(patcher, "model_options", None)
-    witness_directory = (
-        model_options.get(WITNESS_DIRECTORY_OPTION, None)
-        if isinstance(model_options, dict)
-        else None
-    )
+    witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION, None) if isinstance(model_options, dict) else None
     boundary_witness_requested = witness_requested(witness_directory)
     matched = 0
     for key, owner in object_patches.items():
