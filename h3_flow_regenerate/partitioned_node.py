@@ -21,6 +21,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    PARTITIONED_HANDOFF_TRANSFER_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -402,6 +404,21 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after every existing selector so saved workflows retain all
+        # historical widget positions. Absence/default preserves learned_3d.
+        spec["required"]["handoff_transfer_control"] = (
+            list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS),
+            {
+                "default": PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+                "tooltip": (
+                    "learned_3d preserves the current low->high learned latent handoff. "
+                    "bicubic_same_source_control replaces only that clean-video transfer operator "
+                    "with deterministic bicubic spatial resize while preserving the same source "
+                    "low/probe state, residual/noise transport, exact-prefix restoration, "
+                    "postprocess controls and target-high sampling. Diagnostic only."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -443,6 +460,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
         capture_boundary_witness=False,
         vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+        handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -498,6 +516,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
             provider_boundary_stabilization=provider_boundary_stabilization,
+            handoff_transfer_control=handoff_transfer_control,
         )
 
 
