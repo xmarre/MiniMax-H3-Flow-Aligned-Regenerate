@@ -96,6 +96,14 @@ PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS = (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
 )
 
+PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY = "h3_flow_partitioned_handoff_transfer_control_v1"
+PARTITIONED_HANDOFF_TRANSFER_LEARNED = "learned_3d"
+PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL = "bicubic_same_source_control"
+PARTITIONED_HANDOFF_TRANSFER_OPTIONS = (
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+)
+
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 PARTITIONED_VDN_TEMPORAL_CARRIER_KEY = "h3_flow_partitioned_vdn_temporal_carrier_v1"
@@ -125,6 +133,15 @@ class PartitionedAudioModelTimestepContext:
         increment = getattr(self.metrics, "increment", None)
         if callable(increment):
             increment("partitioned_audio_model_timestep_override_calls")
+
+
+def normalize_handoff_transfer_control(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_HANDOFF_TRANSFER_OPTIONS:
+        raise ValueError(
+            f"partitioned handoff transfer control must be one of {PARTITIONED_HANDOFF_TRANSFER_OPTIONS!r}, got {value!r}"
+        )
+    return value
 
 
 def normalize_vdn_linear_diagnostic(value: str) -> str:
@@ -282,6 +299,7 @@ def apply_partitioned_diagnostic_controls(
     guidance_trajectory_source: str = PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     low_probe_execution_source: str = PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     provider_boundary_stabilization: str = PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+    handoff_transfer_control: str = PARTITIONED_HANDOFF_TRANSFER_LEARNED,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -304,6 +322,7 @@ def apply_partitioned_diagnostic_controls(
     guidance_source = normalize_guidance_trajectory_source(guidance_trajectory_source)
     execution_source = normalize_low_probe_execution_source(low_probe_execution_source)
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
+    handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -341,6 +360,12 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY, None)
     else:
         transformer_options[PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY] = boundary_stabilization
+    if handoff_transfer == PARTITIONED_HANDOFF_TRANSFER_LEARNED:
+        # Absence is the historical/default contract. Only the diagnostic
+        # spatial control publishes a leaf, so old workflows remain identical.
+        transformer_options.pop(PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY, None)
+    else:
+        transformer_options[PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY] = handoff_transfer
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -370,6 +395,8 @@ def apply_partitioned_diagnostic_controls(
             fields["low_probe_execution_source"] = execution_source
         if boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
             fields["provider_boundary_stabilization"] = boundary_stabilization
+        if handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
+            fields["handoff_transfer_control"] = handoff_transfer
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -394,6 +421,10 @@ __all__ = [
     "PARTITIONED_AV_HANDOFF_SOURCE_MAIN",
     "PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS",
     "PARTITIONED_AV_HANDOFF_SOURCE_SHADOW",
+    "PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL",
+    "PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY",
+    "PARTITIONED_HANDOFF_TRANSFER_LEARNED",
+    "PARTITIONED_HANDOFF_TRANSFER_OPTIONS",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS",
@@ -430,6 +461,7 @@ __all__ = [
     "normalize_audio_handoff_source",
     "normalize_audio_position_domain",
     "normalize_av_handoff_source",
+    "normalize_handoff_transfer_control",
     "normalize_guidance_trajectory_source",
     "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
