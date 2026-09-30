@@ -19,7 +19,11 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     PartitionedAudioModelTimestepContext,
+    build_vdn_temporal_carrier_contract,
     normalize_vdn_linear_diagnostic,
 )
 from .partitioned_prefix import (
@@ -229,21 +233,24 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     if previous_identity is not None and previous_identity != identity:
         metrics.increment("partitioned_attention_inherited_provider_transitions")
 
-    cached = cache.get(identity)
+    carrier_contract = runtime.vdn_temporal_carrier_contract
+    carrier_digest = None if carrier_contract is None else carrier_contract.get("numerical_digest")
+    cache_identity = (carrier_digest, identity)
+    cached = cache.get(cache_identity)
     if cached is not None:
         if not callable(cached) or not getattr(cached, "_h3_flow_partitioned_attention_override", False):
             raise RuntimeError("partitioned exact-prefix attention provider cache entry is malformed")
         if getattr(cached, "_h3_flow_partitioned_previous", None) is not previous:
             metrics.increment("partitioned_attention_equivalent_provider_rebindings")
         cached._h3_flow_partitioned_previous = previous
-        cached._h3_flow_partitioned_provider_identity = identity
+        cached._h3_flow_partitioned_provider_identity = cache_identity
         metrics.increment("partitioned_attention_provider_reuses")
         return cached
 
     override = make_partitioned_attention_override(runtime, metrics)
     override._h3_flow_partitioned_previous = previous
-    override._h3_flow_partitioned_provider_identity = identity
-    cache[identity] = override
+    override._h3_flow_partitioned_provider_identity = cache_identity
+    cache[cache_identity] = override
     metrics.increment("partitioned_attention_provider_creations")
     return override
 
@@ -268,6 +275,14 @@ def _partitioned_transformer_options(
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
         raise RuntimeError("partitioned exact-prefix VDN linear diagnostic transport drifted")
     block_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = linear_mode
+    carrier_contract = runtime.vdn_temporal_carrier_contract
+    if carrier_contract is None:
+        block_options.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    else:
+        existing_carrier = block_options.get(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY)
+        if existing_carrier is not None and existing_carrier != carrier_contract:
+            raise RuntimeError("partitioned exact-prefix VDN temporal-carrier policy transport drifted")
+        block_options[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] = carrier_contract
     if runtime.boundary_witness is not None:
         from .boundary_witness import WITNESS_KEY
 
@@ -433,10 +448,33 @@ def partitioned_diffusion_wrapper(
         target_grid_w=int(plan.target_grid[1]),
     )
     partition_contract = partition_plan.to_contract()
+    if runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+        if not runtime.vdn_temporal_carrier_short_conv_spec:
+            raise RuntimeError("destination-grid temporal stencil is missing paired VDN checkpoint capability")
+        carrier_contract = build_vdn_temporal_carrier_contract(
+            policy=runtime.vdn_temporal_carrier_policy,
+            flow_semantic_digest=partition_contract["semantic_digest"],
+            diagnostic_mode=runtime.vdn_linear_diagnostic,
+            short_conv_spec=runtime.vdn_temporal_carrier_short_conv_spec,
+        )
+        if (
+            runtime.vdn_temporal_carrier_contract is not None
+            and runtime.vdn_temporal_carrier_contract != carrier_contract
+        ):
+            raise RuntimeError("partitioned exact-prefix temporal-carrier numerical identity changed within one stage")
+        runtime.vdn_temporal_carrier_contract = carrier_contract
+    elif runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        runtime.vdn_temporal_carrier_contract = None
+    else:
+        raise RuntimeError(f"unsupported VDN temporal-carrier policy {runtime.vdn_temporal_carrier_policy!r}")
     if partition_plan.sequence_rows != int(partitioned_layout.seq_len):
         raise RuntimeError("partitioned exact-prefix plan does not match transformed sequence rows")
 
     local = dict(options)
+    if runtime.vdn_temporal_carrier_contract is None:
+        local.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    else:
+        local[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] = runtime.vdn_temporal_carrier_contract
     local["optimized_attention_override"] = _stage_partitioned_attention_override(
         runtime,
         local.get("optimized_attention_override"),
@@ -480,6 +518,12 @@ def partitioned_diffusion_wrapper(
                     suffix_source_grid_rope=True,
                     low_suffix_real_latent=True,
                     vdn_external_sequence_api=VDN_PARTITIONED_SEQUENCE_API,
+                    vdn_temporal_carrier_policy=runtime.vdn_temporal_carrier_policy,
+                    vdn_temporal_carrier_numerical_digest=(
+                        runtime.vdn_temporal_carrier_contract["numerical_digest"]
+                        if runtime.vdn_temporal_carrier_contract is not None
+                        else None
+                    ),
                     sol_single_union=True,
                     deprecated_mixed_grid_contract_active=False,
                     audio_position_domain=str(runtime.audio_position_domain),
