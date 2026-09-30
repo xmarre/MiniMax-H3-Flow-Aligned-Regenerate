@@ -473,7 +473,8 @@ def build_handoff_state(
     validate_av(source_video, source_audio)
     if x0_video.shape != source_video.shape:
         raise ValueError("source x0 video geometry does not match the handoff state")
-    if (target_h, target_w) == tuple(source_video.shape[-2:]):
+    same_geometry = (target_h, target_w) == tuple(source_video.shape[-2:])
+    if same_geometry and not run_same_grid_handoff:
         return source_packed_state.clone(), list(source_shapes)
     if noise_mode not in H3_HANDOFF_NOISE_MODES:
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
