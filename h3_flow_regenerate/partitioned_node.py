@@ -29,6 +29,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
@@ -419,6 +421,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after every existing selector so serialized widget positions remain stable.
+        spec["required"]["spatial_stage_control"] = (
+            list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS),
+            {
+                "default": PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+                "tooltip": (
+                    "progressive_low_to_high preserves the configured reduced source grid. "
+                    "same_grid_target_control runs low/probe directly on the target grid, keeps "
+                    "the same handoff split and downstream high stage, and uses an identity "
+                    "clean-video transfer at the handoff. This directly removes only the spatial "
+                    "resolution transition for diagnosis."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -461,6 +477,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         capture_boundary_witness=False,
         vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -517,6 +534,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             low_probe_execution_source=low_probe_execution_source,
             provider_boundary_stabilization=provider_boundary_stabilization,
             handoff_transfer_control=handoff_transfer_control,
+            spatial_stage_control=spatial_stage_control,
         )
 
 
