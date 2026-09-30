@@ -999,7 +999,7 @@ def test_temporal_carrier_selector_is_model_local_and_default_absent():
         audio_guided_overlap_ticks=4,
     )
     assert PARTITIONED_VDN_TEMPORAL_CARRIER_KEY not in default_model.model_options["transformer_options"]
-    assert default_metrics.events[-1][1]["vdn_temporal_carrier_policy"] == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
+    assert "vdn_temporal_carrier_policy" not in default_metrics.events[-1][1]
 
     candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
     candidate_metrics = _Metrics()
@@ -1012,6 +1012,10 @@ def test_temporal_carrier_selector_is_model_local_and_default_absent():
     )
     assert (
         candidate_model.model_options["transformer_options"][PARTITIONED_VDN_TEMPORAL_CARRIER_KEY]
+        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
+    assert (
+        candidate_metrics.events[-1][1]["vdn_temporal_carrier_policy"]
         == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
     )
     with pytest.raises(ValueError, match="requires vdn_linear_diagnostic='normal'"):
