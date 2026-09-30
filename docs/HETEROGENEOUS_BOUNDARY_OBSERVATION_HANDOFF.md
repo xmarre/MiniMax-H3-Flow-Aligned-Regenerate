@@ -301,6 +301,33 @@ the remaining alternatives are (a) the learned 3D upscaler introduces the
 spatial/temporal gauge change, or (b) the broader low->high resolution
 handoff plus target-high response does so even with a simple spatial transfer.
 
+### 00725 first same-grid attempt: aborted by stale strict-smaller contract guards
+
+The first hardware attempt at the new same-grid control did **not** test the
+hypothesis. The control reached continuation low-stage setup, but Flow's
+`PartitionedExactPrefixPlan` still rejected equal source/target grids before
+the first continuation transformer evaluation with:
+
+`partitioned exact-prefix plan requires a strictly smaller source grid`.
+
+That exposed an incomplete implementation: the scheduler/stage layer allowed
+the explicit same-grid diagnostic, but the published partition contract and the
+paired VDN parser still encoded the old heterogeneous-only invariant.
+
+The fix is now coordinated across both repositories:
+
+* Flow #93 authorizes equal source/target partition geometry only when the
+  explicit same-grid control is active, publishes zero prefix measure bias and
+  `heterogeneous_spatial_domains=false`, and routes the same-grid case through
+  the full handoff plumbing instead of returning early on equal geometry.
+* VDN #35 accepts equal-grid partition contracts, preserves the ordinary
+  strict/non-expanding geometry checks, and canonicalizes the equal-grid
+  contract with zero measure bias and
+  `heterogeneous_spatial_domains=false`.
+
+The failed attempt produced no rendered discriminator result and must not be
+counted as evidence for or against the resolution-transition hypothesis.
+
 ### Revised next discriminator: remove the spatial grid transition itself
 
 The previous learned-vs-bicubic proposal is **not** the required test for the
