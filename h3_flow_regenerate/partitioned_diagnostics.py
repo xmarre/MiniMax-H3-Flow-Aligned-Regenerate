@@ -139,7 +139,8 @@ def normalize_handoff_transfer_control(value: str) -> str:
     value = str(value)
     if value not in PARTITIONED_HANDOFF_TRANSFER_OPTIONS:
         raise ValueError(
-            f"partitioned handoff transfer control must be one of {PARTITIONED_HANDOFF_TRANSFER_OPTIONS!r}, got {value!r}"
+            "partitioned handoff transfer control must be one of "
+            f"{PARTITIONED_HANDOFF_TRANSFER_OPTIONS!r}, got {value!r}"
         )
     return value
 
@@ -421,14 +422,14 @@ __all__ = [
     "PARTITIONED_AV_HANDOFF_SOURCE_MAIN",
     "PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS",
     "PARTITIONED_AV_HANDOFF_SOURCE_SHADOW",
-    "PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL",
-    "PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY",
-    "PARTITIONED_HANDOFF_TRANSFER_LEARNED",
-    "PARTITIONED_HANDOFF_TRANSFER_OPTIONS",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_KEY",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS",
     "PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW",
+    "PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL",
+    "PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY",
+    "PARTITIONED_HANDOFF_TRANSFER_LEARNED",
+    "PARTITIONED_HANDOFF_TRANSFER_OPTIONS",
     "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY",
     "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW",
     "PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS",
@@ -461,8 +462,8 @@ __all__ = [
     "normalize_audio_handoff_source",
     "normalize_audio_position_domain",
     "normalize_av_handoff_source",
-    "normalize_handoff_transfer_control",
     "normalize_guidance_trajectory_source",
+    "normalize_handoff_transfer_control",
     "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
     "normalize_provider_boundary_stabilization",
