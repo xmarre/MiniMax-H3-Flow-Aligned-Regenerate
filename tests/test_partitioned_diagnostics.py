@@ -44,6 +44,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -63,6 +67,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
+    normalize_spatial_stage_control,
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -84,6 +89,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
     _BicubicSameSourceTransferProvider,
+    _IdentitySameGridTransferProvider,
     _cache_audio_decode_witness,
     _prepare_registered_guidance_reference,
     _validate_audio_position_candidate_configuration,
@@ -133,6 +139,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "provider_boundary_stabilization" not in ordinary
     assert "vdn_temporal_carrier_policy" not in ordinary
     assert "handoff_transfer_control" not in ordinary
+    assert "spatial_stage_control" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -165,6 +172,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     assert diagnostic["handoff_transfer_control"][0] == list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS)
     assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    assert diagnostic["spatial_stage_control"][0] == list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS)
+    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
@@ -207,6 +216,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("frame_gauge_residual_mode") < keys.index("provider_boundary_stabilization")
     assert keys.index("provider_boundary_stabilization") < keys.index("capture_boundary_witness")
     assert keys.index("capture_boundary_witness") < keys.index("vdn_temporal_carrier_policy")
+    assert keys.index("vdn_temporal_carrier_policy") < keys.index("handoff_transfer_control")
+    assert keys.index("handoff_transfer_control") < keys.index("spatial_stage_control")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -1025,6 +1036,52 @@ def test_handoff_transfer_control_is_model_local_default_absent_and_fail_closed(
     )
     with pytest.raises(ValueError, match="handoff transfer control"):
         normalize_handoff_transfer_control("invented")
+
+
+def test_spatial_stage_control_is_model_local_default_absent_and_exclusive_with_transfer_control():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    )
+    assert (
+        model.model_options["transformer_options"][PARTITIONED_SPATIAL_STAGE_CONTROL_KEY]
+        == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    )
+    assert metrics.events[-1][1]["spatial_stage_control"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    assert normalize_spatial_stage_control(PARTITIONED_SPATIAL_STAGE_PROGRESSIVE) == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+
+    with pytest.raises(ValueError, match="requires handoff_transfer_control='learned_3d'"):
+        apply_partitioned_diagnostic_controls(
+            SimpleNamespace(model_options={"transformer_options": {}}),
+            _Metrics(),
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+            audio_guided_overlap_ticks=4,
+            handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        )
+    with pytest.raises(ValueError, match="spatial-stage control"):
+        normalize_spatial_stage_control("invented")
+
+
+def test_identity_same_grid_transfer_provider_rejects_resize_and_preserves_values():
+    template = SimpleNamespace(device="cpu", precision="fp32")
+    provider = _IdentitySameGridTransferProvider(template)
+    video = torch.arange(1 * 24 * 3 * 4 * 4, dtype=torch.float32).reshape(1, 24, 3, 4, 4)
+
+    result = provider.upscale_clean_video(video, target_h=4, target_w=4)
+
+    assert provider.calls == 1
+    assert result.shape == video.shape
+    assert torch.equal(result, video)
+    assert result.data_ptr() != video.data_ptr()
+    assert provider.model_name == "diagnostic:same_grid_target_identity"
+    with pytest.raises(RuntimeError, match="spatial resize request"):
+        provider.upscale_clean_video(video, target_h=6, target_w=6)
 
 
 def test_bicubic_same_source_transfer_provider_is_deterministic_and_bounded_to_resize():
