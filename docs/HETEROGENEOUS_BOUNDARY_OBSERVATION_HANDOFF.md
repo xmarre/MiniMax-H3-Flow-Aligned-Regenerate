@@ -47,8 +47,11 @@ does not establish that cross-grid taps cause the rendered artifact.
 All requested branches/pins were fetched. Flow/VDN review threads were resolved
 at retrieval. Sol's source-contract pin differs from main only in release
 metadata. These are fetched source refs, not proof of installed Patcher trees.
-The installed Core log abbreviates `34b50ec9` on `patcher/stack`; that is not the
-public Core oracle/main and its complete identity remains unavailable.
+Earlier installed evidence abbreviated Core `34b50ec9` on `patcher/stack`.
+The 00726 hardware log instead reports ComfyUI `v0.38.0-12-g0d48b6032` on
+`patcher/stack` with Torch 2.10.0+cu130. This runtime change is a comparison
+confound relative to 00724 and must not be silently attributed to the same-grid
+selector.
 
 Both repositories have remote `checkpoint/heterogeneous-observation-start-20260930`
 refs at their protected PR heads. Development uses separate
