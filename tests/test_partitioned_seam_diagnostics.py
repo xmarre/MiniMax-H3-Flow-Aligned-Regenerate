@@ -39,6 +39,33 @@ def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residu
     assert recovery == "actual_clean_postprocess_no_inverse"
 
 
+def test_same_grid_actual_clean_does_not_manufacture_suffix_dc_correction():
+    torch.manual_seed(1203)
+    learned = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    target = torch.randn_like(learned)
+
+    resolved, _, _ = _resolve_partitioned_transfer_clean(
+        target,
+        learned,
+        handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        sigma=0.4,
+        seed=123,
+    )
+    mapped, corrected, metrics = _apply_partitioned_suffix_dc_bridge(
+        target,
+        resolved,
+        exact,
+        sigma=0.4,
+        enabled=True,
+    )
+
+    assert torch.equal(corrected, learned)
+    assert torch.equal(mapped, target)
+    assert metrics["suffix_dc_bridge_delta_rms"] == 0.0
+    assert metrics["suffix_dc_bridge_delta_abs_max"] == 0.0
+
+
 def test_partitioned_transfer_clean_refuses_gaussian_inverse_for_source_residual_without_capture():
     target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
 
