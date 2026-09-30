@@ -396,7 +396,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
                 "tooltip": (
                     "native_grid_then_map_v1 preserves the current VDN short-conv arithmetic. "
-                    "destination_grid_stencil_v1 is the qualified candidate C: only cross-grid "
+                    "destination_grid_stencil_v1 is the hardware-gated candidate C: only cross-grid "
                     "temporal taps map the raw projected feature to the receiving frame lattice "
                     "before the checkpoint spatial stencil; same-grid work is unchanged."
                 ),
