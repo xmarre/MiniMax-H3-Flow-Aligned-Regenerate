@@ -330,6 +330,14 @@ def _audio_model_timestep_kwargs(options, kwargs):
     context_audio_mask = context.audio_mask
     if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(runtime_audio_mask.shape):
         raise RuntimeError("partitioned audio timestep override mask geometry drifted")
+    if context.mask_kind == "exact_authoritative":
+        expected = context_audio_mask.to(device=runtime_audio_mask.device, dtype=runtime_audio_mask.dtype)
+        if not torch.equal(runtime_audio_mask, expected):
+            raise RuntimeError(
+                "exact audio model labels require the same authoritative sampler input and velocity mask"
+            )
+        context.record_verification()
+        return kwargs
     local = dict(kwargs)
     local["audio_denoise_mask"] = context_audio_mask.to(
         device=runtime_audio_mask.device,
