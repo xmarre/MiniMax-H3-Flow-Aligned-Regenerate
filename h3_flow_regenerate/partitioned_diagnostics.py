@@ -349,7 +349,6 @@ def apply_partitioned_diagnostic_controls(
     if callable(event):
         fields = {
             "vdn_linear_diagnostic": mode,
-            "vdn_temporal_carrier_policy": temporal_carrier_policy,
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
             "prefix_transformer_context": prefix_context,
@@ -357,6 +356,8 @@ def apply_partitioned_diagnostic_controls(
             "native_vdn_unchanged": True,
             "production_default_changed": False,
         }
+        if temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+            fields["vdn_temporal_carrier_policy"] = temporal_carrier_policy
         if position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
             fields["audio_position_domain"] = position_domain
         if handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN:
