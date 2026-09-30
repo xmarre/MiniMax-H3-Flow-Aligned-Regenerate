@@ -16,6 +16,7 @@ from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -126,8 +127,9 @@ def partitioned_outer_wrapper(
     # The original exact mask remains authoritative. sampler_mask reproduces
     # the existing sampler-lifetime ramp. model_timestep_only keeps sampler
     # ownership exact but publishes the ramp only to MiniMax-H3's inner timestep
-    # labels. sampler_mask_exact_timestep keeps the validated sampler-owned ramp
-    # while restoring authoritative binary timestep labels inside MiniMax-H3.
+    # labels. exact_mask keeps the native input, timestep and velocity masks
+    # coherent. The old sampler_mask_exact_timestep selector aliases exact_mask:
+    # releasing sampler rows while labeling them clean violates that contract.
     # The ordinary node keeps the existing environment/default path.
     diagnostic_audio_control = (
         PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
@@ -135,6 +137,10 @@ def partitioned_outer_wrapper(
     )
     guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(model_options)
     guided_mode, guided_mode_source = resolve_partitioned_audio_guided_overlap_mode(model_options)
+    exact_audio_mode = guided_mode in (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    )
     runtime_denoise_mask = denoise_mask
     guided_report = None
     audio_model_context = None
@@ -143,45 +149,63 @@ def partitioned_outer_wrapper(
         guided_mask, guided_report = apply_audio_guided_overlap_mask(
             denoise_mask,
             latent_shapes,
-            ticks=guided_ticks,
+            ticks=0 if exact_audio_mode else guided_ticks,
         )
-        sampler_mask_mode = guided_mode in (
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
-        )
+        if exact_audio_mode:
+            audio_mask = unpack_streams(denoise_mask, latent_shapes)[1]
+            minimum = audio_mask.amin(dim=(0, 1, 2))
+            maximum = audio_mask.amax(dim=(0, 1, 2))
+            protected = maximum == 0
+            generated = minimum == 1
+            audio_prefix_ticks = int(protected.sum().item())
+            if not (
+                bool(protected[:audio_prefix_ticks].all().item()) and bool(generated[audio_prefix_ticks:].all().item())
+            ):
+                raise RuntimeError("exact audio mask requires a contiguous fully protected prefix and generated suffix")
+            guided_report.update(
+                requested_ticks=guided_ticks,
+                audio_prefix_ticks=audio_prefix_ticks,
+                effective_ticks=0,
+                reason="exact_audio_input_timestep_velocity_mask",
+                policy="coherent_exact_audio_mask_v1",
+                legacy_selector_alias=guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+            )
+        sampler_mask_mode = guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER
         if sampler_mask_mode:
             runtime_denoise_mask = guided_mask
-        elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
+        elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP or exact_audio_mode:
             runtime_denoise_mask = denoise_mask
         else:
             raise RuntimeError(f"unsupported partitioned audio guided-overlap mode {guided_mode!r}")
 
-        if bool(guided_report.get("applied")) and guided_mode in (
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
-        ):
+        if exact_audio_mode:
+            audio_model_context = PartitionedAudioModelTimestepContext(
+                audio_mask=unpack_streams(denoise_mask, latent_shapes)[1]
+                .amax(dim=1, keepdim=True)
+                .contiguous()
+                .detach()
+                .clone(),
+                metrics=binding.metrics,
+                ticks=0,
+                audio_prefix_ticks=int(guided_report.get("audio_prefix_ticks", 0)),
+                mask_kind="exact_authoritative",
+            )
+        elif bool(guided_report.get("applied")) and guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
             core_audio_velocity_mask_contract = _core_has_audio_velocity_mask_contract()
             if not core_audio_velocity_mask_contract:
                 raise RuntimeError(
                     "partitioned inner/outer audio-mask decoupling requires ComfyUI MiniMax-H3 "
                     "denoise-mask velocity conversion fix #15988"
                 )
-            if guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP:
-                inner_audio_mask = (
-                    unpack_streams(guided_mask, latent_shapes)[1].amax(dim=1, keepdim=True).contiguous().detach()
-                )
-                mask_kind = "guided_overlap"
-            else:
-                inner_audio_mask = (
-                    unpack_streams(denoise_mask, latent_shapes)[1].amax(dim=1, keepdim=True).contiguous().detach()
-                )
-                mask_kind = "exact_authoritative"
+            inner_audio_mask = (
+                unpack_streams(guided_mask, latent_shapes)[1].amax(dim=1, keepdim=True).contiguous().detach()
+            )
             audio_model_context = PartitionedAudioModelTimestepContext(
                 audio_mask=inner_audio_mask,
                 metrics=binding.metrics,
                 ticks=guided_ticks,
                 audio_prefix_ticks=int(guided_report.get("audio_prefix_ticks", 0)),
-                mask_kind=mask_kind,
+                mask_kind="guided_overlap",
             )
 
         sampler_mask_modified = bool(guided_report.get("applied") and sampler_mask_mode)
@@ -201,7 +225,8 @@ def partitioned_outer_wrapper(
                 audio_model_context.mask_kind if audio_model_context is not None else "runtime_sampler_mask"
             ),
             inner_exact_audio_prefix_preserved=bool(
-                audio_model_context is not None and audio_model_context.mask_kind == "exact_authoritative"
+                exact_audio_mode
+                or (audio_model_context is not None and audio_model_context.mask_kind == "exact_authoritative")
             ),
             sampler_exact_audio_prefix_preserved=not sampler_mask_modified,
             core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
@@ -226,11 +251,8 @@ def partitioned_outer_wrapper(
     if not isinstance(transformer_options, dict):
         raise RuntimeError("partitioned audio diagnostics require mutable transformer options")
     context_installed = False
-    if audio_model_context is not None:
-        if PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY in transformer_options:
-            raise RuntimeError("nested partitioned audio model-timestep context is unsupported")
-        transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] = audio_model_context
-        context_installed = True
+    if audio_model_context is not None and PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY in transformer_options:
+        raise RuntimeError("nested partitioned audio model-timestep context is unsupported")
 
     outer_started = time.perf_counter()
     if binding.registered_guidance_reference is not None:
@@ -239,13 +261,16 @@ def partitioned_outer_wrapper(
         binding,
         enabled=bool(progressive.frame_gauge_repair),
     )
-    binding.guidance_state.reset()
-    binding.active_guidance_run = None
-    binding.registered_guidance_reference = None
     error = None
     fallback_reason = None
     result = None
     try:
+        if audio_model_context is not None:
+            transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] = audio_model_context
+            context_installed = True
+        binding.guidance_state.reset()
+        binding.active_guidance_run = None
+        binding.registered_guidance_reference = None
         result = run_partitioned_progressive(
             adapted,
             guider,
@@ -264,7 +289,7 @@ def partitioned_outer_wrapper(
         )
         if audio_model_context is not None and audio_model_context.calls <= 0:
             raise RuntimeError(
-                "model-timestep-only audio guidance was requested but zero MiniMax-H3 inner-forward overrides executed"
+                "partitioned audio mask context was requested but zero MiniMax-H3 inner-forward calls executed"
             )
     except PartitionedPreflightUnsupported as exc:
         fallback_reason = str(exc)
@@ -339,13 +364,36 @@ def partitioned_outer_wrapper(
             ticks=guided_ticks,
             audio_prefix_ticks=audio_model_context.audio_prefix_ticks,
             override_calls=audio_model_context.calls,
+            verification_calls=audio_model_context.verification_calls,
+            model_timestep_override_applied=not exact_audio_mode,
             mask_kind=audio_model_context.mask_kind,
             sampler_mask_modified=sampler_mask_modified,
             exact_sampler_prefix_preserved=not sampler_mask_modified,
             inner_exact_audio_prefix_preserved=audio_model_context.mask_kind == "exact_authoritative",
-            core_audio_velocity_mask_contract=True,
+            core_audio_velocity_mask_contract=core_audio_velocity_mask_contract,
             fail_closed=True,
         )
+        if exact_audio_mode:
+            binding.metrics.event(
+                "partitioned_exact_audio_mask_verified",
+                policy="coherent_exact_audio_mask_v1",
+                mode=guided_mode,
+                requested_overlap_ticks=guided_ticks,
+                effective_overlap_ticks=0,
+                actual_model_calls=audio_model_context.verification_calls,
+                sampler_input_mask_exact=True,
+                model_timestep_mask_exact=True,
+                model_velocity_mask_exact=True,
+                timestep_override_applied=False,
+                regenerated_prefix_restored=False,
+                final_prefix_exact=True,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+                fail_closed=True,
+            )
         LOG.info(
             "partitioned audio model-timestep context verified mode=%s ticks=%d prefix=%d calls=%d "
             "mask_kind=%s sampler_mask_modified=%s",

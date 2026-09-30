@@ -33,10 +33,12 @@ PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY = "h3_flow_partitioned_audio_guided_ov
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER = "sampler_mask"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP = "model_timestep_only"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP = "sampler_mask_exact_timestep"
+PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT = "exact_mask"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS = (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
 )
 PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY = "h3_flow_partitioned_audio_model_timestep_context_v1"
 
@@ -144,6 +146,14 @@ class PartitionedAudioModelTimestepContext:
     audio_prefix_ticks: int
     mask_kind: str = "guided_overlap"
     calls: int = 0
+    verification_calls: int = 0
+
+    def record_verification(self) -> None:
+        self.calls += 1
+        self.verification_calls += 1
+        increment = getattr(self.metrics, "increment", None)
+        if callable(increment):
+            increment("coherent_exact_audio_model_mask_calls")
 
     def record_call(self) -> None:
         self.calls += 1
@@ -460,6 +470,7 @@ def apply_partitioned_diagnostic_controls(
 
 
 __all__ = [
+    "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS",

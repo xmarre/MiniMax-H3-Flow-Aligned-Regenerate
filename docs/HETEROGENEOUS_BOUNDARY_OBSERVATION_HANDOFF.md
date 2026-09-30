@@ -24,11 +24,68 @@ partitioned VDN learned-linear complement. Its measurable boundary motion is
 already present in the same-grid partitioned low/probe output and largely
 survives target-high.
 
-Per the authoritative design, the next bounded discriminator is now
-same-domain weighted-dense suffix attention: keep the exact same grouped Q/K/V
-domain and target-prefix measure bias, but force only generated-suffix local
-query groups through Sol's existing dense path under distinct diagnostic/history
-identity. No production fix is promoted.
+00728 completed the same-domain dense-suffix intervention. The residual rendered
+shift and audio burst remained. The next qualification changes audio ownership
+as described below. No rendered production fix is promoted.
+
+## 00728: coherent exact-audio correction and next qualification
+
+Dense suffix executed 3,300 calls / 8,467,200 Q rows / 45,230,700 KV rows with
+unchanged domain, prefix measure and grouped ownership. Learned-linear bypass
+executed 300 calls / 10,713,600 video rows. Upper45 source-low X successor pairs
+were (-0.124866, -0.344425, -0.166585, -0.030154) cells; final-high was
+(-0.108105, -0.390088, -0.128388, -0.018460). Identity transfer again added zero
+DC correction. Raw decoded PT212 still reports an initial upper45 displacement
+of (-6.3550, +4.4346) pixels. Sparse suffix selection is not a sufficient cause.
+
+With shared authoritative prefix and matched decode context, low/probe audio
+already has +6.5377 dB boundary RMS; final-high has +7.1323 dB. Extra left context
+changes the decoded suffix by exactly zero. The production/common decode
+difference is approximately 0.0771%, and both production normalizers are inactive.
+PT213 measures +7.0079 dB before seam processing and +7.0059 dB afterward.
+The burst originates before high refinement; left decoder context, normalization
+and seam processing are not sufficient explanations.
+
+Source tracing found a definite conditioning mismatch in the selected
+`sampler_mask_exact_timestep` mode: 16 protected audio ticks were released into
+fractional sampler ownership, while inner H3 labels described them as exact.
+Core's input is `m*x + (1-m)*clean`, and its outer audio velocity conversion uses
+m. Labeling that partially regenerated context clean breaks the native input /
+timestep / velocity contract. Final restoration then substitutes the original
+prefix for the regenerated context. This source defect is proven; its rendered
+contribution remains a hardware hypothesis.
+
+The correction keeps the authoritative mask at every low/probe/high sampler
+entry. Core uses matching native input, timestep and velocity masks. `exact_mask`
+is the explicit selector; stored `sampler_mask_exact_timestep` values alias it.
+Requested overlap width remains provenance; effective width is zero. Each actual
+model call verifies equality with the native mask and passes kwargs unchanged.
+A mismatch fails before the inner forward. Invocation context is cleaned up on
+success and failure. Released Target Input and the explicit `sampler_mask` /
+`model_timestep_only` comparison modes retain their behavior.
+
+Refresh Flow #93 through the existing Patcher overlay stack and restart ComfyUI.
+Keep the entire 00728 workflow frozen, including its stored legacy selector and
+16 requested ticks. Keep same-grid control, linear bypass, dense suffix, native
+temporal-carrier policy, source-carrier audio positions, prompts, seeds, LoRAs,
+the audio audit and all other overlays unchanged. Selecting `exact_mask` is
+optional because the legacy selector invokes the same correction.
+
+Require `partitioned_exact_audio_mask_verified` with positive `actual_model_calls`,
+`policy=coherent_exact_audio_mask_v1`, `effective_overlap_ticks=0`, exact input /
+timestep / velocity flags true, `timestep_override_applied=false`,
+`regenerated_prefix_restored=false`, `final_prefix_exact=true`, `fail_closed=true`,
+and every extra-work count zero. Require dense-suffix and linear-bypass receipts
+again. `audio_guided_overlap.applied=false` is expected; the new exact-mask receipt
+replaces an applied-ramp requirement. The old mapped-sparse production gate does
+not qualify this all-dense diagnostic arm.
+
+Compare the matched low/probe audio decode, final PT213 RMS/spectrum, complete raw
+decoded video boundary window and background continuity. Joint audio context may
+couple into video, but the frame-shift root is unresolved. Exact-main semantics,
+attention domains, VDN/Sol arithmetic and the three continuation sampler lifetimes
+/ two history boundaries remain unchanged. No model/provider/VAE call is added.
+Flow #89 and VDN #33/#34/#35 are not consolidated or promoted from source tests.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).

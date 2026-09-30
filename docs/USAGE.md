@@ -61,7 +61,7 @@ low_frequency_cutoff       = 0.25
 temporal_weight            = 0.20
 vdn_linear_diagnostic      = normal
 audio_guided_overlap_ticks = 4
-audio_guided_overlap_mode  = sampler_mask_exact_timestep
+audio_guided_overlap_mode  = exact_mask
 prefix_transformer_context = exact_target_partitioned
 audio_position_domain      = source_carrier
 audio_handoff_source       = main_partitioned
@@ -72,7 +72,7 @@ low_probe_execution_source = source_carrier_uniform_only
 
 The historical class/node ID is retained for serialized-workflow compatibility, but the displayed node name no longer includes `[Diagnostic]`.
 
-This profile runs a single source-uniform low/probe continuation path and then target-high. The four-tick sampler-owned audio ramp is approximately 100 ms at H3's 40 Hz audio-latent rate, while `sampler_mask_exact_timestep` keeps MiniMax-H3's inner timestep/modulation labels on the authoritative exact-prefix mask. The width remains user-selectable from 0 through 16; four ticks is the validated default rather than a hard preflight requirement.
+This profile runs a single source-uniform low/probe continuation path and then target-high. `exact_mask` keeps carried audio protected with matching native sampler input, timestep and velocity masks. It uses zero overlap regardless of the stored width. `sampler_mask_exact_timestep` is a compatibility alias for this behavior. The `0..16`-tick width applies to the advanced `sampler_mask` and `model_timestep_only` comparison modes. Boundary quality depends on the selected model and conditioning and requires rendered validation.
 
 The learned-transfer boundary applies the partitioned one-token DC continuity correction before restoring the authoritative target-grid prefix. The bridge changes only the first generated video suffix token; the exact prefix and later suffix tokens remain untouched by the bridge itself.
 

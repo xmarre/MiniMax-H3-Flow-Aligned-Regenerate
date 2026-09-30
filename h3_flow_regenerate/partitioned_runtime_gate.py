@@ -194,6 +194,40 @@ def _stage_counts(model_calls: list[dict[str, Any]], stage: str) -> tuple[int, i
     return len(calls), actual
 
 
+def validate_coherent_exact_audio_evidence(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Require actual native-mask verification for the latest continuation."""
+    window = _latest_partitioned_window(metrics.get("events", []))
+    receipts = [_event_fields(e) for e in window if _event_kind(e) == "partitioned_exact_audio_mask_verified"]
+    _require(len(receipts) == 1, "latest continuation requires one coherent exact-audio mask receipt")
+    receipt = receipts[0]
+    _require(receipt.get("policy") == "coherent_exact_audio_mask_v1", "exact-audio mask policy drifted")
+    _require(receipt.get("mode") in {"exact_mask", "sampler_mask_exact_timestep"}, "exact-audio mode drifted")
+    _require(
+        type(receipt.get("actual_model_calls")) is int and receipt["actual_model_calls"] > 0,
+        "exact-audio receipt contains no actual model-mask verification",
+    )
+    _require(receipt.get("effective_overlap_ticks") == 0, "exact-audio sampler overlap must be zero")
+    for name in (
+        "sampler_input_mask_exact",
+        "model_timestep_mask_exact",
+        "model_velocity_mask_exact",
+        "final_prefix_exact",
+        "fail_closed",
+    ):
+        _require(receipt.get(name) is True, f"exact-audio receipt failed {name}")
+    for name in ("timestep_override_applied", "regenerated_prefix_restored"):
+        _require(receipt.get(name) is False, f"exact-audio receipt enabled {name}")
+    for name in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(type(receipt.get(name)) is int and receipt[name] == 0, f"exact-audio receipt added work: {name}")
+    return receipt
+
+
 def _sha256(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
@@ -279,10 +313,8 @@ def _validate_audio_position_policy(
         wrapper_entries >= block0_calls,
         "source-carrier candidate wrapper/block execution accounting drifted",
     )
-    _require(
-        model_timestep_calls > 0,
-        "source-carrier candidate gate requires observed model-timestep-only audio guidance",
-    )
+    if model_timestep_calls <= 0:
+        validate_coherent_exact_audio_evidence({"events": window})
 
     integrity_events = [
         _event_fields(event)
@@ -3996,8 +4028,12 @@ def validate_partitioned_runtime_evidence(
             isinstance(expected_audio_guided_overlap_mode, str) and bool(expected_audio_guided_overlap_mode),
             "expected audio guided-overlap mode must be a non-empty string",
         )
+        exact_audio_expected = expected_audio_guided_overlap_mode in {"exact_mask", "sampler_mask_exact_timestep"}
+        if exact_audio_expected and not audio_overlap_applied:
+            validate_coherent_exact_audio_evidence(metrics)
         _require(
-            audio_overlap_applied and audio_overlap_mode == expected_audio_guided_overlap_mode,
+            (audio_overlap_applied or exact_audio_expected)
+            and audio_overlap_mode == expected_audio_guided_overlap_mode,
             (
                 "latest applied partitioned audio guided-overlap mode differs from expectation: "
                 f"expected {expected_audio_guided_overlap_mode!r}, observed {audio_overlap_mode!r}"

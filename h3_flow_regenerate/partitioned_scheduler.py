@@ -59,6 +59,7 @@ from .high_stage_boundary import (
     high_boundary_contract,
 )
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -430,10 +431,11 @@ def _validate_low_probe_execution_source_configuration(
     if guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN:
         mismatches.append("guidance_trajectory_source='main_exact_partitioned'")
     if audio_guided_overlap_mode not in (
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     ):
-        mismatches.append("audio_guided_overlap_mode in {'sampler_mask', 'sampler_mask_exact_timestep'}")
+        mismatches.append("audio_guided_overlap_mode in {'exact_mask', 'sampler_mask', 'sampler_mask_exact_timestep'}")
     # Overlap width is a bounded runtime control, not a structural requirement
     # of source-uniform execution. The node-level validator constrains it to 0..16.
     if mismatches:
@@ -1194,6 +1196,7 @@ def _verify_audio_position_domain_diagnostic(
             wrapper_entries=wrapper_delta,
             actual_block0_calls=block0_delta,
             model_timestep_override_calls=model_timestep_delta,
+            coherent_exact_model_mask_calls=int(counters.get("coherent_exact_audio_model_mask_calls", 0)),
             target_audio_rows_only=True,
             sampler_mask_mutated=False,
             fail_closed=True,

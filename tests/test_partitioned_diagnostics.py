@@ -10,6 +10,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -159,11 +160,9 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     ]
-    assert (
-        diagnostic["audio_guided_overlap_mode"][1]["default"]
-        == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-    )
+    assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
     assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
@@ -403,7 +402,7 @@ def test_model_timestep_audio_context_changes_only_inner_forward_mask():
     assert metrics.counters["partitioned_audio_model_timestep_override_calls"] == 1
 
 
-def test_audio_timestep_context_can_restore_exact_labels_over_fractional_sampler_mask():
+def test_exact_audio_context_rejects_fractional_sampler_mask_before_forward():
     metrics = _Metrics()
     runtime = torch.ones(1, 1, 2, 8)
     runtime[..., 2:6] = torch.tensor([0.2, 0.4, 0.6, 0.8]).view(1, 1, 1, 4)
@@ -417,14 +416,20 @@ def test_audio_timestep_context_can_restore_exact_labels_over_fractional_sampler
         mask_kind="exact_authoritative",
     )
     kwargs = {"audio_denoise_mask": runtime}
-    forwarded = _audio_model_timestep_kwargs(
-        {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context},
-        kwargs,
-    )
+    with pytest.raises(RuntimeError, match="same authoritative sampler input and velocity mask"):
+        _audio_model_timestep_kwargs(
+            {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context},
+            kwargs,
+        )
     assert torch.equal(kwargs["audio_denoise_mask"], runtime)
-    assert torch.equal(forwarded["audio_denoise_mask"], exact)
     assert context.mask_kind == "exact_authoritative"
+    assert context.calls == 0
+    kwargs = {"audio_denoise_mask": exact}
+    assert _audio_model_timestep_kwargs({PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}, kwargs) is kwargs
     assert context.calls == 1
+    assert context.verification_calls == 1
+    assert metrics.counters["coherent_exact_audio_model_mask_calls"] == 1
+    assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
 
 
 def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
@@ -829,8 +834,11 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
-@pytest.mark.parametrize("guided_ticks", [4, 16])
-def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(monkeypatch, guided_ticks):
+@pytest.mark.parametrize("guided_ticks", [0, 4, 16])
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT, PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP]
+)
+def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent(monkeypatch, guided_ticks, mode):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
@@ -868,7 +876,7 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: guided_ticks,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: mode,
             "transformer_options": transformer_options,
         }
     )
@@ -896,17 +904,21 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(exact_denoise_mask, exact_mask)
-        assert not torch.equal(call_mask, exact_mask)
+        assert call_mask is exact_mask
         runtime_audio = unpack_streams(call_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
-        assert bool(((runtime_audio > 0) & (runtime_audio < 1)).any().item())
+        assert not bool(((runtime_audio > 0) & (runtime_audio < 1)).any().item())
         exact_audio = unpack_streams(exact_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
         assert context.mask_kind == "exact_authoritative"
+        assert context.audio_prefix_ticks == 20
+        assert context.ticks == 0
+        kwargs = {"audio_denoise_mask": runtime_audio}
         forwarded = _audio_model_timestep_kwargs(
             transformer_options,
-            {"audio_denoise_mask": runtime_audio},
+            kwargs,
         )
+        assert forwarded is kwargs
         assert torch.equal(forwarded["audio_denoise_mask"], exact_audio)
         return latent_image.clone()
 
@@ -930,16 +942,24 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
     assert torch.equal(result, packed)
     assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
     overlap = [event for event in metrics.events if event.kind == "audio_guided_overlap"][-1]
-    assert overlap.fields["sampler_mask_modified"] is True
+    assert overlap.fields["sampler_mask_modified"] is False
+    assert overlap.fields["applied"] is False
+    assert overlap.fields["effective_ticks"] == 0
     assert overlap.fields["model_timestep_mask_kind"] == "exact_authoritative"
     assert overlap.fields["model_timestep_mask_modified"] is False
     assert overlap.fields["inner_exact_audio_prefix_preserved"] is True
-    assert overlap.fields["sampler_exact_audio_prefix_preserved"] is False
+    assert overlap.fields["sampler_exact_audio_prefix_preserved"] is True
     context_event = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"][-1]
     assert context_event.fields["mask_kind"] == "exact_authoritative"
-    assert context_event.fields["sampler_mask_modified"] is True
-    assert context_event.fields["exact_sampler_prefix_preserved"] is False
+    assert context_event.fields["sampler_mask_modified"] is False
+    assert context_event.fields["exact_sampler_prefix_preserved"] is True
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
+    assert context_event.fields["model_timestep_override_applied"] is False
+    verified = [event for event in metrics.events if event.kind == "partitioned_exact_audio_mask_verified"][-1]
+    assert verified.fields["actual_model_calls"] == 1
+    assert verified.fields["effective_overlap_ticks"] == 0
+    assert verified.fields["regenerated_prefix_restored"] is False
+    assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
 
 
 def test_low_probe_audio_decode_witness_is_output_domain_cpu_and_session_bounded():

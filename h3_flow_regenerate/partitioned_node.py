@@ -11,8 +11,8 @@ from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
-    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
@@ -243,9 +243,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "40-Hz sampler-owned audio overlap width. The production default is 4 ticks "
-                    "(100 ms), validated with sampler_mask_exact_timestep. Values 0..16 remain "
-                    "available for controlled compatibility and diagnostics."
+                    "40-Hz audio overlap width for sampler_mask or model_timestep_only. "
+                    "exact_mask keeps the carried audio prefix protected and uses zero overlap "
+                    "regardless of this width. Values 0..16 are available for comparisons."
                 ),
             },
         )
@@ -254,11 +254,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_mode"] = (
             list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
                 "tooltip": (
-                    "sampler_mask_exact_timestep is the production default: the sampler owns the overlap "
-                    "while MiniMax-H3 inner timestep/modulation labels retain the authoritative exact-prefix mask. "
-                    "sampler_mask and model_timestep_only remain advanced comparison modes."
+                    "exact_mask preserves the carried audio prefix with matching native sampler input, "
+                    "timestep and velocity masks. sampler_mask_exact_timestep is a compatibility alias "
+                    "for exact_mask. sampler_mask releases the configured overlap; model_timestep_only "
+                    "is an intentionally mismatched timestep diagnostic."
                 ),
             },
         )
@@ -461,7 +462,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
         "Sol-H3/VDN-H3-Plus stack. Defaults to the fast source-carrier uniform low/probe path, "
         "learned 3D transfer, "
-        "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
+        "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
 

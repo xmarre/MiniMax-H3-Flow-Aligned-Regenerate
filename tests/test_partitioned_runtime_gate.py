@@ -17,6 +17,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     PARTITIONED_SOL_ABI,
     RuntimeGateError,
     compare_residual_measurement_pair,
+    validate_coherent_exact_audio_evidence,
     validate_partitioned_runtime_evidence,
 )
 from h3_flow_regenerate.residual_geometry import measure_residual_geometry
@@ -742,6 +743,79 @@ def test_partitioned_runtime_gate_accepts_source_carrier_candidate_receipts():
     assert report.audio_position_candidate_verified is True
     assert report.audio_position_candidate_block0_calls == 2
     assert report.audio_position_model_timestep_override_calls == 2
+
+
+def _exact_audio_metrics():
+    metrics = _candidate_metrics()
+    verified = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_audio_position_domain_verified")
+    verified["model_timestep_override_calls"] = 0
+    metrics["events"].append(
+        _event(
+            "partitioned_exact_audio_mask_verified",
+            policy="coherent_exact_audio_mask_v1",
+            mode="exact_mask",
+            actual_model_calls=3,
+            effective_overlap_ticks=0,
+            sampler_input_mask_exact=True,
+            model_timestep_mask_exact=True,
+            model_velocity_mask_exact=True,
+            final_prefix_exact=True,
+            fail_closed=True,
+            timestep_override_applied=False,
+            regenerated_prefix_restored=False,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+        )
+    )
+    return metrics
+
+
+def test_exact_audio_evidence_accepts_verified_native_masks_without_label_overrides():
+    metrics = _exact_audio_metrics()
+    receipt = validate_coherent_exact_audio_evidence(metrics)
+    assert receipt["actual_model_calls"] == 3
+    log = _log().replace("mode=model_timestep_only ticks=4 applied=True", "mode=exact_mask ticks=16 applied=False")
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        log,
+        require_audio_overlap=False,
+        expected_audio_guided_overlap_mode="exact_mask",
+        expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+    )
+    assert report.audio_position_candidate_verified is True
+    assert report.audio_position_model_timestep_override_calls == 0
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("actual_model_calls", 0),
+        ("effective_overlap_ticks", 4),
+        ("model_velocity_mask_exact", False),
+        ("sampler_input_mask_exact", False),
+        ("model_timestep_mask_exact", False),
+        ("timestep_override_applied", True),
+        ("regenerated_prefix_restored", True),
+        ("extra_h3_nfe", 1),
+        ("extra_vae_calls", 1),
+        ("extra_provider_calls", 1),
+    ],
+)
+def test_exact_audio_evidence_rejects_incoherence_and_added_work(name, value):
+    metrics = _exact_audio_metrics()
+    metrics["events"][-1]["fields"][name] = value
+    with pytest.raises(RuntimeGateError):
+        validate_coherent_exact_audio_evidence(metrics)
+
+
+def test_exact_audio_evidence_cannot_reuse_an_earlier_continuation_receipt():
+    metrics = _exact_audio_metrics()
+    metrics["events"].append(_event("partitioned_stage_plan"))
+    with pytest.raises(RuntimeGateError, match="one coherent"):
+        validate_coherent_exact_audio_evidence(metrics)
 
 
 def test_partitioned_runtime_gate_keeps_legacy_gate_backward_compatible():
