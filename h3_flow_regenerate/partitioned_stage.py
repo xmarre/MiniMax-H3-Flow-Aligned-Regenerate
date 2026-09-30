@@ -137,6 +137,7 @@ class PartitionedStageRuntime:
     attention_provider_identity: tuple[object, ...] | None = None
     # Captured once at stage entry and republished explicitly to each VDN block call.
     vdn_linear_diagnostic: str = "normal"
+    softmax_diagnostic: str = "normal"
     vdn_temporal_carrier_policy: str = "native_grid_then_map_v1"
     vdn_temporal_carrier_short_conv_spec: str | None = None
     vdn_temporal_carrier_contract: dict[str, object] | None = None
