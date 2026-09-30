@@ -1053,6 +1053,7 @@ def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_clo
             taps_before=0,
             carriers_before=0,
             rows_before=0,
+            events_before=0,
         )
     metrics.increment("partitioned_vdn_destination_grid_stencil_calls", 5)
     metrics.increment("partitioned_vdn_destination_grid_stencil_taps", 60)
