@@ -74,6 +74,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PartitionedPreflightUnsupported,
     _cache_audio_decode_witness,
     _prepare_registered_guidance_reference,
+    _validate_audio_position_candidate_configuration,
     _validate_partitioned_vdn_compat,
     _verify_partitioned_vdn_linear_diagnostic,
     _verify_prefix_transformer_context_diagnostic,
@@ -936,6 +937,30 @@ return out
 """
     assert _source_has_audio_velocity_mask_contract(old_source) is False
     assert _source_has_audio_velocity_mask_contract(fixed_source) is True
+
+
+def test_source_carrier_audio_position_allows_cross_grid_suppression_ab_arm():
+    _validate_audio_position_candidate_configuration(
+        PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    )
+    _validate_audio_position_candidate_configuration(
+        PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    )
+
+    for incompatible in (
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+    ):
+        with pytest.raises(PartitionedPreflightUnsupported, match="source_carrier audio-position candidate"):
+            _validate_audio_position_candidate_configuration(
+                PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+                PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+                incompatible,
+            )
 
 
 def test_source_carrier_audio_position_control_is_opt_in_and_model_local():
