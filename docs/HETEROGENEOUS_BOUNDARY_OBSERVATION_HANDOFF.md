@@ -8,15 +8,27 @@ No VDN production fix is promoted.
 
 00726 successfully executed the direct same-grid target control. The user still
 observed a slight frame shift, but reported that it was **substantially less
-prominent**. This is partial rendered evidence that the low-resolution ->
-high-resolution stage transition is materially involved, not evidence that it
-is the sole cause. The run also exposed a separate Flow clean-state ownership
-bug: a source-residual handoff was later inverted as though it had used the
-deterministic Gaussian-noise contract, producing a synthetic clean mismatch and
-a nonzero first-suffix DC mutation even though the same-grid provider and frame
-gauge both reported identity. Flow #93 now preserves the actual clean
-postprocess tensor and refuses that invalid inverse. A same-grid rerun after
-this correction is the next qualification gate. No production fix is promoted.
+prominent**. This is rendered evidence that the low-resolution -> high-resolution
+stage transition is materially involved, not evidence that it is the sole cause.
+The run also exposed a separate Flow clean-state ownership bug: a source-residual
+handoff was later inverted as though it had used the deterministic Gaussian-noise
+contract.
+
+00727 repeated the same-grid arm after that ownership correction. The correction
+validated exactly: the actual clean postprocess tensor was used, inverse recovery
+was absent, identity transfer/frame gauge remained identity, and the one-token DC
+delta collapsed to zero. **A very slight rendered frame shift still remains.**
+The residual defect is therefore not explained by the learned transfer, the
+invalid clean inverse, the DC bridge, target-high recreation, or the complete
+partitioned VDN learned-linear complement. Its measurable boundary motion is
+already present in the same-grid partitioned low/probe output and largely
+survives target-high.
+
+Per the authoritative design, the next bounded discriminator is now
+same-domain weighted-dense suffix attention: keep the exact same grouped Q/K/V
+domain and target-prefix measure bias, but force only generated-suffix local
+query groups through Sol's existing dense path under distinct diagnostic/history
+identity. No production fix is promoted.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -32,7 +44,7 @@ does not establish that cross-grid taps cause the rendered artifact.
 | VDN Plus main | `b78e94d0365ffc5059924a048af707e565d0380e` |
 | VDN Plus #33 | `da3627f85d494bdf4213251deb3ba2a94b8a2f36` |
 | VDN Plus #34 observer | `cae13fb5e8d71b93ee3134b629d23fec7c819c5b` |
-| VDN Plus #35 diagnostic head (candidate-C retained; equal-grid contract added) | `109e75c3fb9f97815504d41226dd4c853cd434c0` |
+| VDN Plus #35 diagnostic head (candidate-C retained; equal-grid + dense-suffix discriminator) | `96b4e49e507d223f7900e3cb35a9ae0a207ec213` |
 | Sol main / v0.1.6 | `bef9b300275a89290ca2d53eafff79af06f5e0ef` |
 | Sol source-contract pin | `93b3e03f2b7b579aaf55fa0f87f55083b259e25c` |
 | Continuum Plus main | `e870875b1a29968d39d72ba304e9f2b05544c015` |
@@ -146,7 +158,7 @@ starting ComfyUI:
 1. VDN Plus main, #33, [VDN #34](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/34)
    at `cae13fb5e8d71b93ee3134b629d23fec7c819c5b`, then
    [VDN #35](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/35) at
-   `312a036139ba7422e9122ea418e13ac7cf3ee23e`.
+   `96b4e49e507d223f7900e3cb35a9ae0a207ec213`.
 2. Flow main, existing #89, then [Flow #93](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/93), its stacked qualification/candidate-control draft.
 3. Sol v0.1.6/main at the ref above; no diagnostic Sol overlay.
 4. Continuum Plus main, then #36 solely for its retained diagnostics and disabled
@@ -382,17 +394,86 @@ Flow #93 now fixes ownership at the source:
 * regression tests prove that an identity same-grid handoff cannot manufacture
   a suffix DC correction from this mismatch.
 
-The corrected Flow head is
-`53e99780c3379e2d7606c2cf0de2b0b6eb1252dc`. CI run `36739778101`
-completed successfully across source-contracts and Python 3.10/3.11/3.12/3.13.
-Checkpoints preserve both the pre-fix 00726 state and the CI-green correction.
+The clean-ownership correction first reached CI-green head
+`53e99780c3379e2d7606c2cf0de2b0b6eb1252dc`; the subsequent documentation/
+provenance head `7366e5acf654490b16e2a443584700c8f06668fb` also passed exact-head CI
+run `36741231859` across source-contracts and Python 3.10/3.11/3.12/3.13.
+Checkpoints preserve both the pre-fix 00726 state and the validated correction.
 
-The next hardware run must repeat 00726's same-grid settings. It should report
-`splice_clean_source=actual_clean_postprocess` and
-`splice_recovery=actual_clean_postprocess_no_inverse`. With identity same-grid
-transfer and identity frame gauge, the one-token DC delta should collapse to
-zero; any nonzero DC correction in that exact condition is a fail-closed
-ownership violation.
+### 00727 same-grid rerun: ownership fix validated, residual shift remains
+
+00727 repeated the same-grid configuration on the same reported Core runtime as
+00726. Its handoff receipts validate the ownership correction exactly:
+
+* `same_grid_identity_transfer_applied=true`;
+* `splice_clean_source=actual_clean_postprocess`;
+* `splice_recovery=actual_clean_postprocess_no_inverse`;
+* `suffix_dc_bridge_delta_rms=0.0` and max/mean absolute delta both zero;
+* seam amplification ratios are exactly 1.0 at the identity handoff;
+* VDN learned-linear remained fail-closed bypassed for 300 calls /
+  10,713,600 video rows.
+
+The user nevertheless reports a **very slight frame shift** in the rendered
+00727 movie. The upper45 source-low pairwise trajectory is unchanged from 00726:
+dx `[-0.12936,-0.28895,-0.14254,-0.01740]`, dy
+`[-0.02179,-0.03148,-0.00128,-0.00273]`. After target-high it remains close:
+dx `[-0.09521,-0.27566,-0.11301,-0.00237]`, dy
+`[-0.04498,-0.00125,-0.04743,-0.01593]`.
+
+This is the key localization. Under equal 48x48 low/high grids, identity
+handoff, zero learned-upscaler calls, correct clean ownership, zero DC mutation,
+identity frame gauge and complete VDN learned-linear bypass, the small boundary
+translation already exists in low/probe and target-high mostly preserves it.
+The large historical defect is strongly associated with the spatial transition;
+the remaining defect is upstream inside the exact-partitioned low/probe
+transformer path.
+
+### Next discriminator: same-domain weighted-dense suffix attention
+
+The authoritative design's deferred sparse-selection discriminator is now
+authorized. Flow #93 and VDN #35 add an opt-in leaf
+`h3_flow_partitioned_softmax_diagnostic_v1` API 1 with
+`dense_suffix_same_domain`.
+
+This arm does **not** change grouped ownership. VDN constructs the same
+partitioned grouped plan, gathers the same Q/K/V rows, transports the same
+query-position wire, sink rows, target-prefix K range and prefix log-measure,
+then changes only the existing Sol request's `force_dense` flag for
+generated-suffix local-query groups. Prefix-query groups remain on their
+existing dense path; global/anchor behavior is unchanged. The VDN learned-linear
+selector remains independent.
+
+The diagnostic publishes positive counters for calls/Q rows/KV rows and Flow
+fails closed unless nonzero work is observed. Flow also adds the diagnostic leaf
+to provider-cache and partitioned layout/history identity only while selected,
+so a dense diagnostic sample cannot reuse sparse numerical history. Normal/
+absence semantics remain unchanged.
+
+For the next hardware arm, keep the complete 00727 workflow frozen and change
+only:
+
+* `softmax_diagnostic=dense_suffix_same_domain`
+
+Keep in particular:
+
+* `spatial_stage_control=same_grid_target_control`
+* `handoff_transfer_control=learned_3d`
+* `vdn_linear_diagnostic=bypass_partitioned_linear`
+* `vdn_temporal_carrier_policy=native_grid_then_map_v1`
+* `capture_boundary_witness=false`
+* `audio_position_domain=source_carrier`
+
+The run must emit `partitioned_softmax_diagnostic_verified` with positive
+`dense_suffix_calls`, `dense_suffix_q_rows` and `dense_suffix_kv_rows`,
+plus `same_gathered_domain=true`, `prefix_measure_unchanged=true`,
+`grouped_ownership_unchanged=true` and `fail_closed=true`. The VDN bypass
+receipt and 00727 identity-clean receipts must remain positive/zero respectively.
+
+If the residual rendered shift materially changes, sparse Sol selection is
+causally material and routing/history becomes the next investigation target.
+If it remains with the same character, sparse selection is not a sufficient
+cause and the design advances to the provider-transfer discriminator. Internal
+motion metrics remain diagnostic; rendered whole-window inspection is the gate.
 
 ### Revised next discriminator: remove the spatial grid transition itself
 
@@ -544,15 +625,15 @@ CPU environment: Torch2.14.0+cpu, no CUDA. Results:
 | Flow Ruff/format; VDN CI-selected Ruff; compileall | passed |
 
 Completed gates now include the actual SM120 feature witness, matched A/B
-suppression discriminator, 00722 candidate-C execution, and 00724 complete
-partitioned learned-linear bypass. Both C and bypass fail the rendered-media
-gate: the visible frame shift persists. The next open gate is the direct
-`same_grid_target_control`, which removes the low->high spatial resolution
-transition while preserving the handoff split and downstream target-high stage.
-Same-domain weighted-dense attention is intentionally deferred pending that
-result because the transfer boundary is now directly implicated by repeated
-source->target amplification. Audio remains independently unresolved. No first-pair metric,
-source test or green CI can substitute for rendered whole-window acceptance.
+suppression discriminator, 00722 candidate-C execution, 00724 complete
+partitioned learned-linear bypass, 00726 direct same-grid control and 00727
+same-grid clean-ownership validation. The same-grid arms materially reduce the
+rendered defect, proving the low->high spatial transition is a major contributor,
+but a very slight residual shift remains even after identity transfer and zero
+DC mutation. The next open gate is the same-domain weighted-dense suffix
+attention discriminator described above. Audio remains independently unresolved.
+No first-pair metric, source test or green CI can substitute for rendered
+whole-window acceptance.
 
 Candidate C is retained only as rejected diagnostic evidence in VDN #35. For
 subsequent discriminators keep #35 installed but return the Flow selector to
