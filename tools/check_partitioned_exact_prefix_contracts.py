@@ -163,6 +163,12 @@ def main() -> None:
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL as FLOW_VDN_LINEAR_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE as FLOW_VDN_LINEAR_RAW_MEASURE,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL as FLOW_VDN_LINEAR_SUPPRESS,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_API as FLOW_CARRIER_API,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION as FLOW_CARRIER_DESTINATION,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_KEY as FLOW_CARRIER_KEY,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_MAPPING_POLICY as FLOW_CARRIER_MAPPING_POLICY,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE as FLOW_CARRIER_NATIVE,
+        build_vdn_temporal_carrier_contract,
     )
     from h3_flow_regenerate.partitioned_prefix import (
         PARTITIONED_PREFIX_KEY as FLOW_CONTRACT_KEY,
@@ -200,8 +206,15 @@ def main() -> None:
         PARTITIONED_PREFIX_TOPOLOGY as VDN_TOPOLOGY,
         VDN_PARTITIONED_SEQUENCE_API,
         VDN_PARTITIONED_SEQUENCE_MODE,
+        VDN_TEMPORAL_CARRIER_API,
+        VDN_TEMPORAL_CARRIER_DESTINATION,
+        VDN_TEMPORAL_CARRIER_KEY,
+        VDN_TEMPORAL_CARRIER_MAPPING_POLICY,
+        VDN_TEMPORAL_CARRIER_NATIVE,
+        make_temporal_carrier_contract,
         make_vdn_partitioned_external_contract,
         validate_flow_partition_contract,
+        validate_temporal_carrier_contract,
     )
 
     keys = {
@@ -232,6 +245,42 @@ def main() -> None:
         or FLOW_VDN_LINEAR_SUPPRESS != VDN_PARTITIONED_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL
     ):
         raise SystemExit("Flow/VDN partitioned linear diagnostic contract diverged")
+
+    if (
+        FLOW_CARRIER_API != VDN_TEMPORAL_CARRIER_API
+        or FLOW_CARRIER_KEY != VDN_TEMPORAL_CARRIER_KEY
+        or FLOW_CARRIER_NATIVE != VDN_TEMPORAL_CARRIER_NATIVE
+        or FLOW_CARRIER_DESTINATION != VDN_TEMPORAL_CARRIER_DESTINATION
+        or FLOW_CARRIER_MAPPING_POLICY != VDN_TEMPORAL_CARRIER_MAPPING_POLICY
+    ):
+        raise SystemExit("Flow/VDN temporal-carrier numerical-policy ABI diverged")
+
+    carrier_args = {
+        "policy": FLOW_CARRIER_DESTINATION,
+        "flow_semantic_digest": "a" * 64,
+        "diagnostic_mode": FLOW_VDN_LINEAR_NORMAL,
+        "short_conv_spec": "vdn_solve_short_conv_v1|heads=56|head_dim=128|conv=k,v|spatial=5x5|temporal=5|a_fp32=1",
+    }
+    flow_carrier = build_vdn_temporal_carrier_contract(**carrier_args)
+    vdn_carrier = make_temporal_carrier_contract(**carrier_args)
+    if flow_carrier != vdn_carrier:
+        raise SystemExit(f"Flow/VDN temporal-carrier numerical digest diverged: {flow_carrier!r} != {vdn_carrier!r}")
+    policy, validated_carrier = validate_temporal_carrier_contract(
+        flow_carrier,
+        flow_semantic_digest=carrier_args["flow_semantic_digest"],
+        diagnostic_mode=carrier_args["diagnostic_mode"],
+        short_conv_spec=carrier_args["short_conv_spec"],
+    )
+    if policy != FLOW_CARRIER_DESTINATION or validated_carrier != flow_carrier:
+        raise SystemExit("VDN rejected the canonical Flow temporal-carrier policy leaf")
+    native_policy, native_contract = validate_temporal_carrier_contract(
+        None,
+        flow_semantic_digest=carrier_args["flow_semantic_digest"],
+        diagnostic_mode=carrier_args["diagnostic_mode"],
+        short_conv_spec=carrier_args["short_conv_spec"],
+    )
+    if native_policy != FLOW_CARRIER_NATIVE or native_contract is not None:
+        raise SystemExit("VDN absence semantics no longer preserve the native temporal-carrier policy")
 
     _validate_preprocess_transport()
     if args.require_boundary_witness:
