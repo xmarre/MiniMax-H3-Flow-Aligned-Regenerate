@@ -4537,9 +4537,7 @@ def run_partitioned_progressive(
                 and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
             ),
             spatial_transfer_control_applied=spatial_transfer_control is not None,
-            same_grid_identity_transfer_applied=(
-                spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
-            ),
+            same_grid_identity_transfer_applied=(spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID),
             actual_learned_checkpoint_provider_invoked=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
                 and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
