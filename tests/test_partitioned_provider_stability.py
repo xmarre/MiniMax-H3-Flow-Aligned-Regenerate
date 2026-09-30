@@ -144,6 +144,24 @@ def test_equivalent_rebuilt_preprocess_wrapper_reuses_partition_owner_and_rebind
     assert metrics.counters["partitioned_attention_inherited_provider_transitions"] == 1
 
 
+def test_temporal_carrier_digest_changes_provider_object_without_changing_native_identity_metadata():
+    metrics = H3FlowMetrics()
+    runtime = PartitionedStageRuntime(plan=_plan(), metrics=metrics)
+
+    native = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    inherited_identity = native._h3_flow_partitioned_provider_identity
+
+    runtime.vdn_temporal_carrier_contract = {"numerical_digest": "a" * 64}
+    candidate = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    assert candidate is not native
+    assert candidate._h3_flow_partitioned_provider_identity == inherited_identity
+
+    runtime.vdn_temporal_carrier_contract = None
+    native_again = _stage_partitioned_attention_override(runtime, _provider_a, metrics)
+    assert native_again is native
+    assert len(runtime.attention_provider_cache) == 2
+
+
 def test_partitioned_attention_provider_cache_rejects_malformed_runtime_owner():
     metrics = H3FlowMetrics()
     runtime = PartitionedStageRuntime(plan=_plan(), metrics=metrics)
