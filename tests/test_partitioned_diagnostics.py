@@ -1015,8 +1015,7 @@ def test_temporal_carrier_selector_is_model_local_and_default_absent():
         == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
     )
     assert (
-        candidate_metrics.events[-1][1]["vdn_temporal_carrier_policy"]
-        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+        candidate_metrics.events[-1][1]["vdn_temporal_carrier_policy"] == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
     )
     with pytest.raises(ValueError, match="requires vdn_linear_diagnostic='normal'"):
         apply_partitioned_diagnostic_controls(
