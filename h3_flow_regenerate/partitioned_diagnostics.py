@@ -112,6 +112,15 @@ PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
 )
 
+PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY = "h3_flow_partitioned_softmax_diagnostic_v1"
+PARTITIONED_SOFTMAX_DIAGNOSTIC_API = 1
+PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL = "normal"
+PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX = "dense_suffix_same_domain"
+PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS = (
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+)
+
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 PARTITIONED_VDN_TEMPORAL_CARRIER_KEY = "h3_flow_partitioned_vdn_temporal_carrier_v1"
@@ -149,6 +158,16 @@ def normalize_spatial_stage_control(value: str) -> str:
         raise ValueError(
             "partitioned spatial-stage control must be one of "
             f"{PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
+def normalize_partitioned_softmax_diagnostic(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS:
+        raise ValueError(
+            "partitioned softmax diagnostic must be one of "
+            f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
         )
     return value
 
@@ -320,6 +339,7 @@ def apply_partitioned_diagnostic_controls(
     provider_boundary_stabilization: str = PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     handoff_transfer_control: str = PARTITIONED_HANDOFF_TRANSFER_LEARNED,
     spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -344,6 +364,7 @@ def apply_partitioned_diagnostic_controls(
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
+    softmax_mode = normalize_partitioned_softmax_diagnostic(softmax_diagnostic)
     if (
         spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -396,6 +417,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY, None)
     else:
         transformer_options[PARTITIONED_SPATIAL_STAGE_CONTROL_KEY] = spatial_stage
+    if softmax_mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        transformer_options.pop(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, None)
+    else:
+        transformer_options[PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] = softmax_mode
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -429,6 +454,8 @@ def apply_partitioned_diagnostic_controls(
             fields["handoff_transfer_control"] = handoff_transfer
         if spatial_stage != PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
             fields["spatial_stage_control"] = spatial_stage
+        if softmax_mode != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+            fields["softmax_diagnostic"] = softmax_mode
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -477,6 +504,11 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS",
     "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_API",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -502,6 +534,7 @@ __all__ = [
     "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
     "normalize_provider_boundary_stabilization",
+    "normalize_partitioned_softmax_diagnostic",
     "normalize_spatial_stage_control",
     "normalize_vdn_linear_diagnostic",
     "normalize_vdn_temporal_carrier_policy",
