@@ -1,8 +1,10 @@
 # Heterogeneous boundary observation: qualification handoff
 
-Status: observation implementation qualified by local source tests;
-matched SM120 intervention and rendered-media gates pending. No destination-
-stencil numerical policy or production fix is implemented.
+Status: matched SM120 A/B discrimination is complete. The suppression arm
+materially changed the inherited pre-high successor geometry, so the conditional
+destination-grid stencil candidate C is now implemented behind an explicit
+diagnostic selector. Candidate-C rendered-media qualification is pending. The
+default arithmetic is unchanged and no production fix is promoted.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -17,6 +19,8 @@ does not establish that cross-grid taps cause the rendered artifact.
 | Flow #89 | `fa8d65b84e0666ce467b838544d92c801394a002` |
 | VDN Plus main | `b78e94d0365ffc5059924a048af707e565d0380e` |
 | VDN Plus #33 | `da3627f85d494bdf4213251deb3ba2a94b8a2f36` |
+| VDN Plus #34 observer | `cae13fb5e8d71b93ee3134b629d23fec7c819c5b` |
+| VDN Plus #35 destination-stencil candidate | `312a036139ba7422e9122ea418e13ac7cf3ee23e` |
 | Sol main / v0.1.6 | `bef9b300275a89290ca2d53eafff79af06f5e0ef` |
 | Sol source-contract pin | `93b3e03f2b7b579aaf55fa0f87f55083b259e25c` |
 | Continuum Plus main | `e870875b1a29968d39d72ba304e9f2b05544c015` |
@@ -61,29 +65,41 @@ checkpoint hashes were not available to this implementation environment.
 
 ## Implementation and explicit deviations
 
-1. Milestone one adds an observation ABI, not the proposed numerical-policy
-   ABI. Flow owns a default-off CPU sink; VDN exposes actual raw/filtered/mapped/
-   activated features and A/B/alpha norms. No conditional arithmetic is enabled.
-   The evidence needed to select it is still missing.
-2. A temporary stacked **diagnostic** Flow draft provides Patcher access while
-   #89 stays at its one-commit baseline. This is not a replacement production
-   PR. The design requires hardware acceptance before consolidation into #89;
-   publishing an unqualified numerical change there would violate that gate.
-   After qualification, checkpoint and consolidate approved changes into the
-   existing #89 above its then-current main as one clean commit.
-3. The VDN observer is a separate draft stacked on #33. #33's batching commit
-   and base remain intact. A destination-stencil implementation can extend that
-   draft only after the intervention supports it. No stencil capability or
-   digest is advertised prematurely.
-4. The current-Core native mixed-grid test fixture now accepts Core's
-   `attention` keyword. Production source was not changed for that API mismatch.
-   The invariant tested remains authoritative prefix conditioning of the suffix.
-5. Observation is bounded to two complete heads in the first actual low-stage
-   convolution block, the first mixed boundary and temporal radius ≤4. This
-   supplies complete L2 channels for those heads; it does not establish all-head/
-   all-layer equivalence. Existing stage observers remain in use. Wider kernels
-   and missing paired observer support fail explicitly when observation is
-   selected. These limits affect evidence completeness, not default arithmetic.
+1. Milestone one remains the bounded observation ABI. Flow owns a default-off
+   CPU sink; VDN #34 exposes actual raw/filtered/mapped/activated features and
+   A/B/alpha norms. Observation itself is output-neutral.
+2. 00719 established the actual-checkpoint operator mismatch. 00721 then ran the
+   prescribed `suppress_cross_grid_temporal_taps` B arm on SM120 and materially
+   changed the inherited pre-high boundary. That satisfies the design's gate to
+   implement candidate C, but not its production/media acceptance gate.
+3. VDN candidate C is isolated in **VDN #35**, stacked on observer #34, which is
+   stacked on #33. #33 and #34 remain intact. Flow #93 carries only the paired
+   selector/contract/capability/receipt logic required to invoke and verify #35.
+   Flow #89 remains untouched at its one-clean-commit production-candidate
+   baseline.
+4. Candidate C adds independently versioned numerical leaf
+   `h3_flow_partitioned_vdn_temporal_carrier_v1` API 1. Absence remains
+   `native_grid_then_map_v1`; the opt-in arm is
+   `destination_grid_stencil_v1`. The numerical digest binds the Flow semantic
+   plan digest, diagnostic mode, actual checkpoint short-conv specification and
+   physical mapping/precision policy.
+5. For cross-grid temporal taps only, VDN #35 maps the **raw projected** feature
+   to the receiving H3 lattice with the existing FP32 bilinear/border mapper,
+   restores feature dtype, applies the trained depthwise 5x5 spatial stencil on
+   that destination grid, then preserves the existing temporal weight, SiLU,
+   Q/K L2, A/B/alpha, recurrence and readout path. Same-grid arithmetic remains
+   the existing native batched path. No authoritative residual rows, RoPE,
+   sampler latents, output geometry or decoded pixels are resampled.
+6. The candidate is fail-closed: it requires paired VDN carrier API1,
+   `vdn_linear_diagnostic=normal`, exact partitioned transformer context and a
+   compatible checkpoint short-conv declaration/weight geometry. Native/default
+   execution does not depend on candidate capability and retains the previous
+   provider-cache identity.
+7. The current-Core native mixed-grid test fixture accepts Core's `attention`
+   keyword only for compatibility testing; production model code is unchanged.
+8. Observation remains bounded to two complete heads in the first actual
+   low-stage convolution block, the first mixed boundary and temporal radius ≤4.
+   These bounds affect evidence completeness, not default arithmetic.
 
 Tests cover observation neutrality, dtype/branch/anchor coverage, CPU lifetime,
 budget enforcement, capability rejection, stage owner cleanup, option cloning
@@ -101,9 +117,10 @@ were inspected. Video DeltaNet section 2.3 confirms the released K/V depthwise
 5×5 spatial and five-tap temporal filters, SiLU and Q/K L2, with separately
 calibrated branches. Appendix A.5 makes checkpoint architecture metadata part
 of the release contract. Sol-Attn routing and Spectrum feature history remain
-separate mechanisms. These papers provide no new evidence accepting a
-heterogeneous destination stencil or overturning the rejected output repairs.
-The design and its SM120/media gates therefore remain unchanged.
+separate mechanisms. These papers do not by themselves establish rendered causality or overturn the
+rejected output repairs. The 00721 hardware intervention, rather than the paper
+review, is what authorized implementation of candidate C. The design's
+whole-window SM120/media acceptance gate remains unchanged.
 
 ## Patcher dependency order
 
@@ -111,9 +128,11 @@ The implementation PR descriptions record exact final diagnostic SHAs. Use
 those SHAs and the following dependency order, refreshing all overlays before
 starting ComfyUI:
 
-1. VDN Plus main, #33, then [VDN #34](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/34)
-   at `cae13fb5e8d71b93ee3134b629d23fec7c819c5b`.
-2. Flow main, existing #89, then [Flow #93](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/93), its stacked boundary-observation draft.
+1. VDN Plus main, #33, [VDN #34](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/34)
+   at `cae13fb5e8d71b93ee3134b629d23fec7c819c5b`, then
+   [VDN #35](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/35) at
+   `312a036139ba7422e9122ea418e13ac7cf3ee23e`.
+2. Flow main, existing #89, then [Flow #93](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/93), its stacked qualification/candidate-control draft.
 3. Sol v0.1.6/main at the ref above; no diagnostic Sol overlay.
 4. Continuum Plus main, then #36 solely for its retained diagnostics and disabled
    rigid actuator. Do not add #35. Verify loaded #36 source at the ref above.
@@ -181,12 +200,57 @@ requires the paired VDN draft before sampling.
 
 Verify actual suppression counters and
 `partitioned_vdn_linear_diagnostic_verified`; a widget label is insufficient.
-Do not promote B as a production solution. If B changes the defect materially
-while retaining background continuity, qualify the destination-stencil C with
-the numerical-policy/history contract and independent scalar oracle specified
-in the design. If it does not, stop that promotion path and use the prescribed
-conditional bypass/dense/provider discriminators with documented attribution.
-The old Sol dense environment switch does not exist on these refs.
+
+### Completed A/B hardware evidence
+
+00719 is the witness-enabled A/normal arm. Its witness is actual low-stage block
+0, heads 0/55, boundary inner frame 11, and contains the cross-grid K/V temporal
+taps. Offline replay on that captured input shows a material
+native-filter-then-map versus map-then-destination-filter difference, while
+00718 and 00719 trajectory receipts are identical, establishing witness
+neutrality.
+
+00721 is the B arm. It verified 250 suppression calls, 3000 cross-grid taps and
+1,297,500 destination rows with the same 14 actual H3 evaluations and existing
+sampler/history topology. The upper45 exact-restored pre-high successor pair1
+changed from A `(-3.89833,-3.80939)` target cells to B
+`(-0.94051,-0.32042)`, about an 81.8% reduction in vector magnitude. The
+cross-grid short-conv path is therefore causally material to the inherited
+pre-high discontinuity.
+
+B is not a fix. Its final upper45 window remains displaced and its aggregate
+upper45 net displacement is worse than A. No rendered A/B movies were supplied
+with 00721, so background-retention/media acceptance cannot be inferred from
+metrics alone.
+
+### Candidate C hardware qualification
+
+Candidate C is now implemented but remains default-off and unqualified. For the
+next matched run use:
+
+* `vdn_linear_diagnostic=normal`
+* `vdn_temporal_carrier_policy=destination_grid_stencil_v1`
+* `capture_boundary_witness=true`
+
+Keep every other 00719/00721 selector, seed, workflow, provider, Spectrum,
+LoRA/DoRA, learned upscaler and Continuum Analyze-Only setting frozen. Candidate
+C must publish positive
+`partitioned_vdn_destination_grid_stencil_calls/taps/carriers/rows` counters
+and `partitioned_vdn_temporal_carrier_verified` with one stable numerical
+digest. The transformer receipt must identify
+`destination_grid_stencil_v1` with the same digest.
+
+Save metrics, full log, witness JSON/PT, raw decoded physical-group frames and
+assembled movie. Acceptance is the **whole boundary window**, not pair0: exact
+background continuity must remain, successor motion must not show a displaced
+jump/freeze/compensation drift, and NFE/provider/VAE/sampler/history topology
+must remain unchanged.
+
+If C does not resolve the rendered whole-window defect, stop the stencil
+promotion path and continue with the prescribed
+`bypass_partitioned_linear` discriminator, then same-domain weighted-dense
+suffix attention if needed, before implicating provider transfer. The old Sol
+dense environment switch does not exist on these refs.
 
 ## Source and checkpoint provenance
 
@@ -274,14 +338,18 @@ CPU environment: Torch2.14.0+cpu, no CUDA. Results:
 | VDN current-Core node/compiler smoke | passed |
 | Flow Ruff/format; VDN CI-selected Ruff; compileall | passed |
 
-Remaining gates: effective installed provenance, actual SM120 feature witness,
-matched A/B and conditional C, all-selected weighted-dense GPU arithmetic,
-two-boundary/non-square/history runtime validation, cold/warm performance/VRAM,
-raw and assembled rendered media, and final user inspection. Audio remains
-independently unresolved. No first-pair metric, source test or green CI can
-substitute for these gates.
+Completed gates now include the actual SM120 feature witness and matched A/B
+suppression discriminator. Remaining gates are candidate-C installed provenance
+and SM120 execution, raw and assembled rendered media with final user
+inspection, then (only after a successful C) two-boundary/non-square/history and
+performance/VRAM qualification. If C fails, the next discriminator is
+partitioned-linear bypass, followed conditionally by same-domain weighted-dense
+attention. Audio remains independently unresolved. No first-pair metric, source
+test or green CI can substitute for rendered whole-window acceptance.
 
-Rollback uses Patcher's paired diagnostic-overlay removal to the frozen #89 /
-#33 baseline, retaining exact-main semantics. Verify the effective source
-hashes again. Sol/Continuum branches stay unchanged. The destination-stencil
-policy, production consolidation into #89 and a release remain unqualified.
+Rollback candidate C by removing VDN #35 and returning the Flow selector to
+`native_grid_then_map_v1`; the observer stack #34/#93 can remain for evidence
+capture. Full rollback uses Patcher's paired diagnostic-overlay removal to the
+frozen #89/#33 baseline, retaining exact-main semantics. Verify effective source
+hashes again. Sol/Continuum stay unchanged. Production consolidation into #89
+and any release remain unqualified.
