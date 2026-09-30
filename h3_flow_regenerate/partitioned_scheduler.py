@@ -4514,7 +4514,12 @@ def run_partitioned_progressive(
             source_hw=transfer_metrics.get("source_hw"),
             target_hw=transfer_metrics.get("target_hw"),
             temporal_length=transfer_metrics.get("temporal_length"),
-            learned_upscale_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
+            transfer_operator_elapsed_ms=transfer_metrics.get("learned_upscale_elapsed_ms"),
+            learned_upscale_elapsed_ms=(
+                transfer_metrics.get("learned_upscale_elapsed_ms")
+                if handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+                else None
+            ),
             clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
             handoff_noise=transfer_metrics.get("handoff_noise"),
             **splice_diagnostics,
