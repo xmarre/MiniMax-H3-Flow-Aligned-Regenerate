@@ -166,8 +166,7 @@ def normalize_partitioned_softmax_diagnostic(value: str) -> str:
     value = str(value)
     if value not in PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS:
         raise ValueError(
-            "partitioned softmax diagnostic must be one of "
-            f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
+            f"partitioned softmax diagnostic must be one of {PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
         )
     return value
 
