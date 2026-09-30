@@ -104,6 +104,14 @@ PARTITIONED_HANDOFF_TRANSFER_OPTIONS = (
     PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
 )
 
+PARTITIONED_SPATIAL_STAGE_CONTROL_KEY = "h3_flow_partitioned_spatial_stage_control_v1"
+PARTITIONED_SPATIAL_STAGE_PROGRESSIVE = "progressive_low_to_high"
+PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
+PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+)
+
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
 PARTITIONED_VDN_TEMPORAL_CARRIER_KEY = "h3_flow_partitioned_vdn_temporal_carrier_v1"
@@ -133,6 +141,16 @@ class PartitionedAudioModelTimestepContext:
         increment = getattr(self.metrics, "increment", None)
         if callable(increment):
             increment("partitioned_audio_model_timestep_override_calls")
+
+
+def normalize_spatial_stage_control(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS:
+        raise ValueError(
+            "partitioned spatial-stage control must be one of "
+            f"{PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS!r}, got {value!r}"
+        )
+    return value
 
 
 def normalize_handoff_transfer_control(value: str) -> str:
@@ -301,6 +319,7 @@ def apply_partitioned_diagnostic_controls(
     low_probe_execution_source: str = PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     provider_boundary_stabilization: str = PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     handoff_transfer_control: str = PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -324,6 +343,12 @@ def apply_partitioned_diagnostic_controls(
     execution_source = normalize_low_probe_execution_source(low_probe_execution_source)
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
+    spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
+    if (
+        spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    ):
+        raise ValueError("same-grid spatial-stage control requires handoff_transfer_control='learned_3d'")
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -363,10 +388,14 @@ def apply_partitioned_diagnostic_controls(
         transformer_options[PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY] = boundary_stabilization
     if handoff_transfer == PARTITIONED_HANDOFF_TRANSFER_LEARNED:
         # Absence is the historical/default contract. Only the diagnostic
-        # spatial control publishes a leaf, so old workflows remain identical.
+        # transfer control publishes a leaf, so old workflows remain identical.
         transformer_options.pop(PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY, None)
     else:
         transformer_options[PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY] = handoff_transfer
+    if spatial_stage == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
+        transformer_options.pop(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY, None)
+    else:
+        transformer_options[PARTITIONED_SPATIAL_STAGE_CONTROL_KEY] = spatial_stage
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -398,6 +427,8 @@ def apply_partitioned_diagnostic_controls(
             fields["provider_boundary_stabilization"] = boundary_stabilization
         if handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
             fields["handoff_transfer_control"] = handoff_transfer
+        if spatial_stage != PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
+            fields["spatial_stage_control"] = spatial_stage
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -442,6 +473,10 @@ __all__ = [
     "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF",
     "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS",
     "PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT",
+    "PARTITIONED_SPATIAL_STAGE_CONTROL_KEY",
+    "PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS",
+    "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",
+    "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -467,6 +502,7 @@ __all__ = [
     "normalize_low_probe_execution_source",
     "normalize_prefix_transformer_context",
     "normalize_provider_boundary_stabilization",
+    "normalize_spatial_stage_control",
     "normalize_vdn_linear_diagnostic",
     "normalize_vdn_temporal_carrier_policy",
     "resolve_partitioned_audio_guided_overlap_mode",
