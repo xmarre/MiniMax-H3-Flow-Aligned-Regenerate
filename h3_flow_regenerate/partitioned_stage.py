@@ -157,6 +157,7 @@ def build_partitioned_stage_plan(
     *,
     source_h: int,
     source_w: int,
+    allow_same_grid: bool = False,
 ) -> PartitionedStagePlan:
     """Build the exact-prefix stage plan before any split sampler lifetime starts."""
     if mask is None:
@@ -187,7 +188,9 @@ def build_partitioned_stage_plan(
     target_h, target_w = map(int, video.shape[-2:])
     if any(n < 2 or n % 2 for n in (source_h, source_w, target_h, target_w)):
         raise ValueError("partitioned exact-prefix spatial axes must be positive and H3 patch-safe")
-    if source_h > target_h or source_w > target_w or (source_h, source_w) == (target_h, target_w):
+    if source_h > target_h or source_w > target_w:
+        raise ValueError("partitioned exact-prefix source must not exceed the target spatial grid")
+    if (source_h, source_w) == (target_h, target_w) and not allow_same_grid:
         raise ValueError("partitioned exact-prefix source must strictly reduce the target spatial grid")
 
     return PartitionedStagePlan(
