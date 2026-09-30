@@ -3486,6 +3486,7 @@ def run_partitioned_progressive(
         boundary_content_pre_high_receipt: dict[str, Any] | None = None
         pending_registered_reference = None
         frame_gauge_witnesses: dict[str, torch.Tensor] = {}
+        actual_handoff_clean: torch.Tensor | None = None
         residual_evidence_tensors: dict[str, torch.Tensor] = {}
         residual_stage_receipts: list[dict[str, Any]] = []
         frame_gauge_transaction: dict[str, Any] = {
@@ -3536,6 +3537,7 @@ def run_partitioned_progressive(
                 nonlocal pending_registered_reference
                 nonlocal frame_gauge_witnesses
                 nonlocal frame_gauge_transaction
+                nonlocal actual_handoff_clean
 
                 result, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
                     learned_clean,
@@ -3553,6 +3555,7 @@ def run_partitioned_progressive(
                 pending_registered_reference = registered
                 frame_gauge_witnesses = witnesses
                 frame_gauge_transaction = transaction
+                actual_handoff_clean = result.clean_video.detach().clone()
                 return result
 
         transfer_started = time.perf_counter()
@@ -3769,14 +3772,33 @@ def run_partitioned_progressive(
                 raise RuntimeError("accepted frame-gauge transaction lost the existing DC bridge receipt")
             dc_metrics = dict(dc_metrics)
             splice_recovery = "actual_provider_clean_postprocess"
+            splice_clean_source = "actual_provider"
         else:
             if pending_registered_reference is not None:
                 raise RuntimeError("rejected frame-gauge transaction published a guidance reference")
-            learned_clean = _recover_partitioned_transfer_clean(
-                target_video,
-                sigma=sigma,
-                seed=diagnostic_seed,
-            )
+            if actual_handoff_clean is not None:
+                if (
+                    tuple(actual_handoff_clean.shape) != tuple(target_video.shape)
+                    or actual_handoff_clean.device != target_video.device
+                    or actual_handoff_clean.dtype != target_video.dtype
+                ):
+                    raise RuntimeError("captured handoff clean tensor does not match target video geometry/device/dtype")
+                learned_clean = actual_handoff_clean
+                splice_recovery = "actual_clean_postprocess_no_inverse"
+                splice_clean_source = "actual_clean_postprocess"
+            else:
+                if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+                    raise RuntimeError(
+                        "source-residual handoff lost the actual clean postprocess tensor; "
+                        "refusing deterministic-noise inverse recovery"
+                    )
+                learned_clean = _recover_partitioned_transfer_clean(
+                    target_video,
+                    sigma=sigma,
+                    seed=diagnostic_seed,
+                )
+                splice_recovery = "inverse_conditional_renoise"
+                splice_clean_source = "inverse_recovered"
             provider_native_clean = learned_clean
             if exact_overlap_fallback_requested:
                 learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
@@ -3830,11 +3852,12 @@ def run_partitioned_progressive(
                     sigma=sigma,
                     enabled=True,
                 )
-            splice_recovery = (
-                "inverse_conditional_renoise_with_actual_provider_boundary_pair"
-                if exact_overlap_fallback_requested
-                else "inverse_conditional_renoise"
-            )
+            if exact_overlap_fallback_requested:
+                if splice_clean_source == "inverse_recovered":
+                    splice_recovery = "inverse_conditional_renoise_with_actual_provider_boundary_pair"
+                    splice_clean_source = "actual_provider_boundary_pair_plus_inverse_recovered"
+                else:
+                    splice_recovery = "actual_clean_postprocess_with_verified_boundary_pair"
 
         if provider_native_clean is None:
             raise RuntimeError("partitioned provider-native clean witness was not established")
@@ -3854,13 +3877,7 @@ def run_partitioned_progressive(
         splice_diagnostics.update(
             splice_diagnostic_elapsed_ms=(time.perf_counter() - splice_started) * 1000.0,
             splice_recovery=splice_recovery,
-            splice_clean_source=(
-                "actual_provider"
-                if frame_gauge_accepted
-                else "actual_provider_boundary_pair_plus_inverse_recovered"
-                if exact_overlap_fallback_requested
-                else "inverse_recovered"
-            ),
+            splice_clean_source=splice_clean_source,
             splice_scope="learned_clean_before_exact_prefix_restore",
         )
 
