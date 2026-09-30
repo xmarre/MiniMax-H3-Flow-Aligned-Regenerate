@@ -48,6 +48,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -68,6 +72,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
     normalize_spatial_stage_control,
+    normalize_partitioned_softmax_diagnostic,
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
@@ -94,6 +99,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _prepare_registered_guidance_reference,
     _validate_audio_position_candidate_configuration,
     _validate_partitioned_vdn_compat,
+    _verify_partitioned_softmax_diagnostic,
     _verify_partitioned_vdn_linear_diagnostic,
     _verify_partitioned_vdn_temporal_carrier_policy,
     _verify_prefix_transformer_context_diagnostic,
@@ -140,6 +146,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "vdn_temporal_carrier_policy" not in ordinary
     assert "handoff_transfer_control" not in ordinary
     assert "spatial_stage_control" not in ordinary
+    assert "softmax_diagnostic" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -174,6 +181,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
     assert diagnostic["spatial_stage_control"][0] == list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS)
     assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+    assert diagnostic["softmax_diagnostic"][0] == list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
+    assert diagnostic["softmax_diagnostic"][1]["default"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
@@ -218,6 +227,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("capture_boundary_witness") < keys.index("vdn_temporal_carrier_policy")
     assert keys.index("vdn_temporal_carrier_policy") < keys.index("handoff_transfer_control")
     assert keys.index("handoff_transfer_control") < keys.index("spatial_stage_control")
+    assert keys.index("spatial_stage_control") < keys.index("softmax_diagnostic")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -1378,3 +1388,62 @@ def test_frame_gauge_guidance_rejects_unaudited_sampler_before_registration():
     assert fields["status"] == "rejected"
     assert fields["sampler"] == "sample_euler"
     assert fields["supported_samplers"] == ("sample_res_multistep",)
+
+
+def test_dense_suffix_softmax_selector_is_default_absent_and_fail_closed_verified():
+    default_model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY not in default_model.model_options["transformer_options"]
+    assert "softmax_diagnostic" not in default_metrics.events[-1][1]
+    assert (
+        normalize_partitioned_softmax_diagnostic(PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL)
+        == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+    )
+
+    candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
+    candidate_metrics = H3FlowMetrics()
+    apply_partitioned_diagnostic_controls(
+        candidate_model,
+        candidate_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    )
+    assert (
+        candidate_model.model_options["transformer_options"][PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY]
+        == PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+    )
+    assert candidate_metrics.events[-1].fields["softmax_diagnostic"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+
+    with pytest.raises(RuntimeError, match="no verified suffix local-query dense work"):
+        _verify_partitioned_softmax_diagnostic(
+            candidate_metrics,
+            PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+            calls_before=0,
+            q_rows_before=0,
+            kv_rows_before=0,
+        )
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_calls", 7)
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_q_rows", 123)
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_kv_rows", 456)
+    _verify_partitioned_softmax_diagnostic(
+        candidate_metrics,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        calls_before=0,
+        q_rows_before=0,
+        kv_rows_before=0,
+    )
+    receipt = candidate_metrics.events[-1]
+    assert receipt.kind == "partitioned_softmax_diagnostic_verified"
+    assert receipt.fields["same_gathered_domain"] is True
+    assert receipt.fields["prefix_measure_unchanged"] is True
+    assert receipt.fields["grouped_ownership_unchanged"] is True
+
+    with pytest.raises(ValueError, match="partitioned softmax diagnostic"):
+        normalize_partitioned_softmax_diagnostic("invalid")
