@@ -28,6 +28,35 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## Learned-linear restoration: equal-grid guard correction
+
+The subsequent restoration attempt aborted after 406.87 seconds when the first
+partitioned learned-linear call reached `partitioned_frame_contract()`. Runtime
+log SHA256: `aacc3095f851532319844b0b7f5ab323cefa55d4a4bf5bab9dc21ee130f64c5d`.
+This failed run provides no rendered result for restored learned-linear execution.
+
+Flow's same-grid control and VDN's sequence parser already permit equal source
+and target grids, but the linear frame helper still required strictly fewer
+source rows. The prior bypass arm did not execute this helper. VDN #35 now
+accepts `0 < source_rows <= target_rows`, retaining the generated-suffix and
+source-exceeds-target rejection. Equal grids produce unit physical measure;
+the existing readout uses native arithmetic without interpolation. This fixes
+an inconsistent validity guard and introduces no new numerical policy or calls.
+
+All twelve square/rectangular, prefix-length and anchor-trimming regression
+cases failed at the original guard and pass after its correction, matching
+released VDN readout within the existing FP32 oracle tolerance. Invalid geometry
+remains rejected. The complete local pinned-Comfy/official-oracle suite passes
+248 tests. Flow's paired source-contract CI pin uses corrected VDN head
+`e253432b9f79db91a0d99461bbd85fb1574a39b3`.
+
+Refresh VDN #35 and Flow #93 through Patcher and restart ComfyUI. Repeat the
+failed restoration arm: `vdn_linear_diagnostic=normal`, retaining all other
+00729 settings. Require successful learned-linear execution, the persisted
+positive exact-audio receipt, unchanged dense-suffix ownership receipts and
+complete raw/assembled media acceptance. The slight chunk-to-chunk appearance
+change remains unresolved; this guard correction supplies no new media evidence.
+
 ## 00729: audio improvement in the frozen diagnostic arm
 
 User inspection reports that the audio issue appears gone and the frame shift is
@@ -159,7 +188,7 @@ does not establish that cross-grid taps cause the rendered artifact.
 | VDN Plus main | `b78e94d0365ffc5059924a048af707e565d0380e` |
 | VDN Plus #33 | `da3627f85d494bdf4213251deb3ba2a94b8a2f36` |
 | VDN Plus #34 observer | `cae13fb5e8d71b93ee3134b629d23fec7c819c5b` |
-| VDN Plus #35 diagnostic head (candidate-C retained; equal-grid + dense-suffix discriminator) | `96b4e49e507d223f7900e3cb35a9ae0a207ec213` |
+| VDN Plus #35 diagnostic head (candidate-C retained; equal-grid + dense-suffix discriminator) | `e253432b9f79db91a0d99461bbd85fb1574a39b3` |
 | Sol main / v0.1.6 | `bef9b300275a89290ca2d53eafff79af06f5e0ef` |
 | Sol source-contract pin | `93b3e03f2b7b579aaf55fa0f87f55083b259e25c` |
 | Continuum Plus main | `e870875b1a29968d39d72ba304e9f2b05544c015` |
