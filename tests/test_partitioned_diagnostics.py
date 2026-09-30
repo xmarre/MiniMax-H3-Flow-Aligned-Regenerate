@@ -1053,7 +1053,10 @@ def test_spatial_stage_control_is_model_local_default_absent_and_exclusive_with_
         == PARTITIONED_SPATIAL_STAGE_SAME_GRID
     )
     assert metrics.events[-1][1]["spatial_stage_control"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
-    assert normalize_spatial_stage_control(PARTITIONED_SPATIAL_STAGE_PROGRESSIVE) == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+    assert (
+        normalize_spatial_stage_control(PARTITIONED_SPATIAL_STAGE_PROGRESSIVE)
+        == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+    )
 
     with pytest.raises(ValueError, match="requires handoff_transfer_control='learned_3d'"):
         apply_partitioned_diagnostic_controls(
