@@ -350,7 +350,7 @@ def apply_partitioned_diagnostic_controls(
     if callable(event):
         fields = {
             "vdn_linear_diagnostic": mode,
-        "vdn_temporal_carrier_policy": temporal_carrier_policy,
+            "vdn_temporal_carrier_policy": temporal_carrier_policy,
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
             "prefix_transformer_context": prefix_context,
@@ -416,9 +416,16 @@ __all__ = [
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_API",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_KEY",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_MAPPING_POLICY",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE",
+    "PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS",
     "VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API",
     "PartitionedAudioModelTimestepContext",
     "apply_partitioned_diagnostic_controls",
+    "build_vdn_temporal_carrier_contract",
     "normalize_audio_guided_overlap_mode",
     "normalize_audio_handoff_source",
     "normalize_audio_position_domain",
@@ -428,6 +435,7 @@ __all__ = [
     "normalize_prefix_transformer_context",
     "normalize_provider_boundary_stabilization",
     "normalize_vdn_linear_diagnostic",
+    "normalize_vdn_temporal_carrier_policy",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
 ]
