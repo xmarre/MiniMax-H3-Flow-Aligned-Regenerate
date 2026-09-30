@@ -1045,6 +1045,12 @@ def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_clo
     )
 
     metrics = H3FlowMetrics()
+    metrics.event(
+        "partitioned_vdn_temporal_carrier_stage",
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        numerical_digest="b" * 64,
+    )
+    events_before = len(metrics.events)
     with pytest.raises(RuntimeError, match="no verified cross-grid carrier work"):
         _verify_partitioned_vdn_temporal_carrier_policy(
             metrics,
@@ -1053,7 +1059,7 @@ def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_clo
             taps_before=0,
             carriers_before=0,
             rows_before=0,
-            events_before=0,
+            events_before=events_before,
         )
     metrics.increment("partitioned_vdn_destination_grid_stencil_calls", 5)
     metrics.increment("partitioned_vdn_destination_grid_stencil_taps", 60)
@@ -1071,6 +1077,7 @@ def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_clo
         taps_before=0,
         carriers_before=0,
         rows_before=0,
+        events_before=events_before,
     )
     assert metrics.events[-1].kind == "partitioned_vdn_temporal_carrier_verified"
     assert metrics.events[-1].fields["numerical_digest"] == contract["numerical_digest"]
