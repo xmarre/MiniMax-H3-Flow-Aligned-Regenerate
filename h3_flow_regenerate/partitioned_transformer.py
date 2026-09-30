@@ -18,6 +18,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
     PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
@@ -235,7 +237,12 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
 
     carrier_contract = runtime.vdn_temporal_carrier_contract
     carrier_digest = None if carrier_contract is None else carrier_contract.get("numerical_digest")
-    cache_identity = identity if carrier_digest is None else (("vdn_temporal_carrier_v1", carrier_digest), identity)
+    numerical_identity = []
+    if carrier_digest is not None:
+        numerical_identity.append(("vdn_temporal_carrier_v1", carrier_digest))
+    if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        numerical_identity.append((PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, runtime.softmax_diagnostic))
+    cache_identity = identity if not numerical_identity else (tuple(numerical_identity), identity)
     cached = cache.get(cache_identity)
     if cached is not None:
         if not callable(cached) or not getattr(cached, "_h3_flow_partitioned_attention_override", False):
@@ -275,6 +282,14 @@ def _partitioned_transformer_options(
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
         raise RuntimeError("partitioned exact-prefix VDN linear diagnostic transport drifted")
     block_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = linear_mode
+    softmax_mode = str(runtime.softmax_diagnostic)
+    if softmax_mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        block_options.pop(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, None)
+    else:
+        existing_softmax_mode = block_options.get(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY)
+        if existing_softmax_mode is not None and existing_softmax_mode != softmax_mode:
+            raise RuntimeError("partitioned exact-prefix softmax diagnostic transport drifted")
+        block_options[PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] = softmax_mode
     carrier_contract = runtime.vdn_temporal_carrier_contract
     if carrier_contract is None:
         block_options.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
@@ -431,6 +446,15 @@ def partitioned_diffusion_wrapper(
     )
     if position_policy is not None:
         partitioned_layout.signature = (*partitioned_layout.signature, position_policy.signature)
+    if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        # Sol history-v1 includes the complete partitioned layout signature in
+        # numerical identity. Keep the geometry digest unchanged and add only
+        # this diagnostic leaf so sparse and same-domain dense samples cannot
+        # share history identity.
+        partitioned_layout.signature = (
+            *partitioned_layout.signature,
+            (PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, runtime.softmax_diagnostic),
+        )
     keep = layout.img_pos < video_start
     partitioned_layout.img_pos = torch.cat(
         (layout.img_pos[keep], torch.arange(video_start, partitioned_layout.seq_len))
