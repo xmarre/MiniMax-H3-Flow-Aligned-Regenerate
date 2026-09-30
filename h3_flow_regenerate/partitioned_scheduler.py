@@ -1030,12 +1030,13 @@ def _validate_audio_position_candidate_configuration(
         )
     compatible_vdn_modes = {
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     }
     if vdn_linear_diagnostic not in compatible_vdn_modes:
         raise PartitionedPreflightUnsupported(
             "source_carrier audio-position candidate requires vdn_linear_diagnostic="
-            "'normal' or 'suppress_cross_grid_temporal_taps'"
+            "'normal', 'bypass_partitioned_linear', or 'suppress_cross_grid_temporal_taps'"
         )
 
 
