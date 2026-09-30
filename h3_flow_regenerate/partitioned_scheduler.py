@@ -614,13 +614,14 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         )
     )
-    from .boundary_witness import configured_boundary_witness
+    from .boundary_witness import WITNESS_DIRECTORY_OPTION, configured_boundary_witness
 
+    witness_directory = options.get(WITNESS_DIRECTORY_OPTION, None)
     transformer[PARTITIONED_STAGE_KEY] = PartitionedStageRuntime(
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
-        boundary_witness=configured_boundary_witness(metrics),
+        boundary_witness=configured_boundary_witness(metrics, directory=witness_directory),
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
     )
@@ -746,6 +747,15 @@ def _validate_partitioned_vdn_compat(
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
         raise PartitionedPreflightUnsupported("VDN object-patch ownership is unavailable")
+    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
+
+    model_options = getattr(patcher, "model_options", None)
+    witness_directory = (
+        model_options.get(WITNESS_DIRECTORY_OPTION, None)
+        if isinstance(model_options, dict)
+        else None
+    )
+    boundary_witness_requested = witness_requested(witness_directory)
     matched = 0
     for key, owner in object_patches.items():
         if not key.startswith("diffusion_model.blocks.") or not key.endswith(".attn.forward"):
@@ -753,9 +763,7 @@ def _validate_partitioned_vdn_compat(
         if not getattr(owner, "_vdn_forward", False):
             continue
         matched += 1
-        from .boundary_witness import witness_requested
-
-        if witness_requested() and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
+        if boundary_witness_requested and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
             raise RuntimeError("requested boundary witness requires paired VDN witness API 1 before sampling")
         if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
             raise PartitionedPreflightUnsupported(
