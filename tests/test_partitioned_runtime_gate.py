@@ -562,24 +562,24 @@ def test_partitioned_runtime_gate_uses_latest_audio_overlap_receipt_and_exact_ex
     with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(_metrics(), log_text)
 
-    exact_log = _log().replace(
+    selected_log = _log().replace(
         "mode=model_timestep_only",
-        "mode=sampler_mask_exact_timestep",
+        "mode=sampler_mask",
     )
     report = validate_partitioned_runtime_evidence(
         _metrics(),
-        exact_log,
-        expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        selected_log,
+        expected_audio_guided_overlap_mode="sampler_mask",
         expected_audio_guided_overlap_ticks=4,
     )
-    assert report.audio_guided_overlap_mode == "sampler_mask_exact_timestep"
+    assert report.audio_guided_overlap_mode == "sampler_mask"
     assert report.audio_guided_overlap_ticks == 4
 
     with pytest.raises(RuntimeGateError, match="mode differs from expectation"):
         validate_partitioned_runtime_evidence(
             _metrics(),
             _log(),
-            expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+            expected_audio_guided_overlap_mode="sampler_mask",
         )
     with pytest.raises(RuntimeGateError, match="width differs from expectation"):
         validate_partitioned_runtime_evidence(
@@ -754,6 +754,7 @@ def _exact_audio_metrics():
             "partitioned_exact_audio_mask_verified",
             policy="coherent_exact_audio_mask_v1",
             mode="exact_mask",
+            requested_overlap_ticks=16,
             verified_model_entries=3,
             effective_overlap_ticks=0,
             sampler_input_mask_exact=True,
@@ -783,6 +784,7 @@ def test_exact_audio_evidence_accepts_verified_native_masks_without_label_overri
         log,
         require_audio_overlap=False,
         expected_audio_guided_overlap_mode="exact_mask",
+        expected_audio_guided_overlap_ticks=16,
         expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
     )
     assert report.audio_position_candidate_verified is True
@@ -816,6 +818,26 @@ def test_exact_audio_evidence_cannot_reuse_an_earlier_continuation_receipt():
     metrics["events"].append(_event("partitioned_stage_plan"))
     with pytest.raises(RuntimeGateError, match="one coherent"):
         validate_coherent_exact_audio_evidence(metrics)
+
+
+def test_exact_audio_expectation_rejects_legacy_ramp_without_coherent_receipt():
+    log = _log().replace("mode=model_timestep_only", "mode=sampler_mask_exact_timestep")
+    with pytest.raises(RuntimeGateError, match="one coherent"):
+        validate_partitioned_runtime_evidence(
+            _candidate_metrics(),
+            log,
+            expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        )
+
+
+def test_exact_audio_expectation_rejects_applied_ramp_even_with_receipt():
+    log = _log().replace("mode=model_timestep_only", "mode=exact_mask")
+    with pytest.raises(RuntimeGateError, match="must not apply"):
+        validate_partitioned_runtime_evidence(
+            _exact_audio_metrics(),
+            log,
+            expected_audio_guided_overlap_mode="exact_mask",
+        )
 
 
 def test_partitioned_runtime_gate_keeps_legacy_gate_backward_compatible():

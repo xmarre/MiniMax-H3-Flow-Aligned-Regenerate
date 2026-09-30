@@ -4029,8 +4029,10 @@ def validate_partitioned_runtime_evidence(
             "expected audio guided-overlap mode must be a non-empty string",
         )
         exact_audio_expected = expected_audio_guided_overlap_mode in {"exact_mask", "sampler_mask_exact_timestep"}
-        if exact_audio_expected and not audio_overlap_applied:
-            validate_coherent_exact_audio_evidence(metrics)
+        if exact_audio_expected:
+            receipt = validate_coherent_exact_audio_evidence(metrics)
+            _require(receipt.get("mode") == expected_audio_guided_overlap_mode, "exact-audio receipt mode drifted")
+            _require(not audio_overlap_applied, "exact-audio mode must not apply a sampler overlap ramp")
         _require(
             (audio_overlap_applied or exact_audio_expected)
             and audio_overlap_mode == expected_audio_guided_overlap_mode,
@@ -4044,8 +4046,13 @@ def validate_partitioned_runtime_evidence(
             type(expected_audio_guided_overlap_ticks) is int and expected_audio_guided_overlap_ticks >= 0,
             "expected audio guided-overlap ticks must be a non-negative integer",
         )
+        exact_width_verified = False
+        if expected_audio_guided_overlap_mode in {"exact_mask", "sampler_mask_exact_timestep"}:
+            receipt = validate_coherent_exact_audio_evidence(metrics)
+            exact_width_verified = receipt.get("requested_overlap_ticks") == expected_audio_guided_overlap_ticks
         _require(
-            audio_overlap_applied and audio_overlap_ticks == expected_audio_guided_overlap_ticks,
+            (audio_overlap_applied or exact_width_verified)
+            and audio_overlap_ticks == expected_audio_guided_overlap_ticks,
             (
                 "latest applied partitioned audio guided-overlap width differs from expectation: "
                 f"expected {expected_audio_guided_overlap_ticks}, observed {audio_overlap_ticks}"

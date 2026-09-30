@@ -1,3 +1,26 @@
+# Unreleased: exact-audio mask correction (qualification pending)
+
+Partitioned exact-prefix continuation now keeps the same authoritative audio mask
+for sampler input, native H3 timestep labels, and outer velocity conversion.
+`exact_mask` is the explicit node default. Existing workflows that select
+`sampler_mask_exact_timestep` use the same corrected behavior: carried audio stays
+protected throughout sampling, and the stored overlap width has zero effect.
+The previous selector regenerated overlap rows while labeling them as exact
+carried context, then restored a different prefix after sampling.
+
+Each inner model entry verifies the native mask before inference. Invalid masks,
+missing protected-audio conditions, and unsupported Core velocity-mask semantics
+fail closed. Invocation state is cleared after execution failure or preflight
+rejection. The explicit `sampler_mask` and `model_timestep_only` comparison modes
+remain available. No sampler, transformer, attention-provider, or VAE invocation
+is added.
+
+This corrects an audio conditioning contract. Rendered audio-boundary quality and
+the remaining video displacement still require matched hardware validation;
+this entry does not announce a qualified release.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.8
 
 v0.3.8 promotes the partitioned exact-prefix Continuum path from the diagnostic development line into the shipped production node and closes both boundary regressions reproduced on v0.3.7.

@@ -155,8 +155,8 @@ def partitioned_outer_wrapper(
             audio_mask = unpack_streams(denoise_mask, latent_shapes)[1]
             minimum = audio_mask.amin(dim=(0, 1, 2))
             maximum = audio_mask.amax(dim=(0, 1, 2))
-            protected = maximum == 0
-            generated = minimum == 1
+            protected = (minimum == 0) & (maximum == 0)
+            generated = (minimum == 1) & (maximum == 1)
             audio_prefix_ticks = int(protected.sum().item())
             if not (
                 bool(protected[:audio_prefix_ticks].all().item()) and bool(generated[audio_prefix_ticks:].all().item())
@@ -179,8 +179,13 @@ def partitioned_outer_wrapper(
             raise RuntimeError(f"unsupported partitioned audio guided-overlap mode {guided_mode!r}")
 
         if exact_audio_mode:
+            core_audio_velocity_mask_contract = _core_has_audio_velocity_mask_contract()
+            if not core_audio_velocity_mask_contract:
+                raise RuntimeError(
+                    "exact audio masks require ComfyUI MiniMax-H3 denoise-mask velocity conversion fix #15988"
+                )
             audio_model_context = PartitionedAudioModelTimestepContext(
-                audio_mask=unpack_streams(denoise_mask, latent_shapes)[1]
+                audio_mask=unpack_streams(denoise_mask, latent_shapes)[1][:1]
                 .amax(dim=1, keepdim=True)
                 .contiguous()
                 .detach()

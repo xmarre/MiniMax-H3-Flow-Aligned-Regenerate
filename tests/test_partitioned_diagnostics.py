@@ -432,6 +432,34 @@ def test_exact_audio_context_rejects_fractional_sampler_mask_before_forward():
     assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_exact_audio_context_verifies_cfg_batch_masks_without_changing_kwargs(dtype):
+    exact = torch.ones(1, 1, 2, 8)
+    exact[..., :4] = 0
+    context = PartitionedAudioModelTimestepContext(exact, _Metrics(), 0, 4, mask_kind="exact_authoritative")
+    options = {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}
+    runtime = exact.to(dtype=dtype).repeat(2, 1, 1, 1)
+    kwargs = {"audio_denoise_mask": runtime}
+    assert _audio_model_timestep_kwargs(options, kwargs) is kwargs
+    runtime[1, ..., :1] = 1
+    with pytest.raises(RuntimeError, match="same authoritative"):
+        _audio_model_timestep_kwargs(options, kwargs)
+    assert context.verification_calls == 1
+
+
+def test_exact_audio_context_accepts_omitted_native_mask_only_for_fully_generated_audio():
+    exact = torch.ones(1, 1, 2, 8)
+    context = PartitionedAudioModelTimestepContext(exact, _Metrics(), 0, 0, mask_kind="exact_authoritative")
+    options = {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}
+    kwargs = {}
+    assert _audio_model_timestep_kwargs(options, kwargs) is kwargs
+    assert context.verification_calls == 1
+    exact[..., :1] = 0
+    with pytest.raises(RuntimeError, match="exact protected audio requires"):
+        _audio_model_timestep_kwargs(options, kwargs)
+    assert context.verification_calls == 1
+
+
 def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
     stale = SimpleNamespace(_vdn_forward=True, _vdn_external_sequence_api=4)
     patcher = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": stale})
@@ -834,14 +862,30 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
-@pytest.mark.parametrize("guided_ticks", [0, 4, 16])
+@pytest.mark.parametrize(
+    "guided_ticks,outcome",
+    [
+        (0, "success"),
+        (4, "success"),
+        (16, "success"),
+        (16, "inference_failure"),
+        (16, "preflight_failure"),
+        (16, "zero_calls"),
+        (16, "negative_channel"),
+        (16, "oversized_channel"),
+        (16, "missing_core_contract"),
+        (16, "nested_context"),
+    ],
+)
 @pytest.mark.parametrize(
     "mode", [PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT, PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP]
 )
-def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent(monkeypatch, guided_ticks, mode):
+def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent(
+    monkeypatch, guided_ticks, mode, outcome
+):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
-        lambda: True,
+        lambda: outcome != "missing_core_contract",
     )
     video = torch.randn(1, 24, 5, 8, 12)
     audio = torch.randn(1, 32, 2, 24)
@@ -851,6 +895,10 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
     video_mask[:, :, :2] = 0
     audio_mask = torch.ones_like(audio)
     audio_mask[..., :20] = 0
+    if outcome == "negative_channel":
+        audio_mask[:, :1, :, :1] = -0.5
+    elif outcome == "oversized_channel":
+        audio_mask[:, :1, :, 20:] = 1.5
     exact_mask = pack_streams((video_mask, audio_mask))[0]
 
     metrics = H3FlowMetrics()
@@ -859,6 +907,7 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
         source_latent_h=4,
         source_latent_w=6,
         transfer_mode="learned_3d",
+        frame_gauge_repair=True,
         learned_upscaler=SimpleNamespace(
             api_version=1,
             kind="minimax_h3_learned_latent_upscaler",
@@ -871,6 +920,9 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
         ),
     )
     transformer_options = {}
+    existing_context = object()
+    if outcome == "nested_context":
+        transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] = existing_context
     guider = SimpleNamespace(
         model_options={
             FLOW_BINDING_KEY: binding,
@@ -913,6 +965,16 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
         assert context.mask_kind == "exact_authoritative"
         assert context.audio_prefix_ticks == 20
         assert context.ticks == 0
+        assert binding.frame_gauge_invocation_active is True
+        if outcome == "inference_failure":
+            binding.active_guidance_run = object()
+            binding.registered_guidance_reference = object()
+            binding.guidance_state.current_coordinate = 0.5
+            raise RuntimeError("inference failed")
+        if outcome == "preflight_failure":
+            raise PartitionedPreflightUnsupported("unsupported provider")
+        if outcome == "zero_calls":
+            return latent_image.clone()
         kwargs = {"audio_denoise_mask": runtime_audio}
         forwarded = _audio_model_timestep_kwargs(
             transformer_options,
@@ -926,18 +988,45 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
         "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
         fake_partitioned,
     )
-    result = partitioned_outer_wrapper(
-        Executor(),
-        torch.randn_like(packed),
-        packed,
-        SimpleNamespace(),
-        torch.tensor([1.0, 0.0]),
-        exact_mask,
-        None,
-        True,
-        7,
-        latent_shapes=shapes,
-    )
+
+    def invoke():
+        return partitioned_outer_wrapper(
+            Executor(),
+            torch.randn_like(packed),
+            packed,
+            SimpleNamespace(),
+            torch.tensor([1.0, 0.0]),
+            exact_mask,
+            None,
+            True,
+            7,
+            latent_shapes=shapes,
+        )
+
+    if outcome != "success":
+        messages = {
+            "inference_failure": "inference failed",
+            "preflight_failure": "refusing target-grid fallback",
+            "zero_calls": "zero MiniMax-H3 inner-forward calls",
+            "negative_channel": "contiguous fully protected prefix",
+            "oversized_channel": "contiguous fully protected prefix",
+            "missing_core_contract": "velocity conversion fix #15988",
+            "nested_context": "nested partitioned audio",
+        }
+        with pytest.raises(RuntimeError, match=messages[outcome]):
+            invoke()
+        assert binding.frame_gauge_invocation_active is False
+        assert binding.active_guidance_run is None
+        assert binding.registered_guidance_reference is None
+        assert binding.guidance_state.current_coordinate is None
+        assert not any(event.kind == "partitioned_exact_audio_mask_verified" for event in metrics.events)
+        if outcome == "nested_context":
+            assert transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] is existing_context
+        else:
+            assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
+        return
+
+    result = invoke()
 
     assert torch.equal(result, packed)
     assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options

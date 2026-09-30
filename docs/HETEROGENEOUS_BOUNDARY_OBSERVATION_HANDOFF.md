@@ -30,6 +30,10 @@ as described below. No rendered production fix is promoted.
 
 ## 00728: coherent exact-audio correction and next qualification
 
+Evidence SHA256:
+- metrics: `36b43d3bdaa418aacec9a1c75b5e443fd6c1e1594eb51d26bbe42f33a9a2220d`
+- runtime log: `3a59694fdd7a75cc4ad6ff4e2fd8b6766296703ebf9b15acd416721f8bbbf08d`
+
 Dense suffix executed 3,300 calls / 8,467,200 Q rows / 45,230,700 KV rows with
 unchanged domain, prefix measure and grouped ownership. Learned-linear bypass
 executed 300 calls / 10,713,600 video rows. Upper45 source-low X successor pairs
@@ -61,7 +65,11 @@ is the explicit selector; stored `sampler_mask_exact_timestep` values alias it.
 Requested overlap width remains provenance; effective width is zero. Each inner
 model entry verifies equality with the native mask and passes kwargs unchanged.
 A mismatch fails before the inner forward. Invocation context is cleaned up on
-success and failure. Released Target Input and the explicit `sampler_mask` /
+success, execution failure and preflight rejection, and nested contexts fail
+without replacing the existing owner. Exact masks must be binary and uniform
+across channels, stereo lanes and batch items. Core may repeat the native mask
+for CFG batching or omit it for fully generated audio. The Core #15988 outer
+velocity-mask compatibility requirement remains enforced. Released Target Input and the explicit `sampler_mask` /
 `model_timestep_only` comparison modes retain their behavior.
 
 Refresh Flow #93 through the existing Patcher overlay stack and restart ComfyUI.

@@ -317,7 +317,7 @@ def _partitioned_transformer_options(
 
 
 def _audio_model_timestep_kwargs(options, kwargs):
-    """Override only MiniMax-H3's inner audio timestep labels, never sampler ownership."""
+    """Verify exact native masks or override diagnostic inner timestep labels."""
 
     context = options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
     if context is None:
@@ -325,9 +325,24 @@ def _audio_model_timestep_kwargs(options, kwargs):
     if not isinstance(context, PartitionedAudioModelTimestepContext):
         raise RuntimeError("partitioned audio model-timestep context is malformed")
     runtime_audio_mask = kwargs.get("audio_denoise_mask")
+    context_audio_mask = context.audio_mask
+    if context.mask_kind == "exact_authoritative" and runtime_audio_mask is None:
+        # Core omits the condition when every audio row is fully generated.
+        if not torch.is_tensor(context_audio_mask) or not bool((context_audio_mask == 1).all().item()):
+            raise RuntimeError("exact protected audio requires the native runtime audio denoise mask")
+        context.record_verification()
+        return kwargs
     if not torch.is_tensor(runtime_audio_mask):
         raise RuntimeError("partitioned audio timestep override requires the native runtime audio denoise mask")
-    context_audio_mask = context.audio_mask
+    if (
+        context.mask_kind == "exact_authoritative"
+        and torch.is_tensor(context_audio_mask)
+        and context_audio_mask.ndim == runtime_audio_mask.ndim
+        and context_audio_mask.shape[0] == 1
+        and tuple(context_audio_mask.shape[1:]) == tuple(runtime_audio_mask.shape[1:])
+    ):
+        # Core can repeat the canonical condition when batching CFG branches.
+        context_audio_mask = context_audio_mask.expand_as(runtime_audio_mask)
     if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(runtime_audio_mask.shape):
         raise RuntimeError("partitioned audio timestep override mask geometry drifted")
     if context.mask_kind == "exact_authoritative":
