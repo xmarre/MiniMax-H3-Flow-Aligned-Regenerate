@@ -9,15 +9,13 @@ therefore not sufficient to explain the rendered defect and no VDN production
 fix is promoted.
 
 The leading remaining hypothesis is now the low-resolution -> high-resolution
-Flow handoff itself, especially the learned 3D latent transfer. Across the
-matched runs the source-low successor motion is comparatively small while the
-post-transfer clean witness repeatedly develops a much larger successor
-displacement. A direct same-source transfer discriminator is implemented on
-Flow #93: keep the exact same low/probe state, residual/noise transport,
-postprocess controls, exact-prefix restoration and target-high stage, but replace
-only the learned checkpoint transform with deterministic bicubic spatial
-transfer. This distinguishes "learned upscaler is causal" from "any low->high
-handoff/high-refine transition is causal." No production fix is promoted.
+Flow stage transition itself. Across the matched runs the source-low successor
+motion is comparatively small while the post-transfer target-grid witness
+develops a much larger successor displacement. Flow #93 therefore now includes
+a direct same-grid target control: low/probe executes at the target resolution,
+the handoff keeps the same split but performs no spatial resize, and target-high
+then proceeds normally. This removes the resolution transition itself rather
+than comparing two different resize operators. No production fix is promoted.
 
 The authoritative specification is
 [the design at b97ed34d0db253f26e5c7a391c3fb1358c3c3684](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/b97ed34d0db253f26e5c7a391c3fb1358c3c3684/docs/HETEROGENEOUS_EXACT_PREFIX_BOUNDARY_IMPLEMENTATION_DESIGN.md).
@@ -303,43 +301,68 @@ the remaining alternatives are (a) the learned 3D upscaler introduces the
 spatial/temporal gauge change, or (b) the broader low->high resolution
 handoff plus target-high response does so even with a simple spatial transfer.
 
-### Revised next discriminator: same-source spatial transfer control
+### Revised next discriminator: remove the spatial grid transition itself
 
-The authoritative design explicitly requires revision rather than another
-production correction when A/B/C fail to isolate/remove the rendered defect.
-Given C and the complete VDN-linear bypass both fail media acceptance, the
-previously ordered weighted-dense attention arm is deferred while the already
-implicated handoff is isolated directly.
+The previous learned-vs-bicubic proposal is **not** the required test for the
+current hypothesis. The user is specifically testing whether Flow Regenerate's
+low-resolution -> high-resolution stage transition is what creates the frame
+shift. Replacing one 34x34 -> 48x48 resize operator with another still retains
+that transition and therefore cannot answer the question directly.
 
 Flow #93 now exposes an appended diagnostic selector
-`handoff_transfer_control`:
+`spatial_stage_control`:
 
-* `learned_3d` — historical/default path; absence leaves existing model options
-  unchanged.
-* `bicubic_same_source_control` — retains the exact learned-handoff plumbing
-  but replaces only the checkpoint's `upscale_clean_video` transform with
-  deterministic bicubic spatial resize.
+* `progressive_low_to_high` — historical/default behavior. The configured
+  reduced source geometry remains active.
+* `same_grid_target_control` — ignores the reduced source geometry for actual
+  low/probe execution and runs low/probe directly on the caller target grid.
+  The original configured reduced source geometry is retained only for handoff
+  split selection, so fixed and auto-computed handoff timing remain matched.
+  At the handoff, an identity provider is used through the same handoff plumbing:
+  no spatial resize and no learned-checkpoint invocation occur. Residual/noise
+  transport, clean postprocess, exact-prefix restoration, audio state, guidance,
+  Spectrum/history ownership and target-high sampling remain in place.
 
-The bicubic control deliberately runs through the same postprocess hook,
-source-residual/noise transport, exact-prefix restoration, DC/overlap logic,
-audio state, guidance, Spectrum history and target-high sampler. It performs
-zero actual learned-checkpoint provider calls and emits
-`partitioned_handoff_transfer_control` with a source-clean tensor digest,
-source/target geometry, one spatial-control call and zero extra H3/provider/VAE
-or sampler/history work.
+The control is fail-closed. It requires
+`handoff_transfer_control=learned_3d` and
+`vdn_temporal_carrier_policy=native_grid_then_map_v1`; combining it with the
+bicubic transfer diagnostic or destination-grid stencil is rejected.
 
-For the next matched hardware run keep the **00724** workflow and every control
-frozen, including the VDN linear bypass, and change only:
+For the next matched hardware run keep the complete **00724** workflow and
+every selector frozen and change only:
 
-* `handoff_transfer_control=bicubic_same_source_control`
-* keep `capture_boundary_witness=false`
-* keep `vdn_temporal_carrier_policy=native_grid_then_map_v1`.
+* `spatial_stage_control=same_grid_target_control`
 
-If the visible shift disappears or materially collapses, the learned 3D
-upscaler is causally implicated. If the visible shift remains with comparable
-character, the cause is broader than the learned checkpoint: the low->high
-resolution handoff / target-high transition itself becomes the next owner to
-isolate. Rendered whole-window inspection remains decisive.
+In particular keep:
+
+* `handoff_transfer_control=learned_3d`
+* `vdn_linear_diagnostic=bypass_partitioned_linear`
+* `vdn_temporal_carrier_policy=native_grid_then_map_v1`
+* `capture_boundary_witness=false`
+* the existing source scale/width/height values unchanged.
+
+Do **not** manually set source scale to 1.0; the ordinary configuration rejects
+that by design. The diagnostic selector overrides only the effective low/probe
+spatial stage internally while preserving the configured source geometry as
+provenance and for handoff split selection.
+
+The run must emit `partitioned_stage_plan` with
+`same_grid_control_active=true`, equal effective source/target H/W, and the
+original `configured_progressive_source_hw`. It must also emit
+`partitioned_handoff_transfer_control` with operator
+`diagnostic:same_grid_target_identity`, exactly one spatial-control call and
+zero actual learned-checkpoint provider calls.
+
+Interpretation is direct:
+
+* if the visible frame shift disappears/materially collapses, the
+  low-resolution -> high-resolution stage transition is causally implicated;
+* if it remains with comparable character, the artifact is not caused simply by
+  changing spatial resolution between low/probe and high, and the next
+  discriminator must move elsewhere.
+
+The earlier `bicubic_same_source_control` remains available as archived
+diagnostic machinery but is **not** requested for this hypothesis.
 
 ## Source and checkpoint provenance
 
@@ -431,10 +454,11 @@ Completed gates now include the actual SM120 feature witness, matched A/B
 suppression discriminator, 00722 candidate-C execution, and 00724 complete
 partitioned learned-linear bypass. Both C and bypass fail the rendered-media
 gate: the visible frame shift persists. The next open gate is the direct
-same-source learned-vs-bicubic handoff transfer discriminator. Same-domain
-weighted-dense attention is intentionally deferred pending that result because
-the transfer boundary is now directly implicated by repeated source->learned
-amplification. Audio remains independently unresolved. No first-pair metric,
+`same_grid_target_control`, which removes the low->high spatial resolution
+transition while preserving the handoff split and downstream target-high stage.
+Same-domain weighted-dense attention is intentionally deferred pending that
+result because the transfer boundary is now directly implicated by repeated
+source->target amplification. Audio remains independently unresolved. No first-pair metric,
 source test or green CI can substitute for rendered whole-window acceptance.
 
 Candidate C is retained only as rejected diagnostic evidence in VDN #35. For
