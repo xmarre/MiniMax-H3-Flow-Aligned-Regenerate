@@ -158,7 +158,14 @@ def validate_partitioned_contract(
     )
     if any(type(contract.get(name)) is not int for name in names):
         raise ValueError("partitioned exact-prefix geometry must use integer fields")
-    plan = PartitionedExactPrefixPlan(**{name: contract[name] for name in names})
+    same_grid_control = (
+        contract["source_grid_h"] == contract["target_grid_h"]
+        and contract["source_grid_w"] == contract["target_grid_w"]
+    )
+    plan = PartitionedExactPrefixPlan(
+        **{name: contract[name] for name in names},
+        same_grid_control=same_grid_control,
+    )
     canonical = plan.to_contract()
     for name in (
         "sequence_rows",
