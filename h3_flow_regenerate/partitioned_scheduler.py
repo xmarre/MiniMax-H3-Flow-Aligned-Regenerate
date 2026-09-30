@@ -625,11 +625,13 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         )
     )
-    temporal_carrier_spec = _validate_partitioned_vdn_compat(
-        guider.model_patcher,
-        required_linear_diagnostic=linear_mode,
-        required_temporal_carrier_policy=temporal_carrier_policy,
-    )
+    temporal_carrier_spec = None
+    if temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+        temporal_carrier_spec = _validate_partitioned_vdn_compat(
+            guider.model_patcher,
+            required_linear_diagnostic=linear_mode,
+            required_temporal_carrier_policy=temporal_carrier_policy,
+        )
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, configured_boundary_witness
 
     witness_directory = options.get(WITNESS_DIRECTORY_OPTION, None)
