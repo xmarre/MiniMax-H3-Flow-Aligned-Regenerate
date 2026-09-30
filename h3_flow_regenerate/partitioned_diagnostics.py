@@ -7,6 +7,8 @@ Progressive Target Input node or the ordinary partitioned node defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any
 
 from .audio_guided_overlap import (
@@ -96,6 +98,16 @@ PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS = (
 
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
 
+PARTITIONED_VDN_TEMPORAL_CARRIER_KEY = "h3_flow_partitioned_vdn_temporal_carrier_v1"
+PARTITIONED_VDN_TEMPORAL_CARRIER_API = 1
+PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE = "native_grid_then_map_v1"
+PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION = "destination_grid_stencil_v1"
+PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS = (
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+)
+PARTITIONED_VDN_TEMPORAL_CARRIER_MAPPING_POLICY = "h3_physical_bilinear_border_fp32_restore_dtype_v1"
+
 
 @dataclass(slots=True)
 class PartitionedAudioModelTimestepContext:
@@ -122,6 +134,43 @@ def normalize_vdn_linear_diagnostic(value: str) -> str:
             f"VDN linear diagnostic must be one of {PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS!r}, got {value!r}"
         )
     return value
+
+
+def normalize_vdn_temporal_carrier_policy(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS:
+        raise ValueError(
+            "VDN temporal-carrier policy must be one of "
+            f"{PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
+def build_vdn_temporal_carrier_contract(
+    *,
+    policy: str,
+    flow_semantic_digest: str,
+    diagnostic_mode: str,
+    short_conv_spec: str,
+) -> dict[str, Any]:
+    """Build the exact numerical-policy leaf consumed by paired VDN."""
+    policy = normalize_vdn_temporal_carrier_policy(policy)
+    if not isinstance(flow_semantic_digest, str) or len(flow_semantic_digest) != 64:
+        raise ValueError("VDN temporal-carrier policy requires a Flow semantic digest")
+    diagnostic_mode = normalize_vdn_linear_diagnostic(diagnostic_mode)
+    if not isinstance(short_conv_spec, str) or not short_conv_spec:
+        raise ValueError("VDN temporal-carrier policy requires a checkpoint short-conv specification")
+    payload = {
+        "api": PARTITIONED_VDN_TEMPORAL_CARRIER_API,
+        "policy": policy,
+        "flow_semantic_digest": flow_semantic_digest,
+        "diagnostic_mode": diagnostic_mode,
+        "short_conv_spec": short_conv_spec,
+        "precision_mapping_policy": PARTITIONED_VDN_TEMPORAL_CARRIER_MAPPING_POLICY,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    payload["numerical_digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return payload
 
 
 def normalize_audio_guided_overlap_mode(value: str) -> str:
@@ -225,6 +274,7 @@ def apply_partitioned_diagnostic_controls(
     *,
     vdn_linear_diagnostic: str,
     audio_guided_overlap_ticks: int,
+    vdn_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     audio_guided_overlap_mode: str = PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     prefix_transformer_context: str = PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
@@ -237,6 +287,12 @@ def apply_partitioned_diagnostic_controls(
     """Install diagnostic controls on one cloned MODEL only."""
 
     mode = normalize_vdn_linear_diagnostic(vdn_linear_diagnostic)
+    temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(vdn_temporal_carrier_policy)
+    if (
+        temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+        and mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
+    ):
+        raise ValueError("destination-grid temporal stencil requires vdn_linear_diagnostic='normal'")
     ticks = validate_audio_guided_overlap_ticks(
         audio_guided_overlap_ticks,
         source="audio_guided_overlap_ticks",
@@ -255,6 +311,12 @@ def apply_partitioned_diagnostic_controls(
 
     transformer_options = dict(model_options.get("transformer_options") or {})
     transformer_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = mode
+    if temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        transformer_options.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    else:
+        # The fully bound numerical-policy leaf is constructed only after the
+        # physical Flow plan has a semantic digest inside the transformer.
+        transformer_options[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] = temporal_carrier_policy
     transformer_options[PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY] = prefix_context
     if position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
         transformer_options.pop(PARTITIONED_AUDIO_POSITION_DOMAIN_KEY, None)
@@ -288,6 +350,7 @@ def apply_partitioned_diagnostic_controls(
     if callable(event):
         fields = {
             "vdn_linear_diagnostic": mode,
+        "vdn_temporal_carrier_policy": temporal_carrier_policy,
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
             "prefix_transformer_context": prefix_context,
