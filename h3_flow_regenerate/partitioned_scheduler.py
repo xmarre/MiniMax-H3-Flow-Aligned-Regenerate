@@ -3634,6 +3634,7 @@ def run_partitioned_progressive(
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
+            run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
         if spatial_transfer_control is not None:
             if spatial_transfer_control.calls != 1:
