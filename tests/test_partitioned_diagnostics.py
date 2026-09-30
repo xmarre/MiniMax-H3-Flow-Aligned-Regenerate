@@ -29,6 +29,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+    PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY,
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    PARTITIONED_HANDOFF_TRANSFER_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
@@ -55,6 +59,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
+    normalize_handoff_transfer_control,
     normalize_low_probe_execution_source,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
@@ -78,6 +83,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED,
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
+    _BicubicSameSourceTransferProvider,
     _cache_audio_decode_witness,
     _prepare_registered_guidance_reference,
     _validate_audio_position_candidate_configuration,
@@ -126,6 +132,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "frame_gauge_repair" not in ordinary
     assert "provider_boundary_stabilization" not in ordinary
     assert "vdn_temporal_carrier_policy" not in ordinary
+    assert "handoff_transfer_control" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -156,6 +163,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    assert diagnostic["handoff_transfer_control"][0] == list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS)
+    assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
@@ -983,6 +992,55 @@ def test_source_carrier_audio_position_allows_linear_discriminator_arms():
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
         )
+
+
+def test_handoff_transfer_control_is_model_local_default_absent_and_fail_closed():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY not in model.model_options["transformer_options"]
+    assert "handoff_transfer_control" not in metrics.events[-1][1]
+
+    control = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    control_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        control,
+        control_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+    )
+    assert (
+        control.model_options["transformer_options"][PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY]
+        == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+    )
+    assert (
+        control_metrics.events[-1][1]["handoff_transfer_control"]
+        == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+    )
+    assert normalize_handoff_transfer_control(PARTITIONED_HANDOFF_TRANSFER_LEARNED) == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    with pytest.raises(ValueError, match="handoff transfer control"):
+        normalize_handoff_transfer_control("invented")
+
+
+def test_bicubic_same_source_transfer_provider_is_deterministic_and_bounded_to_resize():
+    template = SimpleNamespace(device="cpu", precision="fp32")
+    provider = _BicubicSameSourceTransferProvider(template)
+    video = torch.arange(1 * 24 * 3 * 4 * 4, dtype=torch.float32).reshape(1, 24, 3, 4, 4)
+
+    first = provider.upscale_clean_video(video, target_h=6, target_w=6)
+    second = provider.upscale_clean_video(video, target_h=6, target_w=6)
+
+    assert provider.calls == 2
+    assert first.shape == (1, 24, 3, 6, 6)
+    assert torch.equal(first, second)
+    assert provider.model_name == "diagnostic:bicubic_same_source_control"
+    assert provider.api_version == 1
 
 
 def test_temporal_carrier_selector_is_model_local_and_default_absent():
