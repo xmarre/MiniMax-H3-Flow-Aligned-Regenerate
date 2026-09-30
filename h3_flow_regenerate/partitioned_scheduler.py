@@ -3561,9 +3561,7 @@ def run_partitioned_progressive(
         )
         if spatial_transfer_control is not None:
             if spatial_transfer_control.calls != 1:
-                raise RuntimeError(
-                    "same-source bicubic transfer control did not execute exactly once"
-                )
+                raise RuntimeError("same-source bicubic transfer control did not execute exactly once")
             if transfer_metrics.get("model_name") != spatial_transfer_control.model_name:
                 raise RuntimeError("same-source bicubic transfer control lost its runtime identity")
             binding.metrics.increment("partitioned_handoff_spatial_control_calls")
@@ -4454,9 +4452,7 @@ def run_partitioned_progressive(
             "partitioned_transfer",
             handoff_transfer_control=handoff_transfer_control,
             learned_transfer_performed=handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED,
-            spatial_transfer_control_applied=(
-                handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
-            ),
+            spatial_transfer_control_applied=(handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL),
             actual_learned_checkpoint_provider_invoked=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
             ),
