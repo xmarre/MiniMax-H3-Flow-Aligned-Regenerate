@@ -893,17 +893,12 @@ def _validate_partitioned_vdn_compat(
                     "the installed VDN bridge does not publish that diagnostic capability"
                 )
         if required_softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
-            if (
-                int(getattr(owner, "_vdn_partitioned_softmax_diagnostic_api", 0))
-                != PARTITIONED_SOFTMAX_DIAGNOSTIC_API
-            ):
+            if int(getattr(owner, "_vdn_partitioned_softmax_diagnostic_api", 0)) != PARTITIONED_SOFTMAX_DIAGNOSTIC_API:
                 raise PartitionedPreflightUnsupported(
                     "same-domain dense suffix diagnostic requires paired VDN softmax diagnostic "
                     f"API v{PARTITIONED_SOFTMAX_DIAGNOSTIC_API}"
                 )
-            supported_softmax = tuple(
-                getattr(owner, "_vdn_partitioned_softmax_diagnostic_modes", ())
-            )
+            supported_softmax = tuple(getattr(owner, "_vdn_partitioned_softmax_diagnostic_modes", ()))
             if required_softmax_diagnostic not in supported_softmax:
                 raise PartitionedPreflightUnsupported(
                     f"partitioned softmax diagnostic {required_softmax_diagnostic!r} was requested but "
@@ -3022,12 +3017,8 @@ def run_partitioned_progressive(
     raw_measure_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
     )
-    dense_suffix_calls_before = int(
-        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0)
-    )
-    dense_suffix_q_rows_before = int(
-        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0)
-    )
+    dense_suffix_calls_before = int(binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0))
+    dense_suffix_q_rows_before = int(binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0))
     dense_suffix_kv_rows_before = int(
         binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_kv_rows", 0)
     )
