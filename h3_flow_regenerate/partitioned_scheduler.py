@@ -88,6 +88,10 @@ from .partitioned_diagnostics import (
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_API,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
     normalize_audio_handoff_source,
     normalize_audio_position_domain,
@@ -97,6 +101,7 @@ from .partitioned_diagnostics import (
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
     normalize_vdn_linear_diagnostic,
+    normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
 )
@@ -614,6 +619,17 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         )
     )
+    temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(
+        transformer.get(
+            PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+            PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+        )
+    )
+    temporal_carrier_spec = _validate_partitioned_vdn_compat(
+        guider.model_patcher,
+        required_linear_diagnostic=linear_mode,
+        required_temporal_carrier_policy=temporal_carrier_policy,
+    )
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, configured_boundary_witness
 
     witness_directory = options.get(WITNESS_DIRECTORY_OPTION, None)
@@ -621,6 +637,8 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         plan=plan,
         metrics=metrics,
         vdn_linear_diagnostic=linear_mode,
+        vdn_temporal_carrier_policy=temporal_carrier_policy,
+        vdn_temporal_carrier_short_conv_spec=temporal_carrier_spec,
         boundary_witness=configured_boundary_witness(metrics, directory=witness_directory),
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
@@ -634,6 +652,18 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             and not owner.boundary_witness.completed
         ):
             raise RuntimeError("requested boundary witness was not completed by the actual low-stage VDN call")
+        if owner.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+            contract = owner.vdn_temporal_carrier_contract
+            if not isinstance(contract, dict) or not isinstance(contract.get("numerical_digest"), str):
+                raise RuntimeError("destination-grid temporal stencil produced no bound numerical-policy receipt")
+            metrics.event(
+                "partitioned_vdn_temporal_carrier_stage",
+                stage=transformer.get(FLOW_STAGE_KEY),
+                policy=owner.vdn_temporal_carrier_policy,
+                numerical_digest=contract["numerical_digest"],
+                short_conv_spec=owner.vdn_temporal_carrier_short_conv_spec,
+                output_space_mutation=False,
+            )
     finally:
         transformer.pop(PARTITIONED_STAGE_KEY, None)
 
@@ -743,7 +773,8 @@ def _validate_partitioned_vdn_compat(
     patcher: Any,
     *,
     required_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-) -> None:
+    required_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+) -> str | None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
         raise PartitionedPreflightUnsupported("VDN object-patch ownership is unavailable")
@@ -752,6 +783,8 @@ def _validate_partitioned_vdn_compat(
     model_options = getattr(patcher, "model_options", None)
     witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION, None) if isinstance(model_options, dict) else None
     boundary_witness_requested = witness_requested(witness_directory)
+    required_temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(required_temporal_carrier_policy)
+    carrier_specs: set[str] = set()
     matched = 0
     for key, owner in object_patches.items():
         if not key.startswith("diffusion_model.blocks.") or not key.endswith(".attn.forward"):
@@ -785,8 +818,32 @@ def _validate_partitioned_vdn_compat(
                     f"partitioned VDN diagnostic {required_linear_diagnostic!r} was requested but "
                     "the installed VDN bridge does not publish that diagnostic capability"
                 )
+        if required_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+            if int(getattr(owner, "_vdn_partitioned_temporal_carrier_api", 0)) != PARTITIONED_VDN_TEMPORAL_CARRIER_API:
+                raise PartitionedPreflightUnsupported(
+                    "destination-grid temporal stencil requires paired VDN temporal-carrier API "
+                    f"v{PARTITIONED_VDN_TEMPORAL_CARRIER_API}"
+                )
+            policies = tuple(getattr(owner, "_vdn_partitioned_temporal_carrier_policies", ()))
+            if required_temporal_carrier_policy not in policies:
+                raise PartitionedPreflightUnsupported(
+                    "installed VDN bridge does not advertise destination-grid temporal-stencil capability"
+                )
+            spec = getattr(owner, "_vdn_partitioned_temporal_carrier_short_conv_spec", None)
+            if not isinstance(spec, str) or not spec:
+                raise PartitionedPreflightUnsupported(
+                    "installed VDN bridge did not publish its checkpoint short-conv specification"
+                )
+            carrier_specs.add(spec)
     if matched == 0:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires active VDN-H3 ownership")
+    if required_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+        if len(carrier_specs) != 1:
+            raise PartitionedPreflightUnsupported(
+                "destination-grid temporal stencil requires one consistent VDN checkpoint short-conv specification"
+            )
+        return next(iter(carrier_specs))
+    return None
 
 
 def _verify_partitioned_vdn_linear_diagnostic(
@@ -873,6 +930,50 @@ def _verify_partitioned_vdn_linear_diagnostic(
             suppressed_taps=delta_taps,
             suppressed_rows=delta_rows,
             fail_closed=True,
+        )
+
+
+def _verify_partitioned_vdn_temporal_carrier_policy(
+    metrics,
+    policy: str,
+    *,
+    calls_before: int,
+    taps_before: int,
+    carriers_before: int,
+    rows_before: int,
+) -> None:
+    policy = normalize_vdn_temporal_carrier_policy(policy)
+    if policy == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        return
+    counters = getattr(metrics, "counters", {})
+    calls = int(counters.get("partitioned_vdn_destination_grid_stencil_calls", 0)) - int(calls_before)
+    taps = int(counters.get("partitioned_vdn_destination_grid_stencil_taps", 0)) - int(taps_before)
+    carriers = int(counters.get("partitioned_vdn_destination_grid_stencil_carriers", 0)) - int(carriers_before)
+    rows = int(counters.get("partitioned_vdn_destination_grid_stencil_rows", 0)) - int(rows_before)
+    if min(calls, taps, carriers, rows) <= 0:
+        raise RuntimeError(
+            "destination-grid temporal stencil was requested but no verified cross-grid carrier work was observed"
+        )
+    receipts = [
+        event for event in getattr(metrics, "events", ())
+        if getattr(event, "kind", None) == "partitioned_vdn_temporal_carrier_stage"
+        and getattr(event, "fields", {}).get("policy") == policy
+    ]
+    digests = {event.fields.get("numerical_digest") for event in receipts}
+    if len(digests) != 1 or not all(isinstance(value, str) and len(value) == 64 for value in digests):
+        raise RuntimeError("destination-grid temporal stencil numerical identity was not stable across low/probe")
+    event = getattr(metrics, "event", None)
+    if callable(event):
+        event(
+            "partitioned_vdn_temporal_carrier_verified",
+            policy=policy,
+            numerical_digest=next(iter(digests)),
+            calls=calls,
+            cross_grid_taps=taps,
+            mapped_carriers=carriers,
+            mapped_carrier_rows=rows,
+            fail_closed=True,
+            output_space_mutation=False,
         )
 
 
@@ -1008,6 +1109,7 @@ def _preflight(
     latent_shapes: list[tuple[int, ...]],
     *,
     required_vdn_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    required_vdn_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
 ):
     if len(latent_shapes) != 2:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
@@ -1029,6 +1131,7 @@ def _preflight(
     _validate_partitioned_vdn_compat(
         guider.model_patcher,
         required_linear_diagnostic=required_vdn_linear_diagnostic,
+        required_temporal_carrier_policy=required_vdn_temporal_carrier_policy,
     )
     _validate_partitioned_sol_compat(guider)
 
@@ -2297,6 +2400,12 @@ def run_partitioned_progressive(
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         )
     )
+    vdn_temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(
+        initial_transformer.get(
+            PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+            PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+        )
+    )
     prefix_transformer_context = normalize_prefix_transformer_context(
         initial_transformer.get(
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY,
@@ -2333,6 +2442,19 @@ def run_partitioned_progressive(
             PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
         )
     )
+    if vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+        if vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL:
+            raise PartitionedPreflightUnsupported(
+                "destination-grid temporal stencil requires vdn_linear_diagnostic='normal'"
+            )
+        if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            raise PartitionedPreflightUnsupported(
+                "destination-grid temporal stencil requires prefix_transformer_context='exact_target_partitioned'"
+            )
+        if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
+            raise PartitionedPreflightUnsupported(
+                "destination-grid temporal stencil requires the exact-partitioned low/probe execution path"
+            )
     provider_boundary_stabilization = normalize_provider_boundary_stabilization(
         initial_transformer.get(
             PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_KEY,
@@ -2488,6 +2610,7 @@ def run_partitioned_progressive(
         denoise_mask,
         latent_shapes,
         required_vdn_linear_diagnostic=vdn_linear_diagnostic,
+        required_vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
     )
 
     # All unsupported conditions above are checked before any sampler lifetime.
@@ -2608,6 +2731,7 @@ def run_partitioned_progressive(
         prefix_target_grid_rows_injected=(prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT),
         deprecated_mixed_grid_contract_active=False,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
+        vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
         prefix_transformer_context=prefix_transformer_context,
         audio_position_domain=audio_position_domain,
     )
@@ -2662,6 +2786,18 @@ def run_partitioned_progressive(
     raw_measure_calls_before = int(binding.metrics.counters.get("partitioned_vdn_raw_token_measure_calls", 0))
     raw_measure_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
+    )
+    temporal_carrier_calls_before = int(
+        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_calls", 0)
+    )
+    temporal_carrier_taps_before = int(
+        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_taps", 0)
+    )
+    temporal_carrier_carriers_before = int(
+        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_carriers", 0)
+    )
+    temporal_carrier_rows_before = int(
+        binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_rows", 0)
     )
     source_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_source_carrier_uniform_transformer_calls", 0)
@@ -2801,6 +2937,14 @@ def run_partitioned_progressive(
                 suppressed_rows_before=suppressed_rows_before,
                 raw_measure_calls_before=raw_measure_calls_before,
                 raw_measure_prefix_frames_before=raw_measure_prefix_frames_before,
+            )
+            _verify_partitioned_vdn_temporal_carrier_policy(
+                binding.metrics,
+                vdn_temporal_carrier_policy,
+                calls_before=temporal_carrier_calls_before,
+                taps_before=temporal_carrier_taps_before,
+                carriers_before=temporal_carrier_carriers_before,
+                rows_before=temporal_carrier_rows_before,
             )
 
         shadow_source_raw = None
