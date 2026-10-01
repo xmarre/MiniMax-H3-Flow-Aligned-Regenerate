@@ -1,6 +1,99 @@
 # Heterogeneous boundary observation: qualification handoff
 
-Status: matched SM120 A/B/C plus complete partitioned learned-linear bypass
+Current status: the user reports the frame shift resolved after restoring
+`same_grid_target_control`. Retain that accepted configuration. The active
+qualification concerns continuation speed and VRAM pressure; older rendered
+observations below remain specific to their earlier configurations.
+
+## 00759–00762: warm admission succeeds; continuation memory needs qualification
+
+The supplied startup and all stage receipts execute VDN's finite
+`bounded_headroom_v1` policy. Its installed receipt reports retained buffers and
+actual fast kernels enabled. The old unconditional VDN purge is absent.
+00760's warm single 7-second chunk completes in **137.40 seconds**, with low-stage
+Core preparation **0.257 seconds**. Warm stage preparation stays below half a
+second in the subsequent runs. The new delay is inside continuation evaluation.
+
+| Run | Chunks | Completed sampler wall | Prompt completion |
+|---|---|---:|---:|
+| 00759 | 1, cold | 211.780 s | 312.89 s |
+| 00760 | 1, warm | 113.102 s | 137.40 s |
+| 00761 | 2, warm | 136.796 + 365.739 s | 550.31 s |
+| 00762 | 2, warm, canceled | first chunk 107.014 s; continuation low 798.120 s | absent |
+
+The 00762 metrics file was saved after the first chunk. It does not contain the
+canceled continuation's final counters or complete sampler interval. Its log
+ends during probe admission, without an OOM traceback. The user reports VRAM
+overflow and cancellation followed by a ComfyUI restart; distinguish that report
+from a captured exception.
+
+The accepted same-grid continuation performs low/probe work on the full 66x58
+target grid, with 62 latent frames including 12 protected-prefix frames. Packed
+video rows increase from 23,920 in the initial low stage to 59,334 in the
+continuation. 00761 continuation low/probe/high take **225.744 / 59.904 / 75.559
+seconds**. Both continuation low stages execute four actual calls plus one
+forecast: canonical history eligibility is now observed at runtime.
+
+00762 changes only the prompt according to the user. Its continuation has fewer
+text rows (3,916 versus 4,132), the same video geometry, and more available
+memory at low entry (35,217.834 versus 33,669.371 MiB by Core's API). Nevertheless,
+later actual calls deteriorate sharply. After low, allocated/reserved receipts
+reach **66,320.374 / 95,552.000 MiB**. The first-stage allocation returns to
+approximately 55,342.969 MiB between prompts; this evidence does not establish
+an accumulating live-tensor leak. Reserved pool size alone does not identify
+live ownership or prove physical spill, especially under `cudaMallocAsync`.
+
+Source tracing identifies three concrete issues:
+
+- Validated unit prefix measure still allocates an all-zero key bias and passes
+  it as an SDPA mask. PyTorch 2.10's CUDA FlashAttention selector rejects any
+  non-null mask. The supplied logs do not identify the selected dense backend,
+  so its share of the measured delay remains unproven.
+- Partitioned VDN retains the QKV projection through raw/RoPE views, the cloned
+  V tensor, and softmax/gated output until the linear readout returns. Their last
+  attention use precedes that large workspace allocation.
+- 00761 probe admission requests 29,028.840 MiB but observes only 28,462.990 MiB
+  after Core eviction. It continues despite the remaining shortfall. The fixed
+  10 GiB allowance is a heuristic, not an attention peak-memory bound.
+
+Sol-H3 #37 candidate `3f2f244f277fc0d8fafc15fcac724c2cffb7eacf` omits only the
+validated exact-zero bias, retaining prefix validation and completion metadata.
+Nonzero key measures remain biased. `partitioned_unit_measure_calls` counts the
+validated identity route. VDN #36 candidate
+`e4684c45c157f07ccb83c3ce9cb4d35c58d9ac58` releases attention temporaries after
+their last use and uses `bounded_headroom_v2`: one further finite eviction pass
+is permitted after partial recovery; an unmet target fails before evaluation
+and cleans prepared additional models. Receipts include `eviction_passes` and
+`target_met`. Prepared models remain protected; sufficient headroom still skips
+eviction.
+
+These commits are checkpointed on GitHub before review. Focused CPU regressions
+cover unmasked dense-oracle equivalence and request-owned receipts, malformed
+zero-measure rejection, raw-copy preservation with and without retained buffers,
+gated/ungated attention lifetimes, bounded recovery and cleanup on failure. The
+canonical Flow/VDN/Sol source oracle passes. They do not qualify GPU peak usage,
+speed, selected backend or rendered equivalence. Omitting the zero mask may
+change floating-point rounding when PyTorch chooses a different fused kernel.
+
+Use Patcher repository-card **Update** actions for Sol-H3 #37, VDN
+#33 -> #34 -> #35 -> #36, and Flow #89 -> #93, then restart ComfyUI. Retain the
+accepted same-grid and dense-suffix controls. The runtime qualification needs
+one repeated two-chunk prompt followed by a prompt-only change, checking the
+new admission policy, identity-measure counts, completion, peak memory and
+boundary output; the single-chunk baseline already establishes the warm loading
+improvement.
+
+Evidence SHA256:
+
+- Log: `77f7459aa4d505e0425bfb2f9189c3814820e6bba6eaa1054fc913d0309b6581`
+- 00759 metrics: `b8f0a8fbb30a8cb85e9df7f6d7b06462b9b932178047b5fa665a94c622a6ed3d`
+- 00760 metrics: `429fa2e59d67c0ffd92a6b9a9fbedb88ac539f945987fb97428c0cf7bd3045bd`
+- 00761 metrics: `97e53a94916aebe5348d5df32e555ac0ba56073e9849a68308d8b5998897dc79`
+- 00762 metrics: `54e27fff450f3876e6e987c8ef151762ba76434f489359803631d7969b28cb08`
+
+## Earlier boundary qualification
+
+Matched SM120 A/B/C plus complete partitioned learned-linear bypass
 discrimination is complete. Candidate C changed the internal pre-high trajectory
 but **00722 still rendered the frame shift**. 00724 then bypassed the complete
 VDN learned-linear complement and **the visible frame shift still remained**.
