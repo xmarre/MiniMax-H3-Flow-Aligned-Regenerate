@@ -101,7 +101,7 @@ wrapper at 00738 log line 1049. Spectrum proposes forecasts at low steps 2 and
 3, but both calls execute actual transformer work. Continuation low has **five
 actual calls and zero forecasts**. Decision labels are not execution receipts.
 
-Sol #37 head `16e23b13fa93fb8b373a6cce2c5f8577cb9b73af` extends the two classifiers only for the canonical API-1 equal-grid
+Sol #37 head `012ae39aa2137699ee8bbcef977b7965a9cb1446` extends the two classifiers only for the canonical API-1 equal-grid
 control. It verifies matching spatial axes, zero key measures, current ranges,
 exact query ownership and the semantic digest; its replacement classifier also
 binds the contract to actual Flow latent-grid closure fields and the inherited
