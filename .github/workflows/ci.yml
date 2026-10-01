@@ -89,6 +89,8 @@ jobs:
           git -C .contracts/SolPartitioned checkout 3f2f244f277fc0d8fafc15fcac724c2cffb7eacf
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
           git -C .contracts/VDNPartitioned checkout 28792f27427e44d312cc4948a15deb78039e3510
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
+          git -C .contracts/ComfyRuntime checkout 6b4e05dc30d65740ce8931434607b9907996fb0e
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -118,3 +120,8 @@ jobs:
           python tools/check_partitioned_exact_prefix_contracts.py \
             --sol .contracts/SolPartitioned \
             --vdn .contracts/VDNPartitioned --require-boundary-witness
+      - name: Validate Core LoRA workspace and MiniMax contracts
+        run: |
+          python -m pytest -q \
+            .contracts/ComfyRuntime/tests-unit/comfy_test/test_lora_bypass_workspace.py \
+            .contracts/ComfyRuntime/tests-unit/comfy_test/test_minimax_h3_model.py

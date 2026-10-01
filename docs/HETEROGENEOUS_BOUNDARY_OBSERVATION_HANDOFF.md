@@ -10,6 +10,108 @@ overcooked second chunk. These remain open runtime/rendered qualifications.
 The latest workspace revision executes in the new receipts below; it does not
 establish a rendered quality fix or a bound on transient GPU memory.
 
+## 00786–00787: captured high-stage LoRA allocation OOM
+
+The user reports six generations preceding these two runs. The supplied log
+begins with warm execution. 00786 completes, while 00787 captures an OOM in the
+first actual target-high evaluation of the second chunk. The earlier successful
+admission and completion observations do not qualify the longer-run VRAM issue.
+
+| Run | Initial sampler | Continuation sampler | Prompt result |
+|---|---:|---:|---|
+| 00786 | 134.575 s | 264.811 s | completed, 446.53 s |
+| 00787 | 117.453 s | 203.393 s, failed | OOM; failure/cleanup log interval 375.31 s |
+
+Both continuation low/probe paths still record 250 successful uniform linear
+readouts and 250 fast requests. 00787's completed low/probe stages take
+135.867 / 35.791 seconds. Its continuation high does not complete and publishes
+no successful high-stage wall receipt. The final counters contain 15 logical
+calls and 12 completed actual evaluations; the interrupted high attempt is not
+an extra successful evaluation. The accepted same-grid/current normal suffix
+configuration is preserved.
+
+### Failure localization
+
+The traceback reaches native MiniMax `MLP.forward`, `fc1`, Core's
+`BypassForwardHook._bypass_forward`, then `LoRAAdapter.h` at `return out * scale`.
+The first high packed layout has 72,676 rows; the native feed-forward first
+projection has 28,672 output columns. Its BF16 output is 3.881317 GiB, matching
+the reported 3.88 GiB allocation request. CUDA reports only 2.36 GiB free at the
+failure. This is a captured feed-forward adapter peak, not an attention traceback.
+
+High admission had reported `target_met=True`, requesting 30,455.639 MiB and
+observing 33,327.572 MiB available by Core's API. That finite target includes a
+fixed scratch allowance and is not a worst-case bound for runtime adapter
+activations or allocator availability during evaluation.
+
+Source tracing confirms two avoidable output-sized allocations. Core LoRA
+projects the adapter delta, then allocates another full output to scale it.
+The default bypass subsequently allocates a full `base_out + h_out` result.
+These two sites overlap the original base/projection storage at separate peaks.
+Changing only the scaling site would leave the same-sized addition pending.
+
+The first low-entry allocated checkpoints are 55,911.719 MiB in 00786 and
+55,342.969 MiB in 00787. The latter matches earlier warm entries. This does not
+establish the absence of a longer-run ownership leak, retained allocator storage
+or fragmentation. The log does not expose ownership over all six preceding
+generations. The concrete correction below targets the captured temporary peak;
+it is not presented as proof that every source of VRAM pressure is removed.
+
+### Core correction and qualification
+
+[Core #16720](https://github.com/Comfy-Org/ComfyUI/pull/16720), head
+`6b4e05dc30d65740ce8931434607b9907996fb0e`, reuses only the native LoRA adapter's
+fresh projection output. In inference, scalar scaling writes into that output;
+the adapter's custom bypass implementation then adds the base output into the
+same owned buffer. It releases its base reference before `g()` and never mutates
+the base output, which may alias caller state. Native quantized projections,
+full projection shapes, adapter strengths and `g()` invocation remain unchanged.
+There is no row chunking, weight folding, new cache, allocator purge or added
+synchronization.
+
+Autograd, an overridden `h()` implementation, tensor subclasses, broadcast/dtype
+promotion and differing output layouts retain the relevant out-of-place
+arithmetic. The implementation uses Core's existing custom-bypass interface;
+other adapter implementations are unchanged. Scalar multiplication and addition
+retain their original operation order and dtype rounding.
+
+23 targeted CPU adapter tests pass, including exact FP32/FP16/BF16 arithmetic,
+gradients, strengths, nested hooks, convolutions, middle weights, base alias
+safety, dtype/broadcast/layout behavior, subclasses and storage reuse. Five
+MiniMax mask/embedding tests pass on the current upstream base. Two new
+storage/lifetime regressions fail on unpatched source at their expected
+assertions. Required lint, compile and diff checks pass. The declared-base Core
+delta also applies cleanly to the earlier `651ca296a73cd21c12a57eb8741d52e40dc6528f`
+runtime source, where 25 adapter and mask tests pass against that overlay.
+These CPU checks do not establish GPU peak reduction, repeated-generation
+completion, allocator fragmentation behavior or rendered equivalence.
+
+Core #16720 is one xmarre-authored commit above upstream
+`77c0f39e343aa83597d67cd95811df9e4fbfef2e`. That upstream base already includes the
+separate embedding-temporary lifetime change `2d6b73283af2447bdd065ece4090b8c6b1784544`;
+Core #16720's overlay changes only LoRA arithmetic and its tests. Applying that
+overlay to an older Core does not install unrelated upstream commits. Flow #93
+pins and executes the exact Core adapter/MiniMax tests alongside the preserved
+historical source fixtures. Core's upstream workflow runs currently report
+`action_required`; no executed upstream CI result is claimed. The owned Flow
+workflow supplies the independent pinned CPU checks. VDN #36 and Sol-H3 #37 remain at
+`28792f27427e44d312cc4948a15deb78039e3510` and
+`3f2f244f277fc0d8fafc15fcac724c2cffb7eacf`, respectively.
+
+In ComfyUI Patcher, enable **ComfyUI/Core #16720** after existing Core overlays,
+update **Flow #93**, then restart ComfyUI. Preserve VDN #33 -> #34 -> #35 -> #36,
+Flow #89 -> #93, Sol-H3 #37 and the existing Continuum overlays. Retain the
+accepted same-grid/current normal suffix configuration. The next normal run
+qualifies the new adapter path under the user's workload; the prior six-run
+report and the captured OOM do not need to be reproduced to establish the bug.
+The reported second-chunk appearance remains a separate open qualification.
+
+Evidence SHA256:
+
+- 00786–00787 log: `e68ebdc98b71e35b25c80a53c1a8620a1186fff0c5419414b0a2d1dc36ae5bed`
+- 00786 metrics: `c5663272470c31fab9879d084d7a453f551fba9c978ac2bcd97c4d18c9dc632d`
+- 00787 metrics: `abd67ebb4935eb07d15e8484761c9b483e897f828e4d4c1c1b7eb065d398aba0`
+
 ## 00779–00780: uniform readout executes; full-grid continuation remains expensive
 
 The supplied log contains a cold two-chunk run followed by a warm two-chunk run
