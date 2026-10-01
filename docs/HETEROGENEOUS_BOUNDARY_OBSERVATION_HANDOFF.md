@@ -5,6 +5,118 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed and VRAM pressure; older rendered
 observations below remain specific to their earlier configurations.
 
+The latest user report adds near-overflow on subsequent runs and a visibly
+overcooked second chunk. These remain open runtime/rendered qualifications.
+The new workspace revision below does not establish a rendered quality fix.
+
+## 00772–00776: full-grid continuation cost and remaining workspace pressure
+
+The supplied runs execute `bounded_headroom_v2`, and every admission target is
+met. Warm Core preparation takes less than half a second per stage. Initial
+low-entry live allocation returns to approximately 55,342.969 MiB. These
+checkpoints do not establish accumulating live storage between prompts, and
+they do not capture the user's observed transient near-overflow peak.
+
+| Run | Chunks | Initial sampler | Continuation sampler | Prompt completion |
+|---|---|---:|---:|---:|
+| 00772 | 1, cold | 226.365 s | — | 333.77 s |
+| 00773 | 1, warm | 131.779 s | — | 155.39 s |
+| 00774 | 2, warm | 144.833 s | 259.220 s | 449.62 s |
+| 00776 | 2, warm | 128.362 s | 233.988 s | 409.73 s |
+
+00774 takes 2.89 times the warm single-chunk prompt interval. Its initial
+low/probe/high stages take 63.419 / 13.204 / 67.549 seconds; continuation takes
+133.799 / 49.450 / 72.242 seconds. The 00773 single-chunk baseline takes
+56.947 / 12.576 / 61.614 seconds. The continuation probe includes a 10.954-second
+VideoVAE eviction; Core preparation itself takes 0.238 seconds.
+
+The accepted `same_grid_target_control` carries 62 latent frames, including
+12 protected-prefix frames, on the full target grid during low/probe. In these
+samples, initial low has 27,040 video rows and continuation has 64,232: 2.38 times
+as many rows. Initial high has 53,872 video rows. 00776 transposes the spatial
+axes relative to 00774 while retaining those row counts, and its references/text
+differ; it is not a matched benchmark. Both two-chunk runs have 18 logical calls,
+14 actual calls and four forecasts, with no extra continuation evaluations.
+
+The current low receipts contain 3,200 unit-measure calls and 1,650 sparse calls;
+probe contains 800 unit-measure dense-warmup calls. Dense-suffix discriminator
+counts are absent. Retain the actual normal suffix configuration used by these
+runs; the earlier handoff's instruction to retain a dense-suffix control does not
+describe this evidence.
+
+00776 continuation low/probe/high take 133.379 / 36.438 / 60.414 seconds. At
+probe admission the allocator reports 66,356.254 MiB allocated and 91,232 MiB
+reserved. One 2.576-second VideoVAE eviction meets the target. At terminal high
+release, allocated/reserved memory falls from 59,703.858 / 88,672 MiB to
+58,572.576 / 62,592 MiB. Reserved pool size is distinct from live storage and
+does not identify spill. The reported transient pressure remains unqualified.
+
+### Confirmed source changes
+
+VDN #36 `28792f27427e44d312cc4948a15deb78039e3510` preserves the finite admission
+and attention-lifetime corrections, and adds two bounded changes:
+
+- Identical-grid, exact-unit-measure partitioned readout reuses the released
+  fixed-grid implementation on an execution-local branch copy. The former
+  general path always selected unfused gather/epilogue and did not request the
+  fast-kernel query layout. With fast kernels disabled, reuse remains eager.
+  Mixed grids, nonunit measures, Q convolution, witnesses, diagnostics and
+  alternate carrier policies retain the general path. Bounds are validated
+  before dispatch, including the anchor-trimmed domain.
+- Native runtime and general partitioned readouts release normalized K/V and
+  beta after statistics, then statistics after scans. Native runtime also
+  releases query features and gathered state after matmul. These tensors no
+  longer overlap later workspaces. Retained scan-bank ownership is preserved;
+  there is no allocator purge or added synchronization.
+
+`partitioned_vdn_uniform_linear_calls` positively records successful shortcut
+calls. `partitioned_vdn_uniform_fast_requested_calls` records the flag and does
+not prove compilation succeeded. Existing compile-failure eager fallbacks remain.
+These receipts count readout work, not completed sampler success.
+
+The reviewed candidate is checkpointed on GitHub. 102 focused CPU tests pass,
+including released/general numerical oracles, full-forward receipts, text and
+anchor semantics, nested execution, shared selector stability, malformed inputs,
+diagnostics and witnesses. Six new lifetime/forward-route regressions fail at
+their expected assertions on the preceding source. Required lint, compile and
+diff checks pass. GPU speed, peak memory and rendered equivalence remain
+unqualified. Fused kernels can change floating-point rounding.
+
+### Second-chunk appearance remains open
+
+The user reports a visibly overcooked second chunk. 00776 has the same sigma
+coordinates and logical/actual call counts in both chunks. The same-grid transfer
+is identity, invokes no learned upscaler for continuation, and reconstructs the
+source state with maximum error 4.768e-7. Frame registration is identity; boundary
+stabilization and post-high video repair are not applied. The external patch
+profile retains the same patch count and declared strengths through both chunks.
+At high entry, the Flow guidance correction/baseline RMS ratio is 0.094286 for the
+initial chunk and 0.012661 for continuation. These observations do not establish
+a guidance-strength increase or an extra re-noising operation at handoff.
+
+The initial chunk uses reduced-grid low sampling followed by a learned upscale;
+the accepted continuation samples low directly on the target grid and has
+protected-prefix context. That is a concrete path difference, not proof of the
+rendered degradation's cause. Boundary latent metrics cannot judge texture,
+color or saturation over the full suffix. No quality correction is promoted from
+these logs. Qualification needs the rendered clip along with the next metrics.
+
+Use ComfyUI Patcher repository-card **Update** for VDN #36 and Flow #93, preserving
+VDN #33 -> #34 -> #35 -> #36 and Flow #89 -> #93, then restart ComfyUI. Sol-H3 #37
+remains pinned at `3f2f244f277fc0d8fafc15fcac724c2cffb7eacf`; existing Continuum
+overlays remain part of the stack. Retain the accepted same-grid configuration.
+The next repeated two-chunk run qualifies shortcut counts, timing, completion,
+memory and rendered appearance; no changed guidance or geometry is requested.
+
+Evidence SHA256:
+
+- 00772–00774 log: `13d59d3cfd82286095aae7c5314263832f8053d756746fcc84c9973646cbd6f3`
+- 00772 metrics: `213f0205ca0b81c067b278261d2d65d7305c84971e2d101cab8f493f700edb2c`
+- 00773 metrics: `cf06d613abdfa17fe9a6242891d5175fde2297236bad3b5538a9daadd98c32dd`
+- 00774 metrics: `e119b9fba49d316a4a136a41380fd0c62e4f10450de4d1ee0e58e1aa03294ee6`
+- 00776 log: `3a37c37651b81385066578c1ba6617af71309a3204aa86b2fd7ebfc9b12fe5cf`
+- 00776 metrics: `4daf6727b987796efd5735ef2dcae2b1bb5afc0a1ad3593106dff64a4ac0c295`
+
 ## 00759–00762: warm admission succeeds; continuation memory needs qualification
 
 The supplied startup and all stage receipts execute VDN's finite
@@ -77,7 +189,7 @@ change floating-point rounding when PyTorch chooses a different fused kernel.
 
 Use Patcher repository-card **Update** actions for Sol-H3 #37, VDN
 #33 -> #34 -> #35 -> #36, and Flow #89 -> #93, then restart ComfyUI. Retain the
-accepted same-grid and dense-suffix controls. The runtime qualification needs
+accepted same-grid configuration. The runtime qualification needs
 one repeated two-chunk prompt followed by a prompt-only change, checking the
 new admission policy, identity-measure counts, completion, peak memory and
 boundary output; the single-chunk baseline already establishes the warm loading
