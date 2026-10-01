@@ -28,6 +28,171 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00734: cross-grid video rejected; hot preparation delay and clone lifetime fix
+
+The user reports that the frame shift returns after restoring progressive
+low-to-high sampling, and that substantial delay occurs before visible sampling
+even on a hot run. The restored cross-grid video is rejected. Preserve 00733's
+visually accepted same-grid arm; the reduced-grid speed result is not an accepted
+production-quality replacement.
+
+Evidence SHA256:
+
+- metrics: `4b981f2a312b6d17a7be619123f50d9dad37ebba5f1d7501e9a9ccb28ca683a7`
+- appended runtime log: `f9455e9eb5b6d1fb9c1ea72dda0014800293b787523c3841c30a67e98a94d323`
+
+The appended log contains 00733 and the subsequent hot prompt. Only the final
+`got prompt` segment belongs to 00734; its completion is **599.99 seconds**.
+
+### Actual restoration and frame-shift localization
+
+The 44x44 source -> 64x64 target plan executes: 12 exact target-prefix tokens,
+50 fresh source tokens, 12,288 prefix rows and 24,200 fresh rows, or 36,488 video
+rows. Normal suffix attention, native temporal carrier and normal learned-linear
+remain active. Learned continuation transfer executes in 0.739 seconds.
+
+Sol now establishes the low-stage history identity. Actual low/probe/high call
+counts are 8/2/4 across both chunks, with four forecasts (two low and two high),
+18 logical calls, six invocations and four history boundaries. Continuation low
+has four actual evaluations and one forecast. This independently confirms that
+the normal cross-grid identity condition permits an actual skipped model call.
+
+The carried-video prefix SHA256 is exactly the same as 00733:
+`32aed92ec74945a42b3ae6f7ccd59aa05f8824f159babed9f18801af04dd8fdf`.
+Logged physical-conditioning and compiled-text hashes also match. The model
+controls differ only by restored `progressive_low_to_high`; the executed low
+geometry and forecast sequence necessarily change with it. This is stronger
+carried-input evidence than the 00732/00733 comparison, but does not isolate the
+individual transfer, prediction, guidance and solver mechanisms.
+
+| Estimated first upper45 successor pair | X, target latent cells | Y, target latent cells |
+|---|---:|---:|
+| Source low/probe, target-equivalent | +0.08294 | +0.23328 |
+| Learned provider clean | -0.04984 | +0.79176 |
+| Exact-restored pre-high | -0.01734 | +0.01770 |
+| Final post-high | +0.22366 | +0.86176 |
+
+The exact-overlap bridge produces a nearly aligned first pair before high;
+target-high recreates the large vertical displacement. The authoritative prefix
+remains exact. Pre-high alignment and structural tests therefore do not establish
+final quality. The learned provider's first pair is already displaced before
+the bridge, but its low wall time excludes it as the large preparation delay.
+No rejected rigid, prediction-gauge, destination-stencil or decoder-window
+candidate is re-enabled.
+
+The high guidance path uses its ordinary source trajectory, with no registered
+target reference when the frame-gauge transaction is rejected. Its three
+correction RMS ratios are 0.07590, 0.04978 and 0.02378; protected-prefix and
+cross-prefix temporal exclusions remain active. That is a possible contributor,
+not proof of causality. The saved run has no per-prediction before/after-Flow
+trace, so native high prediction, forecasting, Flow direction guidance and the
+solver update cannot be separated from this final-stage comparison.
+
+### Hot delay before model execution
+
+| Sampler timing | 00733 first (cold) | 00734 first (hot) | 00733 continuation | 00734 continuation |
+|---|---:|---:|---:|---:|
+| Low | 197.340 s | 114.433 s | 250.356 s | 140.226 s |
+| Exact probe | 12.173 s | 11.568 s | 49.397 s | 26.312 s |
+| High | 69.975 s | 48.998 s | 73.550 s | 60.898 s |
+| Whole sampler | 280.506 s | 175.689 s | 376.697 s | 243.406 s |
+
+Continuation sampler time decreases 133.291 seconds (35.38%). The first hot low
+stage still spends **66.848 seconds before its first timed model call**. Its
+five logical call timers total 40.510 seconds, leaving 73.923 seconds outside
+those timers. Continuation spends 20.488 seconds before its first timed call,
+with 109.002 seconds in call timers and 31.224 seconds outside them. Core
+preparation is included in these stage wall times even though the progress bar
+has not started. The first trajectory begins 98.050 seconds after the metrics
+installation event; that interval is not a pure text-encoder timer.
+
+The first hot Spectrum profile lookup is a cache hit taking 0.018892 seconds;
+Sol's first low arithmetic-gate totals are about 0.075 seconds. These exclude
+those cold-start explanations for the large hot preparation gap. Both physical
+text groups still report `cache_hit=False`, with text-encoder load messages.
+Continuum's physical-conditioning cache is intentionally local to each sequence
+invocation, so a hot process does not imply reused encoded text. Text encoding
+precedes sampler admission and is not individually timed in this log. Do not
+replace it with an unqualified persistent cache that can reuse stale encoder,
+reference or prompt state.
+
+VDN admission reports four evicted models before first low and two before
+continuation low, followed by H3 load messages. The original receipt does not
+identify each evicted model or its duration, so it cannot allocate the entire
+66.848-second gap. A separate source-backed defect does exist in this path.
+
+### VDN #36: preserve resident H3 clones at admission
+
+Continuum's `clone_model_for_chunk` creates a fresh `ModelPatcher` for each chunk.
+VDN protected only `LoadedModel(incoming)` before asking Core to free all other
+GPU models. Core's `LoadedModel.__eq__` compares patcher object identity, while
+`ModelPatcher.is_clone` identifies a shared underlying model. A resident sibling
+clone could therefore be fully unloaded before Core's native clone switch,
+which normally detaches it with `unpatch_all=False` and reconciles weight patches.
+
+[VDN #36](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/36), head
+`2ff221258a0fe878bb3b0cf391ccc142f68fdda5`, keeps native Core-identified resident
+clones on the sampling device at this boundary. Unrelated models remain evictable and Core receives
+unchanged preparation arguments, including forced load/offload flags. Different
+patch UUIDs still reach Core's normal weight reconciliation. The keep list is
+call-local; CPU/non-retained paths, attention, sampler histories and buffer
+release policies are unchanged.
+
+Two regression cases using actual Core patcher/loaded-model classes fail on the
+original code, for equal and differing patch UUIDs. The full local Core/OpenVDN
+suite passes **252 tests**, with compileall, CI-selected Ruff and diff checks.
+These prove structural lifetime/ownership behavior, not saved GPU seconds or
+rendered equivalence.
+
+New admission receipts separately report `kept_resident_h3`,
+`eviction_elapsed_ms`, and delegated `prepare_elapsed_ms` with `success`.
+The host intervals do not overlap and add no CUDA synchronization; original
+delegate errors propagate. They can distinguish admission eviction from Core
+preparation on the next hot run, while the earlier conditioning interval remains
+outside their scope.
+
+### Current handoff and remaining frame diagnosis
+
+Apply **VDN #36 after #35** through Patcher and restart ComfyUI. Existing #33 ->
+#34 -> #35 remain untouched. Flow #93's paired source-contract pin advances to
+the new head; Flow runtime arithmetic is unchanged. Keep Continuum #37 after
+its existing #36 overlay, normal suffix attention, normal learned-linear,
+native temporal carrier, coherent exact audio, Audio Seam Auto and Video Seam
+Analyze Only. The new VDN #36 and the existing Continuum #36 are distinct repos.
+
+For usable output and preparation timing, restore the accepted
+`spatial_stage_control=same_grid_target_control` with final MP 1.1 and measure
+a hot run with residual measurement off. Require the native audio receipt,
+both PCM endpoint checks and the new VDN preparation receipts. A resident clone
+should be preserved when one is present; Core may still reload when its native
+patch/device/memory policy requires it. No measured speedup for #36 exists yet.
+
+For a separate frame-causality run, retain 00734's failing
+`progressive_low_to_high` configuration and change only
+**`frame_gauge_residual_mode=measure`**. The existing
+`partitioned_high_boundary_prediction` diagnostics measure before and after
+Flow guidance on each high call, including actual/forecast classification and
+an authoritative-prefix disposable witness. They add no model/provider/VAE
+calls and make no production correction. Their FFT/scalar synchronization cost
+means this run is not a performance benchmark. Inspect the first native
+prediction, each paired guidance result, the forecast call and the final solver
+output before choosing a new video arithmetic change. Details are in
+`HIGH_STAGE_BOUNDARY_DIAGNOSTICS.md`.
+
+00734's coherent exact-audio validator still passes nine model entries, zero
+effective overlap, no timestep override, exact final prefix and zero added work.
+The applied PCM patch again preserves both endpoints; its jump falls from
+0.003133159 to 0.000250964. Production audio boundary levels are -0.2766 dB
+before and -0.0555 dB after the patch. These retain audio execution evidence;
+no new rendered audio verdict was supplied with 00734.
+
+Pre-review checkpoints preserve the preceding Flow and Continuum heads. The
+VDN fix is preserved at
+`checkpoint/00734-clone-admission-before-review-and-full-suite-20261001` and
+`checkpoint/00734-clone-admission-252-passed-20261001`. #89 and Continuum #37
+retain their clean one-commit topology. Production Sol and all rejected geometry
+candidates remain unchanged. Cross-grid video remains unqualified.
+
 ## 00733: normal attention and PCM correction, cold-run speed still unresolved
 
 The user identifies this as a **cold run**, reports that the video remains fine,
@@ -128,7 +293,7 @@ the summary prove that no model call was skipped. Do not count those decisions
 as speedup or weaken the history gate to force forecasting. Sol production and
 Spectrum arithmetic remain unchanged.
 
-### Current next arm: restore the reduced low/probe grid separately
+### 00733 next arm (historical; executed and rejected in 00734)
 
 Preserve 00733's accepted same-grid baseline. Through the existing Patcher stack,
 change only the model diagnostic
