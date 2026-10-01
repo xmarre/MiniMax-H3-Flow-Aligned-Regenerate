@@ -52,9 +52,10 @@ Continuation transfer is identity; the first chunk still uses learned transfer.
 **`softmax_diagnostic=dense_suffix_same_domain` is still enabled.** Its positive
 receipt reports 3,300 calls / 15,052,800 Q rows / 75,698,100 KV rows, with gathered
 domain, prefix measure and grouped ownership unchanged. Compared with 00731,
-aggregate Q and KV rows increase 77.8% and 67.4%. Their product is about 2.98x;
-this is a work-size indicator, not a kernel benchmark or a causal timing proof.
-Reference/conditioning shapes also change. Calls remain 18 logical / 15 actual /
+aggregate Q and KV rows increase 77.8% and 67.4%. Aggregate row totals do not
+determine attention FLOPs: that requires the sum of each group's Q-by-KV work,
+or measured CUDA component timings. Reference/conditioning shapes also change.
+Calls remain 18 logical / 15 actual /
 three forecasts, with six sampler invocations and four history boundaries.
 
 | Sampler timing | First chunk | Continuation |
@@ -92,20 +93,34 @@ does not return to identity before the unmodified suffix. A matching 0.01-amplit
 2 Hz waveform at 1 kHz reproduces a native step of 7.90e-7 becoming 0.002110.
 
 [Continuum #37](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/37), head
-`4192587a22693bead8483bc934c3e206efea8e66`, fixes that local endpoint defect with
+`560e0c4e460a8a141832692281e7789852de5fdd`, fixes that local endpoint defect with
 a convex overlap blend and tapered bounded gain/DC corrections. Seventeen new
 regressions failed before the change and pass afterward, including actual
-assembly preserving the whole continuous waveform and fresh suffix. The full
-CPU suite passes 410 tests; exact-head CI run 36795079195 is green across Python
-3.10–3.13 and the publisher-toolchain job. This introduces no model/provider/VAE
+assembly preserving the whole continuous waveform and fresh suffix. The head
+also covers all four transient fade lengths and Auto/Off assembly, with 23
+waveform/assembly cases and 415 passing full CPU-suite tests. Exact-head CI run
+36796253302 is green across Python 3.10–3.13 and the publisher-toolchain job.
+This introduces no model/provider/VAE
 calls. It does not establish a fix for the separate high-stage audio level
 change or qualify the complete rendered soundtrack.
 
+After a V3 audio patch is actually copied, `H3C-PT226 decoded-audio-seam receipt`
+records `policy=convex_native_endpoints_v1 applied=True`, its boundary/fade
+length, `left_endpoint_exact`, `right_endpoint_exact`, and before/after jump.
+Both endpoint equality fields must be true for an applied patch. The existing
+correlation gate and Audio Seam Off may produce no patch; absence of PT226 does
+not establish successful correction. This observation adds no decode or model
+calls.
+
 ### Current restoration instructions (supersede earlier next-arm instructions)
 
-Apply Continuum #37 through Patcher alongside the existing overlays, and restart
-ComfyUI. #37 targets released main independently of rejected geometry candidate
-#36; the shared audio helper was identical in both trees. Keep Video Seam
+Apply Continuum #37 through Patcher after existing #36
+`9ea1e75b2ddf8a3cb2a30e26c369aa63c0a32aea`, and restart ComfyUI. #37 targets
+released main independently of rejected geometry candidate #36. The audio helper
+was identical in both trees; the new assembly receipt touches a separate hunk in
+their shared `v3/assembly.py`. The exact #36 -> #37 composition applies cleanly
+and passes 59 seam, phase, video-seam and assembly-memory regression checks. Keep
+Audio Seam Auto and Video Seam
 Analyze Only. With retained decoded chunks, compare Audio Auto before/after the
 PCM correction without resampling H3 to isolate its audible effect.
 
