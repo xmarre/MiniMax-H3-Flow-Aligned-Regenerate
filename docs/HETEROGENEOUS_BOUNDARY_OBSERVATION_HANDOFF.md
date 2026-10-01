@@ -28,6 +28,137 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00733: normal attention and PCM correction, cold-run speed still unresolved
+
+The user identifies this as a **cold run**, reports that the video remains fine,
+and says the audio is now okay "I think". This supplies rendered acceptance of
+the video and tentative acceptance of the audio for the 1.1 MP same-grid arm
+with normal suffix attention and Continuum #37. It does not qualify progressive
+cross-grid sampling or establish general soundtrack acceptance.
+
+Evidence SHA256:
+
+- metrics: `1f5602306fb055abec04652177553ebfca6376b7901c78947ec9f81ac02d3ef4`
+- runtime log: `1cfcfca93ea2e9b9e369c7f14217bfdc638c215a30c41972a35ef57d589626f0`
+
+### Executed controls and audio result
+
+The diagnostic controls differ from 00732 only by removal of
+`softmax_diagnostic=dense_suffix_same_domain`. Source in
+`apply_partitioned_diagnostic_controls` deliberately omits this field and
+removes its transformer option for `normal`; the scheduler defaults to normal.
+Positive Sol teardown evidence independently confirms restored sparse execution:
+continuation low records **2,200 sparse calls / 800 dense warmup calls / five
+actual evaluations**. The exact probe separately records zero sparse calls and
+800 dense warmup calls. Its snapshot must not be mistaken for the complete low
+stage. No dense-suffix intervention counter or verification event remains.
+
+The stage plan is identical to 00732: configured source 44x44, effective source
+and target 64x64, 12 prefix and 50 fresh temporal tokens, 63,488 partitioned video
+rows, identity continuation transfer, normal learned-linear execution and native
+temporal carrier. The stage/actual/sigma call sequence also matches: 18 logical /
+15 actual / three forecasts, six sampler invocations and four history boundaries.
+The coherent exact-audio evidence validator passes nine verified model entries,
+zero effective overlap, no timestep override, exact final prefix and zero added
+work. Low/high audio-mask digests remain equal and match 00732.
+
+Continuum's positive `H3C-PT226` receipt records an applied
+`convex_native_endpoints_v1` patch at frame 175, 1,920 fade samples (60 ms at
+32 kHz), and **both native endpoint checks true**. The measured splice jump
+falls from **0.004413930 to 0.000127817**, a 97.10% reduction. This establishes
+execution of #37's endpoint correction on the user's hardware.
+
+| Audio boundary measurement | 00732 | 00733 |
+|---|---:|---:|
+| Matched low/probe decode | +0.7471 dB | -1.1841 dB |
+| Matched final-high decode | +3.1113 dB | -0.9117 dB |
+| High suffix versus low/probe suffix | +2.3676 dB | +0.2700 dB |
+| Production before Audio Auto | +2.7291 dB | -1.4227 dB |
+| Production after Audio Auto | +2.6833 dB | -1.2003 dB |
+
+Extra left decode context again changes the generated suffix by exactly zero;
+production normalization is provably inactive. These windows do not reproduce
+00732's generated level increase. PCM assembly cannot explain the earlier
+matched-decode change because that audit precedes the seam patch. Cross-run
+attribution to normal attention alone is also unsupported: the authoritative
+carried-video prefix SHA256 changes from
+`181188b45c0e73e7f8387d788109919d703b47e511500d99584fb272016fe0a6`
+to `32aed92ec74945a42b3ae6f7ccd59aa05f8824f159babed9f18801af04dd8fdf`,
+although both physical conditioning and compiled-text hashes match. The cause
+of the different carried input is not established by these files. This is a
+combined restoration/assembly run, not a tensor-matched causal audio A/B.
+
+### Cold overhead and continuing full-grid cost
+
+The prompt finishes in **00:14:41 (881 seconds)**, versus 00:11:54 for 00732.
+
+| Sampler timing | 00732 first | 00733 first | 00732 continuation | 00733 continuation |
+|---|---:|---:|---:|---:|
+| Low | 111.596 s | 197.340 s | 260.276 s | 250.356 s |
+| Exact probe | 12.174 s | 12.173 s | 50.768 s | 49.397 s |
+| High | 67.592 s | 69.975 s | 76.007 s | 73.550 s |
+| Whole sampler | 192.070 s | 280.506 s | 390.660 s | 376.697 s |
+
+The first sampler increases by 88.436 seconds. Within its low stage, measured
+model-call time totals 75.560 seconds, leaving 121.780 seconds outside those
+call timers; 116.108 seconds precede the first timed call. The corresponding
+00732 values are 56.776 / 54.820 / 49.117 seconds. The log confirms model loading,
+admission eviction and a cold Spectrum profile lookup, but does not time these
+components separately enough to assign the whole gap. The VDN-specific AIMDO
+model compiler is explicitly disabled. Do not label all overhead as compilation
+or add overlapping profile timers.
+
+Continuation remains **376.697 seconds**, an observed 13.963-second / 3.57%
+decrease. Low plus probe still costs **299.753 seconds (79.57%)**. The five actual
+low calls alone total 205.067 seconds; another 45.288 seconds lie outside their
+timers, including 32.900 seconds before the first call. Normal sparse attention
+therefore executed, but neither the full-grid diagnostic cost nor all setup cost
+is removed. These runs are not a controlled warm performance benchmark. The
+first-chunk learned upscaler takes only 0.925 seconds; continuation uses identity
+transfer.
+
+There is a second, source-backed limitation of this diagnostic arm. Sol logs
+`backend-history diagnostic opaque` for Flow's partitioned block wrapper.
+Released Sol v0.1.6 `sol_h3/partitioned_history.py` requires
+`target_rows > source_rows` in both its replacement classifier and layout
+validator, so the equal-grid control cannot supply an accepted history identity.
+Spectrum's low-stage summary confirms five actual calls and zero forecasts.
+Two intermediate step-decision lines say "forecast", but actual execution and
+the summary prove that no model call was skipped. Do not count those decisions
+as speedup or weaken the history gate to force forecasting. Sol production and
+Spectrum arithmetic remain unchanged.
+
+### Current next arm: restore the reduced low/probe grid separately
+
+Preserve 00733's accepted same-grid baseline. Through the existing Patcher stack,
+change only the model diagnostic
+**`spatial_stage_control=progressive_low_to_high`**. Retain 1.1 MP final target,
+`softmax_diagnostic=normal`, `vdn_linear_diagnostic=normal`, native temporal
+carrier, coherent exact audio, source-carrier audio positions, learned handoff,
+witness off, Continuum #37, Audio Seam Auto and Video Seam Analyze Only. Do not
+combine this arm with an attention/cache change or a decoded geometry actuator.
+
+With the existing 44x44 configured source and the same temporal lengths, the
+expected low/probe partition has 12,288 exact target-prefix rows plus 24,200
+fresh source rows: **36,488 video rows rather than 63,488** (42.53% fewer). With
+the same nonvideo conditioning, the sequence has 43,229 rather than 70,229 rows.
+These row counts are not a FLOP or elapsed-time forecast.
+
+Require the actual 44x44 -> 64x64 stage plan, positive learned transfer instead
+of diagnostic identity, positive coherent exact-audio receipt, unchanged native
+VDN/mask ownership and raw/assembled media review. Inspect Sol history and actual
+forecast receipts again; genuine cross-grid geometry satisfies the strict size
+condition, but complete identity acceptance is not guaranteed. Compare stage
+times while recording cold/warm state. The current same-grid visual/audio verdict
+cannot be extrapolated to this restored arm. The broad production runtime gate
+is not applicable to 00733's identity transfer.
+
+Flow #93 and Continuum #37 were checkpointed before this investigation at their
+respective `checkpoint/00733-before-runtime-review-20261001` and
+`checkpoint/00733-before-audio-receipt-review-20261001` refs. This observation
+changes documentation only; it preserves #89's clean one-commit topology,
+Continuum #37's one-commit fix, the rejected video candidates and production Sol.
+
 ## 00732: accepted visual boundary, residual audio and diagnostic cost
 
 The user reports no visible boundary issue after increasing final MP to 1.1.
@@ -112,7 +243,7 @@ correlation gate and Audio Seam Off may produce no patch; absence of PT226 does
 not establish successful correction. This observation adds no decode or model
 calls.
 
-### Current restoration instructions (supersede earlier next-arm instructions)
+### 00732 restoration instructions (historical; executed in 00733)
 
 Apply Continuum #37 through Patcher after existing #36
 `9ea1e75b2ddf8a3cb2a30e26c369aa63c0a32aea`, and restart ComfyUI. #37 targets
