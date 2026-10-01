@@ -7,7 +7,111 @@ observations below remain specific to their earlier configurations.
 
 The latest user report adds near-overflow on subsequent runs and a visibly
 overcooked second chunk. These remain open runtime/rendered qualifications.
-The new workspace revision below does not establish a rendered quality fix.
+The latest workspace revision executes in the new receipts below; it does not
+establish a rendered quality fix or a bound on transient GPU memory.
+
+## 00779–00780: uniform readout executes; full-grid continuation remains expensive
+
+The supplied log contains a cold two-chunk run followed by a warm two-chunk run
+in the same process. Both complete without a captured OOM or cancellation. Each
+records 250 `partitioned_vdn_uniform_linear_calls` and 250
+`partitioned_vdn_uniform_fast_requested_calls`: the published VDN #36 uniform
+readout dispatch executes in all 50 blocks across four actual continuation low
+calls and one probe. The requested-fast counter does not prove successful fused
+compilation, and these are not matched eager/fused benchmarks.
+
+| Run | Initial low / probe / high | Continuation low / probe / high | Initial / continuation sampler | Prompt completion |
+|---|---:|---:|---:|---:|
+| 00779, cold | 139.498 / 12.512 / 65.471 s | 132.128 / 43.238 / 72.788 s | 218.469 / 251.878 s | 10m 01s, whole-second log |
+| 00780, warm | 48.177 / 12.683 / 49.449 s | 123.568 / 34.492 / 66.386 s | 110.961 / 227.842 s | 385.67 s |
+
+The warm prompt is 5.9% shorter than 00776's 409.73 seconds, but the inputs are
+not a controlled A/B comparison. Continuation low falls from 133.379 to 123.568
+seconds while high rises from 60.414 to 66.386 seconds. Do not attribute the whole
+prompt difference to the shortcut or claim the remaining speed issue resolved.
+
+Warm H3 Core preparation takes 0.200–0.411 seconds per stage. The continuation's
+model-call intervals total 210.929 of its 227.842 sampler seconds, including the
+forecast, so 92.6% of that sampler interval is inside model calls. Total sampler
+time is 338.804 seconds; another 46.866 seconds of prompt time includes
+conditioning, decoding, assembly and output. The H3 preparation receipts do not
+measure all work before sampling. The text encoder is requested again before
+00780's first chunk, after a partial eviction during 00779; Core's
+"25883.83 MB loaded" is total resident model size, not bytes transferred or a
+timed full reload. Continuum's conditioning cache is invocation-scoped, so an
+unchanged compiled first-chunk text hash still reports `cache_hit=False` on a new
+prompt. No per-node timing separates those costs in this log.
+
+The accepted `same_grid_target_control` remains active. Initial low has 27,040
+video rows; continuation low/probe has 64,232, including 12,432 protected-prefix
+rows. This is 2.38 times the video rows; warm continuation low takes 2.56 times
+the initial low interval. Source tracing confirms that global, anchor and
+protected-prefix query groups remain dense, and the exact probe performs dense
+warmup. Normal suffix low attention still executes 1,650 sparse calls; low/probe
+record 3,200/800 validated unit-measure calls. These are concrete workload and
+attention-domain differences, not a measured breakdown of GPU kernel time.
+Both chunks retain nine logical calls, seven actual calls and two forecasts;
+there are no added continuation evaluations. Do not change the accepted grid or
+prefix semantics merely to make the timing ratios match.
+
+### Memory observations and ownership
+
+Every `bounded_headroom_v2` admission target is met. The first low-entry live
+allocation in 00780 again returns to 55,342.969 MiB, matching earlier warm
+entries. Only one subsequent run is supplied, so this does not establish absence
+of an accumulating leak over a longer sequence or qualify the user's reported
+transient near-overflow peak.
+
+Before 00780's continuation probe, the admission requests 30,208.095 MiB and
+observes 26,212.918 MiB free. One 1.905-second eviction pass raises free memory to
+30,797.509 MiB by partially unloading the text encoder and unloading VideoVAE.
+H3 remains protected. The partial text-encoder receipt frees 1,456.74 MiB and
+leaves 24,427.09 MiB loaded. In 00779 it frees 5,158.95 MiB and leaves 20,724.88
+MiB loaded. Both sums match the 25,883.83 MiB text encoder, not the 19,996.14 MiB
+H3 model. A partial unload can leave the model in Core's registry and therefore
+need not increment the receipt's fully unloaded-model count.
+
+00780's probe-to-high release reduces allocated/reserved storage from
+62,014.686 / 81,696 MiB to 58,825.164 / 61,056 MiB. Terminal-high release reduces
+it from 63,145.405 / 86,400 MiB to 62,013.876 / 64,064 MiB. The warm probe-admission
+reserved checkpoint is 84,512 MiB, versus 91,232 MiB in 00776. These are sampled
+allocator checkpoints, not whole-run GPU peak measurements. Reserved storage is
+distinct from live storage and does not prove spill. End-of-run allocation also
+depends on which text-encoder/VAE weights remain resident. There is no new
+allocator purge or source change justified solely by these readings.
+
+### Appearance qualification
+
+No rendered clip accompanies these metrics. Both runs preserve identity frame
+registration and same-grid handoff, with source-state reconstruction maximum
+error 4.768e-7. The continuation-only DC bridge reports an exactly zero offset
+(RMS and absolute maximum both zero); its source adds only a channel-wise spatial
+mean offset to the first suffix token. It cannot account for a new direct tone
+adjustment in these particular receipts. Boundary stabilization and post-high
+video repair remain unapplied. In 00780 the first actual high-call Flow correction
+ratio is 0.078587 for initial sampling and 0.014698 for continuation, so these
+receipts do not show an increased Flow correction ratio.
+
+Initial sampling still uses reduced-grid low followed by learned upscale;
+continuation uses target-grid low plus exact-prefix context. Compiled first-chunk
+text is identical across these two runs, but continuation text differs (3,212
+versus 3,221 packed text rows). The records therefore do not isolate either the
+performance effect of fusion or the cause of the reported overcooked appearance.
+That rendered quality report remains open. No guidance, geometry, noise or tone
+change is promoted from the latent boundary metrics alone.
+
+VDN #36 remains `28792f27427e44d312cc4948a15deb78039e3510`; Sol-H3 #37 remains
+`3f2f244f277fc0d8fafc15fcac724c2cffb7eacf`. This qualification adds evidence only;
+the exact dependency pins and Flow runtime are unchanged. Keep the current
+Patcher overlay stack and accepted same-grid/current normal suffix configuration.
+A rendered clip is still needed to locate the appearance change. Remaining
+component costs and full transient peaks are not captured by these receipts.
+
+Evidence SHA256:
+
+- 00779–00780 log: `ba49982ca553bacc88624d91efc4d35d27f430e37470cc4052bb51ba0e60671d`
+- 00779 metrics: `6339a01ad6bbe6d7721a892a875b8ed86ca5421e8662b3f5b467a02a2d4b93f0`
+- 00780 metrics: `582e23cd999df3c23bdbe0f9e7395dccf7cbb63487905db809a6c4b72beac6f0`
 
 ## 00772–00776: full-grid continuation cost and remaining workspace pressure
 
