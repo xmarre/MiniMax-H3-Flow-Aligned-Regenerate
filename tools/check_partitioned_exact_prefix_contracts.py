@@ -55,6 +55,99 @@ def _root(value: str) -> Path:
     return path
 
 
+def _validate_same_grid_history_transport() -> None:
+    """Prove canonical Flow/VDN control metadata reaches both Sol classifiers."""
+    from h3_flow_regenerate.partitioned_prefix import PartitionedExactPrefixPlan
+    from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan
+    from h3_flow_regenerate.partitioned_transformer import _vdn_external_contract
+    from sol_h3 import interop
+    from sol_h3.partitioned_history import (
+        PARTITIONED_FLOW_IDENTITY,
+        VDN_EXTERNAL_SEQUENCE_KEY,
+        _partitioned_flow_replacement_identity,
+        _partitioned_history_layout_valid,
+        install_partitioned_history_bridge,
+    )
+    from vdn_h3.partitioned_runtime import _partitioned_query_summary
+    from vdn_h3.partitioned_sequence import validate_flow_partition_contract
+
+    flow = PartitionedExactPrefixPlan(
+        video_start=7,
+        temporal=5,
+        prefix_t=2,
+        source_grid_h=4,
+        source_grid_w=6,
+        target_grid_h=4,
+        target_grid_w=6,
+        same_grid_control=True,
+    )
+    contract = flow.to_contract()
+    vdn = validate_flow_partition_contract(contract, sequence_rows=flow.sequence_rows)
+    if vdn.source_rows != vdn.target_rows or vdn.sequence_rows != flow.sequence_rows:
+        raise SystemExit("VDN changed canonical equal-grid control geometry")
+    layout = SimpleNamespace(
+        seq_len=flow.sequence_rows,
+        segments=[(0, flow.video_start, "nonvideo"), (flow.video_start, flow.sequence_rows, "video")],
+        signature=(PARTITIONED_FLOW_IDENTITY, "same-grid-ci"),
+    )
+    external = _vdn_external_contract(flow)
+    options = {PARTITIONED_FLOW_IDENTITY: contract, VDN_EXTERNAL_SEQUENCE_KEY: external}
+    if not _partitioned_history_layout_valid(options, layout):
+        raise SystemExit("Sol rejected canonical equal-grid Flow/VDN history")
+    vdn_values = {
+        "state": SimpleNamespace(softmax_backend="grouped", query_position_owner_generation="same-grid-ci"),
+        "cfg": {"radius": 1, "chunk": 1, "anchor_frames": "none"},
+    }
+    forward = SimpleNamespace(
+        vdn_query_position_plan_v1=lambda opts, packed: _partitioned_query_summary(None, vdn_values, opts, packed),
+    )
+    install_partitioned_history_bridge()
+    has_hook, mapped_identity = interop._mapped_vdn_history_identity(forward, options, layout)
+    if not has_hook or mapped_identity is None:
+        raise SystemExit("Sol rejected VDN's equal-grid mapped query-position history")
+    prefix = torch.zeros((1, 24, 2, 8, 12))
+    plan = PartitionedStagePlan(
+        prefix=prefix,
+        temporal=5,
+        source_h=8,
+        source_w=12,
+        prefix_noise=prefix.clone(),
+    )
+    previous = object()
+    values = {
+        "layer": 0,
+        "previous": previous,
+        "plan": plan,
+        "layout": SimpleNamespace(
+            seq_len=flow.sequence_rows,
+            segments=layout.segments,
+            signature=("native-carrier",),
+        ),
+        "partitioned_layout": layout,
+        "video_start": flow.video_start,
+        "video_end": flow.sequence_rows,
+        "carrier_prefix_rows": plan.prefix_t * plan.source_rows,
+        "inner": SimpleNamespace(blocks=[object()]),
+        "partition_contract": contract,
+    }
+
+    def patch():
+        return None
+
+    patch.__module__ = "h3_flow_regenerate.partitioned_transformer"
+    patch.__qualname__ = "partitioned_diffusion_wrapper.<locals>.wrap.<locals>.call"
+    classifier = SimpleNamespace(_closure_values=lambda _patch: values)
+    identity = _partitioned_flow_replacement_identity(classifier, patch, 0)
+    if identity is None or identity[1] is not previous or identity[0][1] != flow.semantic_digest:
+        raise SystemExit("Sol rejected equal-grid Flow closure geometry or changed inherited ownership")
+    stale = SimpleNamespace(seq_len=layout.seq_len - 1, segments=layout.segments, signature=layout.signature)
+    if _partitioned_history_layout_valid(options, stale):
+        raise SystemExit("Sol accepted a stale equal-grid control layout")
+    external["flow_semantic_digest"] = "d" * 64
+    if _partitioned_history_layout_valid(options, layout):
+        raise SystemExit("Sol accepted a mismatched equal-grid VDN binding")
+
+
 def _namespace_package(name: str, package_dir: Path) -> None:
     """Load source-contract modules without executing custom-node __init__.py."""
     if not package_dir.is_dir():
@@ -460,9 +553,11 @@ def main() -> None:
     if _partitioned_history_layout_valid(options, stale):
         raise SystemExit("Sol history accepted stale partitioned layout geometry")
 
+    _validate_same_grid_history_transport()
     print(
         "partitioned exact-prefix contracts: OK ",
         f"abi={PARTITIONED_REQUEST_ABI} groups={len(grouped.groups)} sequence_rows={flow.sequence_rows}",
+        "same_grid_history=True",
     )
 
 

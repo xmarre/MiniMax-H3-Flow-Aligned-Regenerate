@@ -4,7 +4,7 @@ Status: matched SM120 A/B/C plus complete partitioned learned-linear bypass
 discrimination is complete. Candidate C changed the internal pre-high trajectory
 but **00722 still rendered the frame shift**. 00724 then bypassed the complete
 VDN learned-linear complement and **the visible frame shift still remained**.
-No VDN production fix is promoted.
+No VDN geometry fix is promoted.
 
 00726 successfully executed the direct same-grid target control. The user still
 observed a slight frame shift, but reported that it was **substantially less
@@ -27,6 +27,124 @@ survives target-high.
 00728 completed the same-domain dense-suffix intervention. The residual rendered
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
+
+## 00737/00738: slow equal-grid control; installed admission fix not evidenced
+
+The new user report is latency only. The attached appended log contains two
+prompts: lines 321–810 correspond to 00737, and lines 811–1252 to 00738. Their
+completion receipts are 14:33 (873 seconds) and 10:08 (608 seconds). A fresh
+startup precedes the first prompt; the second reuses that process. Both prompts
+and physical conditioning hashes differ, so this pair is not a matched
+cold-versus-hot benchmark.
+
+Evidence SHA256:
+
+- 00737 metrics: `f5263a72ff4df5af2dfc7b8d3cf4d31236ccd4d96967e69b7c3fc6bb282520d3`
+- 00738 metrics: `7cf2db3c0ef42f23ede5f9d88bea1d10ea18a5540ac5181de393166dc0a08460`
+- appended log: `963e776ffb10fbbb299e6e64eaf49ff7c3492cb85986c7054b75602752b75a76`
+
+### Effective preparation code
+
+All twelve VDN admission receipts have the old format, for example log line
+1044: `sampling admission eviction stage=low unloaded=2 allocator_before=...`.
+None includes `kept_resident_h3`, `eviction_elapsed_ms` or `sampling preparation`.
+VDN #36's retained CUDA path always adds those fields at this same log site.
+The observed admission wrapper therefore predates #36; these runs cannot
+validate its clone-preservation fix. The files do not distinguish a missing
+Patcher overlay, overwritten overlay order, stale checkout or loaded module.
+Do not infer the installation cause or claim that #36 saved time.
+
+The hot first low stage again evicts four loaded models and then requests H3;
+continuation low evicts two and requests H3. The old log still does not name
+which models were evicted or time eviction versus Core preparation.
+Both physical encodes are cache misses and load the text encoder. Continuum's
+conditioning cache remains invocation-local. 00738's first Spectrum profile is
+also a miss (build 11.007314 seconds, lookup 5.513360 seconds); its continuation
+lookup is a hit (0.029433 seconds). These profile fields overlap existing
+intervals and must not be added together as independent preparation costs.
+
+### Workload and measured cost
+
+Both runs use `same_grid_target_control`, normal softmax and normal VDN linear
+attention. The configured progressive source is 38x50; the initial chunk uses
+that source, but continuation low/probe executes directly at the **54x72 target
+latent grid** (864x1152 decoded geometry). Its transformer contains 11,664
+protected-prefix plus 48,600 generated-suffix video rows: 60,264 total. The
+learned continuation transfer is the control's identity operation. This control
+still pays target-grid low/probe cost.
+
+| Stage wall | 00737 first | 00738 first | 00737 continuation | 00738 continuation |
+|---|---:|---:|---:|---:|
+| Low | 230.838 s | 92.521 s | 216.190 s | 198.940 s |
+| Probe | 10.229 s | 10.904 s | 42.943 s | 39.336 s |
+| High | 63.607 s | 51.616 s | 65.397 s | 55.898 s |
+| Whole sampler | 306.182 s | 155.720 s | 328.109 s | 297.495 s |
+
+00738 has **453.215 seconds** in its two samplers and **356.760 seconds** in
+all timed model calls, leaving 96.455 seconds outside those call timers.
+Prompt completion exceeds the sampler sum by 154.785 seconds; that remainder
+includes work before and after sampling, including conditioning and decode.
+The metrics do not independently isolate text-encoder time.
+
+The first low stage spends 31.134 seconds before its first timed model call;
+continuation low spends 16.982 seconds there. Their model-call sums are
+53.956 / 159.309 seconds and their remaining low-stage costs are 38.565 / 39.630
+seconds. These are nested attribution intervals, not additional costs to sum.
+A faster model-admission path alone cannot eliminate 356.760 seconds of model
+work or the full-grid control workload.
+
+### Canonical equal-grid history correction
+
+The source-backed history limitation recorded under 00733 is reproduced:
+`backend-history diagnostic opaque` names the actual Flow partitioned block
+wrapper at 00738 log line 1049. Spectrum proposes forecasts at low steps 2 and
+3, but both calls execute actual transformer work. Continuation low has **five
+actual calls and zero forecasts**. Decision labels are not execution receipts.
+
+Sol #37 head `16e23b13fa93fb8b373a6cce2c5f8577cb9b73af` extends the two classifiers only for the canonical API-1 equal-grid
+control. It verifies matching spatial axes, zero key measures, current ranges,
+exact query ownership and the semantic digest; its replacement classifier also
+binds the contract to actual Flow latent-grid closure fields and the inherited
+replacement. Full signatures, VDN binding, provider/warmup transitions and
+request-owned completion receipts remain required. Equal row products on
+unequal grids, stale state and malformed metadata remain opaque. This addresses
+the supported control's missing classification rather than bypassing history
+validation. Heterogeneous attention, transformer arithmetic, sampler schedules
+and masks are unchanged.
+
+Two regressions fail on released Sol main. The reviewed candidate passes 46
+local targeted history/native-layout tests, including actual rebuilt Flow
+closures with exact block fusion on/off, preserved dense-to-Sol transitions,
+rectangular equal-grid controls and rejected ownership/digest/layout changes.
+Flow's existing cross-repository source oracle now also consumes a canonical
+control from actual Flow/VDN modules and requires both Sol classifiers to accept
+it. Hosted CI validates the pinned integration separately from the scratch
+runtime's optional dependencies. GPU forecast counts, timing and decoded
+video/audio remain unqualified. Forecast use can change the generated trajectory.
+
+### Patcher handoff
+
+Retain Flow #89 -> #93, VDN #33 -> #34 -> #35 -> **#36**, and Continuum
+#36 -> #37. Add **Sol-H3 #37** as the Sol overlay for this bounded history
+correction. The Sol, VDN and Continuum PR numbers belong to different
+repositories. Refresh the overlays and restart ComfyUI before measuring the
+reviewed pair. Preserve these runs' equal-grid control, normal attention,
+native temporal carrier and other inputs; leave residual measurement off.
+
+Require the new VDN admission/preparation fields to establish which wrapper
+executed. If a resident clone exists, `kept_resident_h3` should count it;
+zero can be valid when no clone remains loaded. Core still owns patch/device/
+memory-dependent reloads. For Sol, require an established identity followed by
+accepted receipts and inspect actual/forecast execution counts. Forecast
+eligibility is not a guaranteed forecast count or elapsed-time gain.
+
+No new rendered quality verdict was supplied. Exact audio has nine verified
+entries in each run and no extra model work, but those structural receipts do
+not establish perceptual quality. 00738's measured motion is already present
+in low/probe, while the previously rejected 00734 cross-grid/high-stage defect
+remains a separate unresolved path. Do not combine the separate residual
+measurement arm with this performance check or promote rejected geometry
+actuators.
 
 ## 00734: cross-grid video rejected; hot preparation delay and clone lifetime fix
 
