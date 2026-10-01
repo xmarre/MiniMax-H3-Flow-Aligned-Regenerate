@@ -28,6 +28,96 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00746–00748: standalone model-loading attribution and finite admission
+
+The user reports some improvement after disabling VDN fast kernels, with model
+loading still slow when changing prompts or reference images. The appended log
+contains the tail of an earlier run, followed by complete runs 00746 (lines
+124–370), 00747 (371–618) and 00748 (619–866). The receipts map to the three
+metrics files by their stage geometry, work counts and wall intervals.
+
+Evidence SHA256:
+
+- Log: `ae7d6f718d6c06fed27cdf6d3f7f1994c13199bfb7ac3ecfc724fb67f0aabcc3`
+- 00746 metrics: `4873586a368276993a2a08a72be719e5915f0aca8d698db51dd3df45c7b0d394`
+- 00747 metrics: `d992771d45599272bddead759e4a2c302e4264e41db02f8ce06013cdeef7f39c`
+- 00748 metrics: `0bad889521dd7367d01e60085a80f7b8ae8bb836987270b4bd5d59ec23bac2d9`
+
+These are **single-chunk** runs: three sampler invocations, two history
+boundaries, nine logical calls, seven actual transformer calls and two forecasts
+(one low, one high). There is no protected continuation prefix or seam audit.
+The low grids are 50x38 / 44x44 / 50x38, and the high grids are 72x54 / 62x62 /
+72x54. The learned transfer actually executes and takes 0.532 / 0.596 / 0.548
+seconds. The same-grid continuation control is configured but has no carried
+prefix to act on. These runs do not exercise the Sol equal-grid continuation
+history correction and cannot establish a boundary-quality result.
+
+| Host wall interval | 00746 | 00747 | 00748 |
+|---|---:|---:|---:|
+| Prompt completion | 196.170 s | 223.350 s | 246.000 s |
+| Whole sampler | 153.828 s | 177.530 s | 186.032 s |
+| Timed model-call sum | 111.703 s | 130.963 s | 127.565 s |
+| Sampler outside model-call timers | 42.125 s | 46.567 s | 58.468 s |
+| Low stage before first timed call | 28.096 s | 29.980 s | 42.549 s |
+| Outside whole sampler | 42.342 s | 45.820 s | 59.968 s |
+
+The low-stage pre-call interval is nested inside sampler wall time and includes
+preparation beyond weight transfers. The outside-sampler interval includes both
+conditioning and decode. Neither interval isolates physical transfer latency.
+Logged host-memory trim hooks contribute 6.451 / 8.345 / 9.101 seconds across
+44 / 52 / 52 receipts, including skipped checks. These costs are also nested;
+do not add them again to prompt completion.
+
+All nine low/probe/high VDN admission lines use the format preceding VDN #36;
+none has its protected-clone or preparation-time fields. Each low stage reports
+`unloaded=4`, allocator allocation falls from 53,486.034 to 20,682.938 MiB,
+and H3 is requested immediately afterward. Each prompt also requests the
+25,883.83 MiB text encoder, and both VAEs are requested for final decode.
+The old log does not identify the four evicted models or time physical transfers.
+The receipts establish the older admission path; overlay order, checkout and
+loaded-module causes cannot be distinguished from this log.
+
+Source tracing identifies an unconditional `free_memory(1e30, ...)` request in
+retained VDN preparation. The earlier clone-preservation correction still made
+that request for unrelated models. `fast_kernels` selects fused branch
+arithmetic and does not gate memory admission. Compilation can affect model-call
+cost, but cannot explain this explicit pre-call purge. Prompts, references and
+geometry change between these runs, and the logs do not identify the selected
+fast-kernel flag, so they are not a controlled kernel on/off benchmark.
+Conditioning changes legitimately require new encoding; reusing resident
+weights must not reuse stale conditioning.
+
+VDN #36 is updated to `64a33b69c2e92014e2adfe43c3e572f7799ce6a6`, one clean
+commit above unchanged #35 `e253432b9f79db91a0d99461bbd85fb1574a39b3`.
+Core now prepares required models and reconciles clones/patches first. VDN then
+requests Core's sampling/conditioning estimate and reserved-memory policy plus
+the existing shared 10 GiB retained allowance. Sufficient headroom skips
+eviction; pressure preserves the prepared H3, additional models and their
+patch backings while using Core's eviction policy. Admission failure cleans
+prepared additional-model execution state and propagates the original error.
+The allowance is a heuristic, not a strict peak-memory guarantee.
+
+Two sufficient-headroom regressions fail on the previous #36 head. The initial
+complete pinned suite passes 255 tests; the final failure-cleanup revision
+passes 24 targeted pinned checks. Actual Core partial eviction, required model
+ownership, changed patch UUIDs, device/dead references, force flags, identity and
+failure propagation are covered. Final-head CI and current-Core checks are
+recorded on VDN #36; source correctness does not establish GPU speed or quality.
+Flow runtime, attention arithmetic, schedules and all geometry policies are
+unchanged by this qualification update.
+
+Through Patcher, refresh **VDN #36 after #35** while retaining the existing
+#33 -> #34 -> #35 -> #36 stack. Refresh Flow #93 after #89; retain Sol-H3 #37
+and the existing Continuum overlays. Restart ComfyUI. Keep fast kernels off
+and other settings fixed for the next loading measurement. Require
+`sampling preparation ... prepare_elapsed_ms=...` followed by
+`sampling admission policy=bounded_headroom_v1`. Sufficient available headroom
+should report `eviction_requested=False`; under pressure inspect the finite
+request, free-memory fields and eviction time. A zero full-unload count can
+represent partial unloading. No particular protected-clone count is universal.
+GPU latency and rendered output remain unqualified, and the prior continuation
+frame-shift defect remains separate.
+
 ## 00737/00738: slow equal-grid control; installed admission fix not evidenced
 
 The new user report is latency only. The attached appended log contains two
