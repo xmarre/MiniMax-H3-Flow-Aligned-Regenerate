@@ -5,10 +5,94 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed and VRAM pressure; older rendered
 observations below remain specific to their earlier configurations.
 
-The latest user report adds near-overflow on subsequent runs and a visibly
-overcooked second chunk. These remain open runtime/rendered qualifications.
-The latest workspace revision executes in the new receipts below; it does not
-establish a rendered quality fix or a bound on transient GPU memory.
+The latest user report captures a third-run OOM after settings changes. The
+new traceback identifies VDN's separate adapter post-forward residual addition.
+Repeated-generation completion and the earlier reported overcooked second
+chunk remain open runtime/rendered qualifications.
+
+## 00788–00789 and third run: VDN adapter residual allocation OOM
+
+00788 and 00789 complete. A separately supplied third-run log fails in the first
+actual target-high evaluation of the second chunk; no third-run metrics file or
+successful high completion receipt is supplied.
+
+| Run | Low / high schedule | Continuation packed rows | Initial sampler | Continuation sampler | Prompt result |
+|---|---:|---:|---:|---:|---|
+| 00788, cold | 5 / 3 | 72,676 | 215.483 s | 253.353 s | completed, 10m 16s whole-second log |
+| 00789, warm | 5 / 3 | 76,836 | 159.178 s | 273.222 s | completed, 488.48 s |
+| Third run, warm | 8 / 4 | 76,836 | low / probe / high: 77.908 / 15.342 / 88.283 s | low / probe: 253.415 / 42.195 s; high failed after 29.522 s | OOM; 10m 15s includes failure handling |
+
+The larger context first appears in successful 00789, with six references
+totalling 5,730 rows and 6,178 continuation text rows, compared with four
+references totalling 3,658 rows and 4,090 text rows in 00788. The third run has
+the same larger packed layout and more sampler steps. Its continuation low
+records seven completed actual calls and one forecast; high records zero
+completed actual calls. The probe performs evaluation even though its Spectrum
+summary has zero scheduled steps. This is not a controlled comparison that
+isolates prompt/reference changes, schedule changes or a leak.
+
+The accepted `same_grid_target_control` and `softmax_diagnostic=normal` remain
+active. Continuation still has 64,232 video rows, 696 audio rows and 12 protected
+video frames on the 56 x 74 target grid. No geometry or guidance adjustment is
+promoted by this memory correction.
+
+### Failure and memory evidence
+
+The traceback reaches native MiniMax `MLP.fc1`, PyTorch's forward-hook dispatch,
+then VDN `_PostForwardLoRA.__call__` at `return output + delta`. A BF16 tensor of
+76,836 x 28,672 elements occupies 4.103485 GiB, matching the requested 4.10 GiB.
+CUDA reports 1.74 GiB free, 69.87 GiB currently allocated and a 95.59 GiB device
+limit. Both the base output and projected adapter delta are live when the old
+addition asks for a third full-sized result.
+
+High admission reports `target_met=True`, requiring 31,054.700 MiB and observing
+34,126.382 MiB free through Core's API. The preceding probe evicts VideoVAE in
+one pass and meets its finite target. These observations still do not make
+admission a worst-case bound on adapter activations or allocator availability.
+The first low-entry live allocation is exactly 55,342.969 MiB in both warm
+00789 and the third run. Those samples do not show a growing baseline, and do
+not establish absence of retained storage, fragmentation or a longer-run leak.
+
+The startup log reports ComfyUI 0.38.0, Patcher stack `3fc64ec0f`, Torch
+2.10.0+cu130, Kitchen 0.2.36, Aimdo 0.5.5 and HIGH_VRAM/cudaMallocAsync. It does
+not supply exact loaded Core module hashes or an overlay manifest. Therefore
+this evidence alone does not establish whether Core #16720 executed. The VDN
+post-hook allocation is independently present and needs its own correction.
+
+### VDN correction and qualification
+
+[VDN #36](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/36), head
+`68aebc6c5192bbfbd9f12e45803eae92616d1f50`, adds the base output into the newly allocated projection delta
+in inference when shape, dtype and strides match for ordinary tensors. The
+base output, cached factors and cached bias remain untouched. Bias-only hooks,
+gradients, tensor subclasses, promotion, broadcasting and differing layouts
+retain the original out-of-place addition. Projection math, factor scaling,
+strengths, hook order and native quantized projections are unchanged.
+
+28 targeted checks pass with CPU Torch 2.10.0 and Core #16720's exact head:
+16 new adapter workspace cases plus reinjection, curve and low-VRAM contracts.
+They cover exact FP32/FP16/BF16 results, gradients, caller/earlier-hook aliases,
+cache immutability and both Core/VDN installation orders. The new storage
+regression fails on preceding VDN source with three full-sized storage pointers
+and passes with two on the correction. Lint, compile and diff checks pass.
+Flow's source-contract job pins this VDN head and executes the paired checks
+alongside the existing Core tests and historical native fixtures. These CPU
+checks do not qualify the user's GPU peak or repeated-generation completion.
+
+In ComfyUI Patcher, update the **VDN #36** and **Flow #93** repository cards and
+restart ComfyUI. Retain VDN #33 -> #34 -> #35 -> #36, Flow #89 -> #93,
+Sol-H3 #37 at `3f2f244f277fc0d8fafc15fcac724c2cffb7eacf`, Core #16720 at
+`6b4e05dc30d65740ce8931434607b9907996fb0e` after existing Core overlays, and the
+existing Continuum overlays. Keep the accepted same-grid/current normal suffix
+configuration. The next normal run qualifies the corrected VDN hook under the
+workload; reproducing the captured failure is not required to establish it.
+
+Evidence SHA256:
+
+- 00788–00789 log: `9a8839ecb2975937e406ad2319c24b4748e50606bceb83ecfc1fdba87c10c009`
+- 00788 metrics: `1e00de3f2e6e7e9f8910ea00fde456899deb9c68da54d1a5cec4ba4ecae27315`
+- 00789 metrics: `2cddcd9b1b236f81ad2070a7db0f273607f3145a766aa8e8905eca9954da2c27`
+- Third-run OOM log: `bc5efbebbc39afd6ed33849731dd17abd66857913ec593e83dab380cc711ae49`
 
 ## 00786–00787: captured high-stage LoRA allocation OOM
 

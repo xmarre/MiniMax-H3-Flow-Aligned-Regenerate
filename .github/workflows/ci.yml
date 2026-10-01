@@ -88,7 +88,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout 3f2f244f277fc0d8fafc15fcac724c2cffb7eacf
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout 28792f27427e44d312cc4948a15deb78039e3510
+          git -C .contracts/VDNPartitioned checkout 68aebc6c5192bbfbd9f12e45803eae92616d1f50
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
           git -C .contracts/ComfyRuntime checkout 6b4e05dc30d65740ce8931434607b9907996fb0e
       - name: Validate native and sibling contracts
@@ -112,8 +112,8 @@ jobs:
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
         run: |
-          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
-          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece
           python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
       - name: Validate partitioned exact-prefix cross-repo contracts
         run: |
@@ -125,3 +125,13 @@ jobs:
           python -m pytest -q \
             .contracts/ComfyRuntime/tests-unit/comfy_test/test_lora_bypass_workspace.py \
             .contracts/ComfyRuntime/tests-unit/comfy_test/test_minimax_h3_model.py
+      - name: Validate VDN post-forward workspace with Core bypass
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/VDNPartitioned/tests/test_post_forward_workspace.py \
+            .contracts/VDNPartitioned/tests/test_bypass_reinject.py \
+            .contracts/VDNPartitioned/tests/test_curve_apply.py \
+            .contracts/VDNPartitioned/tests/test_runtime_lowvram.py
