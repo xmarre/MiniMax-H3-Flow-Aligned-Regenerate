@@ -28,6 +28,105 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00732: accepted visual boundary, residual audio and diagnostic cost
+
+The user reports no visible boundary issue after increasing final MP to 1.1.
+This accepts the rendered video for this same-grid/dense arm. It does not
+qualify restored sparse suffix attention or progressive cross-grid sampling.
+The user still suspects an audio defect and reports very slow execution.
+
+Evidence SHA256:
+
+- metrics: `cda4dcefad83d2370c76efbf8e09ebbadb6e46b3bf795431a0cc39133c080d1e`
+- appended runtime log: `d1c7088424cc80f3dfd1dcf28ea4fe28d5d19122235d862257501eff6ea61441`
+
+The log contains two prompts. Only the final `got prompt` segment belongs to
+00732; its completion is **00:11:54**, not the earlier 576.06-second completion.
+Actual target geometry is 64x64 latent / 1024x1024 decoded (1.048576 MP), versus
+48x48 / 768x768 in 00731. Configured reduced source geometry is 44x44, but
+`same_grid_target_control` runs continuation low/probe on the full 64x64 grid.
+Its source tensor is `[1,24,62,64,64]`, with 12 exact prefix and 50 fresh tokens.
+Continuation transfer is identity; the first chunk still uses learned transfer.
+
+`vdn_linear_diagnostic=normal` and `native_grid_then_map_v1` remain active.
+**`softmax_diagnostic=dense_suffix_same_domain` is still enabled.** Its positive
+receipt reports 3,300 calls / 15,052,800 Q rows / 75,698,100 KV rows, with gathered
+domain, prefix measure and grouped ownership unchanged. Compared with 00731,
+aggregate Q and KV rows increase 77.8% and 67.4%. Their product is about 2.98x;
+this is a work-size indicator, not a kernel benchmark or a causal timing proof.
+Reference/conditioning shapes also change. Calls remain 18 logical / 15 actual /
+three forecasts, with six sampler invocations and four history boundaries.
+
+| Sampler timing | First chunk | Continuation |
+|---|---:|---:|
+| Low | 111.596 s | 260.276 s |
+| Exact probe | 12.174 s | 50.768 s |
+| High | 67.592 s | 76.007 s |
+| Whole sampler | 192.070 s | 390.660 s |
+
+Continuation low plus probe consumes 311.044 seconds, about 80% of its sampler
+time. Its total rises from 208.609 seconds in 00731. First-chunk learned
+upscaling takes only 0.633 seconds; continuation makes no learned-upscaler call.
+Neither increased NFE nor the learned upscaler explains this slow arm. The
+same-grid control intentionally forfeits low-resolution continuation savings,
+and dense suffix attention intentionally forfeits sparse selection.
+
+The existing coherent exact-audio evidence validator passes. Nine model entries
+verify the authoritative native masks, effective overlap and timestep override
+remain zero, and final AV prefixes are exact. Protected low/probe-to-high audio
+error is max 4.768e-7 / RMS 2.853e-8. The original fractional-mask defect has
+not returned.
+
+Matched audio decode reports low/probe +0.7471 dB and final-high +3.1113 dB;
+high suffix RMS increases +2.3676 dB relative to low/probe, while prefix level
+changes only +0.0034 dB. Extra left decode context changes the suffix by zero,
+and both production normalizers are provably inactive. Production boundary
+level is +2.7291 dB before Audio Auto and +2.6833 dB afterward. These are level
+measurements, not proof that the unspecified audible defect is a generation
+burst. The 267-sample physical phase correction is already applied correctly.
+
+Tracing assembly separately exposed a concrete PCM seam defect in Continuum's
+released `v2/seam_guard.py`: equal-power blending amplifies correlated overlap,
+global peak scaling changes both native patch endpoints, and gain/DC correction
+does not return to identity before the unmodified suffix. A matching 0.01-amplitude
+2 Hz waveform at 1 kHz reproduces a native step of 7.90e-7 becoming 0.002110.
+
+[Continuum #37](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/37), head
+`4192587a22693bead8483bc934c3e206efea8e66`, fixes that local endpoint defect with
+a convex overlap blend and tapered bounded gain/DC corrections. Seventeen new
+regressions failed before the change and pass afterward, including actual
+assembly preserving the whole continuous waveform and fresh suffix. The full
+CPU suite passes 410 tests; exact-head CI run 36795079195 is green across Python
+3.10–3.13 and the publisher-toolchain job. This introduces no model/provider/VAE
+calls. It does not establish a fix for the separate high-stage audio level
+change or qualify the complete rendered soundtrack.
+
+### Current restoration instructions (supersede earlier next-arm instructions)
+
+Apply Continuum #37 through Patcher alongside the existing overlays, and restart
+ComfyUI. #37 targets released main independently of rejected geometry candidate
+#36; the shared audio helper was identical in both trees. Keep Video Seam
+Analyze Only. With retained decoded chunks, compare Audio Auto before/after the
+PCM correction without resampling H3 to isolate its audible effect.
+
+For the next sampling run, keep 00732's 1.1 MP workflow and change only the
+**model diagnostic** `softmax_diagnostic=normal`. Retain same-grid control,
+normal VDN linear, native temporal carrier, coherent exact audio, source-carrier
+audio positions, learned handoff selector, witness off and all other inputs.
+This restores the existing production attention path; no new speed algorithm is
+introduced. PCM #37 is a separately recorded assembly change, so a combined run
+is not a one-change audio-quality A/B. Require the positive exact-audio receipt,
+no dense-suffix intervention, and raw/assembled media review.
+
+Restore `spatial_stage_control=progressive_low_to_high` in a later separate arm
+after normal suffix attention is accepted. The clean 00732 visual result cannot
+be extrapolated across that restoration. Do not promote any diagnostic or
+decoded geometry actuator based on this run.
+
+GitHub pre-investigation checkpoints exist on Flow and VDN as
+`checkpoint/00732-audio-and-speed-pre-investigation-20261001`. Continuum has
+separate released-base, loaded-overlay and pre-full-validation checkpoints.
+
 ## 00731: normal learned-linear execution restored
 
 The same-grid restoration run completed in 576.06 seconds with normal VDN
