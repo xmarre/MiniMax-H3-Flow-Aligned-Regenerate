@@ -28,6 +28,98 @@ survives target-high.
 shift and audio burst remained. The next qualification changes audio ownership
 as described below. No rendered production fix is promoted.
 
+## 00755–00758: verify loaded source before another generation
+
+The user reports two generations with VDN fast kernels enabled, then two with
+them disabled, changing prompts, reference pictures or LoRA strength between
+generations. A fresh startup precedes 00755; the other three runs share that
+process. The flag mapping is the user's report: supplied VDN receipts do not
+expose the applied flag. Complete prompt ranges are log lines 302–616,
+617–854, 855–1113 and 1114–1351.
+
+Evidence SHA256:
+
+- Log: `5eb9df11293ff8fca41b5e62d9c9522e4c163ddc200ad3c5c617fb53b767256c`
+- 00755 metrics: `b3cb9ddd4d20bde392f04e9f82f6fc75881c62eaac77f1ecc8f04b7919beb896`
+- 00756 metrics: `bbc30372f46b7dba27e0e53c8b332634d4175f78d019f0e0446af831e9c818e4`
+- 00757 metrics: `5a0d9cb5ad6759226e8c7eab847f81fe8991548181aa4071286c0dd7ec2864c8`
+- 00758 metrics: `22cec1345070ddf2bac4185a45575b745d2c7a2090b9b87f71d33ad8de450b20`
+
+Each run is one standalone chunk: three sampler invocations, nine logical
+calls, seven actual transformer calls and two forecasts. There is no
+continuation prefix. These runs cannot qualify the canonical equal-grid
+history fix or the previous frame/audio boundary defect.
+
+| Host wall interval | 00755 (on) | 00756 (on) | 00757 (off) | 00758 (off) |
+|---|---:|---:|---:|---:|
+| Prompt completion | 393.420 s | 261.360 s | 201.190 s | 233.880 s |
+| Whole sampler | 279.356 s | 172.168 s | 160.613 s | 151.820 s |
+| Timed model-call sum | 141.112 s | 112.571 s | 125.988 s | 107.525 s |
+| Sampler outside timed calls | 138.245 s | 59.597 s | 34.625 s | 44.295 s |
+| Outside whole sampler | 114.064 s | 89.192 s | 40.577 s | 82.060 s |
+| Low stage | 201.032 s | 101.442 s | 77.598 s | 84.759 s |
+| Exact probe | 12.067 s | 12.581 s | 12.296 s | 11.901 s |
+| High stage | 65.114 s | 57.538 s | 70.157 s | 54.589 s |
+
+Model calls, preparation, profile work and kernel arithmetic gates overlap the
+stage totals. Outside-sampler time includes conditioning and final decode; it
+is not a transfer measurement. Logged host-memory trims sum to 1.795 / 7.036 /
+6.477 / 5.204 seconds and are nested in these totals. The first Spectrum profile
+reports build 19.004467 seconds and lookup 9.506764 seconds; those fields
+overlap, so do not add them as independent preparation costs. Unix event
+timestamps use `time.time_ns`, while durations use `perf_counter`; inferred
+post-low windows disagree by 3.862–6.567 seconds. Avoid a precise pre-first-call
+transfer estimate made by mixing those clocks.
+
+Source grids are 50x38 for 00755/00756 and 46x40 for 00757/00758. Targets change
+from 72x54 to 66x58; text/reference row counts differ, and the first run is cold.
+These observations cannot isolate a causal fast-kernel speedup. Changing LoRA
+strength may legitimately require Core patch reconciliation; keep that separate
+from VDN's unconditional eviction.
+
+All **twelve** admission receipts still use the pre-#36 form
+`sampling admission eviction stage=...`. None has `bounded_headroom_v1`,
+`prepare_elapsed_ms` or the earlier clone-preservation fields. Cold low reports
+`unloaded=2`; every warm low reports `unloaded=4`, then requests H3. Warm
+allocation falls from 53,486.034 to 20,682.938 MiB. Each prompt also requests the
+25,883.83 MiB text encoder and final-decode VAEs. The log cannot identify the
+four evicted entries or measure transfer time separately.
+
+The startup `patcher/stack` label describes **ComfyUI Core**, not the VDN
+checkout; it is not a VDN overlay receipt. Current Patcher source at `65cc7d6`
+fetches each enabled PR head during **Update**, validates its captured
+test-merge parents and applies the declared-base delta with
+`git apply --3way --index`. An isolated reproduction on VDN main
+`b78e94d0365ffc5059924a048af707e565d0380e` in #33 -> #34 -> #35 -> #36 order
+produces the exact published `64a33b6` tree and hybrid file. Hybrid SHA256 is
+`e04fb51624f66588e836c80765c55a585be7b76dcc8ad3a3a8aa4d89e23bef5d`;
+the old receipt text is absent. This does not establish the user's Patcher
+version, overlay list, Update result or a Patcher failure.
+
+The prior "refresh" handoff was imprecise. Use the **VDN repository card's
+Update action** to rebuild the enabled stack, then restart ComfyUI. Refreshing
+installation details or checkpoint history and previewing an update do not
+apply the stack. Retain #33 -> #34 -> #35 -> #36 on the existing tracked base;
+Flow remains #89 -> #93, Sol-H3 #37 and Continuum #36 -> #37 remain in place.
+
+VDN #36 adds source receipts at `01ae7bbcab305a46a735f2468c71937d1b6fc35c`,
+still **one clean commit** above unchanged #35. At startup,
+`sampling admission source policy=bounded_headroom_v1` reports the loaded hybrid
+and importing package paths; `policy=unversioned` exposes an older shared import
+without assuming its cause. Applying VDN reports `sampling admission installed`,
+retained buffers and the branch's actual fast-kernel flag. These are loaded
+module paths, not Git revisions or disk hashes. The memory policy and numerical
+behavior are unchanged from reviewed `64a33b6`.
+
+Check the startup receipt **before queuing a generation**. If absent,
+unversioned or pointed at another package, keep the VDN Patcher Update operation
+log and startup log; another full run is not needed for import provenance.
+Startup alone does not prove the current MODEL uses that wrapper: successful
+retained CUDA sampling must emit preparation timings and
+`sampling admission policy=bounded_headroom_v1`. Only then can the finite
+admission correction be evaluated. GPU speed and generated quality remain
+unqualified. Final source/CI validation is recorded on the paired PRs.
+
 ## 00746–00748: standalone model-loading attribution and finite admission
 
 The user reports some improvement after disabling VDN fast kernels, with model
