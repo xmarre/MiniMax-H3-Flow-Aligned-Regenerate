@@ -1461,11 +1461,7 @@ def _partitioned_exact_overlap_fallback_eligibility(
         }
     ):
         return False, "boundary_receipt_inconsistent"
-    if (
-        result == "rejected"
-        and not guidance_only_rejection
-        and str(boundary.get("reason", "")) != reason
-    ):
+    if result == "rejected" and not guidance_only_rejection and str(boundary.get("reason", "")) != reason:
         return False, "boundary_receipt_inconsistent"
 
     checks = boundary.get("checks")
@@ -2248,11 +2244,7 @@ def _frame_gauge_clean_postprocess(
             # Preserve the independently validated provider boundary witness so a
             # guidance-only rejection cannot suppress exact-prefix representation
             # reconciliation at the learned low->high handoff.
-            witnesses = {
-                "learned_boundary_pair": learned_clean[
-                    :, :, prefix_t - 1 : prefix_t + 1
-                ].detach().clone()
-            }
+            witnesses = {"learned_boundary_pair": learned_clean[:, :, prefix_t - 1 : prefix_t + 1].detach().clone()}
             return result, None, witnesses, transaction
 
     if residual_mode == "measure":

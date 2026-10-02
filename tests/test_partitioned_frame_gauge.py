@@ -177,10 +177,7 @@ def test_guidance_only_rejection_keeps_video_boundary_eligible_for_exact_overlap
 
     eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(transaction)
     assert eligible is True
-    assert trigger == (
-        "guidance_rejected_after_video_boundary_acceptance:"
-        "unsupported_sampler_contract"
-    )
+    assert trigger == ("guidance_rejected_after_video_boundary_acceptance:unsupported_sampler_contract")
 
 
 def test_exact_overlap_bridge_preserves_provider_native_first_transition():
