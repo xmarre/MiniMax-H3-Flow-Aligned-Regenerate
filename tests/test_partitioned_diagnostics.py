@@ -17,6 +17,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
+    PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_SHADOW,
@@ -78,6 +79,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_video_guided_overlap_tokens,
 )
 from h3_flow_regenerate.partitioned_node import (
     NODE_DISPLAY_NAME_MAPPINGS,
@@ -149,6 +151,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "handoff_transfer_control" not in ordinary
     assert "spatial_stage_control" not in ordinary
     assert "softmax_diagnostic" not in ordinary
+    assert "video_guided_overlap_tokens" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -183,6 +186,10 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
     assert diagnostic["softmax_diagnostic"][0] == list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
     assert diagnostic["softmax_diagnostic"][1]["default"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+    assert diagnostic["video_guided_overlap_tokens"][0] == "INT"
+    assert diagnostic["video_guided_overlap_tokens"][1]["default"] == 0
+    assert diagnostic["video_guided_overlap_tokens"][1]["min"] == 0
+    assert diagnostic["video_guided_overlap_tokens"][1]["max"] == 4
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
@@ -228,6 +235,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("vdn_temporal_carrier_policy") < keys.index("handoff_transfer_control")
     assert keys.index("handoff_transfer_control") < keys.index("spatial_stage_control")
     assert keys.index("spatial_stage_control") < keys.index("softmax_diagnostic")
+    assert keys.index("softmax_diagnostic") < keys.index("video_guided_overlap_tokens")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -273,6 +281,37 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
             },
         )
     ]
+
+
+def test_video_guided_overlap_control_is_model_local_default_off_and_opt_in():
+    model = SimpleNamespace(
+        model_options={
+            "transformer_options": {},
+            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
+        }
+    )
+    metrics = _Metrics()
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        video_guided_overlap_tokens=0,
+    )
+    assert PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY not in model.model_options
+    assert resolve_partitioned_video_guided_overlap_tokens(model.model_options) == (0, "default_off")
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        video_guided_overlap_tokens=4,
+    )
+    assert model.model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY] == 4
+    assert resolve_partitioned_video_guided_overlap_tokens(model.model_options) == (4, "diagnostic_node")
+    assert metrics.events[-1][1]["video_guided_overlap_tokens"] == 4
 
 
 def test_provider_boundary_stabilization_control_is_model_local_and_opt_in():
