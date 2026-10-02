@@ -5,7 +5,76 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed, VRAM pressure and reported overcooking; older rendered
 observations below remain specific to their earlier configurations.
 
-## 2026-10-02: continuation execution costs corrected, GPU timing pending
+## 2026-10-02: new captures confirm the full-grid continuation cost
+
+The new two-chunk and single-chunk captures run the published dense-dispatch and
+factorization fixes. The two-chunk continuation reports 1,811 Core dense calls
+in low and 800 in the probe, with zero raw-Torch partitioned dense calls. Every
+actual evaluation reports 100 deferred factorizations and 50 status reads,
+consistent with block-boundary checking for streamed branch weights. H3 admission keeps the resident model,
+with no evictions. Both workloads still execute nine actual evaluations per
+chunk: five low, one probe and three high.
+
+| Interval (seconds) | Single chunk, 00867 | First of two, 00866 | Continuation, 00866 |
+| --- | ---: | ---: | ---: |
+| Low sampler | 56.756 | 53.294 | 127.277 |
+| Endpoint probe | 9.754 | 9.541 | 26.836 |
+| Transfer | 0.560 | 0.571 | 1.389 |
+| High sampler | 69.317 | 71.180 | 78.266 |
+| Complete sampler | 136.413 | 134.607 | 235.806 |
+
+The prompt totals are 154.96 s and 407.12 s, respectively. Outside-sampler work
+accounts for 18.547 s and 36.707 s; the capture does not attribute those totals
+to individual decoder or other nodes. The two-chunk total exceeds twice the
+single-chunk total by 97.20 s. These are not identical inputs: the single run
+has a different reference image, 1,411 text rows and a 72x54 target; the first
+of two has 1,243 text rows and a 70x54 target. The within-two-chunk comparison
+isolates the continuation policy more closely.
+
+Continuation sampling costs 101.199 s more than the first chunk. Low/probe
+alone accounts for 91.278 s, or 90.2% of that increase. The configured 48x38
+source grid actually runs at 70x54 under `same_grid_target_control`, with
+62 latent frames including 12 protected prefix frames. Its low/probe processes
+58,590 video rows versus 23,712 initially (2.471x). Initial high processes
+49,140 video rows, so the continuation high's increase is much smaller.
+The label "low" describes its sigma interval; it does not mean a low spatial
+resolution under this control. The larger workload remains the main reason
+the second seven seconds cannot currently match the first's sampler cost.
+
+### Remaining native arithmetic-reference dispatch corrected
+
+Native Sol's all-selected arithmetic references still bypassed Core's SDPA
+dispatcher. This candidate corrects that remaining path and batches the same
+finite/error reductions into one five-scalar host transfer, replacing seven
+separate reads on successful gates. Each new sampling request still verifies
+its layouts; checks, thresholds and sparse routing remain active. Real Core
+execution errors propagate without retry; standalone raw-Torch and explicitly
+supplied dense providers retain their contracts.
+
+The recorded native gate host intervals sum to 31.254 s in 00866 and 20.070 s
+in 00867. They include the all-selected kernel, dense reference, reductions,
+possible compilation and pending device work; they are not a measurement of
+removable overhead or the dispatch change's benefit. Partitioned gate host
+timing was absent in those captures and is now recorded too. Teardown publishes
+`native_core_reference_calls`, `native_torch_reference_calls` and the aggregate
+`arithmetic_gate_wall_s`. These counters identify calls, not selected GPU kernels.
+
+The source-gated mapped-neighbor probe records the changed bridge blob. Earlier
+GPU captures continue to qualify their original source, not this candidate's
+speed. CPU regressions establish dispatcher ownership, layout/bias preservation,
+unchanged statistics and failure decisions, and request-local checks. Actual
+CUDA statistics regressions require a GPU. The full-grid control and its accepted
+boundary behavior remain in place; this correction does not restore progressive
+low-grid continuation or establish a near-2x two-chunk runtime.
+
+The paired Sol source is `0240ccb24193cd84fdeb8081a774368bea1aa427`, with unchanged VDN
+`9af4cd1e8ff396fecf2237c8b08f588c53f7fa96` and Core
+`6b4e05dc30d65740ce8931434607b9907996fb0e`. Sol's local suite passes
+276 tests, with 67 hardware/optional-source skips. Fourteen new regressions fail
+on the preceding source; the new CUDA statistics checks are included among the
+skips. Flow pins this source and adds the new regressions to its paired checks.
+
+## 2026-10-02: previous continuation execution fixes, before the new captures
 
 The captured continuation slowdown has a workload component and two avoidable
 execution costs. Under the accepted same-grid boundary control, continuation
