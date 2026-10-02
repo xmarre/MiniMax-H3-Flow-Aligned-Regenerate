@@ -93,11 +93,15 @@ def _schedule():
 def test_video_boundary_production_contract_fails_closed_to_residual_only():
     assert partitioned_scheduler.PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED is False
     assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0, 0.75, 0.5, 0.25)
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS == (1.0,)
     assert (
         partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
-        == "source_residual_handoff_plus_bounded_suffix_overlap_v2"
+        == "source_residual_handoff_plus_structural_taper_dc_impulse_v3"
     )
-    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_structural_plus_dc_v2"
+    assert (
+        partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY
+        == "partitioned_exact_overlap_structural_taper_dc_impulse_v3"
+    )
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
@@ -201,6 +205,7 @@ def test_exact_overlap_bridge_preserves_provider_native_first_transition():
         exact_prefix,
         sigma=0.8,
         weights=weights,
+        dc_weights=partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS,
     )
     restored = corrected.clone()
     restored[:, :, :4] = exact_prefix
@@ -212,19 +217,42 @@ def test_exact_overlap_bridge_preserves_provider_native_first_transition():
         atol=1e-6,
     )
     delta = exact_prefix[:, :, -1].float() - learned[:, :, 3].float()
-    expected_step = -0.25 * delta
-    for offset in range(1, 4):
+    dc_delta = delta.mean(dim=(-2, -1), keepdim=True)
+    structural_delta = delta - dc_delta
+
+    # The structural residual returns over four tokens, but the historical DC
+    # bridge remains a one-token impulse.  Therefore only the first successor
+    # transition pays the DC release; subsequent transitions are zero-mean.
+    first_successor_expected = -0.25 * structural_delta - dc_delta
+    corrected_step = restored[:, :, 5].float() - restored[:, :, 4].float()
+    native_step = learned[:, :, 5].float() - learned[:, :, 4].float()
+    torch.testing.assert_close(
+        corrected_step - native_step,
+        first_successor_expected,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    structural_step = -0.25 * structural_delta
+    for offset in range(2, 4):
         corrected_step = restored[:, :, 4 + offset].float() - restored[:, :, 3 + offset].float()
         native_step = learned[:, :, 4 + offset].float() - learned[:, :, 3 + offset].float()
-        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(corrected_step - native_step, structural_step, rtol=1e-5, atol=1e-6)
     corrected_exit = restored[:, :, 8].float() - restored[:, :, 7].float()
     native_exit = learned[:, :, 8].float() - learned[:, :, 7].float()
-    torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(corrected_exit - native_exit, structural_step, rtol=1e-5, atol=1e-6)
 
     assert representation["suffix_representation_bridge_corrected_tokens"] == 4
     assert representation["suffix_representation_bridge_successor_safe"] is True
     assert representation["suffix_representation_bridge_max_weight_step"] == pytest.approx(0.25)
-    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    for offset in range(1, 4):
+        correction = corrected[:, :, 4 + offset].float() - learned[:, :, 4 + offset].float()
+        torch.testing.assert_close(
+            correction.mean(dim=(-2, -1), keepdim=True),
+            torch.zeros_like(dc_delta),
+            rtol=0.0,
+            atol=1e-6,
+        )
     assert torch.equal(mapped[:, :, :4], target_before[:, :, :4])
     assert torch.equal(mapped[:, :, 8:], target_before[:, :, 8:])
     assert torch.equal(corrected[:, :, :4], learned[:, :, :4])
