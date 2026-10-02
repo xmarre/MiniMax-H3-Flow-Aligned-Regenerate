@@ -12,7 +12,6 @@ from .audio_guided_overlap import (
     apply_audio_guided_overlap_mask,
     measure_audio_latent_boundary,
 )
-from .video_guided_overlap import apply_video_guided_overlap_mask
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
@@ -36,6 +35,7 @@ from .partitioned_scheduler import (
     run_partitioned_progressive,
 )
 from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
+from .video_guided_overlap import apply_video_guided_overlap_mask
 
 LOG = logging.getLogger(__name__)
 
