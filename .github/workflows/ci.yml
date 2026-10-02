@@ -90,7 +90,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout a812b7064b422d109078f8b1ff288478a7086762
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout 6f355934f3705a7178046f118a92eec37fd7e8ef
+          git -C .contracts/VDNPartitioned checkout efff8ecaada268da1f9ccaf7bb00844c54762b55
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
           git -C .contracts/ComfyRuntime checkout 6b4e05dc30d65740ce8931434607b9907996fb0e
       - name: Validate native and sibling contracts
@@ -155,4 +155,5 @@ jobs:
             .contracts/VDNPartitioned/tests/test_partitioned_kv_workspace.py \
             .contracts/VDNPartitioned/tests/test_partitioned_forward_lifetime.py \
             .contracts/VDNPartitioned/tests/test_partitioned_grouped.py \
-            .contracts/VDNPartitioned/tests/test_partition_index_cache.py
+            .contracts/VDNPartitioned/tests/test_partition_index_cache.py \
+            tests/test_partitioned_native_modulation.py

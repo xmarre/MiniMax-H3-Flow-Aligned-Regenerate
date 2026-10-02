@@ -336,6 +336,9 @@ def _begin_capture(
         padded=(geometry.padded_h, geometry.padded_w),
         spatial_padding=not geometry.patch_safe,
         trajectory_bytes=binding.trajectory.bytes,
+        vdn_adapter_config=(getattr(guider, "model_options", None) or {})
+        .get("transformer_options", {})
+        .get("vdn_h3_adapter_config_v1"),
     )
 
 

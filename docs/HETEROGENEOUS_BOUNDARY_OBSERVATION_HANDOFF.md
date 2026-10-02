@@ -5,6 +5,92 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed and VRAM pressure; older rendered
 observations below remain specific to their earlier configurations.
 
+## 00827 and full-strength feedback: quality remains unqualified
+
+The user reports less overcooking with the settings used for 00827, then reports
+that `turbo_strength=1` still overcooks, especially subsequent chunks. The 00827
+log identifies Euler; 00815 identifies RES multistep. Prompt/reference receipts
+and spatial dimensions also differ. Neither capture records the applied Turbo
+strength. No capture or matched rendered pair for the subsequent strength-1
+trial is supplied here. The visual improvement cannot be attributed to the K/V
+workspace patch: it affects partitioned continuation low/probe, while the first
+chunk still uses native VDN. Treat the latest report as an unresolved quality
+qualification, not proof of a completed fix.
+
+00827 takes 430.93 s versus 424.82 s for 00815. Both have 26 logical calls,
+18 actual transformer evaluations and 8 forecasts. Continuation video rows are
+60,264 versus 24,700 in initial low, a 2.44x ratio. Both continuation low and
+its exact probe use the full target grid under the accepted spatial control.
+
+| 00827 measured interval | First chunk | Continuation |
+|---|---:|---:|
+| Low | 59.656 s | 137.392 s |
+| Probe plus transfer | 10.363 s | 36.903 s |
+| High | 71.035 s | 79.365 s |
+| Sampler lifetime | 141.054 s | 253.660 s |
+
+The remaining 36.216 s is outside those sampler lifetimes. It is not another
+transformer evaluation and this ledger alone does not identify its individual
+preprocessing/decode consumers. The full-grid low/probe work is the main measured
+continuation cost; there is no basis for expecting twice the first-chunk duration
+with these unequal geometries. Arithmetic-gate wall times include queued GPU
+work and qualification; do not classify them as compilation alone.
+
+### Forward-cost candidate, preserving the accepted geometry
+
+Flow previously checked uniform protected-prefix timestep labels at every one
+of the 50 block replacements. The check performs a CUDA scalar read. Core
+constructs the native label table once per forward, so Flow now validates and
+expands it once in that forward's local cache. Each downstream replacement
+receives its own video index tensor, preserving write isolation. The cache is
+not retained across forwards or stages and new native table ownership triggers
+new validation. With the six actual partitioned low/probe calls in 00827, this
+removes 294 redundant prefix-validation scalar reads without weakening the
+prefix invariant.
+
+VDN's linear epilogue also previously created its constant epsilon on CUDA and
+read it back at every block. A CPU scalar cached by dtype preserves the exact
+FP16/BF16/FP32/FP64 rounding of that constant and removes those device reads.
+
+For normal uniform-grid inference, VDN additionally computes the validated
+fixed-grid complement before RoPE, consuming the native raw projection views.
+The projected result is retained through softmax and added after its existing
+output projection. This replaces three retained raw video tensors and two text
+copies, while preserving the native branch arithmetic, prefix/suffix query
+groups, key measure, dense decisions, Sol gates, sampler schedule and forecasts.
+Streamed branch weights are loaded once and lookahead remains after attention.
+Autograd, mixed grids, diagnostics and feature witnesses retain the late path.
+At the 00827 video shape, three BF16 raw video copies total 2,471.766 MiB;
+the retained hidden-width projection is 617.941 MiB. This 1,853.824 MiB lifetime
+difference is not a measured reduction in total GPU peak allocation: the earlier
+linear workspace overlaps the native QKV projection instead.
+
+The actual Core 50-block loop verifies one validation per forward, fresh ownership
+on the next forward and write isolation for downstream patches on both equal and
+mixed grids. Eighteen VDN forward cases exercise strengths 0, 0.5 and 1 across
+FP32/FP16/BF16, with raw-input preservation before destructive fake RoPE,
+no retained activation copies, one weight load and late-path output parity.
+Independent strided-readout cases retain text-state and anchor coverage. These
+tests establish operation/lifetime behavior; they do not establish hardware
+speed, allocator stability or a full-strength rendered-quality fix.
+
+VDN now publishes its applied adapter mode and named strengths from the actual
+application report in `vdn_h3_adapter_config_v1`. Flow records that configuration
+alongside the sampler in `trajectory_begin`, including when the Apply node is
+cached. Older captures remain strength-unknown. The source audit found one scale
+application per named adapter and clone replacement/ejection ownership; no
+double-strength cause is established. The partitioned path still forces protected
+prefix local queries dense and uses a different operator from native high/Sol
+sampling. The eight-low/four-high schedule also differs from the released
+eight-step training recipe. Those differences warrant matched discrimination;
+neither observation establishes the cause of overcooking. This candidate changes
+no Turbo strength, sparse policy or geometry to conceal that open question.
+
+Evidence SHA256: `metrics_00827_.json`
+`e9f7918c725c854dfd8528524c9ac4a8e40249a54e7b73dc188cbe4a7336b1d9`;
+`Pasted text(20261002-044811).txt`
+`e49ea66a4b787b84f587a5596e41a1b470afe73138ec780a6866e8c8fb80135e`.
+
 00815 confirms recovery of the missing continuation forecasts and a 49.20 s
 reduction from 00813, but total latency remains 424.82 s. The user reports the
 improvement insufficient. Earlier settings-change OOM evidence identified VDN's
