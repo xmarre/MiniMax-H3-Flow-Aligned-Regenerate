@@ -452,7 +452,10 @@ def apply_partitioned_diagnostic_controls(
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
-    model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY] = video_overlap_tokens
+    if video_overlap_tokens:
+        model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY] = video_overlap_tokens
+    else:
+        model_options.pop(PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY, None)
 
     event = getattr(metrics, "event", None)
     if callable(event):
@@ -460,12 +463,13 @@ def apply_partitioned_diagnostic_controls(
             "vdn_linear_diagnostic": mode,
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
-            "video_guided_overlap_tokens": video_overlap_tokens,
             "prefix_transformer_context": prefix_context,
             "model_local": True,
             "native_vdn_unchanged": True,
             "production_default_changed": False,
         }
+        if video_overlap_tokens:
+            fields["video_guided_overlap_tokens"] = video_overlap_tokens
         if temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
             fields["vdn_temporal_carrier_policy"] = temporal_carrier_policy
         if position_domain != PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY:
