@@ -5,6 +5,86 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed, VRAM pressure and reported overcooking; older rendered
 observations below remain specific to their earlier configurations.
 
+## 2026-10-02: continuation execution costs corrected, GPU timing pending
+
+The captured continuation slowdown has a workload component and two avoidable
+execution costs. Under the accepted same-grid boundary control, continuation
+low/probe processes 60,264 video rows, versus 24,700 initially. The source
+50x38 grid is overridden to 72x54 for continuation, including 12 protected
+frames. The 00832 sampler intervals are 152.575 s initially and 259.271 s for
+continuation; its continuation low/probe accounts for 169.564 s. Those figures
+predate the fixes below and do not establish their latency benefit.
+
+### Dense attention uses Core's native dispatcher
+
+Sol's partitioned dense helper previously called raw PyTorch SDPA, while native
+VDN calls `comfy.ops.scaled_dot_product_attention`. Core explicitly prefers
+FlashAttention, cuDNN, efficient attention and math in that order when supported.
+The partitioned helper now uses the same Core dispatcher. This affects the dense
+protected-prefix/global/anchor queries, the all-dense endpoint probe (800 calls
+in 00832), and sparse arithmetic-gate references. Query/key row ownership,
+scaling, real measure biases, unit-measure `None` masks and sparse selection
+are preserved. Core execution errors propagate; they are not retried elsewhere.
+
+The Sol teardown publishes `partitioned_core_dense_calls` and
+`partitioned_torch_dense_calls`. They count successful calls to the dispatcher,
+including gate references, and do not identify the GPU kernel ultimately chosen.
+ComfyUI continuation should report positive Core calls and zero raw-Torch calls.
+Standalone CPU oracles still work without Core.
+
+### Factorization error checks move to the prediction boundary
+
+The normal VDN path factors both text and video statistics in each of 50 blocks.
+`torch.linalg.cholesky` introduces a CUDA-to-host synchronization per call:
+normally 100 checks per actual transformer evaluation. In a VDN diffusion
+execution, inference now uses `cholesky_ex(check_errors=False)` and collects only
+its integer statuses. The execution validates them together before returning a
+prediction to the sampler. Cholesky, triangular solve, inverse construction,
+statistics and recurrence arithmetic are unchanged.
+
+The status batch is execution-local, flushes at 128 calls or 4 MiB, and is checked
+on its producer stream. A device/stream switch flushes the prior batch. A single
+larger status tensor is checked immediately. Resident 50-block execution needs one
+host status read. Streamed branch weights check at each attention-block boundary
+(usually 50 reads for 100 factors), preserving bounded transfer lifetimes.
+Failure still rejects the prediction. Cancellation, nested
+execution and a changed next call cannot retain or reuse statuses. CPU, autograd,
+compilation, CUDA capture and calls outside the execution owner keep immediate
+checking. No matrix, factor or activation is retained for this optimization.
+
+VDN logs `[vdn] factorization checks deferred_calls=100 status_reads=1` for the
+resident configuration, or `status_reads=50` with streamed weights.
+Additional configured work or a stream switch can increase
+the read count; the receipt must be interpreted with the actual adapter setup.
+
+PyTorch documents these synchronization semantics in
+[cholesky](https://docs.pytorch.org/docs/main/generated/torch.linalg.cholesky.html)
+and [cholesky_ex](https://docs.pytorch.org/docs/main/generated/torch.linalg.cholesky_ex.html).
+
+### Validation and application
+
+Seven dense-dispatch regressions fail on the preceding Sol source. Four
+50-block factor/status-read regressions fail on the preceding VDN source.
+The candidates preserve CPU output parity, measure bias, native layouts, gradients,
+compiled fallback, error propagation, bounded status storage and execution isolation.
+Local validation passes 370 VDN tests (including all 12 official-source oracles),
+256 Sol tests and 58 paired Core/Flow/VDN/Sol checks. Two CUDA-only factorization
+tests are skipped; 64 Sol hardware/optional-source tests are skipped locally.
+CUDA parity and producer-stream tests are present but require a GPU; CPU tests
+do not qualify GPU latency, rendered output or repeated-run memory stability.
+
+The paired source pins are Sol #37
+`e26dced8eeabc5c8a19e34add56e92e4436411fb` and VDN #36
+`9af4cd1e8ff396fecf2237c8b08f588c53f7fa96`, alongside unchanged Core #16720
+`6b4e05dc30d65740ce8931434607b9907996fb0e`. Flow #93 adds their integration
+checks without changing sampling arithmetic. Refresh these existing overlays
+through Patcher and restart ComfyUI. Preserve the accepted spatial, softmax,
+VDN-linear and audio-carrier controls for a matched timing run.
+
+These fixes remove a backend-policy mismatch and per-layer host barriers. The
+full target-grid continuation workload remains. A measured end-to-end speedup,
+and any further reduction of that workload, are still unqualified.
+
 ## 00832: active forward-cost paths, changed sampling and conditioning
 
 The 00832 capture records Euler, VDN bypass mode, default-adapter strength 1.0

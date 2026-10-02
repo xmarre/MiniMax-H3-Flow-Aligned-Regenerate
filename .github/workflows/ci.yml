@@ -88,9 +88,9 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
-          git -C .contracts/SolPartitioned checkout a812b7064b422d109078f8b1ff288478a7086762
+          git -C .contracts/SolPartitioned checkout e26dced8eeabc5c8a19e34add56e92e4436411fb
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout efff8ecaada268da1f9ccaf7bb00844c54762b55
+          git -C .contracts/VDNPartitioned checkout 9af4cd1e8ff396fecf2237c8b08f588c53f7fa96
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
           git -C .contracts/ComfyRuntime checkout 6b4e05dc30d65740ce8931434607b9907996fb0e
       - name: Validate native and sibling contracts
@@ -157,3 +157,13 @@ jobs:
             .contracts/VDNPartitioned/tests/test_partitioned_grouped.py \
             .contracts/VDNPartitioned/tests/test_partition_index_cache.py \
             tests/test_partitioned_native_modulation.py
+      - name: Validate native dense dispatch and deferred factorization errors
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/SolPartitioned:${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/SolPartitioned/tests/test_partitioned_dense_dispatch.py \
+            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py \
+            .contracts/VDNPartitioned/tests/test_deferred_cholesky.py \
+            .contracts/VDNPartitioned/tests/test_runtime_buffers.py
