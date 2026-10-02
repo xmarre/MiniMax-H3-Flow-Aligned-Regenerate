@@ -902,6 +902,124 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
+
+def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(monkeypatch):
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
+        lambda: True,
+    )
+    video = torch.randn(1, 24, 17, 8, 12)
+    audio = torch.randn(1, 32, 2, 24)
+    packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :12] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :20] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+    exact_mask_before = exact_mask.clone()
+
+    metrics = H3FlowMetrics()
+    binding = FlowBinding(metrics=metrics)
+    progressive = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        transfer_mode="learned_3d",
+        learned_upscaler=SimpleNamespace(
+            api_version=1,
+            kind="minimax_h3_learned_latent_upscaler",
+            model_name="diagnostic-test-provider",
+            device="cpu",
+            inference_device="cpu",
+            precision="fp32",
+            offload_after_upscale=False,
+            upscale_clean_video=lambda *args, **kwargs: None,
+        ),
+    )
+    transformer_options = {}
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: progressive,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 16,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
+            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
+            "transformer_options": transformer_options,
+        }
+    )
+
+    class Executor:
+        class_obj = guider
+
+    def fake_partitioned(
+        adapted,
+        call_guider,
+        call_binding,
+        config,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        call_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes,
+        exact_denoise_mask=None,
+    ):
+        del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
+        assert latent_shapes == shapes
+        assert exact_denoise_mask is exact_mask
+        runtime_video, runtime_audio = unpack_streams(call_mask, latent_shapes)
+        exact_video, exact_audio = unpack_streams(exact_mask, latent_shapes)
+        expected = torch.tensor(
+            [52 / 256, 103 / 256, 154 / 256, 205 / 256],
+            device=runtime_video.device,
+            dtype=runtime_video.dtype,
+        )
+        torch.testing.assert_close(runtime_video[0, 0, 8:12, 0, 0], expected)
+        assert torch.equal(runtime_video[:, :, :8], exact_video[:, :, :8])
+        assert torch.equal(runtime_video[:, :, 12:], exact_video[:, :, 12:])
+        assert torch.equal(runtime_audio, exact_audio)
+
+        context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
+        assert isinstance(context, PartitionedAudioModelTimestepContext)
+        exact_audio_cond = exact_audio.amax(dim=1, keepdim=True)
+        forwarded = _audio_model_timestep_kwargs(
+            transformer_options,
+            {"audio_denoise_mask": exact_audio_cond},
+        )
+        assert torch.equal(forwarded["audio_denoise_mask"], exact_audio_cond)
+        return latent_image.clone()
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
+        fake_partitioned,
+    )
+    result = partitioned_outer_wrapper(
+        Executor(),
+        torch.randn_like(packed),
+        packed,
+        SimpleNamespace(),
+        torch.tensor([1.0, 0.0]),
+        exact_mask,
+        None,
+        True,
+        7,
+        latent_shapes=shapes,
+    )
+
+    assert torch.equal(result, packed)
+    assert torch.equal(exact_mask, exact_mask_before)
+    video_events = [event for event in metrics.events if event.kind == "partitioned_video_guided_overlap"]
+    assert len(video_events) == 1
+    assert video_events[0].fields["applied"] is True
+    assert video_events[0].fields["requested_tokens"] == 4
+    assert video_events[0].fields["video_prefix_tokens"] == 12
+    assert video_events[0].fields["hard_prefix_tokens"] == 8
+    assert video_events[0].fields["final_exact_prefix_restore"] is True
+
+
 @pytest.mark.parametrize(
     "guided_ticks,outcome",
     [
