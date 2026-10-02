@@ -31,9 +31,7 @@ def validate_video_guided_overlap_tokens(
     """Validate a bounded H3 video-latent overlap width."""
 
     if type(value) is not int or not 0 <= value <= MAX_VIDEO_GUIDED_OVERLAP_TOKENS:
-        raise ValueError(
-            f"{source} must be an integer in [0, {MAX_VIDEO_GUIDED_OVERLAP_TOKENS}], got {value!r}"
-        )
+        raise ValueError(f"{source} must be an integer in [0, {MAX_VIDEO_GUIDED_OVERLAP_TOKENS}], got {value!r}")
     return int(value)
 
 
