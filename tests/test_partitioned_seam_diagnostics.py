@@ -386,21 +386,33 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
     )
 
     delta = exact[:, :, 1].float() - learned[:, :, 1].float()
+    dc_delta = delta.mean(dim=(-2, -1), keepdim=True)
+    structural_delta = delta - dc_delta
     native_boundary = learned[:, :, 2].float() - learned[:, :, 1].float()
     restored_boundary = corrected[:, :, 2].float() - exact[:, :, 1].float()
     torch.testing.assert_close(restored_boundary, native_boundary, rtol=0.0, atol=2e-6)
-    expected_step = -0.25 * delta
-    for offset in range(1, 4):
+
+    first_successor_expected = -0.25 * structural_delta - dc_delta
+    corrected_step = corrected[:, :, 3].float() - corrected[:, :, 2].float()
+    native_step = learned[:, :, 3].float() - learned[:, :, 2].float()
+    torch.testing.assert_close(
+        corrected_step - native_step,
+        first_successor_expected,
+        rtol=0.0,
+        atol=2e-6,
+    )
+    structural_step = -0.25 * structural_delta
+    for offset in range(2, 4):
         corrected_step = corrected[:, :, 2 + offset].float() - corrected[:, :, 1 + offset].float()
         native_step = learned[:, :, 2 + offset].float() - learned[:, :, 1 + offset].float()
-        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=0.0, atol=2e-6)
+        torch.testing.assert_close(corrected_step - native_step, structural_step, rtol=0.0, atol=2e-6)
     exit_step = corrected[:, :, 6].float() - corrected[:, :, 5].float()
     native_exit = learned[:, :, 6].float() - learned[:, :, 5].float()
-    torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=2e-6)
+    torch.testing.assert_close(exit_step - native_exit, structural_step, rtol=0.0, atol=2e-6)
 
     assert representation["suffix_representation_bridge_corrected_tokens"] == 4
     assert representation["suffix_representation_bridge_successor_safe"] is True
-    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
     assert torch.equal(corrected[:, :, 6:], learned[:, :, 6:])
     assert torch.equal(mapped[:, :, 6:], state[:, :, 6:])
 
