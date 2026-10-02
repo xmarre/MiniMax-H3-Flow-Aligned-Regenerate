@@ -617,17 +617,25 @@ def partitioned_diffusion_wrapper(
                     inner.rope_freqs(positions, img.device),
                     img.dtype,
                 )
+            # Core builds this table once per forward. Validate its protected
+            # prefix once, rather than reading a CUDA scalar at every block.
+            if cached.get("mod_source") is not args["mod_segments"]:
+                cached["mod_segments"] = partitioned_mod_segments(
+                    args["mod_segments"], plan, video_start, video_end,
+                )
+                cached["mod_source"] = args["mod_segments"]
+                metrics.increment("partitioned_modulation_validations")
             forwarded = dict(args)
             forwarded.update(
                 img=img,
                 layout=partitioned_layout,
                 rope_freqs=cached["rope"],
-                mod_segments=partitioned_mod_segments(
-                    args["mod_segments"],
-                    plan,
-                    video_start,
-                    video_end,
-                ),
+                # Replacement patches receive their own video index tensor,
+                # matching the previous per-block expansion's write isolation.
+                mod_segments=[
+                    (start, stop, row.clone() if start == video_start else row)
+                    for start, stop, row in cached["mod_segments"]
+                ],
             )
             forwarded["transformer_options"] = _partitioned_transformer_options(
                 args["transformer_options"],
