@@ -1393,27 +1393,46 @@ def _partitioned_exact_overlap_fallback_eligibility(
 ) -> tuple[bool, str]:
     """Authorize the structural overlap bridge from validated rigid evidence.
 
-    Two fail-closed arms are eligible:
+    Three fail-closed arms are eligible:
 
     1. the historical rigid boundary-motion veto, where registration accepted
        but the proposed rigid transform failed the native-motion preservation
-       gate; and
-    2. the 00687 hardware-invalidated rigid arm, where the complete v4 rigid
+       gate;
+    2. a guidance-only rejection after the video registration and boundary
+       motion checks have already accepted; and
+    3. the 00687 hardware-invalidated rigid arm, where the complete v4 rigid
        candidate passed numerically but production mutation is deliberately
        shadow-only because decoded media disproved the global warp itself.
 
-    The second arm is not permission to resurrect the rigid transform. It only
-    permits the independent exact-overlap bridge that restores the provider's
-    measured native prefix->suffix transition after authoritative prefix
-    replacement. Ambiguous/clipped evidence remains ineligible.
+    The latter two arms are not permission to resurrect the rigid transform or
+    to extend guidance support to a sampler it does not support. The exact-overlap
+    bridge is an independent representation correction: it restores the learned
+    provider's measured native prefix->suffix transition after caller-owned exact
+    prefix replacement. Ambiguous/clipped video evidence remains ineligible.
     """
 
     result = str(transaction.get("result", ""))
     reason = str(transaction.get("reason", ""))
+    boundary = transaction.get("boundary_motion")
+    guidance_registration = transaction.get("guidance_registration")
+    guidance_only_rejection = bool(
+        result == "rejected"
+        and isinstance(boundary, dict)
+        and boundary.get("status") == "accepted"
+        and str(boundary.get("reason", "")) == "accepted"
+        and isinstance(guidance_registration, dict)
+        and guidance_registration.get("status") == "rejected"
+        and str(guidance_registration.get("reason", "")) == reason
+    )
     if result == "rejected":
-        if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
-            return False, "frame_gauge_rejection_not_structural_overlap_eligible"
-        expected_boundary_status = "rejected"
+        if guidance_only_rejection:
+            expected_boundary_status = "accepted"
+            eligibility_reason = f"guidance_rejected_after_video_boundary_acceptance:{reason}"
+        else:
+            if reason not in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS:
+                return False, "frame_gauge_rejection_not_structural_overlap_eligible"
+            expected_boundary_status = "rejected"
+            eligibility_reason = reason
     elif result == "shadow_only":
         if reason != FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON:
             return False, "frame_gauge_shadow_not_hardware_invalidated_rigid"
@@ -1424,13 +1443,13 @@ def _partitioned_exact_overlap_fallback_eligibility(
         if transaction.get("spatial_warp_applied") is not False:
             return False, "frame_gauge_shadow_spatial_warp_was_applied"
         expected_boundary_status = "accepted"
+        eligibility_reason = reason
     else:
         return False, "frame_gauge_not_structural_overlap_eligible"
 
     video_registration = transaction.get("video_registration")
     if not isinstance(video_registration, dict) or video_registration.get("status") != "accepted":
         return False, "video_registration_not_accepted"
-    boundary = transaction.get("boundary_motion")
     if (
         not isinstance(boundary, dict)
         or boundary.get("status") != expected_boundary_status
@@ -1442,7 +1461,11 @@ def _partitioned_exact_overlap_fallback_eligibility(
         }
     ):
         return False, "boundary_receipt_inconsistent"
-    if result == "rejected" and str(boundary.get("reason", "")) != reason:
+    if (
+        result == "rejected"
+        and not guidance_only_rejection
+        and str(boundary.get("reason", "")) != reason
+    ):
         return False, "boundary_receipt_inconsistent"
 
     checks = boundary.get("checks")
@@ -1464,7 +1487,7 @@ def _partitioned_exact_overlap_fallback_eligibility(
                 return False, f"boundary_{roi}_{variant}_ambiguous"
             if bool(receipt.get("clipped")):
                 return False, f"boundary_{roi}_{variant}_clipped"
-    return True, reason
+    return True, eligibility_reason
 
 
 def _apply_partitioned_exact_overlap_bridge(
@@ -2221,7 +2244,16 @@ def _frame_gauge_clean_postprocess(
                 protected_prefix_t=prefix_t,
                 metadata=transaction,
             )
-            return result, None, {}, transaction
+            # Guidance registration owns only the optional high-stage reference.
+            # Preserve the independently validated provider boundary witness so a
+            # guidance-only rejection cannot suppress exact-prefix representation
+            # reconciliation at the learned low->high handoff.
+            witnesses = {
+                "learned_boundary_pair": learned_clean[
+                    :, :, prefix_t - 1 : prefix_t + 1
+                ].detach().clone()
+            }
+            return result, None, witnesses, transaction
 
     if residual_mode == "measure":
         video_residual = measure_residual_geometry(

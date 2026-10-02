@@ -12,9 +12,11 @@ from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
 from h3_flow_regenerate.partitioned_runtime_gate import RuntimeGateError, _validate_boundary_motion_receipt
 from h3_flow_regenerate.partitioned_scheduler import (
+    _apply_partitioned_exact_overlap_bridge,
     _emit_bicubic_transfer_shadow_trajectory,
     _frame_gauge_boundary_motion_check,
     _frame_gauge_clean_postprocess,
+    _partitioned_exact_overlap_fallback_eligibility,
     _prepare_registered_guidance_reference,
 )
 from h3_flow_regenerate.sigma import H3_VIDEO_SHIFT, normalized_coordinate
@@ -137,6 +139,85 @@ def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
         "paired_prefix_aligned_witness",
         "candidate_corrected_clean",
     }
+
+
+def test_guidance_only_rejection_keeps_video_boundary_eligible_for_exact_overlap():
+    exact_full = _rigid_textured_video()
+    learned = _rigid_textured_video(shift_x=-1)
+    high_sigmas, split_coordinate = _schedule()
+    run = replace(_run(exact_full, split_coordinate), sampler="sample_euler")
+
+    postprocess, registered, witnesses, transaction = _frame_gauge_clean_postprocess(
+        learned,
+        exact_prefix=exact_full[:, :, :4],
+        guidance_run=run,
+        guidance=GuidanceConfig(mode="direction"),
+        target_h=26,
+        target_w=26,
+        prefix_t=4,
+        split_coordinate=split_coordinate,
+        high_sigmas=high_sigmas,
+        video_shift=H3_VIDEO_SHIFT,
+    )
+
+    assert registered is None
+    assert transaction["result"] == "rejected"
+    assert transaction["reason"] == "unsupported_sampler_contract"
+    assert transaction["video_registration"]["status"] == "accepted"
+    assert transaction["boundary_motion"]["status"] == "accepted"
+    assert transaction["guidance_registration"] == {
+        "status": "rejected",
+        "reason": "unsupported_sampler_contract",
+        "sampler": "sample_euler",
+        "supported_samplers": ("sample_res_multistep",),
+    }
+    assert set(witnesses) == {"learned_boundary_pair"}
+    assert torch.equal(witnesses["learned_boundary_pair"], learned[:, :, 3:5])
+    assert torch.equal(postprocess.clean_video, learned)
+
+    eligible, trigger = _partitioned_exact_overlap_fallback_eligibility(transaction)
+    assert eligible is True
+    assert trigger == (
+        "guidance_rejected_after_video_boundary_acceptance:"
+        "unsupported_sampler_contract"
+    )
+
+
+def test_exact_overlap_bridge_preserves_provider_native_first_transition():
+    generator = torch.Generator().manual_seed(60089)
+    learned = torch.randn(1, 24, 6, 18, 20, generator=generator)
+    exact_prefix = learned[:, :, :4].clone()
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, 18),
+        torch.linspace(-1.0, 1.0, 20),
+        indexing="ij",
+    )
+    residual = (0.3 * xx + 0.2 * yy + 0.15).reshape(1, 1, 1, 18, 20)
+    exact_prefix = exact_prefix + residual
+    target_video = torch.randn(learned.shape, generator=generator)
+    target_before = target_video.clone()
+
+    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
+        target_video,
+        learned,
+        exact_prefix,
+        sigma=0.8,
+    )
+    restored = corrected.clone()
+    restored[:, :, :4] = exact_prefix
+
+    torch.testing.assert_close(
+        restored[:, :, 4] - restored[:, :, 3],
+        learned[:, :, 4] - learned[:, :, 3],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 1
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    assert torch.equal(mapped[:, :, :4], target_before[:, :, :4])
+    assert torch.equal(mapped[:, :, 5:], target_before[:, :, 5:])
+    assert torch.equal(corrected[:, :, :4], learned[:, :, :4])
+    assert torch.equal(corrected[:, :, 5:], learned[:, :, 5:])
 
 
 def test_boundary_motion_gate_compact_witness_matches_full_translation():
