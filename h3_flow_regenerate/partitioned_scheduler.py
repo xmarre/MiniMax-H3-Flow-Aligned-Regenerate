@@ -119,6 +119,7 @@ from .partitioned_diagnostics import (
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
@@ -179,6 +180,7 @@ from .vae_boundary_video import (
     repair_vae_window_vertical_residual,
     validate_vae_window_vertical_candidate,
 )
+from .video_guided_overlap import apply_video_guided_overlap_mask
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
@@ -490,6 +492,53 @@ def _resolve_audio_diagnostic_masks(
         source_shapes,
     )
     return diagnostic_target_mask, diagnostic_low_mask
+
+
+def _partitioned_high_video_overlap_mask(
+    runtime_mask: torch.Tensor,
+    exact_mask: torch.Tensor | None,
+    latent_shapes: list[tuple[int, ...]],
+    model_options: dict[str, Any],
+    metrics,
+) -> torch.Tensor:
+    """Apply the opt-in video overlap only to the target-high sampler mask.
+
+    Structural prefix discovery and the heterogeneous low/probe stages must see
+    the caller-owned exact video mask. Releasing protected video tokens before
+    preflight makes those stages unable to prove a contiguous exact prefix and,
+    more importantly, would change the handoff state we are trying to preserve.
+    """
+
+    tokens, source = resolve_partitioned_video_guided_overlap_tokens(model_options)
+    if tokens <= 0:
+        return runtime_mask
+    if exact_mask is None:
+        raise RuntimeError("video guided overlap requires an authoritative exact output mask")
+    if tuple(exact_mask.shape) != tuple(runtime_mask.shape):
+        raise RuntimeError("video guided overlap exact/runtime mask geometry mismatch")
+
+    high_mask, report = apply_video_guided_overlap_mask(
+        runtime_mask,
+        latent_shapes,
+        tokens=tokens,
+    )
+    if not bool(report.get("applied")):
+        raise RuntimeError(
+            "requested target-high video guided overlap could not be applied: "
+            f"{report.get('reason', 'unknown')}"
+        )
+    report.update(
+        configuration_source=source,
+        sampler_mask_modified=True,
+        stage="high",
+        low_probe_sampler_mask_unchanged=True,
+        structural_preflight_mask_exact=True,
+        final_exact_prefix_restore=True,
+        policy="partitioned_video_high_sampler_overlap_exact_restore_v2",
+        partitioned_exact_prefix=True,
+    )
+    metrics.event("partitioned_video_guided_overlap", **report)
+    return high_mask
 
 
 def _cuda_allocator_checkpoint(metrics, stage: str) -> None:
@@ -2848,12 +2897,17 @@ def run_partitioned_progressive(
         prefix_transformer_context,
         vdn_linear_diagnostic,
     )
+    structural_denoise_mask = denoise_mask if exact_denoise_mask is None else exact_denoise_mask
+    if tuple(structural_denoise_mask.shape) != tuple(denoise_mask.shape):
+        raise PartitionedPreflightUnsupported(
+            "partitioned exact-prefix structural mask geometry drifted from runtime sampler mask"
+        )
     source_h, source_w, stage_plan = _preflight(
         guider,
         config,
         noise,
         latent_image,
-        denoise_mask,
+        structural_denoise_mask,
         latent_shapes,
         required_vdn_linear_diagnostic=vdn_linear_diagnostic,
         required_vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
@@ -4874,6 +4928,13 @@ def run_partitioned_progressive(
             binding.metrics.counters.get("high_boundary_reference_anchor_calls", 0)
         )
         high_prediction_bridge_calls_before = int(binding.metrics.counters.get("high_prediction_gauge_bridge_calls", 0))
+        high_denoise_mask = _partitioned_high_video_overlap_mask(
+            denoise_mask,
+            exact_denoise_mask,
+            target_shapes,
+            model_options,
+            binding.metrics,
+        )
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
@@ -4900,7 +4961,7 @@ def run_partitioned_progressive(
                 latent_image,
                 sampler,
                 high_sigmas,
-                denoise_mask,
+                high_denoise_mask,
                 high_callback,
                 disable_pbar,
                 seed,
