@@ -524,8 +524,7 @@ def _partitioned_high_video_overlap_mask(
     )
     if not bool(report.get("applied")):
         raise RuntimeError(
-            "requested target-high video guided overlap could not be applied: "
-            f"{report.get('reason', 'unknown')}"
+            f"requested target-high video guided overlap could not be applied: {report.get('reason', 'unknown')}"
         )
     report.update(
         configuration_source=source,
