@@ -12,6 +12,7 @@ from .audio_guided_overlap import (
     apply_audio_guided_overlap_mask,
     measure_audio_latent_boundary,
 )
+from .video_guided_overlap import apply_video_guided_overlap_mask
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
@@ -23,9 +24,11 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY,
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
+    PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
     PartitionedAudioModelTimestepContext,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_scheduler import (
     PARTITIONED_PROGRESSIVE_KEY,
@@ -135,6 +138,8 @@ def partitioned_outer_wrapper(
         PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY in model_options
         or PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY in model_options
     )
+    diagnostic_video_overlap_control = PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY in model_options
+    video_overlap_tokens, video_overlap_source = resolve_partitioned_video_guided_overlap_tokens(model_options)
     guided_ticks, guided_configuration_source = resolve_partitioned_audio_guided_overlap_ticks(model_options)
     guided_mode, guided_mode_source = resolve_partitioned_audio_guided_overlap_mode(model_options)
     exact_audio_mode = guided_mode in (
@@ -142,12 +147,31 @@ def partitioned_outer_wrapper(
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     )
     runtime_denoise_mask = denoise_mask
+    video_overlap_report = None
+    if video_overlap_tokens or diagnostic_video_overlap_control:
+        runtime_denoise_mask, video_overlap_report = apply_video_guided_overlap_mask(
+            denoise_mask,
+            latent_shapes,
+            tokens=video_overlap_tokens,
+        )
+        if video_overlap_tokens > 0 and not bool(video_overlap_report.get("applied")):
+            reason = str(video_overlap_report.get("reason", "unknown"))
+            if reason not in {"no_exact_video_prefix", "no_generated_video_suffix"}:
+                raise RuntimeError(f"requested video guided overlap could not be applied: {reason}")
+        video_overlap_report.update(
+            configuration_source=video_overlap_source,
+            sampler_mask_modified=bool(video_overlap_report.get("applied")),
+            low_probe_exact_prefix_transformer_unchanged=True,
+            final_exact_prefix_restore=True,
+            policy="partitioned_video_sampler_overlap_exact_restore_v1",
+        )
+
     guided_report = None
     audio_model_context = None
     core_audio_velocity_mask_contract = None
     if guided_ticks or diagnostic_audio_control:
         guided_mask, guided_report = apply_audio_guided_overlap_mask(
-            denoise_mask,
+            runtime_denoise_mask,
             latent_shapes,
             ticks=0 if exact_audio_mode else guided_ticks,
         )
@@ -341,6 +365,23 @@ def partitioned_outer_wrapper(
             disable_pbar,
             seed,
             latent_shapes=latent_shapes,
+        )
+
+    if isinstance(video_overlap_report, dict):
+        binding.metrics.event(
+            "partitioned_video_guided_overlap",
+            partitioned_exact_prefix=True,
+            **video_overlap_report,
+        )
+        LOG.info(
+            "partitioned video guided overlap tokens=%d applied=%s source=%s reason=%s "
+            "exact_prefix=%d ramp=%s final_exact_restore=true",
+            video_overlap_tokens,
+            bool(video_overlap_report.get("applied")),
+            video_overlap_report.get("configuration_source"),
+            video_overlap_report.get("reason"),
+            int(video_overlap_report.get("video_prefix_tokens", 0)),
+            video_overlap_report.get("ramp_values"),
         )
 
     if isinstance(guided_report, dict):
