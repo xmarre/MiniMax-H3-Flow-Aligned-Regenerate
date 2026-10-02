@@ -5,10 +5,91 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed and VRAM pressure; older rendered
 observations below remain specific to their earlier configurations.
 
-The latest user report captures a third-run OOM after settings changes. The
-new traceback identifies VDN's separate adapter post-forward residual addition.
-Repeated-generation completion and the earlier reported overcooked second
-chunk remain open runtime/rendered qualifications.
+The latest 00812/00813 report completes both runs but reports excessive 2 x 7 s
+latency and an overcooked second chunk. Earlier settings-change OOM evidence
+identified VDN's separate adapter post-forward residual addition. Repeated-run
+memory stability and second-chunk rendered quality remain open qualifications.
+
+## 00812–00813: repeated numerical-receipt resets and continuation cost
+
+Both runs use RES multistep with eight low and four high logical calls, plus an
+exact handoff probe. The split is index 8, sigma 0.8575096726417542, video
+coordinate 0.3340000817667999. The accepted same-grid continuation control,
+normal softmax and normal VDN linear path remain active.
+
+| Sampling stage | 00812 single 7 s | 00813 first chunk | 00813 continuation |
+|---|---:|---:|---:|
+| Low | 47.351 s | 60.861 s | 178.665 s |
+| Exact probe | 9.642 s | 9.626 s | 29.022 s |
+| Transfer | 0.566 s | 0.556 s | 1.577 s |
+| High | 60.168 s | 74.359 s | 77.454 s |
+| Sampler lifetime | 117.743 s | 145.423 s | 288.910 s |
+| Actual low / probe / high calls | 5 / 1 / 3 | 5 / 1 / 3 | 7 / 1 / 3 |
+| Low / high forecasts | 3 / 1 | 3 / 1 | 1 / 1 |
+
+The logged prompt totals are 138.36 s and 474.02 s. Twice the single-run total
+is 276.72 s, leaving 197.30 s excess. Combined sampling accounts for 198.847 s
+of that difference; time outside sampling is 1.547 s lower than twice the
+single-run overhead. Extra encoding, decoding or saving is not the net cause.
+
+First-chunk low has 23,712 video rows on a 48 x 38 latent grid. Continuation low
+has 58,590 video rows on the 70 x 54 target grid, including 12 protected prefix
+frames and 50 generated frames. This is 2.4717 times the initial-low video work
+before accounting for the extra actual calls. High-stage video rows increase
+from 49,140 to 58,590 because of continuation context and temporal padding.
+
+Continuation repeatedly reports `history=0` before an actual call and retains
+one anchor afterwards. Steps 4 and 6 execute actuals for `insufficient actual
+history`, where initial low forecasts. Source execution reproduces the cause:
+Sol's partitioned v1 receipt includes a changing evaluation number, while
+Spectrum compares complete receipts as numerical backend identities. Every
+otherwise unchanged actual receipt therefore resets the preceding history.
+The two observed low calls cost 22.962 s and 23.071 s. Replacing them with
+forecasts could avoid most of that model time, but the candidate's actual GPU
+schedule, policy decisions and wall time have not been measured.
+
+Sol #37 now publishes v2 partitioned receipts with stable numerical fields.
+Completion proof is retained separately on the request and checked against
+the active forward. Old completion proof cannot authorize an unexecuted current
+call; geometry, measure, mapping, kernel and execution-mode changes still reset
+history. Regression tests execute the actual CPU attention request through the
+real Spectrum history consumer. The old source resets seven times and executes
+all eight calls in the fixed-route fixture; the candidate retains anchors and
+executes five actuals and three forecasts. This fixture disables bootstrap and
+model-aware forecasting to isolate receipt behavior; it is not a GPU timing or
+quality result.
+
+The initial 00813 sampling lifetime is 27.680 s slower than 00812. Sol's five
+low arithmetic gates total 14.363 s and its five high gates total 14.441 s,
+compared with 0.030 s and 0.090 s in 00812. The 28.684 s extra gate lifetime
+accounts for the two model-call outliers within ordinary timing variation.
+The gate timer combines kernel execution and independent reference/error
+measurement; these receipts do not distinguish compilation, reference
+execution or synchronization within that timer. The checks remain enabled.
+
+### Quality and memory limits
+
+The user reports second-chunk overcooking. The first high-stage Flow correction
+is 7.841% of baseline RMS in initial 00813 and 1.369% in continuation; the
+records do not show doubled Flow correction, clamping or acceleration. The
+same-grid handoff has identity transfer, exact audio copy and zero spatial-mean
+bridge delta. Prefix restoration remains exact. These checks do not establish
+the cause of the visible degradation or demonstrate that forecasts fix it.
+Initial low is coarse-grid while continuation low is full-grid, so their
+trajectories are not matched quality controls. No guidance, adapter strength,
+spatial-control or denoising-schedule change is promoted from these metrics.
+
+Neither latest run OOMs. The repeated initial-low allocation remains
+55,342.969 MiB; probe admission evicts VideoVAE once and high admission meets
+its finite target. Completion of these two runs does not qualify longer-run
+retention or allocator behavior.
+
+Evidence hashes: `metrics_00812_.json`
+`64d187052dc5592d774750a962a0e31cdc2252b29540f7785126ce8a39667538`;
+`metrics_00813_.json`
+`ca0d39df68804e7ec1c715426ebca409e6fd69dfa414987424d8988c88445ba2`;
+`Pasted text(20261002-021921).txt`
+`b47d89c6c99240c2ad45e03f2ba100812f93d2ae22ad93fe66b975071bc46791`.
 
 ## 00788–00789 and third run: VDN adapter residual allocation OOM
 

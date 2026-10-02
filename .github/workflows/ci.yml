@@ -73,6 +73,8 @@ jobs:
           git -C .contracts/ComfyMask checkout 421a1c245c682c04d4325ba365f40c834c66f5b0
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
           git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/SpectrumHistory
+          git -C .contracts/SpectrumHistory checkout 5161f0457bc8c52535212d6783eee73f439e1537
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
           git -C .contracts/Continuum checkout bf25353d8bec44afea22c89717c4301ce13c2036
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-DiffAid-Patches.git .contracts/DiffAid
@@ -86,7 +88,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
-          git -C .contracts/SolPartitioned checkout 3f2f244f277fc0d8fafc15fcac724c2cffb7eacf
+          git -C .contracts/SolPartitioned checkout a812b7064b422d109078f8b1ff288478a7086762
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
           git -C .contracts/VDNPartitioned checkout 68aebc6c5192bbfbd9f12e45803eae92616d1f50
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
@@ -120,6 +122,15 @@ jobs:
           python tools/check_partitioned_exact_prefix_contracts.py \
             --sol .contracts/SolPartitioned \
             --vdn .contracts/VDNPartitioned --require-boundary-witness
+      - name: Validate partitioned completion receipts with Spectrum
+        env:
+          SPECTRUM_PATH: ${{ github.workspace }}/.contracts/SpectrumHistory
+          PYTHONPATH: ${{ github.workspace }}/.contracts/SolPartitioned
+        run: |
+          python -m pytest -q \
+            .contracts/SolPartitioned/tests/test_partitioned_forecast_history.py \
+            .contracts/SolPartitioned/tests/test_partitioned_history.py \
+            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py
       - name: Validate Core LoRA workspace and MiniMax contracts
         run: |
           python -m pytest -q \
