@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
     configured_audio_guided_overlap_ticks,
     validate_audio_guided_overlap_ticks,
 )
+from .video_guided_overlap import validate_video_guided_overlap_tokens
 
 PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY = "h3_flow_partitioned_vdn_linear_diagnostic_v1"
 PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL = "normal"
@@ -29,6 +30,7 @@ PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS = (
 )
 
 PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY = "h3_flow_partitioned_audio_guided_overlap_ticks_v1"
+PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY = "h3_flow_partitioned_video_guided_overlap_tokens_v1"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY = "h3_flow_partitioned_audio_guided_overlap_mode_v1"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER = "sampler_mask"
 PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP = "model_timestep_only"
@@ -331,6 +333,18 @@ def resolve_partitioned_audio_guided_overlap_ticks(model_options: dict[str, Any]
     )
 
 
+def resolve_partitioned_video_guided_overlap_tokens(model_options: dict[str, Any]) -> tuple[int, str]:
+    if PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY not in model_options:
+        return 0, "default_off"
+    return (
+        validate_video_guided_overlap_tokens(
+            model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY],
+            source=PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
+        ),
+        "diagnostic_node",
+    )
+
+
 def apply_partitioned_diagnostic_controls(
     model,
     metrics,
@@ -349,6 +363,7 @@ def apply_partitioned_diagnostic_controls(
     handoff_transfer_control: str = PARTITIONED_HANDOFF_TRANSFER_LEARNED,
     spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    video_guided_overlap_tokens: int = 0,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -374,6 +389,10 @@ def apply_partitioned_diagnostic_controls(
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
     softmax_mode = normalize_partitioned_softmax_diagnostic(softmax_diagnostic)
+    video_overlap_tokens = validate_video_guided_overlap_tokens(
+        video_guided_overlap_tokens,
+        source="video_guided_overlap_tokens",
+    )
     if (
         spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -433,6 +452,7 @@ def apply_partitioned_diagnostic_controls(
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
+    model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY] = video_overlap_tokens
 
     event = getattr(metrics, "event", None)
     if callable(event):
@@ -440,6 +460,7 @@ def apply_partitioned_diagnostic_controls(
             "vdn_linear_diagnostic": mode,
             "audio_guided_overlap_ticks": ticks,
             "audio_guided_overlap_mode": audio_mode,
+            "video_guided_overlap_tokens": video_overlap_tokens,
             "prefix_transformer_context": prefix_context,
             "model_local": True,
             "native_vdn_unchanged": True,
@@ -477,6 +498,7 @@ __all__ = [
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP",
     "PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY",
+    "PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_KEY",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN",
     "PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS",
@@ -550,4 +572,5 @@ __all__ = [
     "normalize_vdn_temporal_carrier_policy",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
+    "resolve_partitioned_video_guided_overlap_tokens",
 ]
