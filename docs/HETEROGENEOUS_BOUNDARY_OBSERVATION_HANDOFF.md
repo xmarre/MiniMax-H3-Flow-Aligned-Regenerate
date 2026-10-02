@@ -2,8 +2,106 @@
 
 Current status: the user reports the frame shift resolved after restoring
 `same_grid_target_control`. Retain that accepted configuration. The active
-qualification concerns continuation speed and VRAM pressure; older rendered
+qualification concerns continuation speed, VRAM pressure and reported overcooking; older rendered
 observations below remain specific to their earlier configurations.
+
+## 00832: active forward-cost paths, changed sampling and conditioning
+
+The 00832 capture records Euler, VDN bypass mode, default-adapter strength 1.0
+and Turbo strength 0.75 in both `trajectory_begin` events. It does not qualify
+the previously reported strength-1 failure. No rendered clip or new visual
+verdict accompanies this capture.
+
+The runtime counters confirm six partitioned transformer forwards, six
+modulation validations and 300 uniform linear reads before RoPE. The
+probe-to-high release reports zero retained activation-scratch entries. These
+receipts establish that the new paths executed; the capture does not include
+loaded-file hashes proving every installed blob matches a particular PR head.
+The audited source heads are Flow `5558c698a8a3e1a3dfcb6b8c48dd45a85d34988c`,
+VDN `efff8ecaada268da1f9ccaf7bb00844c54762b55`,
+Sol `a812b7064b422d109078f8b1ff288478a7086762` and
+Core `6b4e05dc30d65740ce8931434607b9907996fb0e`.
+
+### Workload comparison
+
+The video grids and prefix length match 00827, but the sampling coordinates,
+text and references do not. Physical-conditioning and compiled-text hashes
+change in both chunks. The manifest now contains two reference latents.
+
+| Receipt | 00827 | 00832 |
+|---|---:|---:|
+| Low/high logical steps per chunk | 8 / 4 | 6 / 4 |
+| Actual transformer evaluations, both chunks including probes | 18 | 18 |
+| Forecasts, both chunks | 8 | 4 |
+| Initial text / reference rows | 1,253 / 972 | 2,232 / 1,944 |
+| Continuation text / reference rows | 1,335 / 972 | 2,314 / 1,944 |
+| Initial low packed rows | 27,509 | 29,460 |
+| Continuation packed rows | 63,267 | 65,218 |
+| Handoff coordinate / sigma | 0.334000 / 0.857510 | 0.400000 / 0.888889 |
+| Applied Turbo strength | Unknown | 0.75 |
+
+Each low stage still makes five actual evaluations; reducing its logical steps
+removed forecasts. The original actual evaluation count is preserved. DiffAid
+and visual-reference preprocessing report the same strengths and block scopes
+in both logs. Their input conditioning and sampled coordinates still change.
+
+### Measured costs
+
+| Interval | 00827 initial | 00832 initial | 00827 continuation | 00832 continuation |
+|---|---:|---:|---:|---:|
+| Low | 59.656 s | 65.232 s | 137.392 s | 140.743 s |
+| Probe | 9.782 s | 10.825 s | 33.384 s | 28.821 s |
+| High | 71.035 s | 75.930 s | 79.365 s | 86.407 s |
+| Complete sampler lifetime | 141.054 s | 152.575 s | 253.660 s | 259.271 s |
+
+00832 takes 452.25 s: 152.575 s initial sampling, 259.271 s continuation
+sampling and 40.404 s outside those two lifetimes. It is 21.32 s longer than
+00827, comprising 11.521 s initial, 5.611 s continuation and 4.188 s outside
+sampling. Probe, transfer and other intra-sampler work are already included in
+the complete sampler lifetimes; do not add their timings again.
+
+Continuation low/probe takes 169.564 s versus 76.057 s initially. Under the
+accepted `same_grid_target_control`, continuation low/probe uses the complete
+72x54 target grid with 62 temporal rows per spatial patch, including 12 protected
+frames. Its 60,264 video rows are 2.44x the initial low's 24,700 rows on the
+50x38 grid. That cost remains present after the scalar-read and activation-lifetime
+fixes. Packed conditioning adds work on top of the video geometry. This is not a
+matched latency comparison that isolates the effect of those fixes.
+
+### Memory and quality limits
+
+00832 completes without a captured OOM. H3 remains resident throughout all six
+sampling admissions; eviction is bounded to at most one pass in this capture.
+The continuation probe and high admissions request headroom without unloading
+a model. In 00827 the probe admission unloads the video VAE. The post-high live
+allocation is 64,619.157 MiB versus 63,624.104 MiB in 00827. Residency and
+conditioning differ, so these endpoint readings do not isolate a leak or a
+total-peak reduction. Reserved memory reported before the final high-stage
+release reaches 88,960 MiB; it is not a measured peak of live tensor allocation.
+One completed prompt does not qualify repeated-run stability.
+
+Protected video and audio prefixes remain exact. The first high-stage Flow
+correction is 9.382% of baseline RMS initially and 1.378% in continuation; its
+relative amplitude is lower in continuation. This is not a perceptual saturation
+measurement and does not establish the cause of overcooking. VDN's own adapter
+path applies each named strength once. The separate runtime DoRA loader still
+does not identify its checkpoint or strengths in the supplied log.
+
+The remaining source differences are unchanged: partitioned low/probe forces
+protected-prefix local queries dense, while native high uses its native Sol
+selection; the low/probe endpoint and first high evaluation therefore do not
+have interchangeable operator ownership. Eliminating the exact probe or
+changing prefix sparsity without an equivalence result would change sampling.
+The ten-step Euler schedule also differs from the released eight-step
+distillation recipe described in Video DeltaNet section 4.2. Neither difference
+is established as the quality cause. Further discrimination needs a controlled
+rendered comparison and GPU component timings. Preserve the accepted spatial,
+softmax, VDN-linear and audio-carrier controls while obtaining that evidence.
+
+Evidence SHA256: `metrics_00832_.json`
+`1029d953a530221c7555cda404a5a0380e8ef40d2f5d353a312baee9b87b0f06`;
+`Pasted text(20261002-134934).txt`
+`11a94681c95961573ffef2c9f52630255bcddbbf632a45083ffc79e67351a6eb`.
 
 ## 00827 and full-strength feedback: quality remains unqualified
 
