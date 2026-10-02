@@ -5,10 +5,76 @@ Current status: the user reports the frame shift resolved after restoring
 qualification concerns continuation speed and VRAM pressure; older rendered
 observations below remain specific to their earlier configurations.
 
-The latest 00812/00813 report completes both runs but reports excessive 2 x 7 s
-latency and an overcooked second chunk. Earlier settings-change OOM evidence
-identified VDN's separate adapter post-forward residual addition. Repeated-run
-memory stability and second-chunk rendered quality remain open qualifications.
+00815 confirms recovery of the missing continuation forecasts and a 49.20 s
+reduction from 00813, but total latency remains 424.82 s. The user reports the
+improvement insufficient. Earlier settings-change OOM evidence identified VDN's
+separate adapter post-forward residual addition. Repeated-run memory stability
+and the reported overcooked second chunk remain open qualifications.
+
+## 00815: forecast recovery measured; full-grid continuation still dominates
+
+The accepted same-grid continuation, normal softmax, normal VDN linear path,
+source-carrier audio positions and RES 8-low/4-high schedule remain active.
+The geometry and handoff split match 00813. These are successive user runs,
+not a controlled GPU benchmark proving identical random inputs.
+
+| Sampling stage | 00813 first chunk | 00815 first chunk | 00813 continuation | 00815 continuation |
+|---|---:|---:|---:|---:|
+| Low | 60.861 s | 58.984 s | 178.665 s | 135.129 s |
+| Exact probe | 9.626 s | 9.516 s | 29.022 s | 29.048 s |
+| Transfer | 0.556 s | 0.562 s | 1.577 s | 1.395 s |
+| High | 74.359 s | 72.722 s | 77.454 s | 78.423 s |
+| Sampler lifetime | 145.423 s | 141.809 s | 288.910 s | 245.839 s |
+| Actual low / probe / high calls | 5 / 1 / 3 | 5 / 1 / 3 | 7 / 1 / 3 | 5 / 1 / 3 |
+| Low / high forecasts | 3 / 1 | 3 / 1 | 1 / 1 | 3 / 1 |
+
+The latest prompt total is 424.82 s versus 474.02 s, a 49.20 s (10.38%)
+improvement. Continuation low is 43.536 s (24.37%) faster, matching the restored
+forecasts at steps 4 and 6. The remaining continuation low/probe costs 164.176 s,
+66.78% of its sampler lifetime. Its 58,590 video rows compare with 23,712 in
+initial low. The 104.030 s difference between the latest two sampler lifetimes
+is chiefly low-stage work (+76.144 s) and the exact probe (+19.532 s).
+Time outside both sampler lifetimes is 37.172 s.
+
+### Remaining allocation work
+
+VDN's partitioned softmax loop still allocated fresh gathered K/V tensors for
+each temporal group. The released native grouped loop already reuses a pair.
+VDN #36 now uses a block-local pair sized for the largest local domain: global
+sink rows are copied once and each local group overwrites its video rows. Shape,
+row order, strides, query maps, key measure, dense/sparse decisions, receipts,
+arithmetic gates and the sigma schedule remain unchanged. The pair is released
+before anchor attention and learned-linear work, with no retained-pool entry.
+
+Eighteen FP32/FP16/BF16 cases compare with an independent per-frame dense
+attention oracle across equal/mixed grids and all four anchor modes. They also
+verify one K/V storage pair and release before branch-weight retrieval. The
+preceding source passes the numerical comparison but fails all eighteen storage
+checks with distinct per-group allocations. Local VDN validation passes 311
+tests with 12 official-oracle skips; candidate CI additionally checks the pinned
+official source and passes 323 tests. This establishes removal of redundant
+allocations, not a GPU latency or peak-memory improvement. The number of
+full-grid evaluations and exact probes is unchanged.
+
+### Memory and quality qualification
+
+00815 completes without OOM. Continuation low retains 2,431.7 MiB of Spectrum
+history versus 607.9 MiB in 00813, confirming the expected additional anchors.
+Stage teardown reports release of those history buffers. One completed run
+does not establish repeated-run allocator or retention stability.
+
+The first continuation high-stage Flow correction is 1.398% of baseline RMS,
+versus 7.744% in the first chunk. The transfer remains identity, audio copy is
+exact, the spatial-mean bridge delta is zero and no acceleration is applied.
+The measured continuation seam gradient ratio after/before high is 1.0115;
+these local latent observations do not settle visible overcooking elsewhere
+in the generated suffix. No new rendered clip is supplied with 00815. The
+K/V workspace change preserves numerical inputs and is not a quality fix.
+
+Evidence SHA256: `metrics_00815_.json`
+`499d20ce484592d916a78732ee1cd7b9659f776bbf504a11a9170417561cc251`;
+`Pasted text(20261002-033346).txt`
+`190eef4537df3135eec82f40d0a1dc9fc4d42fe4ae306545bd3eb94aacb86de1`.
 
 ## 00812–00813: repeated numerical-receipt resets and continuation cost
 

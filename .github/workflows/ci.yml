@@ -90,7 +90,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
           git -C .contracts/SolPartitioned checkout a812b7064b422d109078f8b1ff288478a7086762
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout 68aebc6c5192bbfbd9f12e45803eae92616d1f50
+          git -C .contracts/VDNPartitioned checkout 6f355934f3705a7178046f118a92eec37fd7e8ef
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
           git -C .contracts/ComfyRuntime checkout 6b4e05dc30d65740ce8931434607b9907996fb0e
       - name: Validate native and sibling contracts
@@ -146,3 +146,13 @@ jobs:
             .contracts/VDNPartitioned/tests/test_bypass_reinject.py \
             .contracts/VDNPartitioned/tests/test_curve_apply.py \
             .contracts/VDNPartitioned/tests/test_runtime_lowvram.py
+      - name: Validate partitioned K/V workspace and forward lifetime
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/VDNPartitioned/tests/test_partitioned_kv_workspace.py \
+            .contracts/VDNPartitioned/tests/test_partitioned_forward_lifetime.py \
+            .contracts/VDNPartitioned/tests/test_partitioned_grouped.py \
+            .contracts/VDNPartitioned/tests/test_partition_index_cache.py
