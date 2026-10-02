@@ -349,7 +349,7 @@ def partitioned_outer_wrapper(
             before_sampler=True,
             target_grid_fallback=True,
         )
-        if diagnostic_audio_control:
+        if diagnostic_audio_control or diagnostic_video_overlap_control:
             raise RuntimeError(
                 "partitioned diagnostic controls require supported partitioned exact-prefix "
                 f"execution; refusing target-grid fallback: {fallback_reason}"
