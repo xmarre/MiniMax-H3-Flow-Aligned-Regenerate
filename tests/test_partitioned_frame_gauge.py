@@ -92,12 +92,12 @@ def _schedule():
 
 def test_video_boundary_production_contract_fails_closed_to_residual_only():
     assert partitioned_scheduler.PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED is False
-    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0,)
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0, 0.75, 0.5, 0.25)
     assert (
         partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
-        == "source_residual_handoff_plus_first_suffix_overlap_v1"
+        == "source_residual_handoff_plus_bounded_suffix_overlap_v2"
     )
-    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_structural_plus_dc_v1"
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_structural_plus_dc_v2"
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
@@ -182,7 +182,7 @@ def test_guidance_only_rejection_keeps_video_boundary_eligible_for_exact_overlap
 
 def test_exact_overlap_bridge_preserves_provider_native_first_transition():
     generator = torch.Generator().manual_seed(60089)
-    learned = torch.randn(1, 24, 6, 18, 20, generator=generator)
+    learned = torch.randn(1, 24, 9, 18, 20, generator=generator)
     exact_prefix = learned[:, :, :4].clone()
     yy, xx = torch.meshgrid(
         torch.linspace(-1.0, 1.0, 18),
@@ -193,12 +193,14 @@ def test_exact_overlap_bridge_preserves_provider_native_first_transition():
     exact_prefix = exact_prefix + residual
     target_video = torch.randn(learned.shape, generator=generator)
     target_before = target_video.clone()
+    weights = partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
 
     mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
         target_video,
         learned,
         exact_prefix,
         sigma=0.8,
+        weights=weights,
     )
     restored = corrected.clone()
     restored[:, :, :4] = exact_prefix
@@ -209,12 +211,24 @@ def test_exact_overlap_bridge_preserves_provider_native_first_transition():
         rtol=1e-5,
         atol=1e-6,
     )
-    assert representation["suffix_representation_bridge_corrected_tokens"] == 1
-    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    delta = exact_prefix[:, :, -1].float() - learned[:, :, 3].float()
+    expected_step = -0.25 * delta
+    for offset in range(1, 4):
+        corrected_step = restored[:, :, 4 + offset].float() - restored[:, :, 3 + offset].float()
+        native_step = learned[:, :, 4 + offset].float() - learned[:, :, 3 + offset].float()
+        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=1e-5, atol=1e-6)
+    corrected_exit = restored[:, :, 8].float() - restored[:, :, 7].float()
+    native_exit = learned[:, :, 8].float() - learned[:, :, 7].float()
+    torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=1e-5, atol=1e-6)
+
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 4
+    assert representation["suffix_representation_bridge_successor_safe"] is True
+    assert representation["suffix_representation_bridge_max_weight_step"] == pytest.approx(0.25)
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
     assert torch.equal(mapped[:, :, :4], target_before[:, :, :4])
-    assert torch.equal(mapped[:, :, 5:], target_before[:, :, 5:])
+    assert torch.equal(mapped[:, :, 8:], target_before[:, :, 8:])
     assert torch.equal(corrected[:, :, :4], learned[:, :, :4])
-    assert torch.equal(corrected[:, :, 5:], learned[:, :, 5:])
+    assert torch.equal(corrected[:, :, 8:], learned[:, :, 8:])
 
 
 def test_boundary_motion_gate_compact_witness_matches_full_translation():
