@@ -455,6 +455,25 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after every historical control. This releases only a short
+        # tail of the caller-owned video prefix during sampler lifetime; the
+        # original exact mask still restores the visible prefix on return.
+        spec["required"]["video_guided_overlap_tokens"] = (
+            "INT",
+            {
+                "default": 0,
+                "min": 0,
+                "max": 4,
+                "step": 1,
+                "tooltip": (
+                    "Sampling-side video overlap width in H3 temporal latent tokens. 0 is exact/off. "
+                    "Values 1..4 feather the last protected video tokens into the sampler so target-high "
+                    "can establish motion through the chunk boundary, while caller-visible prefix latents "
+                    "remain byte-exact after sampling. Four tokens correspond to 13 decoded frames for "
+                    "the standard 22/39-frame Continuum context phase. Diagnostic until rendered-qualified."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -499,6 +518,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
         softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+        video_guided_overlap_tokens=0,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -557,6 +577,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             handoff_transfer_control=handoff_transfer_control,
             spatial_stage_control=spatial_stage_control,
             softmax_diagnostic=softmax_diagnostic,
+            video_guided_overlap_tokens=video_guided_overlap_tokens,
         )
 
 
