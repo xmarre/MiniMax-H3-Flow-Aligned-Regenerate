@@ -194,9 +194,10 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # one fine-search quantum as measurement-floor degradation, never as evidence
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
-PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v2"
+PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_taper_dc_impulse_v3"
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_bounded_suffix_overlap_v2"
+PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS = (1.0,)
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_structural_taper_dc_impulse_v3"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -1541,16 +1542,20 @@ def _apply_partitioned_exact_overlap_bridge(
     *,
     sigma: float,
     weights: tuple[float, ...] = (1.0,),
+    dc_weights: tuple[float, ...] = (1.0,),
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
     """Reconcile the measured exact/learned overlap before authoritative restore.
 
-    The representation primitive transfers the zero-spatial-mean overlap
-    residual with bounded temporal support.  The DC bridge applies the same
-    weights to the spatial mean.  Their sum is exactly the measured same-time
-    residual E_p-L_p at suffix token 0, so the immediate exact-prefix -> suffix
-    transition equals the learned provider's native L_p -> L_s transition.
-    Production then tapers that residual over four generated tokens instead of
-    relocating the full discontinuity onto suffix transition 1.
+    The zero-spatial-mean representation residual uses bounded temporal support
+    so the structural boundary correction returns smoothly to the provider
+    trajectory.  The spatial-mean/DC term intentionally retains the historical
+    one-token bridge semantics that fixed the brief Continuum tone/contrast
+    flash: only the first generated suffix token receives the full DC offset.
+
+    Both components have weight 1.0 on suffix token 0, so the immediate
+    exact-prefix -> suffix transition still equals the learned provider's native
+    L_p -> L_s transition.  Later structural support must not extend the tone
+    offset across the generated chunk.
     """
 
     prefix_t = int(exact_prefix.shape[2])
@@ -1563,7 +1568,7 @@ def _apply_partitioned_exact_overlap_bridge(
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         structured_clean,
         exact_prefix,
-        weights=weights,
+        weights=dc_weights,
     )
     corrected_tokens = max(
         int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
@@ -4031,6 +4036,7 @@ def run_partitioned_progressive(
                         exact_prefix,
                         sigma=sigma,
                         weights=PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
+                        dc_weights=PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS,
                     )
                 )
             else:
@@ -4147,7 +4153,7 @@ def run_partitioned_progressive(
             ),
             dc_bridge_applied=True,
             dc_policy=(
-                "bounded_exact_overlap_spatial_mean_v2"
+                "historical_one_token_spatial_mean_v1"
                 if exact_overlap_fallback_requested
                 else "existing_one_token_spatial_mean_v1"
             ),
@@ -4246,6 +4252,9 @@ def run_partitioned_progressive(
                 "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
             ),
             suffix_support_tokens=exact_overlap_corrected_tokens,
+            dc_support_policy="historical_first_suffix_only_v1",
+            dc_support_tokens=int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
+            dc_temporal_weights=list(PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS),
             suffix_outside_support_modified=False,
             extra_h3_nfe=0,
             extra_provider_calls=0,
@@ -4803,6 +4812,9 @@ def run_partitioned_progressive(
                     "bounded_linear_return_v2" if exact_overlap_bounded_successor_support else "first_suffix_only_v1"
                 ),
                 "suffix_support_tokens": exact_overlap_corrected_tokens,
+                "dc_support_policy": "historical_first_suffix_only_v1",
+                "dc_support_tokens": int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
+                "dc_temporal_weights": list(PARTITIONED_EXACT_OVERLAP_DC_WEIGHTS),
                 "suffix_outside_support_modified": False,
                 **representation_metrics,
             },
