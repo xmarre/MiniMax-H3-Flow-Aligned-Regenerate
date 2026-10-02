@@ -198,7 +198,11 @@ def partitioned_outer_wrapper(
         if sampler_mask_mode:
             runtime_denoise_mask = guided_mask
         elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP or exact_audio_mode:
-            runtime_denoise_mask = denoise_mask
+            # Audio remains exact/model-timestep-only, but any independently
+            # requested video sampler overlap must survive this branch.
+            # With video overlap disabled runtime_denoise_mask is still the
+            # caller-owned exact mask, so the historical path is unchanged.
+            pass
         else:
             raise RuntimeError(f"unsupported partitioned audio guided-overlap mode {guided_mode!r}")
 
