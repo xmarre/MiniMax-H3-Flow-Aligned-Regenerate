@@ -536,7 +536,7 @@ def test_boundary_rejection_retains_only_actual_provider_boundary_pair(monkeypat
     assert postprocess.clean_video is learned
 
 
-def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
+def test_guidance_registration_rejection_aborts_spatial_mutation_but_retains_boundary_witness():
     exact_full = _rigid_textured_video()
     learned = _rigid_textured_video(shift_x=-1)
     ambiguous_guidance = torch.ones_like(exact_full)
@@ -560,7 +560,12 @@ def test_guidance_registration_rejection_aborts_the_whole_spatial_transaction():
     assert transaction["result"] == "rejected"
     assert str(transaction["reason"]).startswith("guidance_")
     assert registered is None
-    assert witnesses == {}
+    assert set(witnesses) == {"learned_boundary_pair"}
+    assert torch.equal(
+        witnesses["learned_boundary_pair"],
+        learned[:, :, prefix_t - 1 : prefix_t + 1],
+    )
+    assert witnesses["learned_boundary_pair"].data_ptr() != learned.data_ptr()
     assert postprocess.clean_video is learned
 
 
@@ -600,7 +605,12 @@ def test_guidance_rejection_does_not_materialize_full_video_translation(monkeypa
     assert transaction["result"] == "rejected"
     assert str(transaction["reason"]).startswith("guidance_")
     assert registered is None
-    assert witnesses == {}
+    assert set(witnesses) == {"learned_boundary_pair"}
+    assert torch.equal(
+        witnesses["learned_boundary_pair"],
+        learned[:, :, prefix_t - 1 : prefix_t + 1],
+    )
+    assert witnesses["learned_boundary_pair"].data_ptr() != learned.data_ptr()
     assert postprocess.clean_video is learned
     assert translated == [(2, 0)]
 
