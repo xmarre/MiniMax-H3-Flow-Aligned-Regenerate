@@ -132,10 +132,13 @@ jobs:
             .contracts/SolPartitioned/tests/test_partitioned_history.py \
             .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py
       - name: Validate Core LoRA workspace and MiniMax contracts
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
         run: |
           python -m pytest -q \
             .contracts/ComfyRuntime/tests-unit/comfy_test/test_lora_bypass_workspace.py \
-            .contracts/ComfyRuntime/tests-unit/comfy_test/test_minimax_h3_model.py
+            .contracts/ComfyRuntime/tests-unit/comfy_test/test_minimax_h3_model.py \
+            tests/test_video_overlap_sampling.py
       - name: Validate VDN post-forward workspace with Core bypass
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime

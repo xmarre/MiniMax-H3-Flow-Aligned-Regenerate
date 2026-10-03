@@ -3,12 +3,10 @@
 The caller-owned carried video prefix remains authoritative at the framework
 boundary. During the target-grid high sampler lifetime this helper can feather
 only the tail of a canonical exact video prefix onto the normal denoise mask.
-That gives the model a short generated temporal runway before the nominal chunk
-boundary while the final exact-mask canonicalization still restores every
-caller-owned prefix latent byte-for-byte.
-
-This is deliberately not an RGB crossfade. It is the sampling-side half of an
-overlap-add experiment, modeled after the released audio overlap contract.
+This helper constructs the initial release envelope. The high sampler's
+video_overlap_closure contract must close it before the final scheduled
+evaluations and keep Core inpaint, timestep labels and velocity conversion
+coherent. Final exact-mask canonicalization restores caller-owned prefix values.
 """
 
 from __future__ import annotations

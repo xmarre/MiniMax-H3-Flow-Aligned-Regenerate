@@ -466,9 +466,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "step": 1,
                 "tooltip": (
                     "Sampling-side video overlap width in H3 temporal latent tokens. 0 is exact/off. "
-                    "Any positive integer feathers the last protected video tokens into the sampler so target-high "
-                    "can establish motion through the chunk boundary, while caller-visible prefix latents "
-                    "remain byte-exact after sampling. The applied width uses at most the available "
+                    "Any positive integer feathers the last carried video tokens early in target-high sampling. "
+                    "The release closes before the final two scheduled evaluations so sampling finishes with "
+                    "exact carried context. Schedules with at most two evaluations keep exact context throughout. "
+                    "Caller-visible prefix latents remain byte-exact. The applied width uses at most the available "
                     "carried video prefix; requested and applied widths are reported separately. "
                     "Diagnostic until rendered-qualified."
                 ),

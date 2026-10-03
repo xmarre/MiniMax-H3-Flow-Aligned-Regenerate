@@ -181,6 +181,11 @@ from .vae_boundary_video import (
     validate_vae_window_vertical_candidate,
 )
 from .video_guided_overlap import apply_video_guided_overlap_mask
+from .video_overlap_closure import (
+    VIDEO_OVERLAP_CLOSURE_POLICY,
+    validate_video_overlap_closure_options,
+    video_overlap_closure,
+)
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
@@ -533,7 +538,9 @@ def _partitioned_high_video_overlap_mask(
         low_probe_sampler_mask_unchanged=True,
         structural_preflight_mask_exact=True,
         final_exact_prefix_restore=True,
-        policy="partitioned_video_high_sampler_overlap_exact_restore_v2",
+        policy="partitioned_video_high_sampler_overlap_exact_tail_v3",
+        ramp_scope="initial_high_mask_upper_bound",
+        temporal_closure_policy=VIDEO_OVERLAP_CLOSURE_POLICY,
         partitioned_exact_prefix=True,
     )
     metrics.event("partitioned_video_guided_overlap", **report)
@@ -2753,6 +2760,8 @@ def run_partitioned_progressive(
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
+    if resolve_partitioned_video_guided_overlap_tokens(initial_model_options)[0] > 0:
+        validate_video_overlap_closure_options(initial_model_options)
     _validate_low_probe_execution_source_configuration(
         low_probe_execution_source,
         prefix_transformer_context=prefix_transformer_context,
@@ -4947,6 +4956,15 @@ def run_partitioned_progressive(
         with (
             _flow_stage_contract(guider, "high"),
             _high_stage_contract(guider),
+            video_overlap_closure(
+                guider,
+                high_denoise_mask,
+                target_shapes,
+                prefix_t=stage_plan.prefix_t,
+                tokens=resolve_partitioned_video_guided_overlap_tokens(model_options)[0],
+                sigmas=high_sigmas,
+                metrics=binding.metrics,
+            ),
             high_boundary_contract(
                 binding,
                 high_boundary_context,

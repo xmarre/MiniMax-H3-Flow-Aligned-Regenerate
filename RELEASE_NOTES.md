@@ -1,3 +1,19 @@
+# Unreleased: close temporary video overlap before completion
+
+Target-high video overlap now returns to exact carried-context conditioning
+before its final two scheduled evaluations. Previously it held the repaint mask
+until sampling returned, then restored the caller prefix while retaining a
+suffix generated against the repainted context. Core inpaint and the H3 model
+mask now use one quantized sigma-dependent publication through public hooks.
+Short high schedules retain exact context throughout; execution receipts report
+the effective release and terminal context. Non-negative widths remain uncapped.
+
+Audio, low/probe masks, the learned-transfer structural/DC taper and final exact
+output restoration retain their existing ownership. No model/decoder invocation
+is added. Hook cleanup and buffer release cover success and failure. Native Core
+sampling regressions verify coherence; rendered quality and GPU cost remain
+unqualified.
+
 # Unreleased: guided overlap widths
 
 The Continuum handoff node and backend now accept non-negative overlap widths
