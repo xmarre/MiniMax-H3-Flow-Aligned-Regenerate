@@ -4977,6 +4977,14 @@ def run_partitioned_progressive(
                 prediction_gauge_bridge_weights=(
                     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS if high_prediction_gauge_bridge_enabled else None
                 ),
+                guidance_reference_gauge_weights=(
+                    PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
+                    if exact_overlap_applied
+                    and binding.registered_guidance_reference is None
+                    and binding.guidance is not None
+                    and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
+                    else None
+                ),
             ),
         ):
             result = executor(

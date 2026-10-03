@@ -11,6 +11,55 @@ from .contracts import TrajectoryRun, TrajectorySample
 from .geometry import resize_video
 from .sigma import interpolate_coordinate
 
+EXACT_PREFIX_GUIDANCE_GAUGE_POLICY = "exact_prefix_guidance_reference_coupled_v1"
+
+
+class ExactPrefixGuidanceGauge:
+    """Carry one authoritative frame while comparing references in its gauge.
+
+    This reuses the handoff's coupled support. It neither registers nor warps a
+    reference, and source trajectory tensors remain caller-owned and untouched.
+    """
+
+    def __init__(self, exact_prefix: torch.Tensor, weights: tuple[float, ...]):
+        if exact_prefix.ndim != 5 or not exact_prefix.is_floating_point() or exact_prefix.shape[2] < 1:
+            raise ValueError("guidance reference gauge requires a floating video prefix")
+        if (
+            not weights
+            or weights[0] != 1.0
+            or any(not math.isfinite(w) or not 0 < w <= 1 for w in weights)
+            or any(a < b for a, b in pairwise(weights))
+        ):
+            raise ValueError("guidance reference gauge requires the coupled handoff support")
+        self.prefix_t = int(exact_prefix.shape[2])
+        self.weights = tuple(weights)
+        self.anchor = exact_prefix[:, :, -1:].detach().clone()
+        self.calls = 0
+
+    def __deepcopy__(self, memo):
+        # Recursive model-options copies share this one high-lifetime owner.
+        memo[id(self)] = self
+        return self
+
+    def residual(self, reference: torch.Tensor, *, prefix_t: int) -> torch.Tensor:
+        if self.anchor is None:
+            raise RuntimeError("guidance reference gauge used outside its high lifetime")
+        if prefix_t != self.prefix_t or not 0 < prefix_t < reference.shape[2]:
+            raise RuntimeError("guidance reference gauge prefix ownership differs")
+        last = reference[:, :, prefix_t - 1 : prefix_t]
+        if last.shape != self.anchor.shape:
+            raise RuntimeError("guidance reference gauge target geometry differs")
+        self.calls += 1
+        return self.anchor.to(last) - last
+
+    def add_to(self, operand: torch.Tensor, residual: torch.Tensor, *, scale=1.0) -> None:
+        for offset, weight in enumerate(self.weights[: max(0, operand.shape[2] - self.prefix_t)]):
+            index = self.prefix_t + offset
+            operand[:, :, index : index + 1].add_(residual * (weight * scale))
+
+    def close(self) -> None:
+        self.anchor = None
+
 
 @dataclass(frozen=True, slots=True)
 class GuidanceConfig:
@@ -116,6 +165,7 @@ class GuidanceState:
     last_temporal_search_radius: int | None = None
     last_temporal_cross_prefix_pairs_disabled: int = 0
     last_registered_reference_used: bool = False
+    last_reference_gauge_used: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -150,6 +200,7 @@ class GuidanceState:
         self.last_temporal_search_radius = None
         self.last_temporal_cross_prefix_pairs_disabled = 0
         self.last_registered_reference_used = False
+        self.last_reference_gauge_used = False
 
 
 _PHASE_PRIORITY = {
@@ -873,6 +924,7 @@ def apply_guidance(
     sigma: float | None = None,
     registered_reference: RegisteredGuidanceReference | None = None,
     protected_prefix_t: int = 0,
+    reference_gauge: ExactPrefixGuidanceGauge | None = None,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
@@ -970,6 +1022,12 @@ def apply_guidance(
         )
         temporal_reference = source_ref
 
+    reference_residual = None
+    if reference_gauge is not None:
+        if registered or config.mode == "downsample_consistency":
+            raise RuntimeError("exact-prefix guidance gauge requires an unregistered direction reference")
+        reference_residual = reference_gauge.residual(ref, prefix_t=prefix_t)
+
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
     start = max(float(state.start_coordinate), 1e-8)
@@ -982,6 +1040,8 @@ def apply_guidance(
         "direction+temporal",
     }:
         direction_delta = ref - high_x0
+        if reference_residual is not None:
+            reference_gauge.add_to(direction_delta, reference_residual)
         if registered:
             assert temporal_validity is not None
             residual = _masked_low_frequency_projection(
@@ -1073,6 +1133,8 @@ def apply_guidance(
         assert high_state is not None
         assert sigma_value is not None
         reference_velocity = (high_state - ref) / sigma_value
+        if reference_residual is not None:
+            reference_gauge.add_to(reference_velocity, reference_residual, scale=-1.0 / sigma_value)
         high_velocity = (high_state - guided) / sigma_value
 
         if state.current_coordinate is not None:
@@ -1148,6 +1210,7 @@ def apply_guidance(
         min(prefix_t, max(0, high_x0.shape[2] - 1)) if temporal_active else 0
     )
     state.last_registered_reference_used = registered
+    state.last_reference_gauge_used = reference_residual is not None
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0

@@ -150,6 +150,24 @@ All-generated first chunks and fully protected audio are no-ops. Other non-canon
 
 ### Guided overlap controls
 
+When partitioned continuation applies the coupled exact-prefix handoff bridge,
+high-stage direction guidance also compares its reference in that representation.
+For each reference, it measures the authoritative last-prefix frame minus the
+reference's corresponding frame and adds that residual to the direction
+comparison across the handoff's existing coupled suffix support. This prevents
+guidance from undoing an already reconciled first transition. Acceleration
+reference velocity uses the same corrected comparison. Source trajectory tensors
+and source-grid temporal correspondence remain unchanged. This operation does
+not register or warp frames and is separate from sampler overlap width.
+
+The `guidance` receipt records `reference_gauge_used` and
+`reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` when active.
+`partitioned_guidance_reference_gauge_complete` records calls and support. The
+owner retains one authoritative frame for one high sampler lifetime, including
+option copies, and releases it on success or failure. It adds no H3, provider or
+VAE evaluation. The comparison consistency tests do not establish rendered seam
+acceptance or GPU overhead.
+
 The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Video overlap is applied only to the target-high sampler mask. Low/probe sampling and structural prefix discovery keep the authoritative exact mask. Audio overlap follows the selected audio mode; `exact_mask` keeps its effective overlap at zero regardless of the stored width.
 
 For an applied width `N`, the initial carried-prefix tail envelope uses a monotonic `i/(N+1)` denoise ramp on Core H3's 1/256 mask grid. A request that reaches or exceeds the available prefix can feather the entire carried prefix early in sampling. Ramp allocation uses the actual prefix width, so an oversized request does not create an oversized tensor. The initial video receipt separates `requested_tokens` and `applied_tokens`, records `width_limited_by_prefix` and `hard_prefix_tokens`, and marks its ramp as an initial upper bound.

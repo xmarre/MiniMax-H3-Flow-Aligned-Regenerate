@@ -1,3 +1,20 @@
+# Unreleased: reconcile continuation guidance with the exact-prefix handoff
+
+Partitioned continuation now compares high-stage direction guidance in the same
+exact-prefix representation as its coupled learned-transfer bridge. Previously
+the handoff corrected the generated boundary, then guidance could pull it back
+toward an uncorrected low-grid reference. The reference comparison reuses the
+handoff's structural and DC support together. It preserves source trajectory
+tensors and source-grid temporal correspondence. Acceleration reference velocity
+uses the same comparison correction when that mode is selected.
+
+The high-stage owner retains one authoritative video frame and releases it on
+success or failure, including recursively copied options and receipt failures.
+Execution reports reference use and support separately from video mask closure.
+No model/provider/VAE evaluations or sampler lifetimes are added. Initial chunks,
+inactive guidance and handoffs without the coupled bridge retain their existing
+behavior. Rendered boundary quality and GPU overhead still need qualification.
+
 # Unreleased: close temporary video overlap before completion
 
 Target-high video overlap now returns to exact carried-context conditioning
