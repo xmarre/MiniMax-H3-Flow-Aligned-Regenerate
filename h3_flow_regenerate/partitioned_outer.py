@@ -219,7 +219,7 @@ def partitioned_outer_wrapper(
             audio_model_context = PartitionedAudioModelTimestepContext(
                 audio_mask=inner_audio_mask,
                 metrics=binding.metrics,
-                ticks=guided_ticks,
+                ticks=int(guided_report["applied_ticks"]),
                 audio_prefix_ticks=int(guided_report.get("audio_prefix_ticks", 0)),
                 mask_kind="guided_overlap",
             )

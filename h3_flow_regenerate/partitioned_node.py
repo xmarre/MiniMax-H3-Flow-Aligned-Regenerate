@@ -240,12 +240,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": 4,
                 "min": 0,
-                "max": 16,
                 "step": 1,
                 "tooltip": (
                     "40-Hz audio overlap width for sampler_mask or model_timestep_only. "
                     "exact_mask keeps the carried audio prefix protected and uses zero overlap "
-                    "regardless of this width. Values 0..16 are available for comparisons."
+                    "regardless of this width. Any non-negative integer is accepted. "
+                    "The applied width uses at most the available carried audio prefix."
                 ),
             },
         )
@@ -463,14 +463,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": 0,
                 "min": 0,
-                "max": 4,
                 "step": 1,
                 "tooltip": (
                     "Sampling-side video overlap width in H3 temporal latent tokens. 0 is exact/off. "
-                    "Values 1..4 feather the last protected video tokens into the sampler so target-high "
+                    "Any positive integer feathers the last protected video tokens into the sampler so target-high "
                     "can establish motion through the chunk boundary, while caller-visible prefix latents "
-                    "remain byte-exact after sampling. Four tokens correspond to 13 decoded frames for "
-                    "the standard 22/39-frame Continuum context phase. Diagnostic until rendered-qualified."
+                    "remain byte-exact after sampling. The applied width uses at most the available "
+                    "carried video prefix; requested and applied widths are reported separately. "
+                    "Diagnostic until rendered-qualified."
                 ),
             },
         )

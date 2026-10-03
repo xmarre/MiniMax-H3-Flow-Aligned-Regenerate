@@ -6,7 +6,6 @@ import torch
 from h3_flow_regenerate.audio_guided_overlap import apply_audio_guided_overlap_mask
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.video_guided_overlap import (
-    MAX_VIDEO_GUIDED_OVERLAP_TOKENS,
     apply_video_guided_overlap_mask,
     validate_video_guided_overlap_tokens,
 )
@@ -84,16 +83,19 @@ def test_video_guided_overlap_all_generated_video_is_expected_noop():
     assert report["reason"] == "no_exact_video_prefix"
 
 
-def test_video_guided_overlap_short_exact_prefix_preserves_native_path():
+def test_video_guided_overlap_can_release_the_whole_exact_prefix():
     _packed, shapes, mask = _packed_case(video_prefix=4)
     original = mask.clone()
 
     runtime_mask, report = apply_video_guided_overlap_mask(mask, shapes, tokens=4)
 
-    assert runtime_mask is mask
+    assert runtime_mask is not mask
     assert torch.equal(mask, original)
-    assert report["applied"] is False
-    assert report["reason"] == "exact_video_prefix_too_short"
+    video_mask, _ = unpack_streams(runtime_mask, shapes)
+    torch.testing.assert_close(video_mask[0, 0, :4, 0, 0], _core_grid_ramp(video_mask.dtype))
+    assert report["applied"] is True
+    assert report["applied_tokens"] == 4
+    assert report["hard_prefix_tokens"] == 0
     assert report["video_prefix_tokens"] == 4
 
 
@@ -106,12 +108,12 @@ def test_video_guided_overlap_rejects_noncanonical_partial_video_mask():
         apply_video_guided_overlap_mask(mask, shapes, tokens=4)
 
 
-def test_video_guided_overlap_validation_is_bounded_and_rejects_bool():
+def test_video_guided_overlap_validation_accepts_nonnegative_integers_and_rejects_bool():
     assert validate_video_guided_overlap_tokens(0) == 0
-    assert validate_video_guided_overlap_tokens(MAX_VIDEO_GUIDED_OVERLAP_TOKENS) == 4
+    assert validate_video_guided_overlap_tokens(4) == 4
+    assert validate_video_guided_overlap_tokens(8) == 8
+    assert validate_video_guided_overlap_tokens(10**30) == 10**30
     with pytest.raises(ValueError):
         validate_video_guided_overlap_tokens(True)
     with pytest.raises(ValueError):
         validate_video_guided_overlap_tokens(-1)
-    with pytest.raises(ValueError):
-        validate_video_guided_overlap_tokens(5)

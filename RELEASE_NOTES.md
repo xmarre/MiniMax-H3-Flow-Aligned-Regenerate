@@ -1,3 +1,17 @@
+# Unreleased: guided overlap widths
+
+The Continuum handoff node and backend now accept non-negative overlap widths
+without a fixed video-token or audio-tick maximum. The audio environment override
+uses the same validation. Applied support uses the available carried prefix,
+including the whole prefix when requested; an oversized request no longer
+silently disables overlap. Receipts distinguish requested and applied widths.
+
+Defaults stay video `0` and audio `4`. Video overlap remains target-high-only;
+low/probe ownership, cross-stream isolation, Core mask quantization and final
+exact-prefix restoration are preserved. Exact-audio mode retains zero effective
+audio overlap. Wider overlap requires rendered qualification and can change
+boundary motion or tone. No model or decoder invocation is added.
+
 # Unreleased: exact-audio mask correction (qualification pending)
 
 Partitioned exact-prefix continuation now keeps the same authoritative audio mask

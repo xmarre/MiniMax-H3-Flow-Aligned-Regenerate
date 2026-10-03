@@ -170,7 +170,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
-    assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
+    assert "max" not in diagnostic["audio_guided_overlap_ticks"][1]
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
     assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
     assert diagnostic["audio_position_domain"][0] == list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS)
@@ -190,7 +190,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["video_guided_overlap_tokens"][0] == "INT"
     assert diagnostic["video_guided_overlap_tokens"][1]["default"] == 0
     assert diagnostic["video_guided_overlap_tokens"][1]["min"] == 0
-    assert diagnostic["video_guided_overlap_tokens"][1]["max"] == 4
+    assert "max" not in diagnostic["video_guided_overlap_tokens"][1]
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
@@ -395,7 +395,7 @@ def test_ordinary_partitioned_audio_overlap_still_uses_existing_environment_or_d
     assert source == "environment_or_default"
 
 
-@pytest.mark.parametrize("bad", [-1, 17, True, 4.0, "4"])
+@pytest.mark.parametrize("bad", [-1, True, 4.0, "4"])
 def test_diagnostic_audio_overlap_rejects_noncanonical_values(bad):
     model = SimpleNamespace(model_options={"transformer_options": {}})
     with pytest.raises(ValueError):
@@ -903,7 +903,11 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
-def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(monkeypatch):
+@pytest.mark.parametrize("video_overlap", [4, 8, 12, 10**30])
+@pytest.mark.parametrize("audio_overlap", [16, 32, 10**30])
+def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(
+    monkeypatch, video_overlap, audio_overlap
+):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
@@ -941,9 +945,9 @@ def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(m
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 16,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: audio_overlap,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
-            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
+            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: video_overlap,
             "transformer_options": transformer_options,
         }
     )

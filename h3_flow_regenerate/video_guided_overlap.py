@@ -19,7 +19,6 @@ import torch
 
 from .geometry import unpack_streams
 
-MAX_VIDEO_GUIDED_OVERLAP_TOKENS = 4
 _MASK_QUANTIZATION_LEVELS = 256.0
 
 
@@ -28,10 +27,10 @@ def validate_video_guided_overlap_tokens(
     *,
     source: str = "video guided overlap",
 ) -> int:
-    """Validate a bounded H3 video-latent overlap width."""
+    """Validate a non-negative H3 video-latent overlap request."""
 
-    if type(value) is not int or not 0 <= value <= MAX_VIDEO_GUIDED_OVERLAP_TOKENS:
-        raise ValueError(f"{source} must be an integer in [0, {MAX_VIDEO_GUIDED_OVERLAP_TOKENS}], got {value!r}")
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{source} must be a non-negative integer, got {value!r}")
     return int(value)
 
 
@@ -49,14 +48,16 @@ def apply_video_guided_overlap_mask(
     denoise-strength ramp, rounded upward to Core H3's 1/256 mask grid.
 
     Audio is untouched. The caller-owned exact mask is not mutated and remains
-    authoritative for the final output restore. At least one fully protected
-    video latent token is retained as a hard anchor. Non-canonical partially
-    protected layouts fail closed rather than being interpreted heuristically.
+    authoritative for the final output restore. The applied width uses the
+    available carried prefix, including the whole prefix when requested.
+    Non-canonical partially protected layouts retain their existing rejection.
     """
 
     tokens = validate_video_guided_overlap_tokens(tokens)
     report: dict[str, Any] = {
         "requested_tokens": tokens,
+        "applied_tokens": 0,
+        "width_limited_by_prefix": False,
         "applied": False,
         "reason": "disabled" if tokens <= 0 else "pending",
         "video_prefix_tokens": 0,
@@ -118,14 +119,13 @@ def apply_video_guided_overlap_mask(
         raise ValueError(
             "video guided overlap requires a contiguous exact video prefix followed by a fully generated suffix"
         )
-    if tokens >= prefix:
-        report.update(reason="exact_video_prefix_too_short", hard_prefix_tokens=max(prefix - tokens, 0))
-        return denoise_mask, report
-
-    raw_ramp = torch.arange(1, tokens + 1, device=video_mask.device, dtype=torch.float32) / float(tokens + 1)
+    overlap_tokens = min(tokens, prefix)
+    raw_ramp = torch.arange(1, overlap_tokens + 1, device=video_mask.device, dtype=torch.float32) / float(
+        overlap_tokens + 1
+    )
     ramp = torch.ceil(raw_ramp * _MASK_QUANTIZATION_LEVELS) / _MASK_QUANTIZATION_LEVELS
     ramp = ramp.to(dtype=video_mask.dtype)
-    start = prefix - tokens
+    start = prefix - overlap_tokens
     stop = prefix
     video_mask[:, :, start:stop, :, :] = ramp.view(1, 1, -1, 1, 1)
 
@@ -134,6 +134,8 @@ def apply_video_guided_overlap_mask(
 
     report.update(
         applied=True,
+        applied_tokens=overlap_tokens,
+        width_limited_by_prefix=tokens > prefix,
         reason="exact_video_prefix_tail",
         hard_prefix_tokens=start,
         ramp_values=[float(value) for value in ramp.detach().to(device="cpu", dtype=torch.float32).tolist()],
@@ -144,7 +146,6 @@ def apply_video_guided_overlap_mask(
 
 
 __all__ = [
-    "MAX_VIDEO_GUIDED_OVERLAP_TOKENS",
     "apply_video_guided_overlap_mask",
     "validate_video_guided_overlap_tokens",
 ]

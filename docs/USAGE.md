@@ -133,7 +133,7 @@ progressive guidance           = no
 
 A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not independently trigger the video fallback, and fractional video masks remain intentional blends rather than exact protection.
 
-On a canonical exact-prefix continuation, only the last four carried **audio latent ticks** are guided during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact ramp values are:
+On a canonical exact-prefix continuation, the default overlap guides the last four carried **audio latent ticks** during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact default ramp values are:
 
 ```text
 0.203125
@@ -144,9 +144,17 @@ On a canonical exact-prefix continuation, only the last four carried **audio lat
 
 The video mask is byte-for-byte unchanged. The caller-owned original exact mask remains authoritative and every originally protected video/audio value is restored exactly at the sampler boundary.
 
-All-generated first chunks, fully protected audio, and exact prefixes too short to retain at least one fully protected audio tick are no-ops. Other non-canonical partially protected audio layouts fail closed rather than being guessed.
+All-generated first chunks and fully protected audio are no-ops. Other non-canonical partially protected audio layouts retain their existing rejection.
 
-`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Values 1-16 are accepted when deliberately testing a different width.
+`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Any non-negative integer is accepted. The applied width is the smaller of the requested ticks and the available carried audio prefix. The receipt separates `requested_ticks` and `applied_ticks` and records `width_limited_by_prefix` and `hard_prefix_ticks`.
+
+### Guided overlap controls
+
+The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Video overlap is applied only to the target-high sampler mask. Low/probe sampling and structural prefix discovery keep the authoritative exact mask. Audio overlap follows the selected audio mode; `exact_mask` keeps its effective overlap at zero regardless of the stored width.
+
+For an applied width `N`, the carried-prefix tail uses a monotonic `i/(N+1)` denoise ramp on Core H3's 1/256 mask grid. A request that reaches or exceeds the available prefix feathers the entire carried prefix during that sampler lifetime. The original exact output mask still restores every carried latent at completion. Ramp allocation uses the actual prefix width, so an oversized request does not create an oversized tensor. The video receipt separates `requested_tokens` and `applied_tokens` and records `width_limited_by_prefix` and `hard_prefix_tokens`.
+
+For a 12-token carried video prefix, a request of eight releases tokens 4 through 11 and retains four hard prefix tokens. A request of 12 or more releases all 12 during high sampling. Wider overlap changes conditioning and can improve or worsen generated boundary motion or tone; exact restoration does not establish rendered continuity. Compare one width at a time with the same accepted prefix, geometry, seed, sampler and adapter settings. No extra H3 evaluation, sampler lifetime, or VAE invocation is added.
 
 ### What happens at an unprotected handoff
 
