@@ -13,7 +13,10 @@ from h3_flow_regenerate.geometry import geometry_from_video, pack_streams, resiz
 from h3_flow_regenerate.guidance import ExactPrefixGuidanceGauge, GuidanceConfig, GuidanceState, apply_guidance
 from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
 from h3_flow_regenerate.metrics import H3FlowMetrics
-from h3_flow_regenerate.partitioned_scheduler import _apply_partitioned_exact_overlap_bridge
+from h3_flow_regenerate.partitioned_scheduler import (
+    _apply_partitioned_exact_overlap_bridge,
+    _apply_partitioned_suffix_dc_bridge,
+)
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
 
 
@@ -52,6 +55,99 @@ def _case(dtype=torch.float32):
         True,
     )
     return prefix_t, source, native, exact, corrected, run
+
+
+def _dc_case(dtype=torch.float32):
+    p, source, native, exact, _, run = _case(dtype)
+    _, corrected, metrics = _apply_partitioned_suffix_dc_bridge(native.clone(), native, exact, sigma=0.8, enabled=True)
+    corrected[:, :, :p] = exact
+    return p, source, native, exact, corrected, run, metrics
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("cutoff", [0.25, 1.0])
+def test_dc_handoff_guidance_preserves_mean_without_reintroducing_rejected_spatial_residual(dtype, cutoff):
+    p, source, native, exact, high, run, metrics = _dc_case(dtype)
+    original_high, original_source = high.clone(), source.clone()
+    config = GuidanceConfig(direction_weight=0.35, cutoff=cutoff, max_correction_rms_ratio=10.0)
+    legacy = apply_guidance(high, run=run, coordinate=0.2, config=config, state=GuidanceState(), protected_prefix_t=p)
+    assert (legacy[:, :, p] - high[:, :, p]).mean().item() == pytest.approx(-0.07, abs=2e-7)
+
+    binding = FlowBinding(guidance=config)
+    with high_boundary_contract(
+        binding, exact, [tuple(high.shape)], measure=False, guidance_reference_dc_metrics=metrics
+    ):
+        gauge = binding.guidance_reference_gauge
+        assert gauge is not None and gauge.weights == (1.0,) and gauge.spatial_mean_only
+        # Retain channel means rather than the complete prefix/frame activation.
+        assert gauge.anchor.shape == (1, 24, 1, 1, 1)
+        assert gauge.anchor.untyped_storage().nbytes() == 24 * 4
+        state = GuidanceState()
+        guided = apply_guidance(
+            high, run=run, coordinate=0.2, config=config, state=state, protected_prefix_t=p, reference_gauge=gauge
+        )
+        residual = gauge.residual(native, prefix_t=p)
+        assert residual.shape == (1, 24, 1, 1, 1)
+    torch.testing.assert_close(guided, high, atol=4e-7, rtol=0)
+    assert torch.equal(guided[:, :, :p], exact)
+    assert torch.equal(guided[:, :, p + 1 :], high[:, :, p + 1 :])
+    assert torch.equal(high, original_high) and torch.equal(source, original_source)
+    assert all(torch.equal(sample.video_x0, source) for sample in run.samples)
+    assert state.last_reference_gauge_policy == "exact_prefix_guidance_reference_dc_v1"
+    receipt = binding.metrics.events[-1].fields
+    assert receipt["policy"] == state.last_reference_gauge_policy and receipt["support_tokens"] == 1
+    assert receipt["spatial_mean_only"] is True
+    assert gauge.anchor is None and binding.guidance_reference_gauge is None
+
+
+@pytest.mark.parametrize("actual", [True, False])
+def test_production_wrapper_applies_dc_reference_and_preserves_audio(actual):
+    p, _, _, exact, high, run, metrics = _dc_case()
+    audio = torch.randn(1, 32, 2, 8)
+    packed, shapes = pack_streams((high, audio))
+    binding = FlowBinding(guidance=GuidanceConfig(cutoff=1.0), active_guidance_run=run)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding}, inner_model=SimpleNamespace(latent_shapes=list(shapes))
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options, seed):
+            return x.clone()
+
+    options = {"transformer_options": {FLOW_STAGE_KEY: "high", "spectrum_h3_actual": actual}}
+    with high_boundary_contract(binding, exact, shapes, measure=False, guidance_reference_dc_metrics=metrics):
+        result = flow_predict_wrapper(Executor(), packed, torch.tensor([0.7]), model_options=options, seed=17)
+    video_out, audio_out = unpack_streams(result, shapes)
+    torch.testing.assert_close(video_out, high, atol=4e-7, rtol=0)
+    assert torch.equal(audio_out, audio) and torch.equal(video_out[:, :, :p], exact)
+    receipt = next(e.fields for e in binding.metrics.events if e.kind == "guidance")
+    assert receipt["reference_gauge_used"] and receipt["actual"] is actual
+    assert receipt["reference_gauge_policy"] == "exact_prefix_guidance_reference_dc_v1"
+
+
+@pytest.mark.parametrize(
+    "mode", ["direction", "direction+temporal", "direction+acceleration", "off", "downsample_consistency"]
+)
+@pytest.mark.parametrize("bridge_state", ["applied", "zero", "disabled", "registered", "wrong_prefix"])
+def test_dc_reference_activation_requires_actual_compatible_handoff(mode, bridge_state):
+    _, _, _, exact, high, _, metrics = _dc_case()
+    metrics = dict(metrics)
+    if bridge_state == "zero":
+        metrics["suffix_dc_bridge_delta_rms"] = 0.0
+    elif bridge_state == "disabled":
+        metrics["suffix_dc_bridge_enabled"] = False
+    elif bridge_state == "wrong_prefix":
+        metrics["suffix_dc_bridge_prefix_t"] += 1
+    binding = FlowBinding(guidance=GuidanceConfig(mode=mode))
+    if bridge_state == "registered":
+        binding.registered_guidance_reference = object()
+    with high_boundary_contract(
+        binding, exact, [tuple(high.shape)], measure=False, guidance_reference_dc_metrics=metrics
+    ):
+        expected = mode in {"direction", "direction+temporal", "direction+acceleration"} and bridge_state == "applied"
+        assert (binding.guidance_reference_gauge is not None) is expected
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

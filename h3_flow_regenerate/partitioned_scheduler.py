@@ -4985,6 +4985,7 @@ def run_partitioned_progressive(
                     and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
                     else None
                 ),
+                guidance_reference_dc_metrics=(dc_metrics if not exact_overlap_applied else None),
             ),
         ):
             result = executor(

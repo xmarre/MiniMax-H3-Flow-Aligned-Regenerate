@@ -2,7 +2,7 @@
 
 The exact-prefix continuation owns the caller prefix at the framework boundary.
 Its high-stage direction reference uses the handoff's coupled representation
-support. Fixed-reference anchors and model-prediction bridges remain available
+support or its one-token channel-mean correction. Fixed-reference anchors and model-prediction bridges remain available
 for historical evidence. No model, sampler, provider, or VAE work is added.
 """
 
@@ -16,7 +16,7 @@ from typing import Any
 import torch
 
 from .geometry import pack_streams, unpack_streams
-from .guidance import EXACT_PREFIX_GUIDANCE_GAUGE_POLICY, ExactPrefixGuidanceGauge
+from .guidance import ExactPrefixGuidanceGauge
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
@@ -435,6 +435,7 @@ def high_boundary_contract(
     prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
     prediction_gauge_bridge_weights: tuple[float, ...] | None = None,
     guidance_reference_gauge_weights: tuple[float, ...] | None = None,
+    guidance_reference_dc_metrics: dict[str, Any] | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -451,8 +452,24 @@ def high_boundary_contract(
     prediction_bridge = None
     reference_gauge = None
     try:
-        if guidance_reference_gauge_weights is not None:
-            reference_gauge = ExactPrefixGuidanceGauge(exact_prefix, guidance_reference_gauge_weights)
+        reference_weights = guidance_reference_gauge_weights
+        dc_only = False
+        if (
+            reference_weights is None
+            and guidance_reference_dc_metrics is not None
+            and binding.registered_guidance_reference is None
+            and binding.guidance is not None
+            and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_enabled") is True
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_prefix_t") == binding.guidance_protected_prefix_t
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_corrected_tokens") == 1
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_first_weight") == 1.0
+            and float(guidance_reference_dc_metrics.get("suffix_dc_bridge_delta_rms", 0.0)) > 0.0
+        ):
+            reference_weights = (1.0,)
+            dc_only = True
+        if reference_weights is not None:
+            reference_gauge = ExactPrefixGuidanceGauge(exact_prefix, reference_weights, spatial_mean_only=dc_only)
             binding.guidance_reference_gauge = reference_gauge
         if prediction_gauge_bridge_weights is not None:
             prediction_bridge = HighStagePredictionGaugeBridge(
@@ -494,7 +511,8 @@ def high_boundary_contract(
             reference_gauge.close()
             binding.metrics.event(
                 "partitioned_guidance_reference_gauge_complete",
-                policy=EXACT_PREFIX_GUIDANCE_GAUGE_POLICY,
+                policy=reference_gauge.policy,
+                spatial_mean_only=reference_gauge.spatial_mean_only,
                 calls=reference_gauge.calls,
                 prefix_t=reference_gauge.prefix_t,
                 support_tokens=min(len(reference_gauge.weights), int(shapes[0][2]) - reference_gauge.prefix_t),

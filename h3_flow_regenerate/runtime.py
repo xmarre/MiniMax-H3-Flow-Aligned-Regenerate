@@ -15,7 +15,6 @@ import torch
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import (
-    EXACT_PREFIX_GUIDANCE_GAUGE_POLICY,
     ExactPrefixGuidanceGauge,
     GuidanceConfig,
     GuidanceState,
@@ -634,9 +633,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
             registered_reference_used=binding.guidance_state.last_registered_reference_used,
             reference_gauge_used=binding.guidance_state.last_reference_gauge_used,
-            reference_gauge_policy=(
-                EXACT_PREFIX_GUIDANCE_GAUGE_POLICY if binding.guidance_state.last_reference_gauge_used else None
-            ),
+            reference_gauge_policy=binding.guidance_state.last_reference_gauge_policy,
             protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(

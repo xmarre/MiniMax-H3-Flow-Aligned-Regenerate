@@ -12,16 +12,18 @@ from .geometry import resize_video
 from .sigma import interpolate_coordinate
 
 EXACT_PREFIX_GUIDANCE_GAUGE_POLICY = "exact_prefix_guidance_reference_coupled_v1"
+EXACT_PREFIX_GUIDANCE_DC_GAUGE_POLICY = "exact_prefix_guidance_reference_dc_v1"
 
 
 class ExactPrefixGuidanceGauge:
-    """Carry one authoritative frame while comparing references in its gauge.
+    """Carry authoritative prefix data while comparing references in its gauge.
 
-    This reuses the handoff's coupled support. It neither registers nor warps a
-    reference, and source trajectory tensors remain caller-owned and untouched.
+    Coupled handoffs use their full measured residual and temporal support.
+    DC-only handoffs compare only channel means over their first suffix token.
+    Source trajectory tensors remain caller-owned and untouched.
     """
 
-    def __init__(self, exact_prefix: torch.Tensor, weights: tuple[float, ...]):
+    def __init__(self, exact_prefix: torch.Tensor, weights: tuple[float, ...], *, spatial_mean_only: bool = False):
         if exact_prefix.ndim != 5 or not exact_prefix.is_floating_point() or exact_prefix.shape[2] < 1:
             raise ValueError("guidance reference gauge requires a floating video prefix")
         if (
@@ -31,9 +33,15 @@ class ExactPrefixGuidanceGauge:
             or any(a < b for a, b in pairwise(weights))
         ):
             raise ValueError("guidance reference gauge requires the coupled handoff support")
+        if not isinstance(spatial_mean_only, bool) or (spatial_mean_only and weights != (1.0,)):
+            raise ValueError("DC guidance reference gauge requires first-suffix-only support")
         self.prefix_t = int(exact_prefix.shape[2])
         self.weights = tuple(weights)
-        self.anchor = exact_prefix[:, :, -1:].detach().clone()
+        self.spatial_mean_only = spatial_mean_only
+        self.policy = EXACT_PREFIX_GUIDANCE_DC_GAUGE_POLICY if spatial_mean_only else EXACT_PREFIX_GUIDANCE_GAUGE_POLICY
+        last = exact_prefix[:, :, -1:].detach()
+        self.anchor_shape = tuple(last.shape)
+        self.anchor = last.float().mean(dim=(-2, -1), keepdim=True) if spatial_mean_only else last.clone()
         self.calls = 0
 
     def __deepcopy__(self, memo):
@@ -47,8 +55,10 @@ class ExactPrefixGuidanceGauge:
         if prefix_t != self.prefix_t or not 0 < prefix_t < reference.shape[2]:
             raise RuntimeError("guidance reference gauge prefix ownership differs")
         last = reference[:, :, prefix_t - 1 : prefix_t]
-        if last.shape != self.anchor.shape:
+        if tuple(last.shape) != self.anchor_shape:
             raise RuntimeError("guidance reference gauge target geometry differs")
+        if self.spatial_mean_only:
+            last = last.float().mean(dim=(-2, -1), keepdim=True)
         self.calls += 1
         return self.anchor.to(last) - last
 
@@ -166,6 +176,7 @@ class GuidanceState:
     last_temporal_cross_prefix_pairs_disabled: int = 0
     last_registered_reference_used: bool = False
     last_reference_gauge_used: bool = False
+    last_reference_gauge_policy: str | None = None
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -201,6 +212,7 @@ class GuidanceState:
         self.last_temporal_cross_prefix_pairs_disabled = 0
         self.last_registered_reference_used = False
         self.last_reference_gauge_used = False
+        self.last_reference_gauge_policy = None
 
 
 _PHASE_PRIORITY = {
@@ -1211,6 +1223,7 @@ def apply_guidance(
     )
     state.last_registered_reference_used = registered
     state.last_reference_gauge_used = reference_residual is not None
+    state.last_reference_gauge_policy = reference_gauge.policy if reference_residual is not None else None
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0
