@@ -1942,6 +1942,7 @@ def test_runtime_gate_accepts_current_coupled_overlap_receipts(arm):
             "partitioned_exact_overlap_structural_plus_dc_v1",
             "receipts differ",
         ),
+        ("overlap", "policy", "partitioned_exact_overlap_structural_plus_dc_v1", "receipts differ"),
     ],
 )
 def test_runtime_gate_rejects_uncoupled_current_overlap_receipts(location, field, value, error):
@@ -1954,6 +1955,14 @@ def test_runtime_gate_rejects_uncoupled_current_overlap_receipts(location, field
     }
     targets[location][field] = value
     with pytest.raises(RuntimeGateError, match=error):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+def test_runtime_gate_rejects_current_transaction_without_transfer_overlap():
+    metrics = _install_current_coupled_overlap_receipt("guidance")
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    del transfer["partitioned_exact_overlap_bridge"]
+    with pytest.raises(RuntimeGateError, match="coupled exact-overlap transaction and transfer receipts differ"):
         validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
 
 

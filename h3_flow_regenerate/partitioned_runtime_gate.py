@@ -2420,7 +2420,8 @@ def _validate_frame_gauge_transfer(
         len(frames) == 1 and frames[0].get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
     ):
         _require(
-            len(frames) == 1
+            coupled_policy
+            and len(frames) == 1
             and frames[0].get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
             and frames[0].get("exact_overlap_fallback_requested") is overlap.get("requested")
             and frames[0].get("exact_overlap_fallback_applied") is overlap.get("applied"),
