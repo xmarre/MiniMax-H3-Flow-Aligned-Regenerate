@@ -18,6 +18,7 @@ import torch
 
 from .geometry import pack_streams, unpack_streams
 from .guidance import ExactPrefixGuidanceGauge
+from .residual_evidence import BoundaryWindowEvidence
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
@@ -371,6 +372,7 @@ class HighStageBoundaryTrace:
         shapes,
         *,
         prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
+        window_evidence: BoundaryWindowEvidence | None = None,
     ):
         self.metrics = metrics
         self.prefix_t = int(exact_prefix.shape[2])
@@ -379,12 +381,18 @@ class HighStageBoundaryTrace:
         self.prefix_witness = str(prefix_witness)
         self.calls = 0
         self.previous_prediction = None
+        self.window_evidence = window_evidence
 
-    def observe(self, packed, *, point, call_index, sigma, actual):
+    def observe(self, packed, *, point, call_index, sigma, actual, sampler_input=None):
         if call_index >= self.max_calls:
             return
         started = time.perf_counter()
         video, _ = unpack_streams(packed, self.shapes)
+        if self.window_evidence is not None:
+            input_video = unpack_streams(sampler_input, self.shapes)[0] if sampler_input is not None else None
+            self.window_evidence.observe_prediction(
+                video, point=point, call_index=call_index, sigma=sigma, actual=actual, sampler_input=input_video
+            )
         suffix = video[:, :, self.prefix_t : self.prefix_t + self.suffix_tokens].detach()
         # torch.cat owns this bounded witness; never modify a sampler operand.
         witness = torch.cat((self.exact_tail.to(suffix), suffix), dim=2)
@@ -437,6 +445,7 @@ def high_boundary_contract(
     prediction_gauge_bridge_weights: tuple[float, ...] | None = None,
     guidance_reference_gauge_weights: tuple[float, ...] | None = None,
     guidance_reference_dc_metrics: dict[str, Any] | None = None,
+    window_evidence: BoundaryWindowEvidence | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -497,6 +506,7 @@ def high_boundary_contract(
                 exact_prefix,
                 shapes,
                 prefix_witness=prefix_witness,
+                window_evidence=window_evidence,
             )
         yield
     finally:
@@ -527,6 +537,7 @@ def high_boundary_contract(
                 extra_vae_calls=0,
             )
         if trace is not None:
+            trace.window_evidence = None
             binding.metrics.event(
                 "partitioned_high_boundary_trace_complete",
                 prediction_calls=trace.calls,

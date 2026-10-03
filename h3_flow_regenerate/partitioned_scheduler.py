@@ -132,7 +132,7 @@ from .representation_bridge import (
     apply_suffix_representation_bridge,
     disabled_suffix_representation_bridge_metrics,
 )
-from .residual_evidence import export_residual_geometry_evidence
+from .residual_evidence import BoundaryWindowEvidence, export_residual_geometry_evidence
 from .residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
     measure_residual_geometry,
@@ -3228,6 +3228,7 @@ def run_partitioned_progressive(
     committed_low_run = _finish_capture(binding)
     binding.metrics.increment("handoff_exact_probe_nfe")
     _cuda_allocator_checkpoint(binding.metrics, "after_primary_probe")
+    boundary_window_evidence = None
     try:
         _verify_prefix_transformer_context_diagnostic(
             binding.metrics,
@@ -4272,6 +4273,22 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
+        if residual_mode == "measure":
+            try:
+                boundary_window_evidence = BoundaryWindowEvidence(exact_prefix, int(target_video.shape[2]))
+            except ValueError as exc:
+                binding.metrics.event(
+                    "partitioned_boundary_window_evidence",
+                    policy="native_boundary_decoder_window_evidence_v1",
+                    status="unsupported",
+                    reason=str(exc),
+                    output_mutated=False,
+                    diagnostic_only=True,
+                )
+            else:
+                boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
+                boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
+
         high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
         high_audio_reference_enabled = PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED
         high_video_reference_suffix = None
@@ -4949,6 +4966,9 @@ def run_partitioned_progressive(
             model_options,
             binding.metrics,
         )
+        if boundary_window_evidence is not None:
+            high_video_mask, _ = unpack_streams(high_denoise_mask, target_shapes)
+            boundary_window_evidence.capture("initial_high_video_mask", high_video_mask)
         sampler_invocation_count += 1
         history_boundary_count += 1
         binding.metrics.increment("progressive_sampler_invocations")
@@ -4986,6 +5006,7 @@ def run_partitioned_progressive(
                     else None
                 ),
                 guidance_reference_dc_metrics=(dc_metrics if not exact_overlap_applied else None),
+                window_evidence=boundary_window_evidence,
             ),
         ):
             result = executor(
@@ -5086,6 +5107,7 @@ def run_partitioned_progressive(
         if (
             diagnostic_audio_control
             or (residual_mode == "measure" and frame_gauge_candidate_accepted)
+            or boundary_window_evidence is not None
             or boundary_content_diagnostic_enabled
             or vae_window_repair_armed
         ):
@@ -5228,6 +5250,9 @@ def run_partitioned_progressive(
                 diagnostic_only=not bool(vae_window_video_repair.get("applied", False)),
                 **trajectory,
             )
+
+        if boundary_window_evidence is not None:
+            boundary_window_evidence.capture("final_post_high_internal_clean", final_internal_video)
 
         if residual_mode == "measure" and frame_gauge_candidate_accepted:
             if final_internal_video is None:
@@ -5562,6 +5587,51 @@ def run_partitioned_progressive(
                 **residual_evidence_receipt,
             )
 
+        if boundary_window_evidence is not None:
+            window_evidence_receipt = export_residual_geometry_evidence(
+                boundary_window_evidence.tensors,
+                session_id=str(session_id),
+                chunk_id=str(chunk_id),
+                seed=int(seed or 0),
+                sigma=float(sigma),
+                evidence_kind="h3_flow_native_boundary_decoder_window_evidence",
+                metadata={
+                    "policy": "native_boundary_decoder_window_evidence_v1",
+                    "window": boundary_window_evidence.plan,
+                    "domain": "model_internal_clean_except_sampler_input_and_mask",
+                    "prediction_prefix": "native_model_prediction_not_recanonicalized",
+                    "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
+                    "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
+                    "initial_mask_domain": "initial_high_sampler_and_model_video_denoise_mask",
+                    "provider_clean_provenance": splice_clean_source,
+                    "registration_result": str(frame_gauge_transaction.get("result")),
+                    "registration_reason": str(frame_gauge_transaction.get("reason")),
+                    "registration_acceptance_required": False,
+                    "first_high_call_index": boundary_window_evidence.first_high_call_index,
+                    "first_high_sigma": boundary_window_evidence.first_high_sigma,
+                    "first_high_actual": True,
+                    "process_latent_out_required_before_vae": True,
+                    "extra_h3_nfe": 0,
+                    "extra_provider_calls": 0,
+                    "extra_vae_calls": 0,
+                },
+            )
+            binding.metrics.event(
+                "partitioned_boundary_window_evidence",
+                policy="native_boundary_decoder_window_evidence_v1",
+                requested_mode=residual_mode,
+                registration_acceptance_required=False,
+                first_high_call_index=boundary_window_evidence.first_high_call_index,
+                first_high_sigma=boundary_window_evidence.first_high_sigma,
+                tensor_copy_wall_s=boundary_window_evidence.copy_wall_s,
+                output_mutated=False,
+                diagnostic_only=True,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_sampler_lifetimes=0,
+                extra_history_boundaries=0,
+                **window_evidence_receipt,
+            )
         if final_internal is not None:
             del final_internal
         binding.metrics.event(
@@ -5680,6 +5750,9 @@ def run_partitioned_progressive(
                 partitioned_exact_prefix=True,
             )
         raise
+    finally:
+        if boundary_window_evidence is not None:
+            boundary_window_evidence.close()
 
 
 __all__ = [
