@@ -4105,6 +4105,22 @@ def run_partitioned_progressive(
         )
         if residual_telemetry_bytes > 128 * 1024:
             raise RuntimeError("residual geometry telemetry exceeded the 128 KiB transaction bound")
+        exact_overlap_applied = bool(
+            exact_overlap_fallback_requested
+            and (
+                representation_metrics.get("suffix_representation_bridge_accepted", False)
+                or float(dc_metrics.get("suffix_dc_bridge_delta_rms", 0.0)) > 0.0
+            )
+        )
+        exact_overlap_corrected_tokens = (
+            max(
+                int(representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)),
+                int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
+            )
+            if exact_overlap_applied
+            else 0
+        )
+        exact_overlap_bounded_successor_support = exact_overlap_corrected_tokens > 1
         binding.metrics.event(
             "partitioned_frame_gauge",
             mode="on" if config.frame_gauge_repair else "off",
@@ -4203,31 +4219,18 @@ def run_partitioned_progressive(
             residual_geometry_telemetry_bytes=residual_telemetry_bytes,
             exact_overlap_fallback_requested=bool(exact_overlap_fallback_requested),
             exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
-            exact_overlap_fallback_applied=bool(
-                representation_metrics.get("suffix_representation_bridge_accepted", False)
-            ),
+            exact_overlap_fallback_applied=exact_overlap_applied,
             exact_overlap_fallback_policy=exact_overlap_policy,
             exact_overlap_fallback_source=(
                 "actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"
             ),
             exact_overlap_fallback_transformed_states=(
-                [
-                    f"learned_suffix_{offset}"
-                    for offset in range(
-                        int(representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0))
-                    )
-                ]
-                if representation_metrics.get("suffix_representation_bridge_accepted", False)
+                [f"learned_suffix_{offset}" for offset in range(exact_overlap_corrected_tokens)]
+                if exact_overlap_applied
                 else []
             ),
         )
 
-        exact_overlap_corrected_tokens = int(
-            representation_metrics.get("suffix_representation_bridge_corrected_tokens", 0)
-        )
-        exact_overlap_bounded_successor_support = bool(
-            representation_metrics.get("suffix_representation_bridge_successor_safe", False)
-        )
         exact_overlap_dc_weights = (
             PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
         )
@@ -4239,12 +4242,8 @@ def run_partitioned_progressive(
             policy=exact_overlap_policy,
             requested=bool(exact_overlap_fallback_requested),
             trigger=str(exact_overlap_fallback_trigger),
-            applied=bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
-            state_mapping=(
-                "conditional_renoise_affine"
-                if representation_metrics.get("suffix_representation_bridge_accepted", False)
-                else "disabled_or_noop"
-            ),
+            applied=exact_overlap_applied,
+            state_mapping=("conditional_renoise_affine" if exact_overlap_applied else "disabled_or_noop"),
             authoritative_prefix_modified=False,
             later_suffix_extrapolated=exact_overlap_bounded_successor_support,
             suffix_support_policy=(
@@ -4798,12 +4797,8 @@ def run_partitioned_progressive(
                 "policy": exact_overlap_policy,
                 "requested": bool(exact_overlap_fallback_requested),
                 "trigger": str(exact_overlap_fallback_trigger),
-                "applied": bool(representation_metrics.get("suffix_representation_bridge_accepted", False)),
-                "state_mapping": (
-                    "conditional_renoise_affine"
-                    if representation_metrics.get("suffix_representation_bridge_accepted", False)
-                    else "disabled_or_noop"
-                ),
+                "applied": exact_overlap_applied,
+                "state_mapping": ("conditional_renoise_affine" if exact_overlap_applied else "disabled_or_noop"),
                 "source": ("actual_provider_boundary_pair" if exact_overlap_fallback_requested else "not_used"),
                 "authoritative_prefix_modified": False,
                 "later_suffix_extrapolated": exact_overlap_bounded_successor_support,
