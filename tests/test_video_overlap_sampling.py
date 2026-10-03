@@ -79,12 +79,12 @@ def native():
     )
 
 
-def _sample(native, *, tokens, close):
+def _sample(native, *, tokens, close, dtype=torch.float32):
     latent, shapes, exact = _case()
     runtime, _ = apply_video_guided_overlap_mask(exact, shapes, tokens=tokens)
     original = runtime.clone()
     noise = torch.zeros_like(latent)
-    sigmas = torch.tensor([0.88, 0.84, 0.8, 0.73, 0.63, 0.44, 0.0])
+    sigmas = torch.tensor([0.88, 0.84, 0.8, 0.73, 0.63, 0.44, 0.0], dtype=dtype)
     base = native.h3()
     base.latent_shapes = shapes
     base.audio_scale = lambda: 1.0
@@ -183,16 +183,17 @@ def _sample(native, *, tokens, close):
 
 
 @pytest.mark.parametrize("tokens", [4, 6, 8, 12, 10**30])
-def test_native_sampling_closes_context_before_final_prefix_restoration(native, tokens):
-    old, latent, shapes, exact, _, _ = _sample(native, tokens=tokens, close=False)
-    new, _, _, _, publications, metrics = _sample(native, tokens=tokens, close=True)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_native_sampling_closes_context_before_final_prefix_restoration(native, tokens, dtype):
+    old, latent, shapes, exact, _, _ = _sample(native, tokens=tokens, close=False, dtype=dtype)
+    new, _, _, _, publications, metrics = _sample(native, tokens=tokens, close=True, dtype=dtype)
     old, _ = _canonicalize_exact_masked_output(old, latent, exact)
     new, _ = _canonicalize_exact_masked_output(new, latent, exact)
     old_video, _ = unpack_streams(old, shapes)
     new_video, _ = unpack_streams(new, shapes)
     source_video, _ = unpack_streams(latent, shapes)
     assert (old_video[:, :, 12] - source_video[:, :, 12]).abs().max().item() > 0.01
-    torch.testing.assert_close(new_video[:, :, 12], source_video[:, :, 12], atol=1e-6, rtol=0)
+    torch.testing.assert_close(new_video[:, :, 12], source_video[:, :, 12].to(new_video), atol=1e-6, rtol=0)
     for publication in publications[-2:]:
         video, audio = unpack_streams(publication, shapes)
         exact_video, exact_audio = unpack_streams(exact, shapes)
@@ -255,14 +256,79 @@ def test_overlap_closure_cleans_only_its_hooks_and_releases_buffers_after_failur
         owner.mask(torch.tensor([0.8]), runtime)
 
 
-def test_disabled_overlap_does_not_install_hooks_or_emit_receipts():
+@pytest.mark.parametrize("tokens,prefix_t", [(0, 12), (8, 0)])
+def test_disabled_overlap_does_not_install_hooks_or_emit_receipts(tokens, prefix_t):
     _, shapes, exact = _case()
     options = {"denoise_mask_function": object()}
     guider = SimpleNamespace(model_options=options)
     metrics = H3FlowMetrics()
     with video_overlap_closure(
-        guider, exact, shapes, prefix_t=12, tokens=0, sigmas=torch.tensor([0.8, 0.0]), metrics=metrics
+        guider, exact, shapes, prefix_t=prefix_t, tokens=tokens, sigmas=torch.tensor([0.8, 0.0]), metrics=metrics
     ) as owner:
         assert owner is None
     assert guider.model_options is options
     assert not metrics.events
+
+
+def test_foreign_mask_owner_is_rejected_without_mutation():
+    _, shapes, exact = _case()
+
+    def foreign(*a, **k):
+        return exact
+
+    options = {"denoise_mask_function": foreign}
+    guider = SimpleNamespace(model_options=options)
+    metrics = H3FlowMetrics()
+    with (
+        pytest.raises(RuntimeError, match="cannot share"),
+        video_overlap_closure(
+            guider, exact, shapes, prefix_t=12, tokens=8, sigmas=torch.tensor([0.8, 0.0]), metrics=metrics
+        ),
+    ):
+        pytest.fail("a conflicting owner must fail before entering the sampler")
+    assert options == {"denoise_mask_function": foreign}
+    assert not metrics.events
+
+
+def test_mismatched_sigma_is_rejected_and_does_not_retain_mask_buffers():
+    _, shapes, exact = _case()
+    runtime, _ = apply_video_guided_overlap_mask(exact, shapes, tokens=8)
+    guider = SimpleNamespace(model_options={})
+    metrics = H3FlowMetrics()
+    with (
+        pytest.raises(RuntimeError, match="sigma publication differs"),
+        video_overlap_closure(
+            guider, runtime, shapes, prefix_t=12, tokens=8, sigmas=torch.tensor([0.8, 0.4, 0.0]), metrics=metrics
+        ) as owner,
+    ):
+        owner.mask(torch.tensor([0.8]), runtime)
+        owner.apply_model(lambda *a, **k: pytest.fail("must reject before executing"), None, torch.tensor([0.4]))
+    assert guider.model_options == {}
+    assert owner.closed and owner.video_condition is None
+    assert metrics.events[-1].fields["failed"] is True
+
+
+def test_receipt_failure_releases_copied_hooks_and_preserves_explicit_none_owner():
+    _, shapes, exact = _case()
+    runtime, _ = apply_video_guided_overlap_mask(exact, shapes, tokens=8)
+    options = {"denoise_mask_function": None}
+    guider = SimpleNamespace(model_options=options)
+
+    class Metrics:
+        def event(self, *a, **k):
+            raise RuntimeError("receipt failed")
+
+    with (
+        pytest.raises(RuntimeError, match="receipt failed"),
+        video_overlap_closure(
+            guider, runtime, shapes, prefix_t=12, tokens=8, sigmas=torch.tensor([0.8, 0.4, 0.0]), metrics=Metrics()
+        ) as owner,
+    ):
+        copied_hook = copy.deepcopy(options)["denoise_mask_function"]
+        mask = owner.mask(torch.tensor([0.8]), runtime)
+        prior = unpack_streams(mask, shapes)[0][:1, :1]
+        owner.apply_model(lambda *a, **k: None, None, torch.tensor([0.8]), denoise_mask=prior)
+    assert options == {"denoise_mask_function": None}
+    assert owner.closed and owner.current_mask is None and owner.video_condition is None
+    with pytest.raises(RuntimeError, match="outside its sampler lifetime"):
+        copied_hook(torch.tensor([0.8]), runtime)

@@ -113,12 +113,13 @@ class VideoOverlapClosure:
 def video_overlap_closure(guider, runtime_mask, shapes, *, prefix_t, tokens, sigmas, metrics):
     """Install only call-local public Core hooks and restore their prior owners."""
 
-    if tokens <= 0:
+    if tokens <= 0 or prefix_t <= 0:
         yield None
         return
     options = guider.model_options
     validate_video_overlap_closure_options(options)
     closure = VideoOverlapClosure(runtime_mask, shapes, prefix_t=prefix_t, tokens=tokens, sigmas=sigmas)
+    had_transformer = "transformer_options" in options
     transformer = options.setdefault("transformer_options", {})
     had_wrappers = "wrappers" in transformer
     wrappers = transformer.setdefault("wrappers", {})
@@ -158,7 +159,7 @@ def video_overlap_closure(guider, runtime_mask, shapes, *, prefix_t, tokens, sig
         )
         terminal = {
             "final_sampler_sigma": final_sigma,
-            "last_actual_model_sigma": model_sigma,
+            "last_core_apply_model_sigma": model_sigma,
             "final_prefix_mask_max": prefix_mask_max,
             "exact_model_context_before_completion": model_sigma <= closure.close_sigma and prefix_mask_max == 0,
         }
@@ -175,6 +176,8 @@ def video_overlap_closure(guider, runtime_mask, shapes, *, prefix_t, tokens, sig
             wrappers.pop(_APPLY_MODEL, None)
         if not had_wrappers and not wrappers:
             transformer.pop("wrappers", None)
+        if not had_transformer and not transformer:
+            options.pop("transformer_options", None)
         fields = dict(
             policy=VIDEO_OVERLAP_CLOSURE_POLICY,
             requested_tokens=int(tokens),
@@ -185,7 +188,7 @@ def video_overlap_closure(guider, runtime_mask, shapes, *, prefix_t, tokens, sig
             exact_tail_steps=_EXACT_TAIL_STEPS,
             release_enabled=closure.release_enabled,
             sampler_mask_calls=closure.mask_calls,
-            actual_model_entries=closure.model_calls,
+            core_apply_model_entries=closure.model_calls,
             model_mask_matches_sampler=closure.model_calls > 0,
             failed=failed,
             extra_h3_nfe=0,
