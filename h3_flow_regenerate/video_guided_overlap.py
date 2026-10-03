@@ -43,7 +43,7 @@ def apply_video_guided_overlap_mask(
     """Feather the tail of a canonical exact video prefix for sampling only.
 
     Native H3 continuation uses a contiguous zero-valued carried video prefix
-    followed by a one-valued generated suffix. For tokens=N the last N
+    followed by a one-valued generated suffix. For an applied width N the last N
     protected video latent tokens receive a monotonic 1/(N+1)..N/(N+1)
     denoise-strength ramp, rounded upward to Core H3's 1/256 mask grid.
 

@@ -172,6 +172,7 @@ def partitioned_outer_wrapper(
             guided_report.update(
                 requested_ticks=guided_ticks,
                 audio_prefix_ticks=audio_prefix_ticks,
+                hard_prefix_ticks=audio_prefix_ticks,
                 effective_ticks=0,
                 reason="exact_audio_input_timestep_velocity_mask",
                 policy="coherent_exact_audio_mask_v1",
@@ -361,10 +362,11 @@ def partitioned_outer_wrapper(
             **guided_report,
         )
         LOG.info(
-            "partitioned audio guided overlap mode=%s ticks=%d applied=%s source=%s "
+            "partitioned audio guided overlap mode=%s requested_ticks=%d applied_ticks=%d applied=%s source=%s "
             "reason=%s exact_prefix=%d ramp=%s final_exact_restore=true",
             guided_report.get("mode"),
             guided_ticks,
+            int(guided_report["applied_ticks"]),
             bool(guided_report.get("applied")),
             guided_report.get("configuration_source"),
             guided_report.get("reason"),
@@ -378,6 +380,8 @@ def partitioned_outer_wrapper(
             "partitioned_audio_model_timestep_context",
             mode=guided_mode,
             ticks=guided_ticks,
+            requested_ticks=guided_ticks,
+            applied_ticks=audio_model_context.ticks,
             audio_prefix_ticks=audio_model_context.audio_prefix_ticks,
             override_calls=audio_model_context.calls - audio_model_context.verification_calls,
             verification_calls=audio_model_context.verification_calls,
@@ -411,10 +415,11 @@ def partitioned_outer_wrapper(
                 fail_closed=True,
             )
         LOG.info(
-            "partitioned audio model-timestep context verified mode=%s ticks=%d prefix=%d calls=%d "
-            "mask_kind=%s sampler_mask_modified=%s",
+            "partitioned audio model-timestep context verified mode=%s requested_ticks=%d applied_ticks=%d "
+            "prefix=%d calls=%d mask_kind=%s sampler_mask_modified=%s",
             guided_mode,
             guided_ticks,
+            audio_model_context.ticks,
             audio_model_context.audio_prefix_ticks,
             audio_model_context.calls,
             audio_model_context.mask_kind,

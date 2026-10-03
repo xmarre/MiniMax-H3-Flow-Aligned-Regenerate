@@ -700,7 +700,8 @@ def test_vdn_raw_token_measure_verification_fails_closed_then_reports_counts():
     assert fields["raw_token_measure_prefix_frames"] == 36
 
 
-def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
+@pytest.mark.parametrize("guided_ticks", [4, 32, 10**30])
+def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch, guided_ticks):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
@@ -738,7 +739,7 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 4,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: guided_ticks,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
             "transformer_options": transformer_options,
         }
@@ -771,6 +772,8 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         assert torch.equal(exact_denoise_mask, exact_mask)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
+        assert context.ticks == min(guided_ticks, 6)
+        assert context.audio_prefix_ticks == 6
         exact_audio = unpack_streams(call_mask, latent_shapes)[1]
         exact_audio_cond = exact_audio.amax(dim=1, keepdim=True)
         forwarded = _audio_model_timestep_kwargs(
@@ -808,6 +811,8 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     context_events = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"]
     assert len(context_events) == 1
     assert context_events[0].fields["override_calls"] == 1
+    assert context_events[0].fields["requested_ticks"] == guided_ticks
+    assert context_events[0].fields["applied_ticks"] == min(guided_ticks, 6)
     assert context_events[0].fields["sampler_mask_modified"] is False
     assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
     assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
@@ -1237,12 +1242,15 @@ def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent
     assert overlap.fields["sampler_mask_modified"] is False
     assert overlap.fields["applied"] is False
     assert overlap.fields["effective_ticks"] == 0
+    assert overlap.fields["applied_ticks"] == 0
+    assert overlap.fields["hard_prefix_ticks"] == 20
     assert overlap.fields["model_timestep_mask_kind"] == "exact_authoritative"
     assert overlap.fields["model_timestep_mask_modified"] is False
     assert overlap.fields["inner_exact_audio_prefix_preserved"] is True
     assert overlap.fields["sampler_exact_audio_prefix_preserved"] is True
     context_event = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"][-1]
     assert context_event.fields["mask_kind"] == "exact_authoritative"
+    assert context_event.fields["applied_ticks"] == 0
     assert context_event.fields["sampler_mask_modified"] is False
     assert context_event.fields["exact_sampler_prefix_preserved"] is True
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
