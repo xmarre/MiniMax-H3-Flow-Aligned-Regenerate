@@ -10,8 +10,8 @@ not been measured. The decoded contrast discontinuity remains unresolved.
 ## Workload and sampling time
 
 The source/target latent grids are 44x44/62x62. The initial chunk contains 52
-video frames. Continuation retains twelve target-grid prefix frames and
-generates fifty source-grid suffix frames. Initial low/high video patch rows
+video latent tokens. Continuation retains twelve target-grid prefix latent tokens and
+generates fifty source-grid suffix latent tokens. Initial low/high video patch rows
 are 25,168/49,972; continuation low/high rows are 35,732/59,582. Low rows
 increase 42.0% and high rows 19.2% within the capture. Initial conditioning
 contains 1,304 text, 961 reference and 584 audio rows, for 28,017 packed rows.

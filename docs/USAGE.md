@@ -156,8 +156,11 @@ For each reference, it measures the authoritative last-prefix frame minus the
 reference's corresponding frame and adds that residual to the direction
 comparison across the handoff's existing coupled suffix support. This prevents
 guidance from undoing an already reconciled first transition. Acceleration
-reference velocity uses the same corrected comparison. Source trajectory tensors
-and source-grid temporal correspondence remain unchanged. This operation does
+reference velocity uses the same corrected comparison. Temporal guidance pulls
+its high-grid operand back into the source representation before evaluating
+the native motion innovation, then adds the correction to the reconciled
+operand. Its warp must transport the residual as well as its endpoint value.
+Source trajectory tensors and source-grid temporal correspondence remain unchanged. This operation does
 not register or warp frames and is separate from sampler overlap width.
 
 The one-token DC handoff also rebases an unregistered direction reference when
@@ -171,6 +174,8 @@ and zero-offset DC handoffs retain their existing behavior.
 The `guidance` receipt records `reference_gauge_used` and
 `reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` for coupled
 support or `exact_prefix_guidance_reference_dc_v1` for channel means.
+`temporal_reference_gauge_used` records an executed temporal pullback; it is
+false when temporal guidance is off or there are no usable correspondences.
 `partitioned_guidance_reference_gauge_complete` records calls and support. The
 owner retains one authoritative frame for coupled support or one mean per
 batch/channel for DC support during one high sampler lifetime, including option

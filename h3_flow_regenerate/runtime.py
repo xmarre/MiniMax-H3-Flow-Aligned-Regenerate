@@ -634,6 +634,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             registered_reference_used=binding.guidance_state.last_registered_reference_used,
             reference_gauge_used=binding.guidance_state.last_reference_gauge_used,
             reference_gauge_policy=binding.guidance_state.last_reference_gauge_policy,
+            temporal_reference_gauge_used=binding.guidance_state.last_temporal_reference_gauge_used,
             protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(

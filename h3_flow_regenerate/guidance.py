@@ -177,6 +177,7 @@ class GuidanceState:
     last_registered_reference_used: bool = False
     last_reference_gauge_used: bool = False
     last_reference_gauge_policy: str | None = None
+    last_temporal_reference_gauge_used: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -213,6 +214,7 @@ class GuidanceState:
         self.last_registered_reference_used = False
         self.last_reference_gauge_used = False
         self.last_reference_gauge_policy = None
+        self.last_temporal_reference_gauge_used = False
 
 
 _PHASE_PRIORITY = {
@@ -1108,6 +1110,7 @@ def apply_guidance(
     temporal_correction = torch.zeros_like(high_x0)
     temporal_match = None
     temporal_cache_hit = False
+    temporal_reference_gauge_used = False
     guided = high_x0 + direction_correction
     if temporal_active:
         temporal_match, temporal_cache_hit = _temporal_correspondence(
@@ -1121,8 +1124,18 @@ def apply_guidance(
             cache_key=temporal_cache_key,
         )
         if temporal_match is not None:
+            temporal_high = guided
+            if reference_residual is not None:
+                # Correspondence and reference innovations describe the native
+                # source representation. Pull the target operand back into that
+                # same representation before transporting it. The resulting
+                # correction can then be added in the reconciled representation:
+                # subtracting the gauge only after transport would miss W(delta).
+                temporal_high = guided.clone()
+                reference_gauge.add_to(temporal_high, reference_residual, scale=-1.0)
+                temporal_reference_gauge_used = True
             temporal_delta = _temporal_alignment_correction(
-                guided,
+                temporal_high,
                 temporal_reference,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
@@ -1224,6 +1237,7 @@ def apply_guidance(
     state.last_registered_reference_used = registered
     state.last_reference_gauge_used = reference_residual is not None
     state.last_reference_gauge_policy = reference_gauge.policy if reference_residual is not None else None
+    state.last_temporal_reference_gauge_used = temporal_reference_gauge_used
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0

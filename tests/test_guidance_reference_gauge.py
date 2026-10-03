@@ -200,6 +200,82 @@ def test_reference_gauge_leaves_source_temporal_correspondence_unchanged(monkeyp
     assert torch.equal(observed[0][0], source) and observed[0][1] == p
 
 
+@pytest.mark.parametrize("dc_only", [False, True])
+@pytest.mark.parametrize("moving", [False, True])
+def test_temporal_transport_respects_the_reconciled_representation(dc_only, moving):
+    p, _, _, _, _, run = _case()
+    generator = torch.Generator().manual_seed(713)
+    texture = torch.randn(1, 24, 1, 8, 10, generator=generator)
+    source = torch.cat([torch.roll(texture, i if moving else 0, dims=-1) for i in range(10)], dim=2)
+    original_source = source.clone()
+    native = resize_video(source, 12, 14)
+    exact = native[:, :, :p].clone()
+    y, x = torch.meshgrid(torch.linspace(-1, 1, 12), torch.linspace(-1, 1, 14), indexing="ij")
+    exact[:, :, -1] += 0.3 + 0.12 * x + 0.08 * y
+    weights = (1.0,) if dc_only else (1.0, 0.75, 0.5, 0.25)
+    if dc_only:
+        _, high, _ = _apply_partitioned_suffix_dc_bridge(native.clone(), native, exact, sigma=0.8, enabled=True)
+    else:
+        _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
+            native.clone(), native, exact, sigma=0.8, weights=weights
+        )
+    high[:, :, :p] = exact
+    original_high = high.clone()
+    baseline = native.clone()
+    baseline[:, :, :p] = exact
+    run = replace(
+        run,
+        samples=tuple(
+            TrajectorySample(c, c, c, i, i, "handoff_probe", "actual", source.clone()) for i, c in enumerate((0.8, 0.2))
+        ),
+    )
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        # Isolate temporal transport in the moving case. On the stationary
+        # scene both direction and temporal guidance must preserve the handoff.
+        direction_weight=0.0 if moving else 0.35,
+        temporal_weight=0.3,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.001,
+        temporal_search_radius=2,
+        cutoff=1.0,
+        max_correction_rms_ratio=10.0,
+    )
+    state = GuidanceState()
+    baseline_state = GuidanceState()
+    gauge = ExactPrefixGuidanceGauge(exact, weights, spatial_mean_only=dc_only)
+    cached = None
+    for coordinate in (0.2, 0.1):
+        baseline_result = apply_guidance(
+            baseline, run=run, coordinate=coordinate, config=config, state=baseline_state, protected_prefix_t=p
+        )
+        result = apply_guidance(
+            high,
+            run=run,
+            coordinate=coordinate,
+            config=config,
+            state=state,
+            protected_prefix_t=p,
+            reference_gauge=gauge,
+        )
+        # A representation change cannot create a different temporal correction.
+        assert torch.allclose(
+            result[:, :, p:] - high[:, :, p:], baseline_result[:, :, p:] - baseline[:, :, p:], atol=4e-7
+        )
+        if not moving:
+            assert torch.allclose(result, high, atol=2e-6, rtol=1e-6)
+        assert torch.equal(result[:, :, :p], exact)
+        assert state.last_temporal_valid_fraction > 0.0
+        assert state.last_temporal_reference_gauge_used
+        assert torch.equal(state.temporal_cache.backward_flow, baseline_state.temporal_cache.backward_flow)
+        assert torch.equal(state.temporal_cache.backward_confidence, baseline_state.temporal_cache.backward_confidence)
+        if cached is not None:
+            assert state.temporal_cache is cached and state.last_temporal_cache_hit
+        cached = state.temporal_cache
+    assert torch.equal(high, original_high) and torch.equal(source, original_source)
+    assert all(torch.equal(sample.video_x0, source) for sample in run.samples)
+
+
 @pytest.mark.parametrize("actual", [True, False])
 def test_production_prediction_wrapper_uses_the_gauge_and_preserves_audio(actual):
     p, _, native, exact, high, run = _case()
