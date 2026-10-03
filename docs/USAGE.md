@@ -191,6 +191,33 @@ Video release decays linearly in sigma to zero at the start of the final two sch
 
 For a 12-token carried video prefix, a request of eight initially releases tokens 4 through 11 and retains four hard prefix tokens. A request of 12 or more initially releases all 12. Both close to twelve hard prefix tokens before completion. Wider overlap changes conditioning and can improve or worsen generated boundary motion or tone; exact restoration does not establish rendered continuity. Compare one width at a time with the same accepted prefix, geometry, seed, sampler and adapter settings. No extra H3 evaluation, sampler lifetime, or VAE invocation is added. The video closure policy does not change audio overlap or the learned-transfer structural/DC taper. CPU native-source tests establish mask coherence and reproduce discarded-context suffix bias in a temporal denoiser; H3 rendered quality and GPU overhead require separate qualification.
 
+### Boundary decoder-window evidence
+
+`frame_gauge_residual_mode=measure` also saves the native seven-token boundary
+decoder window, independently of registration acceptance. This captures failures
+on the coupled fallback and DC paths as well as accepted registration. The
+existing regional residual-fit gate remains unchanged; its `not_evaluated`
+result does not suppress this separate stage evidence.
+
+The bundle contains two authoritative prefix tokens; provider-native and
+pre-high clean windows; the first actual high prediction before and after Flow;
+that call's input after sampler inpaint; the initial video mask; and final
+internal clean output. Later actual calls and forecasts do not overwrite the
+first actual prediction. All snapshots own CPU storage. They are released on
+success or failure and add no model, sampler, provider or VAE evaluation.
+
+`partitioned_boundary_window_evidence` reports the relative output bundle path,
+manifest hash, first actual call/sigma and CPU-copy time. The manifest records
+tensor shapes, dtypes, byte hashes, decoder phase and domains. Model-predicted
+prefix bytes remain native: for an offline comparison of the returned suffix,
+replace the window's first two tokens with `authoritative_prefix`, then apply
+the model's latent-output conversion before VAE decoding. The first retained
+frame is local frame five; the next twelve frames precede the next native window
+blend. Unsupported prefix phases or missing real right context report
+`unsupported`; no context is invented. CPU copies and file I/O contribute
+diagnostic overhead. Mode `off` creates no window snapshots or files. Capturing
+these operands does not correct a rendered jump or qualify image quality.
+
 ### What happens at an unprotected handoff
 
 At the selected handoff point the wrapper:

@@ -572,7 +572,9 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             actual=actual,
         )
     if boundary_trace is not None:
-        boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+        boundary_trace.observe(
+            result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual, sampler_input=x
+        )
 
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
