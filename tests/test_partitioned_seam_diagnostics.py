@@ -12,6 +12,7 @@ from h3_flow_regenerate.handoff import (
     deterministic_video_noise,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
+    PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
     _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
@@ -386,35 +387,78 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
     )
 
     delta = exact[:, :, 1].float() - learned[:, :, 1].float()
-    dc_delta = delta.mean(dim=(-2, -1), keepdim=True)
-    structural_delta = delta - dc_delta
     native_boundary = learned[:, :, 2].float() - learned[:, :, 1].float()
     restored_boundary = corrected[:, :, 2].float() - exact[:, :, 1].float()
     torch.testing.assert_close(restored_boundary, native_boundary, rtol=0.0, atol=2e-6)
 
-    first_successor_expected = -0.25 * structural_delta - dc_delta
-    corrected_step = corrected[:, :, 3].float() - corrected[:, :, 2].float()
-    native_step = learned[:, :, 3].float() - learned[:, :, 2].float()
-    torch.testing.assert_close(
-        corrected_step - native_step,
-        first_successor_expected,
-        rtol=0.0,
-        atol=2e-6,
-    )
-    structural_step = -0.25 * structural_delta
-    for offset in range(2, 4):
+    expected_step = -0.25 * delta
+    for offset in range(1, 4):
         corrected_step = corrected[:, :, 2 + offset].float() - corrected[:, :, 1 + offset].float()
         native_step = learned[:, :, 2 + offset].float() - learned[:, :, 1 + offset].float()
-        torch.testing.assert_close(corrected_step - native_step, structural_step, rtol=0.0, atol=2e-6)
+        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=0.0, atol=2e-6)
     exit_step = corrected[:, :, 6].float() - corrected[:, :, 5].float()
     native_exit = learned[:, :, 6].float() - learned[:, :, 5].float()
-    torch.testing.assert_close(exit_step - native_exit, structural_step, rtol=0.0, atol=2e-6)
+    torch.testing.assert_close(exit_step - native_exit, expected_step, rtol=0.0, atol=2e-6)
 
     assert representation["suffix_representation_bridge_corrected_tokens"] == 4
     assert representation["suffix_representation_bridge_successor_safe"] is True
-    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
     assert torch.equal(corrected[:, :, 6:], learned[:, :, 6:])
     assert torch.equal(mapped[:, :, 6:], state[:, :, 6:])
+
+
+@pytest.mark.parametrize("residual_kind", ["dc_only", "centered_only", "mixed"])
+@pytest.mark.parametrize("sigma", [0.0, 0.8])
+@pytest.mark.parametrize("suffix_t", [4, 6])
+def test_production_overlap_bounds_full_residual_and_preserves_renoise(residual_kind, sigma, suffix_t):
+    prefix_t = 2
+    weights = PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
+    learned = torch.zeros(1, 24, prefix_t + suffix_t, 8, 10)
+    yy = (torch.arange(8) - 3.5).view(1, 1, 8, 1)
+    xx = (torch.arange(10) - 4.5).view(1, 1, 1, 10)
+    spatial = (yy + 2 * xx) / 32
+    dc = torch.arange(1, 25).view(1, 24, 1, 1) / 32
+    delta = dc if residual_kind == "dc_only" else spatial if residual_kind == "centered_only" else dc + spatial
+    exact = learned[:, :, :prefix_t].clone()
+    exact[:, :, -1] += delta
+    noise = deterministic_video_noise(tuple(learned.shape), seed=993, device=learned.device, dtype=learned.dtype)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    learned_before, state_before, exact_before = learned.clone(), state.clone(), exact.clone()
+
+    mapped, corrected, _, dc_metrics = _apply_partitioned_exact_overlap_bridge(
+        state, learned, exact, sigma=sigma, weights=weights
+    )
+    expected = learned.clone()
+    for offset, weight in enumerate(weights):
+        expected[:, :, prefix_t + offset] += weight * delta
+    torch.testing.assert_close(corrected, expected, rtol=0.0, atol=1e-6)
+    torch.testing.assert_close(
+        mapped, conditional_renoise_target(expected, sigma=sigma, noise=noise), rtol=0.0, atol=1e-6
+    )
+
+    restored = corrected.clone()
+    restored[:, :, :prefix_t] = exact
+    torch.testing.assert_close(
+        restored[:, :, prefix_t] - restored[:, :, prefix_t - 1],
+        learned[:, :, prefix_t] - learned[:, :, prefix_t - 1],
+        rtol=0.0,
+        atol=1e-6,
+    )
+    for offset in range(1, min(len(weights) + 1, suffix_t)):
+        j = prefix_t + offset
+        correction_step = (corrected[:, :, j] - corrected[:, :, j - 1]) - (learned[:, :, j] - learned[:, :, j - 1])
+        torch.testing.assert_close(correction_step, -0.25 * delta.expand_as(correction_step), rtol=0.0, atol=1e-6)
+    if residual_kind != "centered_only":
+        assert dc_metrics["suffix_dc_bridge_corrected_tokens"] == 4
+        assert dc_metrics["suffix_dc_bridge_first_weight"] == 1.0
+        assert dc_metrics["suffix_dc_bridge_last_weight"] == 0.25
+    assert torch.equal(corrected[:, :, :prefix_t], learned_before[:, :, :prefix_t])
+    assert torch.equal(corrected[:, :, prefix_t + len(weights) :], learned_before[:, :, prefix_t + len(weights) :])
+    assert torch.equal(mapped[:, :, :prefix_t], state_before[:, :, :prefix_t])
+    assert torch.equal(mapped[:, :, prefix_t + len(weights) :], state_before[:, :, prefix_t + len(weights) :])
+    assert torch.equal(learned, learned_before)
+    assert torch.equal(state, state_before)
+    assert torch.equal(exact, exact_before)
 
 
 def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improvement"):
