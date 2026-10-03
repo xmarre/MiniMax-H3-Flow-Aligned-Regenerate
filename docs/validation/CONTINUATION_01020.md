@@ -49,7 +49,7 @@ six/four respectively. Increased evaluation count does not explain the timing.
 Continuation low/probe executes 2,050/800 weighted dense calls under
 `sm120-weighted-all-selected-v1`. Each scope admits ten request/layout arithmetic
 identities against independent native SDPA. Their maximum relative L2 errors
-are 0.000398/0.000364; all checks accept under the existing thresholds.
+are 0.000337/0.000364; all checks accept under the existing thresholds.
 
 | Dispatcher receipt | 01000 low/probe | 01020 low/probe |
 |---|---:|---:|
@@ -67,8 +67,8 @@ All arithmetic-gate wall times are already inside their sampling scopes.
 Initial low executes zero weighted dense calls. Its 180.461 s duration cannot
 be attributed solely to the new weighted route. Its Spectrum scope is 168.523 s,
 and a cold model-profile lookup logs 11.919 s, consistent with much of the
-11.938 s scope difference. The profile's `build_s` and `lookup_s` are not two
-independent stage costs and must not be added together.
+11.938 s scope difference. These are observations from nested timing scopes,
+not a complete attribution of the initial-stage cost.
 
 ## Memory admission
 
