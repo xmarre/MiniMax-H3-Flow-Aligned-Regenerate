@@ -1,11 +1,9 @@
 """Bounded high-stage boundary ownership and model-output observations.
 
 The exact-prefix continuation owns the caller prefix at the framework boundary.
-High-stage corrections, when selected, operate only on existing model
-predictions: fixed-reference anchors remain available for historical evidence,
-while the production candidate rebases each model-native prediction onto the
-authoritative prefix and releases that gauge correction across bounded generated
-suffix support. No model, sampler, provider, or VAE work is added.
+Its high-stage direction reference uses the handoff's coupled representation
+support. Fixed-reference anchors and model-prediction bridges remain available
+for historical evidence. No model, sampler, provider, or VAE work is added.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from typing import Any
 import torch
 
 from .geometry import pack_streams, unpack_streams
+from .guidance import EXACT_PREFIX_GUIDANCE_GAUGE_POLICY, ExactPrefixGuidanceGauge
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
@@ -360,7 +359,9 @@ class HighStageBoundaryReferenceAnchor:
 
 class HighStageBoundaryTrace:
     max_calls = 16
-    suffix_tokens = 4
+    # A phase-aligned H3 boundary decoder window consumes five generated
+    # tokens. Observing only the four-token bridge omits its support exit.
+    suffix_tokens = 5
 
     def __init__(
         self,
@@ -387,7 +388,9 @@ class HighStageBoundaryTrace:
         # torch.cat owns this bounded witness; never modify a sampler operand.
         witness = torch.cat((self.exact_tail.to(suffix), suffix), dim=2)
         trajectories = {
-            name: measure_translation_trajectory(witness, 1, backward_steps=0, roi_fraction=fraction)
+            name: measure_translation_trajectory(
+                witness, 1, forward_steps=int(suffix.shape[2]), backward_steps=0, roi_fraction=fraction
+            )
             for name, fraction in (("upper45", 0.45), ("full", 1.0))
         }
         delta_rms = None
@@ -395,7 +398,7 @@ class HighStageBoundaryTrace:
             delta_rms = float((suffix.float() - self.previous_prediction.float()).square().mean().sqrt().item())
         self.metrics.event(
             "partitioned_high_boundary_prediction",
-            policy="high_boundary_prediction_v1",
+            policy="high_boundary_prediction_v2",
             point=point,
             call_index=call_index,
             sigma=float(sigma),
@@ -431,6 +434,7 @@ def high_boundary_contract(
     exact_denoise_mask: torch.Tensor | None = None,
     prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
     prediction_gauge_bridge_weights: tuple[float, ...] | None = None,
+    guidance_reference_gauge_weights: tuple[float, ...] | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -439,12 +443,17 @@ def high_boundary_contract(
         or binding.high_boundary_trace is not None
         or binding.high_boundary_anchor is not None
         or binding.high_prediction_bridge is not None
+        or getattr(binding, "guidance_reference_gauge", None) is not None
     ):
         raise RuntimeError("nested high-stage boundary ownership is unsupported")
     binding.guidance_protected_prefix_t = int(exact_prefix.shape[2])
     anchor = None
     prediction_bridge = None
+    reference_gauge = None
     try:
+        if guidance_reference_gauge_weights is not None:
+            reference_gauge = ExactPrefixGuidanceGauge(exact_prefix, guidance_reference_gauge_weights)
+            binding.guidance_reference_gauge = reference_gauge
         if prediction_gauge_bridge_weights is not None:
             prediction_bridge = HighStagePredictionGaugeBridge(
                 binding.metrics,
@@ -480,6 +489,24 @@ def high_boundary_contract(
         binding.high_boundary_anchor = None
         binding.high_prediction_bridge = None
         binding.guidance_protected_prefix_t = 0
+        if reference_gauge is not None:
+            binding.guidance_reference_gauge = None
+            reference_gauge.close()
+            binding.metrics.event(
+                "partitioned_guidance_reference_gauge_complete",
+                policy=EXACT_PREFIX_GUIDANCE_GAUGE_POLICY,
+                calls=reference_gauge.calls,
+                prefix_t=reference_gauge.prefix_t,
+                support_tokens=min(len(reference_gauge.weights), int(shapes[0][2]) - reference_gauge.prefix_t),
+                temporal_weights=list(reference_gauge.weights),
+                authoritative_prefix_modified=False,
+                source_trajectory_modified=False,
+                temporal_correspondence_reference_modified=False,
+                spatial_warp_applied=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+            )
         if trace is not None:
             binding.metrics.event(
                 "partitioned_high_boundary_trace_complete",

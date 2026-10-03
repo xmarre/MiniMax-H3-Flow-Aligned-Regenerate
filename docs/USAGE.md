@@ -61,7 +61,7 @@ low_frequency_cutoff       = 0.25
 temporal_weight            = 0.20
 vdn_linear_diagnostic      = normal
 audio_guided_overlap_ticks = 4
-audio_guided_overlap_mode  = sampler_mask_exact_timestep
+audio_guided_overlap_mode  = exact_mask
 prefix_transformer_context = exact_target_partitioned
 audio_position_domain      = source_carrier
 audio_handoff_source       = main_partitioned
@@ -72,7 +72,7 @@ low_probe_execution_source = source_carrier_uniform_only
 
 The historical class/node ID is retained for serialized-workflow compatibility, but the displayed node name no longer includes `[Diagnostic]`.
 
-This profile runs a single source-uniform low/probe continuation path and then target-high. The four-tick sampler-owned audio ramp is approximately 100 ms at H3's 40 Hz audio-latent rate, while `sampler_mask_exact_timestep` keeps MiniMax-H3's inner timestep/modulation labels on the authoritative exact-prefix mask. The width remains user-selectable from 0 through 16; four ticks is the validated default rather than a hard preflight requirement.
+This profile runs a single source-uniform low/probe continuation path and then target-high. `exact_mask` keeps carried audio protected with matching native sampler input, timestep and velocity masks. It uses zero overlap regardless of the stored width. `sampler_mask_exact_timestep` is a compatibility alias for this behavior. The `0..16`-tick width applies to the advanced `sampler_mask` and `model_timestep_only` comparison modes. Boundary quality depends on the selected model and conditioning and requires rendered validation.
 
 The learned-transfer boundary applies the partitioned one-token DC continuity correction before restoring the authoritative target-grid prefix. The bridge changes only the first generated video suffix token; the exact prefix and later suffix tokens remain untouched by the bridge itself.
 
@@ -133,7 +133,7 @@ progressive guidance           = no
 
 A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not independently trigger the video fallback, and fractional video masks remain intentional blends rather than exact protection.
 
-On a canonical exact-prefix continuation, only the last four carried **audio latent ticks** are guided during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact ramp values are:
+On a canonical exact-prefix continuation, the default overlap guides the last four carried **audio latent ticks** during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact default ramp values are:
 
 ```text
 0.203125
@@ -144,9 +144,37 @@ On a canonical exact-prefix continuation, only the last four carried **audio lat
 
 The video mask is byte-for-byte unchanged. The caller-owned original exact mask remains authoritative and every originally protected video/audio value is restored exactly at the sampler boundary.
 
-All-generated first chunks, fully protected audio, and exact prefixes too short to retain at least one fully protected audio tick are no-ops. Other non-canonical partially protected audio layouts fail closed rather than being guessed.
+All-generated first chunks and fully protected audio are no-ops. Other non-canonical partially protected audio layouts retain their existing rejection.
 
-`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Values 1-16 are accepted when deliberately testing a different width.
+`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Any non-negative integer is accepted. The applied width is the smaller of the requested ticks and the available carried audio prefix. The receipt separates `requested_ticks` and `applied_ticks` and records `width_limited_by_prefix` and `hard_prefix_ticks`.
+
+### Guided overlap controls
+
+When partitioned continuation applies the coupled exact-prefix handoff bridge,
+high-stage direction guidance also compares its reference in that representation.
+For each reference, it measures the authoritative last-prefix frame minus the
+reference's corresponding frame and adds that residual to the direction
+comparison across the handoff's existing coupled suffix support. This prevents
+guidance from undoing an already reconciled first transition. Acceleration
+reference velocity uses the same corrected comparison. Source trajectory tensors
+and source-grid temporal correspondence remain unchanged. This operation does
+not register or warp frames and is separate from sampler overlap width.
+
+The `guidance` receipt records `reference_gauge_used` and
+`reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` when active.
+`partitioned_guidance_reference_gauge_complete` records calls and support. The
+owner retains one authoritative frame for one high sampler lifetime, including
+option copies, and releases it on success or failure. It adds no H3, provider or
+VAE evaluation. The comparison consistency tests do not establish rendered seam
+acceptance or GPU overhead.
+
+The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Video overlap is applied only to the target-high sampler mask. Low/probe sampling and structural prefix discovery keep the authoritative exact mask. Audio overlap follows the selected audio mode; `exact_mask` keeps its effective overlap at zero regardless of the stored width.
+
+For an applied width `N`, the initial carried-prefix tail envelope uses a monotonic `i/(N+1)` denoise ramp on Core H3's 1/256 mask grid. A request that reaches or exceeds the available prefix can feather the entire carried prefix early in sampling. Ramp allocation uses the actual prefix width, so an oversized request does not create an oversized tensor. The initial video receipt separates `requested_tokens` and `applied_tokens`, records `width_limited_by_prefix` and `hard_prefix_tokens`, and marks its ramp as an initial upper bound.
+
+Video release decays linearly in sigma to zero at the start of the final two scheduled high evaluations. Both use the original exact carried context; schedules with at most two evaluations retain exact context throughout and report zero effective release. Core's public inpaint-mask function and `APPLY_MODEL` wrapper publish the same quantized mask for sampler injection/blending, H3 timestep labels and velocity conversion. Holding a repainted prefix until the sampler returns would let the suffix follow context that is then discarded by final restoration. The original exact output mask remains authoritative. The `partitioned_video_overlap_closure` receipt records sampler and Core model entries, closure sigma, terminal mask maximum and an observed exact Core model condition before completion. Core entries include Spectrum forecasts; the existing `model_call.actual` receipt separately identifies H3 evaluations. Conflicting custom `denoise_mask_function` ownership is rejected before sampling. Other model wrappers are preserved, and temporary mask buffers and hooks are released on success or failure.
+
+For a 12-token carried video prefix, a request of eight initially releases tokens 4 through 11 and retains four hard prefix tokens. A request of 12 or more initially releases all 12. Both close to twelve hard prefix tokens before completion. Wider overlap changes conditioning and can improve or worsen generated boundary motion or tone; exact restoration does not establish rendered continuity. Compare one width at a time with the same accepted prefix, geometry, seed, sampler and adapter settings. No extra H3 evaluation, sampler lifetime, or VAE invocation is added. The video closure policy does not change audio overlap or the learned-transfer structural/DC taper. CPU native-source tests establish mask coherence and reproduce discarded-context suffix bias in a temporal denoiser; H3 rendered quality and GPU overhead require separate qualification.
 
 ### What happens at an unprotected handoff
 

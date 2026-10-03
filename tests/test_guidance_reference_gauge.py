@@ -1,0 +1,241 @@
+"""Regression for direction guidance undoing an exact-prefix handoff."""
+
+import copy
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+import h3_flow_regenerate.guidance as guidance
+from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
+from h3_flow_regenerate.geometry import geometry_from_video, pack_streams, resize_video, unpack_streams
+from h3_flow_regenerate.guidance import ExactPrefixGuidanceGauge, GuidanceConfig, GuidanceState, apply_guidance
+from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
+from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.partitioned_scheduler import _apply_partitioned_exact_overlap_bridge
+from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
+
+
+def _case(dtype=torch.float32):
+    prefix_t = 3
+    # A source scene with motion; the authoritative prefix also carries a
+    # spatially varying representation residual and a nonzero channel mean.
+    y, x = torch.meshgrid(torch.arange(8), torch.arange(10), indexing="ij")
+    source = 1 + x / 20 + y / 30 + torch.arange(10)[:, None, None] / 40
+    source = source[None, None].expand(1, 24, -1, -1, -1).to(dtype).clone()
+    native = resize_video(source, 12, 14)
+    exact = native[:, :, :prefix_t].clone()
+    exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, 14).to(dtype)
+    _, corrected, _, _ = _apply_partitioned_exact_overlap_bridge(
+        native.clone(), native, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
+    )
+    corrected[:, :, :prefix_t] = exact
+    samples = tuple(
+        TrajectorySample(c, c, c, i, i, "handoff_probe", "actual", source.clone()) for i, c in enumerate((0.8, 0.2))
+    )
+    run = TrajectoryRun(
+        1,
+        "r",
+        "s",
+        "0",
+        "sample_euler",
+        "sched",
+        geometry_from_video(source),
+        (1, 32, 2, 8),
+        "layout",
+        "cond",
+        "system_ram",
+        samples,
+        0,
+        1,
+        True,
+    )
+    return prefix_t, source, native, exact, corrected, run
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("cutoff", [0.25, 1.0])
+def test_guidance_preserves_an_already_reconciled_native_transition(dtype, cutoff):
+    p, source, native, exact, high, run = _case(dtype)
+    original_high, original_source = high.clone(), source.clone()
+    config = GuidanceConfig(direction_weight=0.35, cutoff=cutoff, max_correction_rms_ratio=10.0)
+    legacy = apply_guidance(high, run=run, coordinate=0.2, config=config, state=GuidanceState(), protected_prefix_t=p)
+    native_transition = native[:, :, p] - native[:, :, p - 1]
+    legacy_error = (legacy[:, :, p] - exact[:, :, -1] - native_transition).abs().max()
+    assert legacy_error > 0.03
+
+    state = GuidanceState()
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    guided = apply_guidance(
+        high, run=run, coordinate=0.2, config=config, state=state, protected_prefix_t=p, reference_gauge=gauge
+    )
+    assert torch.allclose(guided[:, :, p] - exact[:, :, -1], native_transition, atol=5e-7, rtol=1e-6)
+    assert torch.allclose(guided, high, atol=3e-7, rtol=1e-6)
+    assert torch.equal(guided[:, :, :p], exact)
+    assert torch.equal(guided[:, :, p + 4 :], high[:, :, p + 4 :])
+    assert torch.equal(high, original_high) and torch.equal(source, original_source)
+    assert all(torch.equal(sample.video_x0, source) for sample in run.samples)
+    assert state.last_reference_gauge_used and gauge.calls == 1
+
+
+def test_reference_gauge_leaves_source_temporal_correspondence_unchanged(monkeypatch):
+    p, source, _, exact, high, run = _case()
+    observed = []
+
+    def correspondence(reference, **kwargs):
+        observed.append((reference.clone(), kwargs["prefix_t"]))
+        return None, False
+
+    monkeypatch.setattr(guidance, "_temporal_correspondence", correspondence)
+    apply_guidance(
+        high,
+        run=run,
+        coordinate=0.2,
+        config=GuidanceConfig(mode="direction+temporal"),
+        state=GuidanceState(),
+        protected_prefix_t=p,
+        reference_gauge=ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25)),
+    )
+    assert len(observed) == 1
+    assert torch.equal(observed[0][0], source) and observed[0][1] == p
+
+
+@pytest.mark.parametrize("actual", [True, False])
+def test_production_prediction_wrapper_uses_the_gauge_and_preserves_audio(actual):
+    p, _, native, exact, high, run = _case()
+    audio = torch.randn(1, 32, 2, 8)
+    packed, shapes = pack_streams((high, audio))
+    binding = FlowBinding(guidance=GuidanceConfig(cutoff=1.0), active_guidance_run=run)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding}, inner_model=SimpleNamespace(latent_shapes=list(shapes))
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options, seed):
+            return x.clone()
+
+    options = {"transformer_options": {FLOW_STAGE_KEY: "high", "spectrum_h3_actual": actual}}
+    with high_boundary_contract(
+        binding, exact, shapes, measure=False, guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25)
+    ):
+        result = flow_predict_wrapper(Executor(), packed, torch.tensor([0.7]), model_options=options, seed=17)
+    video_out, audio_out = unpack_streams(result, shapes)
+    assert torch.equal(audio_out, audio)
+    assert torch.equal(video_out[:, :, :p], exact)
+    assert torch.allclose(video_out[:, :, p] - exact[:, :, -1], native[:, :, p] - native[:, :, p - 1], atol=5e-7)
+    receipt = next(e.fields for e in binding.metrics.events if e.kind == "guidance")
+    assert receipt["reference_gauge_used"] and receipt["actual"] is actual
+    assert receipt["reference_gauge_policy"] == "exact_prefix_guidance_reference_coupled_v1"
+    assert binding.guidance_reference_gauge is None
+
+
+def test_acceleration_uses_the_same_reconciled_reference_velocity():
+    p, source, _, exact, high, run = _case()
+    samples = tuple(
+        TrajectorySample(c, c, c, i, i, "corrected", "actual", source.clone()) for i, c in enumerate((0.8, 0.5, 0.2))
+    )
+    run = replace(run, samples=samples)
+    state = GuidanceState()
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    for coordinate in (0.2, 0.1):
+        result = apply_guidance(
+            high,
+            run=run,
+            coordinate=coordinate,
+            config=GuidanceConfig(mode="direction+acceleration", acceleration_weight=0.2, cutoff=1.0),
+            state=state,
+            high_state=high + 0.7,
+            sigma=0.7,
+            protected_prefix_t=p,
+            reference_gauge=gauge,
+        )
+        assert torch.allclose(result, high, atol=5e-7, rtol=1e-6)
+    assert state.last_acceleration_applied
+    assert torch.allclose(state.current_reference_velocity[:, :, p:], torch.ones_like(high[:, :, p:]), atol=5e-7)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_high_contract_owns_one_frame_and_cleans_recursive_clones(failure):
+    p, _, _, exact, _, _ = _case()
+    binding = FlowBinding()
+    shapes = [(1, 24, 10, 12, 14), (1, 32, 2, 8)]
+    try:
+        with high_boundary_contract(
+            binding, exact, shapes, measure=False, guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25)
+        ):
+            owner = binding.guidance_reference_gauge
+            clone = copy.deepcopy({"transformer_options": {"owner": owner}})["transformer_options"]["owner"]
+            assert clone is owner
+            assert owner.anchor.shape == (1, 24, 1, 12, 14)
+            assert owner.anchor.untyped_storage().nbytes() == owner.anchor.numel() * owner.anchor.element_size()
+            assert binding.guidance_protected_prefix_t == p
+            with (
+                pytest.raises(RuntimeError, match="nested high-stage"),
+                high_boundary_contract(binding, exact, shapes, measure=False),
+            ):
+                pass
+            if failure:
+                raise RuntimeError("sampler failure")
+    except RuntimeError as exc:
+        assert failure and str(exc) == "sampler failure"
+    assert binding.guidance_reference_gauge is None and binding.guidance_protected_prefix_t == 0
+    assert owner.anchor is None
+    with pytest.raises(RuntimeError, match="outside its high lifetime"):
+        clone.residual(torch.zeros(1, 24, 10, 12, 14), prefix_t=p)
+    receipt = binding.metrics.events[-1].fields
+    assert receipt["support_tokens"] == 4 and receipt["spatial_warp_applied"] is False
+
+
+def test_high_contract_releases_anchor_before_receipt_failure():
+    _, _, _, exact, _, _ = _case()
+
+    class FailedMetrics(H3FlowMetrics):
+        def event(self, *args, **kwargs):
+            raise RuntimeError("receipt failure")
+
+    binding = FlowBinding(metrics=FailedMetrics())
+    with (
+        pytest.raises(RuntimeError, match="receipt failure"),
+        high_boundary_contract(
+            binding,
+            exact,
+            [(1, 24, 10, 12, 14)],
+            measure=False,
+            guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25),
+        ),
+    ):
+        owner = binding.guidance_reference_gauge
+    assert owner.anchor is None and binding.guidance_reference_gauge is None
+    assert binding.guidance_protected_prefix_t == 0
+
+
+def test_reference_gauge_rejects_wrong_ownership_and_releases_short_support():
+    p, _, native, exact, _, _ = _case()
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    with pytest.raises(RuntimeError, match="prefix ownership"):
+        gauge.residual(native, prefix_t=p - 1)
+    with pytest.raises(RuntimeError, match="target geometry"):
+        gauge.residual(native[..., :-1], prefix_t=p)
+    short = native[:, :, : p + 1].clone()
+    residual = gauge.residual(short, prefix_t=p)
+    result = torch.zeros_like(short)
+    gauge.add_to(result, residual)
+    assert torch.equal(result[:, :, p:], residual)
+    assert torch.count_nonzero(result[:, :, :p]) == 0
+    gauge.close()
+
+
+def test_inactive_high_contract_retains_baseline_binding_surface():
+    binding = SimpleNamespace(
+        guidance_protected_prefix_t=0,
+        high_boundary_trace=None,
+        high_boundary_anchor=None,
+        high_prediction_bridge=None,
+        metrics=H3FlowMetrics(),
+    )
+    with high_boundary_contract(binding, torch.ones(1, 24, 3, 8, 8), [], measure=False):
+        assert not hasattr(binding, "guidance_reference_gauge")
+    assert not hasattr(binding, "guidance_reference_gauge")
