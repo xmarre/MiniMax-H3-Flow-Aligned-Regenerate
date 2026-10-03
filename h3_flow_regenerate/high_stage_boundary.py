@@ -2,8 +2,9 @@
 
 The exact-prefix continuation owns the caller prefix at the framework boundary.
 Its high-stage direction reference uses the handoff's coupled representation
-support or its one-token channel-mean correction. Fixed-reference anchors and model-prediction bridges remain available
-for historical evidence. No model, sampler, provider, or VAE work is added.
+support or its one-token channel-mean correction. Fixed-reference anchors and
+model-prediction bridges remain available for historical evidence. No model,
+sampler, provider, or VAE work is added.
 """
 
 from __future__ import annotations

@@ -160,11 +160,21 @@ reference velocity uses the same corrected comparison. Source trajectory tensors
 and source-grid temporal correspondence remain unchanged. This operation does
 not register or warp frames and is separate from sampler overlap width.
 
+The one-token DC handoff also rebases an unregistered direction reference when
+its measured offset is nonzero. This path compares only per-channel spatial
+means and applies the difference to the first generated token. It preserves
+the DC handoff's one-token support and leaves the reference's spatially varying
+component intact. A rejected structural registration does not authorize a full
+residual correction. Registered references, guidance off, downsample consistency
+and zero-offset DC handoffs retain their existing behavior.
+
 The `guidance` receipt records `reference_gauge_used` and
-`reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` when active.
+`reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` for coupled
+support or `exact_prefix_guidance_reference_dc_v1` for channel means.
 `partitioned_guidance_reference_gauge_complete` records calls and support. The
-owner retains one authoritative frame for one high sampler lifetime, including
-option copies, and releases it on success or failure. It adds no H3, provider or
+owner retains one authoritative frame for coupled support or one mean per
+batch/channel for DC support during one high sampler lifetime, including option
+copies, and releases it on success or failure. It adds no H3, provider or
 VAE evaluation. The comparison consistency tests do not establish rendered seam
 acceptance or GPU overhead.
 

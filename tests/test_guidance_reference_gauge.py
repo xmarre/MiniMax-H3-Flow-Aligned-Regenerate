@@ -175,7 +175,8 @@ def test_guidance_preserves_an_already_reconciled_native_transition(dtype, cutof
     assert state.last_reference_gauge_used and gauge.calls == 1
 
 
-def test_reference_gauge_leaves_source_temporal_correspondence_unchanged(monkeypatch):
+@pytest.mark.parametrize("dc_only", [False, True])
+def test_reference_gauge_leaves_source_temporal_correspondence_unchanged(monkeypatch, dc_only):
     p, source, _, exact, high, run = _case()
     observed = []
 
@@ -191,7 +192,9 @@ def test_reference_gauge_leaves_source_temporal_correspondence_unchanged(monkeyp
         config=GuidanceConfig(mode="direction+temporal"),
         state=GuidanceState(),
         protected_prefix_t=p,
-        reference_gauge=ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25)),
+        reference_gauge=ExactPrefixGuidanceGauge(
+            exact, (1.0,) if dc_only else (1.0, 0.75, 0.5, 0.25), spatial_mean_only=dc_only
+        ),
     )
     assert len(observed) == 1
     assert torch.equal(observed[0][0], source) and observed[0][1] == p
@@ -228,14 +231,18 @@ def test_production_prediction_wrapper_uses_the_gauge_and_preserves_audio(actual
     assert binding.guidance_reference_gauge is None
 
 
-def test_acceleration_uses_the_same_reconciled_reference_velocity():
-    p, source, _, exact, high, run = _case()
+@pytest.mark.parametrize("dc_only", [False, True])
+def test_acceleration_uses_the_same_reconciled_reference_velocity(dc_only):
+    if dc_only:
+        p, source, _, exact, high, run, _ = _dc_case()
+    else:
+        p, source, _, exact, high, run = _case()
     samples = tuple(
         TrajectorySample(c, c, c, i, i, "corrected", "actual", source.clone()) for i, c in enumerate((0.8, 0.5, 0.2))
     )
     run = replace(run, samples=samples)
     state = GuidanceState()
-    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0,) if dc_only else (1.0, 0.75, 0.5, 0.25), spatial_mean_only=dc_only)
     for coordinate in (0.2, 0.1):
         result = apply_guidance(
             high,
@@ -254,18 +261,24 @@ def test_acceleration_uses_the_same_reconciled_reference_velocity():
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_high_contract_owns_one_frame_and_cleans_recursive_clones(failure):
-    p, _, _, exact, _, _ = _case()
-    binding = FlowBinding()
+@pytest.mark.parametrize("dc_only", [False, True])
+def test_high_contract_owns_one_frame_and_cleans_recursive_clones(failure, dc_only):
+    p, _, _, exact, _, _, metrics = _dc_case()
+    binding = FlowBinding(guidance=GuidanceConfig())
     shapes = [(1, 24, 10, 12, 14), (1, 32, 2, 8)]
     try:
         with high_boundary_contract(
-            binding, exact, shapes, measure=False, guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25)
+            binding,
+            exact,
+            shapes,
+            measure=False,
+            guidance_reference_gauge_weights=None if dc_only else (1.0, 0.75, 0.5, 0.25),
+            guidance_reference_dc_metrics=metrics if dc_only else None,
         ):
             owner = binding.guidance_reference_gauge
             clone = copy.deepcopy({"transformer_options": {"owner": owner}})["transformer_options"]["owner"]
             assert clone is owner
-            assert owner.anchor.shape == (1, 24, 1, 12, 14)
+            assert owner.anchor.shape == ((1, 24, 1, 1, 1) if dc_only else (1, 24, 1, 12, 14))
             assert owner.anchor.untyped_storage().nbytes() == owner.anchor.numel() * owner.anchor.element_size()
             assert binding.guidance_protected_prefix_t == p
             with (
@@ -282,17 +295,18 @@ def test_high_contract_owns_one_frame_and_cleans_recursive_clones(failure):
     with pytest.raises(RuntimeError, match="outside its high lifetime"):
         clone.residual(torch.zeros(1, 24, 10, 12, 14), prefix_t=p)
     receipt = binding.metrics.events[-1].fields
-    assert receipt["support_tokens"] == 4 and receipt["spatial_warp_applied"] is False
+    assert receipt["support_tokens"] == (1 if dc_only else 4) and receipt["spatial_warp_applied"] is False
 
 
-def test_high_contract_releases_anchor_before_receipt_failure():
-    _, _, _, exact, _, _ = _case()
+@pytest.mark.parametrize("dc_only", [False, True])
+def test_high_contract_releases_anchor_before_receipt_failure(dc_only):
+    _, _, _, exact, _, _, metrics = _dc_case()
 
     class FailedMetrics(H3FlowMetrics):
         def event(self, *args, **kwargs):
             raise RuntimeError("receipt failure")
 
-    binding = FlowBinding(metrics=FailedMetrics())
+    binding = FlowBinding(guidance=GuidanceConfig(), metrics=FailedMetrics())
     with (
         pytest.raises(RuntimeError, match="receipt failure"),
         high_boundary_contract(
@@ -300,7 +314,8 @@ def test_high_contract_releases_anchor_before_receipt_failure():
             exact,
             [(1, 24, 10, 12, 14)],
             measure=False,
-            guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25),
+            guidance_reference_gauge_weights=None if dc_only else (1.0, 0.75, 0.5, 0.25),
+            guidance_reference_dc_metrics=metrics if dc_only else None,
         ),
     ):
         owner = binding.guidance_reference_gauge
