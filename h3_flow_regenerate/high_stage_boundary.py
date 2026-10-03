@@ -360,7 +360,9 @@ class HighStageBoundaryReferenceAnchor:
 
 class HighStageBoundaryTrace:
     max_calls = 16
-    suffix_tokens = 4
+    # A phase-aligned H3 boundary decoder window consumes five generated
+    # tokens. Observing only the four-token bridge omits its support exit.
+    suffix_tokens = 5
 
     def __init__(
         self,
@@ -387,7 +389,9 @@ class HighStageBoundaryTrace:
         # torch.cat owns this bounded witness; never modify a sampler operand.
         witness = torch.cat((self.exact_tail.to(suffix), suffix), dim=2)
         trajectories = {
-            name: measure_translation_trajectory(witness, 1, backward_steps=0, roi_fraction=fraction)
+            name: measure_translation_trajectory(
+                witness, 1, forward_steps=int(suffix.shape[2]), backward_steps=0, roi_fraction=fraction
+            )
             for name, fraction in (("upper45", 0.45), ("full", 1.0))
         }
         delta_rms = None
@@ -395,7 +399,7 @@ class HighStageBoundaryTrace:
             delta_rms = float((suffix.float() - self.previous_prediction.float()).square().mean().sqrt().item())
         self.metrics.event(
             "partitioned_high_boundary_prediction",
-            policy="high_boundary_prediction_v1",
+            policy="high_boundary_prediction_v2",
             point=point,
             call_index=call_index,
             sigma=float(sigma),
