@@ -110,17 +110,16 @@ def test_h3_patch_lattice_resize_is_exact_identity_when_geometry_matches():
 def test_h3_patch_lattice_resize_preserves_physical_linear_field():
     source_h, source_w = 56, 74
     target_h, target_w = 40, 52
-    source_grid = (source_h // 2, source_w // 2)
     target_grid = (target_h // 2, target_w // 2)
 
-    source_y = _h3_patch_axis(*source_grid, 0)
-    source_x = _h3_patch_axis(*source_grid, 1)
+    source_area = math.sqrt(source_h * source_w)
+    source_y = (torch.arange(source_h) - 0.5) * 32 / source_area + (1 - source_h / source_area) * 16
+    source_x = (torch.arange(source_w) - 0.5) * 32 / source_area + (1 - source_w / source_area) * 16
     source_field = source_y[:, None] + 0.25 * source_x[None, :]
-    latent = source_field.repeat_interleave(2, dim=0).repeat_interleave(2, dim=1)
-    latent = latent.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+    latent = source_field.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
     mapped = resize_spatial_5d_h3_patch_lattice(latent, target_h, target_w)
-    mapped_patch = mapped[0, 0, 0, ::2, ::2]
+    mapped_patch = torch.nn.functional.avg_pool2d(mapped[0, :, 0], 2)[0]
 
     target_y = _h3_patch_axis(*target_grid, 0)
     target_x = _h3_patch_axis(*target_grid, 1)
@@ -129,21 +128,20 @@ def test_h3_patch_lattice_resize_preserves_physical_linear_field():
     assert torch.allclose(mapped_patch[1:-1, 1:-1], expected[1:-1, 1:-1], rtol=1e-5, atol=3e-4)
 
     generic = resize_spatial_5d(latent, target_h, target_w, mode="bicubic")
-    generic_patch = generic[0, 0, 0, ::2, ::2]
+    generic_patch = torch.nn.functional.avg_pool2d(generic[0, :, 0], 2)[0]
     assert torch.max(torch.abs(generic_patch[1:-1, 1:-1] - expected[1:-1, 1:-1])) > 1e-3
 
 
-def test_h3_patch_lattice_resize_preserves_patch_subcell_layout():
-    source = torch.zeros(1, 1, 1, 12, 16)
-    for row in range(2):
-        for col in range(2):
-            source[..., row::2, col::2] = row * 10.0 + col
-
-    mapped = resize_spatial_5d_h3_patch_lattice(source, 8, 12)
-    assert torch.allclose(mapped[..., 0::2, 0::2], torch.zeros_like(mapped[..., 0::2, 0::2]), atol=1e-6)
-    assert torch.allclose(mapped[..., 0::2, 1::2], torch.ones_like(mapped[..., 0::2, 1::2]), atol=1e-6)
-    assert torch.allclose(mapped[..., 1::2, 0::2], torch.full_like(mapped[..., 1::2, 0::2], 10.0), atol=1e-6)
-    assert torch.allclose(mapped[..., 1::2, 1::2], torch.full_like(mapped[..., 1::2, 1::2], 11.0), atol=1e-6)
+@pytest.mark.parametrize("phase", [0, 1])
+def test_h3_dense_lattice_resize_does_not_duplicate_latent_edges(phase):
+    source = torch.zeros(1, 1, 1, 36, 36)
+    source[..., 18 + phase, :] = 1
+    mapped = resize_spatial_5d_h3_patch_lattice(source, 50, 50)[0, 0, 0, :, 25]
+    support = (mapped > 1e-5).nonzero().flatten()
+    assert int(support[-1] - support[0] + 1) == support.numel()
+    peak = int(mapped.argmax())
+    assert bool((mapped[: peak + 1].diff() >= -1e-5).all())
+    assert bool((mapped[peak:].diff() <= 1e-5).all())
 
 
 def test_resize_is_spatial_only():
