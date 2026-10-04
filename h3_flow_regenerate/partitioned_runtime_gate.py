@@ -57,6 +57,7 @@ PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
+PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 _AUDIO_OVERLAP_RE = re.compile(
     r"partitioned audio guided overlap mode=(?P<mode>\S+) "
@@ -3902,6 +3903,10 @@ def validate_partitioned_runtime_evidence(
     )
 
     transformer_events = [event for event in window if _event_kind(event) == "partitioned_exact_prefix_transformer"]
+    high_transformer_events = [event for event in transformer_events if _event_fields(event).get("stage") == "high"]
+    low_probe_transformer_events = [
+        event for event in transformer_events if _event_fields(event).get("stage") != "high"
+    ]
     _require(
         bool(transformer_events),
         "partitioned transformer emitted no physical-domain evidence",
@@ -3909,7 +3914,7 @@ def validate_partitioned_runtime_evidence(
     audio_position_domain, candidate_verified, candidate_block0_calls, model_timestep_calls = (
         _validate_audio_position_policy(
             window,
-            transformer_events,
+            low_probe_transformer_events,
             plan_fields,
             expected_audio_position_domain=expected_audio_position_domain,
         )
@@ -3950,8 +3955,10 @@ def validate_partitioned_runtime_evidence(
             "source-suffix RoPE contract was not active",
         )
         _require(
-            fields.get("low_suffix_real_latent") is True,
-            "low suffix was not represented by the real source-grid latent",
+            fields.get("native_target_suffix") is True
+            if fields.get("stage") == "high"
+            else fields.get("low_suffix_real_latent") is True,
+            "partitioned suffix was not represented by the participating stage's real latent grid",
         )
         _require(
             fields.get("deprecated_mixed_grid_contract_active") is False,
@@ -4066,13 +4073,87 @@ def validate_partitioned_runtime_evidence(
 
     partitioned_logical = low_logical + probe_logical
     partitioned_actual = low_actual + probe_actual
+    high_attention_plans = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_attention_plan"
+    ]
+    if high_attention_plans:
+        _require(len(high_attention_plans) == 1, "high attention must emit exactly one policy plan")
+        high_attention = high_attention_plans[0]
+        _require(
+            high_attention.get("policy") == PARTITIONED_HIGH_ATTENTION_POLICY,
+            "high attention policy drifted",
+        )
+        _require(
+            high_attention.get("startup_density_exemption") is False
+            and high_attention.get("refinement_source") == "h3_flow_partitioned_refinement",
+            "high attention consumed the low/probe startup exemption",
+        )
+        _require(
+            high_attention.get("generated_local_queries") == "native_sol_selection"
+            and high_attention.get("high_linear_diagnostic") == "normal"
+            and high_attention.get("high_softmax_diagnostic") == "normal"
+            and high_attention.get("high_audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
+            "high attention changed generated-query, learned-linear or audio policy",
+        )
+        _require(
+            high_attention.get("extra_logical_model_calls") == 0
+            and high_attention.get("extra_sampler_invocations") == 0,
+            "high attention added sampler or logical model calls",
+        )
+        if high_attention.get("exact_prefix_attention") is True:
+            _require(
+                high_attention.get("protected_prefix_local_queries") == "dense",
+                "high attention released protected-prefix query policy",
+            )
+            _require(
+                len(high_transformer_events) == high_actual,
+                "high prefix attention did not reach every actual high model call",
+            )
+            target_hw = high_attention.get("target_hw")
+            _require(
+                isinstance(target_hw, (list, tuple))
+                and len(target_hw) == 2
+                and all(type(value) is int and value > 0 and value % 2 == 0 for value in target_hw),
+                "high attention target grid is invalid",
+            )
+            _require(
+                tuple(target_hw) == tuple(plan_fields.get("target_hw", ()))
+                and high_attention.get("prefix_t") == plan_fields.get("prefix_temporal_length")
+                and isinstance(plan_fields.get("source_shape"), (list, tuple))
+                and len(plan_fields["source_shape"]) == 5
+                and high_attention.get("temporal") == plan_fields["source_shape"][2],
+                "high attention changed the continuation geometry",
+            )
+            target_rows = target_hw[0] * target_hw[1] // 4
+            for event in high_transformer_events:
+                fields = _event_fields(event)
+                _require(
+                    fields.get("source_rows_per_frame") == target_rows
+                    and fields.get("target_rows_per_frame") == target_rows
+                    and fields.get("prefix_log_key_measure") == 0.0
+                    and fields.get("prefix_t") == high_attention.get("prefix_t")
+                    and fields.get("temporal") == high_attention.get("temporal")
+                    and fields.get("audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
+                    "high prefix attention did not use the native target grid and unit measure",
+                )
+            partitioned_logical += high_logical
+            partitioned_actual += high_actual
+        else:
+            _require(
+                high_attention.get("exact_prefix_attention") is False
+                and high_attention.get("protected_prefix_local_queries") == "native"
+                and not high_transformer_events,
+                "native high attention unexpectedly published a partition",
+            )
+    else:
+        _require(not high_transformer_events, "high partition evidence is missing its policy plan")
     _require(
         partitioned_calls == partitioned_actual,
-        "partitioned transformer-call accounting does not match actual low/probe calls",
+        "partitioned transformer-call accounting does not match actual participating stages",
     )
     _require(
         provider_creations + provider_reuses == partitioned_logical,
-        "partitioned provider binding accounting does not match logical low/probe calls",
+        "partitioned provider binding accounting does not match logical participating stages",
     )
     if partitioned_logical > 1:
         _require(

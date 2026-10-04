@@ -123,6 +123,7 @@ from .partitioned_diagnostics import (
 )
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
+    PartitionedStagePlan,
     PartitionedStageRuntime,
     build_partitioned_stage_plan,
     tensor_sha256,
@@ -198,6 +199,7 @@ PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_one_t
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
+PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 
 
@@ -817,6 +819,61 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
             )
     finally:
         transformer.pop(PARTITIONED_STAGE_KEY, None)
+
+
+@contextlib.contextmanager
+def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True):
+    """Keep exact-prefix query policy across the target-grid refinement boundary."""
+    transformer = guider.model_options["transformer_options"]
+    with _high_stage_contract(guider, source="h3_flow_partitioned_refinement"):
+        metrics.event(
+            "partitioned_high_attention_plan",
+            policy=PARTITIONED_HIGH_ATTENTION_POLICY,
+            exact_prefix_attention=bool(exact_prefix_attention),
+            prefix_t=int(plan.prefix_t),
+            temporal=int(plan.temporal),
+            target_hw=plan.target_hw,
+            protected_prefix_local_queries="dense" if exact_prefix_attention else "native",
+            generated_local_queries="native_sol_selection",
+            startup_density_exemption=False,
+            refinement_source="h3_flow_partitioned_refinement",
+            high_linear_diagnostic="normal",
+            high_softmax_diagnostic="normal",
+            high_audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+            extra_logical_model_calls=0,
+            extra_sampler_invocations=0,
+        )
+        if not exact_prefix_attention:
+            yield
+            return
+
+        high_plan = PartitionedStagePlan(
+            prefix=plan.prefix,
+            prefix_noise=plan.prefix_noise,
+            temporal=plan.temporal,
+            source_h=plan.target_hw[0],
+            source_w=plan.target_hw[1],
+        )
+        # These selectors describe low/probe interventions. High keeps its native
+        # learned complement, target-audio positions and generated-query policy.
+        controls = {
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY: PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+            PARTITIONED_VDN_TEMPORAL_CARRIER_KEY: PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY: PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+        }
+        previous = {key: transformer[key] for key in controls if key in transformer}
+        transformer.update(controls)
+        try:
+            with _partitioned_stage_contract(guider, high_plan, metrics):
+                yield
+        finally:
+            for key in controls:
+                if key in previous:
+                    transformer[key] = previous[key]
+                else:
+                    transformer.pop(key, None)
 
 
 @contextlib.contextmanager
@@ -5126,7 +5183,12 @@ def run_partitioned_progressive(
         binding.metrics.increment("progressive_history_boundaries")
         with (
             _flow_stage_contract(guider, "high"),
-            _high_stage_contract(guider),
+            _partitioned_high_stage_contract(
+                guider,
+                stage_plan,
+                binding.metrics,
+                exact_prefix_attention=prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            ),
             high_boundary_contract(
                 binding,
                 high_boundary_context,

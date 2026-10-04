@@ -550,6 +550,7 @@ def partitioned_diffusion_wrapper(
                 metrics.increment("partitioned_transformer_calls")
                 metrics.event(
                     "partitioned_exact_prefix_transformer",
+                    stage=options.get("h3_flow_stage"),
                     native_sequence_rows=int(layout.seq_len),
                     partitioned_sequence_rows=int(partitioned_layout.seq_len),
                     video_start=int(video_start),
@@ -564,7 +565,8 @@ def partitioned_diffusion_wrapper(
                     prefix_visual_cond_timestep=aug,
                     prefix_target_grid_rope=True,
                     suffix_source_grid_rope=True,
-                    low_suffix_real_latent=True,
+                    low_suffix_real_latent=options.get("h3_flow_stage") != "high",
+                    native_target_suffix=options.get("h3_flow_stage") == "high",
                     vdn_external_sequence_api=VDN_PARTITIONED_SEQUENCE_API,
                     vdn_temporal_carrier_policy=runtime.vdn_temporal_carrier_policy,
                     vdn_temporal_carrier_numerical_digest=(

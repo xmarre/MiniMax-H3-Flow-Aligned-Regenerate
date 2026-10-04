@@ -1082,7 +1082,7 @@ def _exact_prefix_suffix_bridge_contract(guider, exact_prefix, *, source):
 
 
 @contextlib.contextmanager
-def _high_stage_contract(guider: Any):
+def _high_stage_contract(guider: Any, *, source: str = "h3_flow_progressive_handoff"):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
         raise RuntimeError("progressive handoff requires mutable model options")
@@ -1093,7 +1093,7 @@ def _high_stage_contract(guider: Any):
         "active": True,
         "min_actual_prefix_steps": 1,
         "sigma_reference": 1.0,
-        "source": "h3_flow_progressive_handoff",
+        "source": source,
     }
     if previous is not None:
         if not isinstance(previous, dict):

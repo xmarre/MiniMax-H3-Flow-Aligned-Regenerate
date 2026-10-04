@@ -236,6 +236,50 @@ def _validate_preprocess_transport() -> None:
         raise SystemExit("Flow->Sol->VDN preprocessing changed V unexpectedly")
 
 
+def _validate_high_attention_transport() -> None:
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.partitioned_scheduler import _partitioned_high_stage_contract
+    from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
+    from h3_flow_regenerate.partitioned_prefix import PartitionedExactPrefixPlan
+    from h3_flow_regenerate.runtime import _flow_stage_contract, _high_stage_contract
+    from sol_h3.contracts import Config
+    from sol_h3.interop import dense_evaluation_warmup
+    from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
+    from vdn_h3.partitioned_runtime import _partitioned_local_force_dense
+    from vdn_h3.partitioned_sequence import validate_flow_partition_contract
+    from vdn_h3.window import window_bounds
+
+    prefix = torch.zeros(1, 24, 12, 8, 12)
+    plan = PartitionedStagePlan(prefix, 47, 4, 6, prefix.clone())
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+    options = guider.model_options["transformer_options"]
+    with _flow_stage_contract(guider, "probe"), _high_stage_contract(guider):
+        if not dense_evaluation_warmup(Config(), 0, options):
+            raise SystemExit("endpoint probe unexpectedly consumed the high startup exemption")
+    with _flow_stage_contract(guider, "high"), _partitioned_high_stage_contract(guider, plan, H3FlowMetrics()):
+        high = options[PARTITIONED_STAGE_KEY].plan
+        if high.source_grid != high.target_grid or high.prefix is not plan.prefix:
+            raise SystemExit("high attention changed target-grid prefix ownership")
+        for count in (0, 1, 2):
+            config = Config(dense_evaluations=count)
+            for evaluation in (0, 1, 2):
+                if dense_evaluation_warmup(config, evaluation, options) != (evaluation < count):
+                    raise SystemExit("high attention bypassed the configured Sol startup policy")
+        flow = PartitionedExactPrefixPlan(
+            7, high.temporal, high.prefix_t, *high.source_grid, *high.target_grid, same_grid_control=True
+        )
+        vdn = validate_flow_partition_contract(flow.to_contract(), sequence_rows=flow.sequence_rows)
+        grouped = build_partitioned_grouped_plan(
+            vdn, bounds=window_bounds(47, 1, 5), anchor_frames="both", semantic_digest=flow.semantic_digest
+        )
+        for group in grouped.groups:
+            force_dense, diagnostic = _partitioned_local_force_dense(group, "normal")
+            if force_dense != group.query_prefix_domain or diagnostic:
+                raise SystemExit("high VDN prefix/suffix query ownership differs from low/probe")
+    if options:
+        raise SystemExit("high attention left sampler-stage state behind")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--require-boundary-witness", action="store_true")
@@ -554,10 +598,12 @@ def main() -> None:
         raise SystemExit("Sol history accepted stale partitioned layout geometry")
 
     _validate_same_grid_history_transport()
+    _validate_high_attention_transport()
     print(
         "partitioned exact-prefix contracts: OK ",
         f"abi={PARTITIONED_REQUEST_ABI} groups={len(grouped.groups)} sequence_rows={flow.sequence_rows}",
         "same_grid_history=True",
+        "high_prefix_attention=True",
     )
 
 

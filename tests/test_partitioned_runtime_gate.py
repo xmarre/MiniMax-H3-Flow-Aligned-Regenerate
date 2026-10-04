@@ -94,6 +94,98 @@ def _metrics() -> dict:
     }
 
 
+def _high_attention_metrics():
+    metrics = _metrics()
+    events = metrics["events"]
+    events[0]["fields"].update(target_hw=[8, 12], prefix_temporal_length=2, source_shape=[1, 24, 7, 4, 6])
+    events[1]["fields"]["stage"] = "low"
+    first_high = next(i for i, event in enumerate(events) if event["fields"].get("stage") == "high")
+    events[first_high:first_high] = [
+        _event(
+            "partitioned_high_attention_plan",
+            policy="exact_prefix_query_continuity_v1",
+            exact_prefix_attention=True,
+            protected_prefix_local_queries="dense",
+            generated_local_queries="native_sol_selection",
+            startup_density_exemption=False,
+            refinement_source="h3_flow_partitioned_refinement",
+            high_linear_diagnostic="normal",
+            high_softmax_diagnostic="normal",
+            high_audio_position_domain="legacy_target",
+            extra_logical_model_calls=0,
+            extra_sampler_invocations=0,
+            target_hw=[8, 12],
+            prefix_t=2,
+            temporal=7,
+        ),
+        _event(
+            "partitioned_exact_prefix_transformer",
+            **{
+                **events[1]["fields"],
+                "stage": "high",
+                "source_rows_per_frame": 24,
+                "target_rows_per_frame": 24,
+                "prefix_log_key_measure": 0.0,
+                "prefix_t": 2,
+                "temporal": 7,
+                "low_suffix_real_latent": False,
+                "native_target_suffix": True,
+                "audio_position_domain": "legacy_target",
+            },
+        ),
+    ]
+    metrics["counters"].update(
+        partitioned_transformer_calls=3,
+        partitioned_attention_provider_creations=3,
+        partitioned_attention_provider_reuses=2,
+    )
+    return metrics
+
+
+def test_gate_accounts_for_high_prefix_attention_without_reclassifying_old_runs():
+    report = validate_partitioned_runtime_evidence(_high_attention_metrics(), _log())
+    assert report.high_actual == 1
+    assert report.logical_calls == 5
+    old = validate_partitioned_runtime_evidence(_metrics(), _log())
+    assert old.high_actual == report.high_actual
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value", "reason"),
+    [
+        ("partitioned_high_attention_plan", "startup_density_exemption", True, "startup exemption"),
+        ("partitioned_high_attention_plan", "target_hw", [4, 6], "continuation geometry"),
+        ("partitioned_high_attention_plan", "high_linear_diagnostic", "bypass_partitioned_linear", "learned-linear"),
+        ("partitioned_exact_prefix_transformer", "source_rows_per_frame", 6, "native target grid"),
+        ("partitioned_exact_prefix_transformer", "prefix_log_key_measure", -0.693, "unit measure"),
+        ("partitioned_exact_prefix_transformer", "prefix_t", 3, "native target grid"),
+        ("partitioned_exact_prefix_transformer", "stage", "probe", "participating stage's real latent grid"),
+    ],
+)
+def test_gate_rejects_changed_high_operator_transport(kind, field, value, reason):
+    metrics = _high_attention_metrics()
+    receipt = next(
+        event
+        for event in metrics["events"]
+        if event["kind"] == kind
+        and (kind == "partitioned_high_attention_plan" or event["fields"].get("stage") == "high")
+    )
+    receipt["fields"][field] = value
+    with pytest.raises(RuntimeGateError, match=reason):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
+def test_gate_rejects_missing_actual_high_prefix_attention():
+    metrics = _high_attention_metrics()
+    metrics["events"] = [
+        event
+        for event in metrics["events"]
+        if not (event["kind"] == "partitioned_exact_prefix_transformer" and event["fields"].get("stage") == "high")
+    ]
+    with pytest.raises(RuntimeGateError, match="every actual high"):
+        validate_partitioned_runtime_evidence(metrics, _log())
+
+
 def _sol_record(**overrides) -> dict:
     record = {
         "success": True,
