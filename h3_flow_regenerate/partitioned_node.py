@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import copy
 
+from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
-    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN,
     PARTITIONED_AUDIO_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS,
@@ -20,14 +21,23 @@ from .partitioned_diagnostics import (
     PARTITIONED_AV_HANDOFF_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    PARTITIONED_HANDOFF_TRANSFER_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS,
     apply_partitioned_diagnostic_controls,
 )
 from .partitioned_outer import partitioned_outer_wrapper
@@ -230,12 +240,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": 4,
                 "min": 0,
-                "max": 16,
                 "step": 1,
                 "tooltip": (
-                    "40-Hz sampler-owned audio overlap width. The production default is 4 ticks "
-                    "(100 ms), validated with sampler_mask_exact_timestep. Values 0..16 remain "
-                    "available for controlled compatibility and diagnostics."
+                    "40-Hz audio overlap width for sampler_mask or model_timestep_only. "
+                    "exact_mask keeps the carried audio prefix protected and uses zero overlap "
+                    "regardless of this width. Any non-negative integer is accepted. "
+                    "The applied width uses at most the available carried audio prefix."
                 ),
             },
         )
@@ -244,11 +254,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["audio_guided_overlap_mode"] = (
             list(PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS),
             {
-                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+                "default": PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
                 "tooltip": (
-                    "sampler_mask_exact_timestep is the production default: the sampler owns the overlap "
-                    "while MiniMax-H3 inner timestep/modulation labels retain the authoritative exact-prefix mask. "
-                    "sampler_mask and model_timestep_only remain advanced comparison modes."
+                    "exact_mask preserves the carried audio prefix with matching native sampler input, "
+                    "timestep and velocity masks. sampler_mask_exact_timestep is a compatibility alias "
+                    "for exact_mask. sampler_mask releases the configured overlap; model_timestep_only "
+                    "is an intentionally mismatched timestep diagnostic."
                 ),
             },
         )
@@ -373,6 +384,96 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append only: never shift historical serialized widget positions.
+        spec["required"]["capture_boundary_witness"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Capture the bounded actual-feature VDN boundary witness for this execution. "
+                    "Artifacts are written under ComfyUI's output/h3-flow-boundary-witness directory. "
+                    "This is per-run and does not require an environment variable or ComfyUI restart."
+                ),
+            },
+        )
+        # Append after the witness toggle so every existing serialized widget index
+        # remains stable. The candidate is hardware-gated and never the default.
+        spec["required"]["vdn_temporal_carrier_policy"] = (
+            list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS),
+            {
+                "default": PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+                "tooltip": (
+                    "native_grid_then_map_v1 preserves the current VDN short-conv arithmetic. "
+                    "destination_grid_stencil_v1 is the hardware-gated candidate C: only cross-grid "
+                    "temporal taps map the raw projected feature to the receiving frame lattice "
+                    "before the checkpoint spatial stencil; same-grid work is unchanged."
+                ),
+            },
+        )
+        # Append after every existing selector so saved workflows retain all
+        # historical widget positions. Absence/default preserves learned_3d.
+        spec["required"]["handoff_transfer_control"] = (
+            list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS),
+            {
+                "default": PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+                "tooltip": (
+                    "learned_3d preserves the current low->high learned latent handoff. "
+                    "bicubic_same_source_control replaces only that clean-video transfer operator "
+                    "with deterministic bicubic spatial resize while preserving the same source "
+                    "low/probe state, residual/noise transport, exact-prefix restoration, "
+                    "postprocess controls and target-high sampling. Diagnostic only."
+                ),
+            },
+        )
+        # Append after every existing selector so serialized widget positions remain stable.
+        spec["required"]["spatial_stage_control"] = (
+            list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS),
+            {
+                "default": PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+                "tooltip": (
+                    "progressive_low_to_high preserves the configured reduced source grid. "
+                    "same_grid_target_control runs low/probe directly on the target grid, keeps "
+                    "the same handoff split and downstream high stage, and uses an identity "
+                    "clean-video transfer at the handoff. This directly removes only the spatial "
+                    "resolution transition for diagnosis."
+                ),
+            },
+        )
+        # Append-only after the 00726/00727 spatial selector. This discriminator
+        # changes only suffix local-query Sol selection; grouped domains and
+        # target-prefix measure remain unchanged.
+        spec["required"]["softmax_diagnostic"] = (
+            list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS),
+            {
+                "default": PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+                "tooltip": (
+                    "normal preserves sparse Sol selection for generated-suffix query groups. "
+                    f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX} forces only those same gathered "
+                    "suffix groups through Sol's weighted dense path while preserving the identical "
+                    "Q/K/V domain, target-prefix bias, grouped ownership and VDN linear setting. "
+                    "Diagnostic only."
+                ),
+            },
+        )
+        # Append-only historical control. Keep the uncapped integer in the node
+        # so old workflows deserialize unchanged and matched hardware reruns can
+        # preserve the requested width. Run 01093 retired the prefix-release
+        # mutation; positive values are now provenance only.
+        spec["required"]["video_guided_overlap_tokens"] = (
+            "INT",
+            {
+                "default": 0,
+                "min": 0,
+                "step": 1,
+                "tooltip": (
+                    "Legacy video-overlap width in H3 temporal latent tokens. The value remains uncapped for "
+                    "workflow compatibility and matched-run provenance. After hardware run 01093, positive values "
+                    "do not feather or regenerate carried video tokens: target-high keeps the authoritative exact "
+                    "video prefix for every evaluation and reports requested_tokens with applied_tokens=0 and "
+                    "retired_prefix_release=true. Set 0 for ordinary use. Audio overlap is independent."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -380,7 +481,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
         "Sol-H3/VDN-H3-Plus stack. Defaults to the fast source-carrier uniform low/probe path, "
         "learned 3D transfer, "
-        "four-tick sampler-owned audio overlap with exact inner H3 timestep labels, and exact "
+        "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
     )
 
@@ -412,6 +513,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         frame_gauge_repair=False,
         frame_gauge_residual_mode="off",
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
+        capture_boundary_witness=False,
+        vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+        handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+        video_guided_overlap_tokens=0,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -435,11 +542,30 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
+        witness_directory = ""
+        if capture_boundary_witness:
+            try:
+                import folder_paths
+            except ImportError as exc:
+                raise RuntimeError("boundary witness capture requires ComfyUI folder_paths at node execution") from exc
+            witness_directory = str(folder_paths.get_output_directory() + "/h3-flow-boundary-witness")
+        # Store an explicit per-model value even when disabled so stale process
+        # environment cannot silently override the node on subsequent runs.
+        patched.model_options[WITNESS_DIRECTORY_OPTION] = witness_directory
+        metrics.event(
+            "partitioned_boundary_witness_control",
+            enabled=bool(capture_boundary_witness),
+            directory=witness_directory or None,
+            source="node",
+            restart_required=False,
+            output_mutated=False,
+        )
         return apply_partitioned_diagnostic_controls(
             patched,
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
             audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
             audio_guided_overlap_mode=audio_guided_overlap_mode,
             prefix_transformer_context=prefix_transformer_context,
             audio_position_domain=audio_position_domain,
@@ -448,6 +574,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             guidance_trajectory_source=guidance_trajectory_source,
             low_probe_execution_source=low_probe_execution_source,
             provider_boundary_stabilization=provider_boundary_stabilization,
+            handoff_transfer_control=handoff_transfer_control,
+            spatial_stage_control=spatial_stage_control,
+            softmax_diagnostic=softmax_diagnostic,
+            video_guided_overlap_tokens=video_guided_overlap_tokens,
         )
 
 

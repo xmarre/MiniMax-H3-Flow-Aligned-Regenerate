@@ -57,15 +57,28 @@ PARTITIONED_SOL_ABI = "sol-h3-partitioned-single-union-v1"
 VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
+PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 _AUDIO_OVERLAP_RE = re.compile(
     r"partitioned audio guided overlap mode=(?P<mode>\S+) "
-    r"ticks=(?P<ticks>\d+)\b applied=(?P<applied>True|False)\b"
+    r"(?:ticks=(?P<ticks>\d+)|"
+    r"requested_ticks=(?P<requested_ticks>\d+) applied_ticks=(?P<applied_ticks>\d+))\b "
+    r"applied=(?P<applied>True|False)\b"
 )
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
+PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY = "partitioned_exact_overlap_coupled_successor_taper_v4"
+PARTITIONED_EXACT_OVERLAP_DC_POLICY = "partitioned_exact_overlap_dc_only_v5"
+PARTITIONED_EXACT_OVERLAP_POLICIES = frozenset(
+    {
+        PARTITIONED_EXACT_OVERLAP_POLICY,
+        PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY,
+        PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
+        PARTITIONED_EXACT_OVERLAP_DC_POLICY,
+    }
+)
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = [1.0, 0.75, 0.5, 0.25]
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS = frozenset(
@@ -95,6 +108,9 @@ class RuntimeGateReport:
     probe_actual: int
     high_logical: int
     high_actual: int
+    high_attention_policy: str | None
+    high_prefix_attention_verified: bool
+    high_prefix_transformer_events: int
     partitioned_transformer_events: int
     partitioned_provider_creations: int
     partitioned_provider_reuses: int
@@ -194,6 +210,40 @@ def _stage_counts(model_calls: list[dict[str, Any]], stage: str) -> tuple[int, i
     return len(calls), actual
 
 
+def validate_coherent_exact_audio_evidence(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Require actual native-mask verification for the latest continuation."""
+    window = _latest_partitioned_window(metrics.get("events", []))
+    receipts = [_event_fields(e) for e in window if _event_kind(e) == "partitioned_exact_audio_mask_verified"]
+    _require(len(receipts) == 1, "latest continuation requires one coherent exact-audio mask receipt")
+    receipt = receipts[0]
+    _require(receipt.get("policy") == "coherent_exact_audio_mask_v1", "exact-audio mask policy drifted")
+    _require(receipt.get("mode") in {"exact_mask", "sampler_mask_exact_timestep"}, "exact-audio mode drifted")
+    _require(
+        type(receipt.get("verified_model_entries")) is int and receipt["verified_model_entries"] > 0,
+        "exact-audio receipt contains no actual model-mask verification",
+    )
+    _require(receipt.get("effective_overlap_ticks") == 0, "exact-audio sampler overlap must be zero")
+    for name in (
+        "sampler_input_mask_exact",
+        "model_timestep_mask_exact",
+        "model_velocity_mask_exact",
+        "final_prefix_exact",
+        "fail_closed",
+    ):
+        _require(receipt.get(name) is True, f"exact-audio receipt failed {name}")
+    for name in ("timestep_override_applied", "regenerated_prefix_restored"):
+        _require(receipt.get(name) is False, f"exact-audio receipt enabled {name}")
+    for name in (
+        "extra_h3_nfe",
+        "extra_sampler_lifetimes",
+        "extra_history_boundaries",
+        "extra_provider_calls",
+        "extra_vae_calls",
+    ):
+        _require(type(receipt.get(name)) is int and receipt[name] == 0, f"exact-audio receipt added work: {name}")
+    return receipt
+
+
 def _sha256(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
@@ -279,10 +329,8 @@ def _validate_audio_position_policy(
         wrapper_entries >= block0_calls,
         "source-carrier candidate wrapper/block execution accounting drifted",
     )
-    _require(
-        model_timestep_calls > 0,
-        "source-carrier candidate gate requires observed model-timestep-only audio guidance",
-    )
+    if model_timestep_calls <= 0:
+        validate_coherent_exact_audio_evidence({"events": window})
 
     integrity_events = [
         _event_fields(event)
@@ -2327,6 +2375,25 @@ def _validate_boundary_content_diagnostics(window: list[dict[str, Any]]) -> None
     )
 
 
+def _coupled_overlap_guidance_rejection(receipt: dict[str, Any], trigger: str) -> bool:
+    boundary = receipt.get("boundary_motion")
+    guidance = receipt.get("guidance_registration")
+    reason = str(receipt.get("reason", ""))
+    return bool(
+        receipt.get("exact_overlap_fallback_policy")
+        in {PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY, PARTITIONED_EXACT_OVERLAP_DC_POLICY}
+        and receipt.get("result") == "rejected"
+        and bool(reason)
+        and isinstance(boundary, dict)
+        and boundary.get("status") == "accepted"
+        and boundary.get("reason") == "accepted"
+        and isinstance(guidance, dict)
+        and guidance.get("status") == "rejected"
+        and guidance.get("reason") == reason
+        and trigger == f"guidance_rejected_after_video_boundary_acceptance:{reason}"
+    )
+
+
 def _validate_frame_gauge_transfer(
     window: list[dict[str, Any]],
     *,
@@ -2355,14 +2422,40 @@ def _validate_frame_gauge_transfer(
         "frame-gauge transfer activated deprecated mixed-grid repairs",
     )
     overlap = transfer.get("partitioned_exact_overlap_bridge")
+    coupled_policy = isinstance(overlap, dict) and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
+    dc_policy = isinstance(overlap, dict) and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_DC_POLICY
+    coupled_requested = coupled_policy and overlap.get("requested") is True
+    frames = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
+    if (
+        coupled_policy
+        or dc_policy
+        or (
+            len(frames) == 1
+            and frames[0].get("exact_overlap_fallback_policy")
+            in {PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY, PARTITIONED_EXACT_OVERLAP_DC_POLICY}
+        )
+    ):
+        _require(
+            (coupled_policy or dc_policy)
+            and len(frames) == 1
+            and frames[0].get("exact_overlap_fallback_policy") == overlap.get("policy")
+            and frames[0].get("exact_overlap_fallback_requested") is overlap.get("requested")
+            and frames[0].get("exact_overlap_fallback_applied") is overlap.get("applied"),
+            "coupled exact-overlap transaction and transfer receipts differ",
+        )
     successor_safe_overlap = (
         isinstance(overlap, dict)
         and overlap.get("requested") is True
         and overlap.get("applied") is True
-        and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+        and overlap.get("policy")
+        in {PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY, PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY}
     )
-    expected_dc_policy = "successor_safe_linear_v2" if successor_safe_overlap else "one_token_spatial_mean_v1"
-    expected_dc_tokens = len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS) if successor_safe_overlap else 1
+    expected_dc_policy = (
+        "successor_safe_linear_v2" if successor_safe_overlap or coupled_requested else "one_token_spatial_mean_v1"
+    )
+    expected_dc_tokens = (
+        len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS) if successor_safe_overlap or coupled_requested else 1
+    )
     _require(
         transfer.get("suffix_dc_bridge_policy") == expected_dc_policy,
         "frame-gauge transfer DC policy does not match the selected exact-overlap arm",
@@ -2384,8 +2477,11 @@ def _validate_frame_gauge_transfer(
         transfer.get("suffix_dc_bridge_state_mapping") == expected_mapping,
         "frame-gauge transfer changed DC routing for the selected arm",
     )
+    allowed_clean_sources = {expected_clean_source}
+    if (coupled_policy or dc_policy) and not accepted:
+        allowed_clean_sources.add("actual_clean_postprocess")
     _require(
-        transfer.get("splice_clean_source") == expected_clean_source,
+        transfer.get("splice_clean_source") in allowed_clean_sources,
         "frame-gauge transfer used the wrong clean-state source",
     )
     _require(
@@ -2400,17 +2496,74 @@ def _validate_frame_gauge_transfer(
     if overlap is not None:
         _require(isinstance(overlap, dict), "partitioned exact-overlap receipt is malformed")
         _require(
-            overlap.get("policy")
-            in {PARTITIONED_EXACT_OVERLAP_POLICY, PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY},
+            overlap.get("policy") in PARTITIONED_EXACT_OVERLAP_POLICIES,
             "partitioned exact-overlap policy version drifted",
         )
         requested = overlap.get("requested") is True
         applied = overlap.get("applied") is True
+        if dc_policy:
+            delta_rms = _finite_number(transfer.get("suffix_dc_bridge_delta_rms"))
+            _require(
+                delta_rms >= 0.0 and applied is (requested and delta_rms > 0.0),
+                "DC-only exact-overlap application differs from its measured offset",
+            )
+            _require(
+                transfer.get("suffix_dc_bridge_enabled") is True
+                and _close_number(transfer.get("suffix_dc_bridge_first_weight"), 1.0, atol=1e-12)
+                and _close_number(transfer.get("suffix_dc_bridge_last_weight"), 1.0, atol=1e-12)
+                and overlap.get("dc_support_policy") == "first_suffix_only_v1"
+                and overlap.get("dc_support_tokens") == 1
+                and overlap.get("dc_temporal_weights") == [1.0],
+                "DC-only exact-overlap channel-mean support drifted",
+            )
+            _require(
+                overlap.get("structural_bridge_retired") is True
+                and overlap.get("structural_support_tokens") == 0
+                and overlap.get("production_correction") == "one_token_per_channel_spatial_mean_only"
+                and overlap.get("suffix_representation_bridge_requested") is False
+                and overlap.get("suffix_representation_bridge_enabled") is False
+                and overlap.get("suffix_representation_bridge_accepted") is False
+                and overlap.get("suffix_representation_bridge_corrected_tokens") == 0,
+                "DC-only exact-overlap reactivated structural transport",
+            )
+            _require(
+                overlap.get("later_suffix_extrapolated") is False
+                and overlap.get("suffix_support_policy") == "first_suffix_only_v1"
+                and overlap.get("suffix_support_tokens") == (1 if applied else 0)
+                and overlap.get("suffix_outside_support_modified") is False,
+                "DC-only exact-overlap changed later suffix tokens",
+            )
         _require(
             overlap.get("authoritative_prefix_modified") is False,
             "partitioned exact-overlap repair altered authoritative prefix ownership",
         )
-        successor_safe_policy = overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY
+        successor_safe_policy = overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY or (
+            coupled_policy and requested and applied
+        )
+        if coupled_policy:
+            expected_weights = PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS if requested else [1.0]
+            _require(
+                overlap.get("dc_support_policy")
+                == ("bounded_linear_return_v2" if requested else "first_suffix_only_v1")
+                and int(overlap.get("dc_support_tokens", 0)) == expected_dc_tokens,
+                "coupled exact-overlap DC support drifted",
+            )
+            _require(overlap.get("dc_temporal_weights") == expected_weights, "coupled exact-overlap DC weights drifted")
+            _require(
+                _close_number(transfer.get("suffix_dc_bridge_first_weight"), expected_weights[0], atol=1e-12)
+                and _close_number(transfer.get("suffix_dc_bridge_last_weight"), expected_weights[-1], atol=1e-12),
+                "coupled exact-overlap DC endpoint weights drifted",
+            )
+            if requested and not applied:
+                _require(
+                    overlap.get("suffix_representation_bridge_accepted") is False
+                    and overlap.get("suffix_representation_bridge_enabled") is False
+                    and int(overlap.get("suffix_representation_bridge_corrected_tokens", -1)) == 0
+                    and overlap.get("suffix_representation_bridge_reason") == "structural_overlap_already_matched"
+                    and _finite_number(overlap.get("suffix_representation_bridge_centered_error_before")) == 0.0
+                    and _finite_number(transfer.get("suffix_dc_bridge_delta_rms")) == 0.0,
+                    "inactive coupled exact-overlap receipt reports a nonzero correction",
+                )
         if successor_safe_policy:
             _require(
                 overlap.get("later_suffix_extrapolated") is True,
@@ -2446,29 +2599,49 @@ def _validate_frame_gauge_transfer(
             eligible_shadow = (
                 enabled and result == "shadow_only" and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
+            eligible_guidance = bool(
+                (coupled_policy or dc_policy)
+                and enabled
+                and len(frames) == 1
+                and _coupled_overlap_guidance_rejection(frames[0], trigger)
+            )
             _require(
-                eligible_rejected or eligible_shadow,
+                eligible_rejected or eligible_shadow or eligible_guidance,
                 "partitioned exact-overlap repair was requested outside an eligible frame-gauge arm",
             )
             _require(
-                transfer.get("frame_gauge_reason") == trigger,
+                transfer.get("frame_gauge_reason") == (frames[0].get("reason") if eligible_guidance else trigger),
                 "partitioned exact-overlap trigger differs from the frame-gauge transaction reason",
             )
         if applied:
             _require(requested, "partitioned exact-overlap repair applied without being requested")
+            dc_only = bool(
+                (coupled_policy or dc_policy)
+                and overlap.get("suffix_representation_bridge_accepted") is False
+                and overlap.get("suffix_representation_bridge_enabled") is False
+                and int(overlap.get("suffix_representation_bridge_corrected_tokens", -1)) == 0
+                and overlap.get("suffix_representation_bridge_reason")
+                == ("structural_successor_transport_retired" if dc_policy else "structural_overlap_already_matched")
+                and _finite_number(overlap.get("suffix_representation_bridge_centered_error_before")) == 0.0
+                and _finite_number(transfer.get("suffix_dc_bridge_delta_rms")) > 0.0
+            )
             _require(
-                overlap.get("suffix_representation_bridge_accepted") is True
-                and overlap.get("suffix_representation_bridge_enabled") is True,
+                (
+                    overlap.get("suffix_representation_bridge_accepted") is True
+                    and overlap.get("suffix_representation_bridge_enabled") is True
+                )
+                or dc_only,
                 "partitioned exact-overlap repair lacks an accepted structural-overlap receipt",
             )
             corrected_tokens = int(overlap.get("suffix_representation_bridge_corrected_tokens", 0))
-            if overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY:
+            if successor_safe_policy:
+                if not coupled_policy:
+                    _require(
+                        eligible_shadow,
+                        "successor-safe exact-overlap support is restricted to the hardware-invalidated shadow arm",
+                    )
                 _require(
-                    eligible_shadow,
-                    "successor-safe exact-overlap support is restricted to the hardware-invalidated shadow arm",
-                )
-                _require(
-                    corrected_tokens == len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS),
+                    corrected_tokens == (0 if dc_only else len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS)),
                     "successor-safe exact-overlap support length drifted",
                 )
                 _require(
@@ -2483,7 +2656,7 @@ def _validate_frame_gauge_transfer(
                 )
             else:
                 _require(
-                    corrected_tokens == 1,
+                    corrected_tokens == (0 if dc_policy else 1),
                     "historical exact-overlap repair changed more than the first suffix token",
                 )
             _require(
@@ -2624,8 +2797,7 @@ def _validate_frame_gauge(
     _validate_frame_gauge_transfer(window, mode=mode, result=result)
     if "exact_overlap_fallback_policy" in receipt:
         _require(
-            receipt.get("exact_overlap_fallback_policy")
-            in {PARTITIONED_EXACT_OVERLAP_POLICY, PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY},
+            receipt.get("exact_overlap_fallback_policy") in PARTITIONED_EXACT_OVERLAP_POLICIES,
             "frame-gauge exact-overlap fallback policy version drifted",
         )
         fallback_requested = receipt.get("exact_overlap_fallback_requested") is True
@@ -2641,6 +2813,7 @@ def _validate_frame_gauge(
                 "frame-gauge exact-overlap fallback was requested outside an eligible ON arm",
             )
             fallback_policy = receipt.get("exact_overlap_fallback_policy")
+            guidance_arm = rejected_arm and _coupled_overlap_guidance_rejection(receipt, trigger)
             if fallback_policy == PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY:
                 _require(
                     shadow_arm,
@@ -2648,11 +2821,11 @@ def _validate_frame_gauge(
                 )
             if rejected_arm:
                 _require(
-                    trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS,
+                    trigger in FRAME_GAUGE_EXACT_OVERLAP_FALLBACK_REASONS or guidance_arm,
                     "frame-gauge exact-overlap fallback rejection trigger is not eligible",
                 )
             _require(
-                receipt.get("reason") == trigger,
+                guidance_arm or receipt.get("reason") == trigger,
                 "frame-gauge exact-overlap fallback trigger differs from the transaction reason",
             )
             _require(
@@ -2665,7 +2838,10 @@ def _validate_frame_gauge(
                 "frame-gauge exact-overlap fallback lacks an accepted video registration",
             )
             if rejected_arm:
-                _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
+                if guidance_arm:
+                    _validate_boundary_motion_receipt(receipt.get("boundary_motion"))
+                else:
+                    _validate_exact_overlap_boundary_veto(receipt.get("boundary_motion"), reason=trigger)
             else:
                 _require(
                     receipt.get("candidate_accepted") is True
@@ -3654,6 +3830,7 @@ def validate_partitioned_runtime_evidence(
     expected_audio_guided_overlap_mode: str | None = None,
     expected_audio_guided_overlap_ticks: int | None = None,
     expected_audio_position_domain: str | None = None,
+    expected_high_attention_policy: str | None = None,
     expected_frame_gauge_mode: str | None = None,
     expected_residual_mode: str | None = None,
     expected_residual_result: str | None = None,
@@ -3730,6 +3907,10 @@ def validate_partitioned_runtime_evidence(
     )
 
     transformer_events = [event for event in window if _event_kind(event) == "partitioned_exact_prefix_transformer"]
+    high_transformer_events = [event for event in transformer_events if _event_fields(event).get("stage") == "high"]
+    low_probe_transformer_events = [
+        event for event in transformer_events if _event_fields(event).get("stage") != "high"
+    ]
     _require(
         bool(transformer_events),
         "partitioned transformer emitted no physical-domain evidence",
@@ -3737,7 +3918,7 @@ def validate_partitioned_runtime_evidence(
     audio_position_domain, candidate_verified, candidate_block0_calls, model_timestep_calls = (
         _validate_audio_position_policy(
             window,
-            transformer_events,
+            low_probe_transformer_events,
             plan_fields,
             expected_audio_position_domain=expected_audio_position_domain,
         )
@@ -3778,8 +3959,10 @@ def validate_partitioned_runtime_evidence(
             "source-suffix RoPE contract was not active",
         )
         _require(
-            fields.get("low_suffix_real_latent") is True,
-            "low suffix was not represented by the real source-grid latent",
+            fields.get("native_target_suffix") is True
+            if fields.get("stage") == "high"
+            else fields.get("low_suffix_real_latent") is True,
+            "partitioned suffix was not represented by the participating stage's real latent grid",
         )
         _require(
             fields.get("deprecated_mixed_grid_contract_active") is False,
@@ -3793,9 +3976,16 @@ def validate_partitioned_runtime_evidence(
         transfer.get("learned_transfer_performed") is True,
         "learned_3d transfer did not execute",
     )
+    # Partitioned transfer names this independently of the selected provider;
+    # historical uniform-grid receipts used the upscaler-specific name.
+    prefix_discard_receipts = [
+        transfer[key]
+        for key in ("transferred_prefix_output_discarded", "upscaler_prefix_output_discarded")
+        if key in transfer
+    ]
     _require(
-        transfer.get("upscaler_prefix_output_discarded") is True,
-        "upscaled prefix output was not discarded",
+        bool(prefix_discard_receipts) and all(value is True for value in prefix_discard_receipts),
+        "transferred prefix output was not discarded or its receipts disagree",
     )
     _require(
         transfer.get("authoritative_target_prefix_restored") is True,
@@ -3887,13 +4077,100 @@ def validate_partitioned_runtime_evidence(
 
     partitioned_logical = low_logical + probe_logical
     partitioned_actual = low_actual + probe_actual
+    high_attention_plans = [
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_attention_plan"
+    ]
+    high_attention_policy = None
+    high_prefix_attention_verified = False
+    if high_attention_plans:
+        _require(len(high_attention_plans) == 1, "high attention must emit exactly one policy plan")
+        high_attention = high_attention_plans[0]
+        high_attention_policy = high_attention.get("policy")
+        _require(
+            high_attention.get("policy") == PARTITIONED_HIGH_ATTENTION_POLICY,
+            "high attention policy drifted",
+        )
+        _require(
+            high_attention.get("startup_density_exemption") is False
+            and high_attention.get("refinement_source") == "h3_flow_partitioned_refinement",
+            "high attention consumed the low/probe startup exemption",
+        )
+        _require(
+            high_attention.get("generated_local_queries") == "native_sol_selection"
+            and high_attention.get("high_linear_diagnostic") == "normal"
+            and high_attention.get("high_softmax_diagnostic") == "normal"
+            and high_attention.get("high_audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
+            "high attention changed generated-query, learned-linear or audio policy",
+        )
+        _require(
+            high_attention.get("extra_logical_model_calls") == 0
+            and high_attention.get("extra_sampler_invocations") == 0,
+            "high attention added sampler or logical model calls",
+        )
+        if high_attention.get("exact_prefix_attention") is True:
+            _require(
+                high_attention.get("protected_prefix_local_queries") == "dense",
+                "high attention released protected-prefix query policy",
+            )
+            _require(
+                len(high_transformer_events) == high_actual,
+                "high prefix attention did not reach every actual high model call",
+            )
+            target_hw = high_attention.get("target_hw")
+            _require(
+                isinstance(target_hw, (list, tuple))
+                and len(target_hw) == 2
+                and all(type(value) is int and value > 0 and value % 2 == 0 for value in target_hw),
+                "high attention target grid is invalid",
+            )
+            _require(
+                tuple(target_hw) == tuple(plan_fields.get("target_hw", ()))
+                and high_attention.get("prefix_t") == plan_fields.get("prefix_temporal_length")
+                and isinstance(plan_fields.get("source_shape"), (list, tuple))
+                and len(plan_fields["source_shape"]) == 5
+                and high_attention.get("temporal") == plan_fields["source_shape"][2],
+                "high attention changed the continuation geometry",
+            )
+            target_rows = target_hw[0] * target_hw[1] // 4
+            for event in high_transformer_events:
+                fields = _event_fields(event)
+                _require(
+                    fields.get("source_rows_per_frame") == target_rows
+                    and fields.get("target_rows_per_frame") == target_rows
+                    and fields.get("prefix_log_key_measure") == 0.0
+                    and fields.get("prefix_t") == high_attention.get("prefix_t")
+                    and fields.get("temporal") == high_attention.get("temporal")
+                    and fields.get("audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
+                    "high prefix attention did not use the native target grid and unit measure",
+                )
+            partitioned_logical += high_logical
+            partitioned_actual += high_actual
+            high_prefix_attention_verified = True
+        else:
+            _require(
+                high_attention.get("exact_prefix_attention") is False
+                and high_attention.get("protected_prefix_local_queries") == "native"
+                and not high_transformer_events,
+                "native high attention unexpectedly published a partition",
+            )
+    else:
+        _require(not high_transformer_events, "high partition evidence is missing its policy plan")
+    if expected_high_attention_policy is not None:
+        _require(
+            expected_high_attention_policy == PARTITIONED_HIGH_ATTENTION_POLICY,
+            "unsupported expected high attention policy",
+        )
+        _require(
+            high_attention_policy == expected_high_attention_policy and high_prefix_attention_verified,
+            "run does not qualify the expected high prefix attention policy",
+        )
     _require(
         partitioned_calls == partitioned_actual,
-        "partitioned transformer-call accounting does not match actual low/probe calls",
+        "partitioned transformer-call accounting does not match actual participating stages",
     )
     _require(
         provider_creations + provider_reuses == partitioned_logical,
-        "partitioned provider binding accounting does not match logical low/probe calls",
+        "partitioned provider binding accounting does not match logical participating stages",
     )
     if partitioned_logical > 1:
         _require(
@@ -3978,8 +4255,19 @@ def validate_partitioned_runtime_evidence(
     audio_overlap_receipts = list(_AUDIO_OVERLAP_RE.finditer(log_text))
     latest_audio_overlap = audio_overlap_receipts[-1] if audio_overlap_receipts else None
     audio_overlap_mode = latest_audio_overlap.group("mode") if latest_audio_overlap is not None else None
-    audio_overlap_ticks = int(latest_audio_overlap.group("ticks")) if latest_audio_overlap is not None else None
+    audio_overlap_ticks = (
+        int(latest_audio_overlap.group("requested_ticks") or latest_audio_overlap.group("ticks"))
+        if latest_audio_overlap is not None
+        else None
+    )
     audio_overlap_applied = latest_audio_overlap is not None and latest_audio_overlap.group("applied") == "True"
+    audio_effective_ticks = (
+        int(latest_audio_overlap.group("applied_ticks"))
+        if latest_audio_overlap is not None and latest_audio_overlap.group("applied_ticks") is not None
+        else audio_overlap_ticks
+        if audio_overlap_applied
+        else 0
+    )
     audio_overlap = bool(audio_overlap_applied and audio_overlap_ticks == 4)
     if require_vdn_linear:
         _require(
@@ -3996,8 +4284,17 @@ def validate_partitioned_runtime_evidence(
             isinstance(expected_audio_guided_overlap_mode, str) and bool(expected_audio_guided_overlap_mode),
             "expected audio guided-overlap mode must be a non-empty string",
         )
+        exact_audio_expected = expected_audio_guided_overlap_mode in {"exact_mask", "sampler_mask_exact_timestep"}
+        if exact_audio_expected:
+            receipt = validate_coherent_exact_audio_evidence(metrics)
+            _require(receipt.get("mode") == expected_audio_guided_overlap_mode, "exact-audio receipt mode drifted")
+            _require(
+                not audio_overlap_applied and audio_effective_ticks == 0,
+                "exact-audio mode must not apply a sampler overlap ramp",
+            )
         _require(
-            audio_overlap_applied and audio_overlap_mode == expected_audio_guided_overlap_mode,
+            (audio_overlap_applied or exact_audio_expected)
+            and audio_overlap_mode == expected_audio_guided_overlap_mode,
             (
                 "latest applied partitioned audio guided-overlap mode differs from expectation: "
                 f"expected {expected_audio_guided_overlap_mode!r}, observed {audio_overlap_mode!r}"
@@ -4008,8 +4305,13 @@ def validate_partitioned_runtime_evidence(
             type(expected_audio_guided_overlap_ticks) is int and expected_audio_guided_overlap_ticks >= 0,
             "expected audio guided-overlap ticks must be a non-negative integer",
         )
+        exact_width_verified = False
+        if expected_audio_guided_overlap_mode in {"exact_mask", "sampler_mask_exact_timestep"}:
+            receipt = validate_coherent_exact_audio_evidence(metrics)
+            exact_width_verified = receipt.get("requested_overlap_ticks") == expected_audio_guided_overlap_ticks
         _require(
-            audio_overlap_applied and audio_overlap_ticks == expected_audio_guided_overlap_ticks,
+            (audio_overlap_applied or exact_width_verified)
+            and audio_overlap_ticks == expected_audio_guided_overlap_ticks,
             (
                 "latest applied partitioned audio guided-overlap width differs from expectation: "
                 f"expected {expected_audio_guided_overlap_ticks}, observed {audio_overlap_ticks}"
@@ -4026,6 +4328,9 @@ def validate_partitioned_runtime_evidence(
         probe_actual=probe_actual,
         high_logical=high_logical,
         high_actual=high_actual,
+        high_attention_policy=high_attention_policy,
+        high_prefix_attention_verified=high_prefix_attention_verified,
+        high_prefix_transformer_events=len(high_transformer_events),
         partitioned_transformer_events=len(transformer_events),
         partitioned_provider_creations=provider_creations,
         partitioned_provider_reuses=provider_reuses,

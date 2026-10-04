@@ -1,3 +1,109 @@
+# Unreleased: first-token DC support with coherent learned guidance
+
+Partitioned exact-prefix continuation now applies only a per-channel spatial-mean
+correction to the first generated suffix token. The four-token structural
+successor transplant is retired: a spatially varying prefix residual has no
+established equivariance contract with H3 or its decoder. The exact prefix,
+later generated tokens and handoff noise remain unchanged by the bridge.
+
+High-stage direction, acceleration and temporal comparisons use the same
+first-token channel-mean correction. They retain the actual learned provider
+source/target pair and the native source temporal correspondence. Historical
+structural bridge/guidance primitives remain available for regression evidence.
+No model/provider/VAE evaluation, sampler lifetime or history boundary is added.
+
+Receipts identify `partitioned_exact_overlap_dc_only_v5`, DC support of one token
+and zero structural support. The offline validator accepts this ownership contract
+and continues to replay historical policies; it rejects structural reactivation,
+later-token correction and mismatched transaction/transfer receipts.
+
+Both the prior coupled path and the current DC-only path failed rendered
+continuity acceptance. Source tests establish mutation scope and guidance
+ownership, but the frame-shift, shock and tone defect remains unresolved. The
+current bridge must not be treated as a qualified visual fix. The native boundary
+tensor export is the next evidence for choosing a correction. See the
+[current qualification](docs/validation/CONTINUATION_01109.md) and
+[preceding candidate rationale](docs/validation/CONTINUATION_01097.md).
+
+# Unreleased: retire discarded video-prefix context after 01093
+
+Run 01093 executed the corrected learned provider-pair guidance path but still
+reproduced the rendered frame-shift/shock/tone defect while six carried video
+tokens were temporarily released during target-high sampling. The first
+target-high prediction recreated substantial boundary displacement before Flow
+guidance materially changed it. Larger overlap had also been observed to worsen
+the rendered boundary.
+
+Partitioned exact-prefix video therefore no longer repaints carried-prefix rows
+for a positive `video_guided_overlap_tokens` request. The control remains an
+uncapped non-negative integer so historical workflows and matched runs deserialize
+unchanged, but it is provenance-only: target-high keeps the authoritative exact
+video mask/context for every evaluation, reports `applied_tokens=0` and
+`retired_prefix_release=true`, and installs no temporary Core mask/APPLY_MODEL
+owner. A foreign `denoise_mask_function` fails closed rather than allowing an
+uncertified exact-context claim. Audio overlap remains independent. No H3,
+provider, VAE, sampler-lifetime or history-boundary work is added.
+
+The native Core oracle demonstrates the failure mode directly: final exact-prefix
+restoration cannot undo suffix evolution caused while the model saw temporarily
+repainted carried context, whereas exact high context removes that synthetic
+temporal-denoiser bias. Rendered acceptance still requires a matched hardware
+rerun.
+
+# Historical candidate: close temporary video overlap before completion (retired after 01093)
+
+Target-high video overlap now returns to exact carried-context conditioning
+before its final two scheduled evaluations. Previously it held the repaint mask
+until sampling returned, then restored the caller prefix while retaining a
+suffix generated against the repainted context. Core inpaint and the H3 model
+mask now use one quantized sigma-dependent publication through public hooks.
+Short high schedules retain exact context throughout; execution receipts report
+the effective release and terminal context. Non-negative widths remain uncapped.
+
+Audio, low/probe masks, the learned-transfer structural/DC taper and final exact
+output restoration retain their existing ownership. No model/decoder invocation
+is added. Hook cleanup and buffer release cover success and failure. Native Core
+sampling regressions verify coherence; rendered quality and GPU cost remain
+unqualified.
+
+# Unreleased: guided overlap widths
+
+The Continuum handoff node and backend now accept non-negative overlap widths
+without a fixed video-token or audio-tick maximum. The audio environment override
+uses the same validation. Applied support uses the available carried prefix,
+including the whole prefix when requested; an oversized request no longer
+silently disables overlap. Receipts distinguish requested and applied widths.
+
+Defaults stay video `0` and audio `4`. The video width remains accepted and
+reported at target-high, but after 01093 it no longer releases carried video
+prefix rows; positive values are provenance-only and keep exact video context.
+Low/probe ownership, cross-stream isolation and final exact-prefix restoration
+remain preserved. Exact-audio mode retains zero effective audio overlap. No
+model or decoder invocation is added.
+
+# Unreleased: exact-audio mask correction (qualification pending)
+
+Partitioned exact-prefix continuation now keeps the same authoritative audio mask
+for sampler input, native H3 timestep labels, and outer velocity conversion.
+`exact_mask` is the explicit node default. Existing workflows that select
+`sampler_mask_exact_timestep` use the same corrected behavior: carried audio stays
+protected throughout sampling, and the stored overlap width has zero effect.
+The previous selector regenerated overlap rows while labeling them as exact
+carried context, then restored a different prefix after sampling.
+
+Each inner model entry verifies the native mask before inference. Invalid masks,
+missing protected-audio conditions, and unsupported Core velocity-mask semantics
+fail closed. Invocation state is cleared after execution failure or preflight
+rejection. The explicit `sampler_mask` and `model_timestep_only` comparison modes
+remain available. No sampler, transformer, attention-provider, or VAE invocation
+is added.
+
+This corrects an audio conditioning contract. Rendered audio-boundary quality and
+the remaining video displacement still require matched hardware validation;
+this entry does not announce a qualified release.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.8
 
 v0.3.8 promotes the partitioned exact-prefix Continuum path from the diagnostic development line into the shipped production node and closes both boundary regressions reproduced on v0.3.7.
