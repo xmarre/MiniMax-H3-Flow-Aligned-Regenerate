@@ -124,6 +124,52 @@ class RegisteredGuidanceReference:
     temporal_search_radius: int
 
 
+class HandoffGuidanceReference:
+    """One actual learned transfer of the selected low/probe endpoint.
+
+    This is a representation map, not spatial registration or a high prediction
+    anchor. It changes the reference used by the existing scheduled guidance.
+    Native source correspondence remains in its original representation.
+    """
+
+    def __init__(self, video: torch.Tensor, *, run_id: str, coordinate: float, prefix_t: int):
+        if (
+            video.ndim != 5
+            or not video.is_floating_point()
+            or video.device.type == "meta"
+            or not bool(torch.isfinite(video).all().item())
+            or type(prefix_t) is not int
+            or not 0 < prefix_t < video.shape[2]
+            or not math.isfinite(coordinate)
+            or not 0 <= coordinate <= 1
+        ):
+            raise ValueError("handoff guidance requires a finite target video and endpoint")
+        self.video = video.detach().clone()
+        self.run_id = str(run_id)
+        self.coordinate = float(coordinate)
+        self.prefix_t = prefix_t
+        self.calls = 0
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def resolve(self, high: torch.Tensor, *, run_id: str, coordinate: float, prefix_t: int) -> torch.Tensor:
+        if self.video is None:
+            raise RuntimeError("handoff guidance used outside its high lifetime")
+        if str(run_id) != self.run_id:
+            raise RuntimeError("handoff guidance trajectory identity drifted")
+        if not math.isclose(float(coordinate), self.coordinate, rel_tol=0.0, abs_tol=1e-7):
+            raise RuntimeError("handoff guidance endpoint identity drifted")
+        if prefix_t != self.prefix_t or high.shape != self.video.shape:
+            raise RuntimeError("handoff guidance target ownership drifted")
+        self.calls += 1
+        return self.video.to(high)
+
+    def close(self) -> None:
+        self.video = None
+
+
 @dataclass(slots=True)
 class _TemporalCorrespondence:
     coordinate: float
@@ -178,6 +224,8 @@ class GuidanceState:
     last_reference_gauge_used: bool = False
     last_reference_gauge_policy: str | None = None
     last_temporal_reference_gauge_used: bool = False
+    last_handoff_reference_used: bool = False
+    last_temporal_handoff_reference_used: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -215,6 +263,8 @@ class GuidanceState:
         self.last_reference_gauge_used = False
         self.last_reference_gauge_policy = None
         self.last_temporal_reference_gauge_used = False
+        self.last_handoff_reference_used = False
+        self.last_temporal_handoff_reference_used = False
 
 
 _PHASE_PRIORITY = {
@@ -939,6 +989,7 @@ def apply_guidance(
     registered_reference: RegisteredGuidanceReference | None = None,
     protected_prefix_t: int = 0,
     reference_gauge: ExactPrefixGuidanceGauge | None = None,
+    handoff_reference: HandoffGuidanceReference | None = None,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
@@ -972,7 +1023,10 @@ def apply_guidance(
     temporal_radius = config.temporal_search_radius
     temporal_cache_key = None
     source_ref = None
+    native_target_ref = None
     if registered_reference is not None:
+        if handoff_reference is not None:
+            raise RuntimeError("registered and native handoff guidance references cannot be combined")
         if config.mode == "downsample_consistency":
             raise RuntimeError("registered frame-gauge guidance does not support downsample_consistency")
         if str(registered_reference.run_id) != str(run.run_id):
@@ -1034,6 +1088,15 @@ def apply_guidance(
             high_x0.shape[-1],
             mode=config.transfer_mode,
         )
+        if handoff_reference is not None:
+            if config.mode == "downsample_consistency":
+                raise RuntimeError("handoff guidance requires a direction reference")
+            if coordinate > handoff_reference.coordinate + 1e-7:
+                raise RuntimeError("high-stage sampler evaluated above the learned handoff endpoint")
+            native_target_ref = ref
+            ref = handoff_reference.resolve(
+                high_x0, run_id=run.run_id, coordinate=reference_coordinate, prefix_t=prefix_t
+            )
         temporal_reference = source_ref
 
     reference_residual = None
@@ -1111,6 +1174,7 @@ def apply_guidance(
     temporal_match = None
     temporal_cache_hit = False
     temporal_reference_gauge_used = False
+    temporal_handoff_reference_used = False
     guided = high_x0 + direction_correction
     if temporal_active:
         temporal_match, temporal_cache_hit = _temporal_correspondence(
@@ -1125,13 +1189,22 @@ def apply_guidance(
         )
         if temporal_match is not None:
             temporal_high = guided
+            if native_target_ref is not None:
+                # The source matcher and its innovations still describe the
+                # native low-grid trajectory. Remove the learned-transfer
+                # representation difference before applying that operator.
+                # Add the resulting correction to the learned representation,
+                # without replacing or freezing the current high prediction.
+                temporal_high = guided - ref + native_target_ref
+                temporal_handoff_reference_used = True
             if reference_residual is not None:
                 # Correspondence and reference innovations describe the native
                 # source representation. Pull the target operand back into that
                 # same representation before transporting it. The resulting
                 # correction can then be added in the reconciled representation:
                 # subtracting the gauge only after transport would miss W(delta).
-                temporal_high = guided.clone()
+                if temporal_high is guided:
+                    temporal_high = guided.clone()
                 reference_gauge.add_to(temporal_high, reference_residual, scale=-1.0)
                 temporal_reference_gauge_used = True
             temporal_delta = _temporal_alignment_correction(
@@ -1238,6 +1311,8 @@ def apply_guidance(
     state.last_reference_gauge_used = reference_residual is not None
     state.last_reference_gauge_policy = reference_gauge.policy if reference_residual is not None else None
     state.last_temporal_reference_gauge_used = temporal_reference_gauge_used
+    state.last_handoff_reference_used = handoff_reference is not None
+    state.last_temporal_handoff_reference_used = temporal_handoff_reference_used
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0

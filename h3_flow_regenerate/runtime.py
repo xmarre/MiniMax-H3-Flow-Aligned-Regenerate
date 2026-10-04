@@ -18,6 +18,7 @@ from .guidance import (
     ExactPrefixGuidanceGauge,
     GuidanceConfig,
     GuidanceState,
+    HandoffGuidanceReference,
     RegisteredGuidanceReference,
     apply_guidance,
 )
@@ -86,6 +87,7 @@ class FlowBinding:
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     registered_guidance_reference: RegisteredGuidanceReference | None = None
     guidance_reference_gauge: ExactPrefixGuidanceGauge | None = None
+    handoff_guidance_reference: HandoffGuidanceReference | None = None
     guidance_protected_prefix_t: int = 0
     high_boundary_trace: Any = None
     high_boundary_anchor: Any = None
@@ -602,6 +604,7 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             registered_reference=binding.registered_guidance_reference,
             protected_prefix_t=binding.guidance_protected_prefix_t,
             reference_gauge=binding.guidance_reference_gauge,
+            handoff_reference=binding.handoff_guidance_reference,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))
@@ -637,6 +640,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             reference_gauge_used=binding.guidance_state.last_reference_gauge_used,
             reference_gauge_policy=binding.guidance_state.last_reference_gauge_policy,
             temporal_reference_gauge_used=binding.guidance_state.last_temporal_reference_gauge_used,
+            handoff_reference_used=binding.guidance_state.last_handoff_reference_used,
+            temporal_handoff_reference_used=binding.guidance_state.last_temporal_handoff_reference_used,
             protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(

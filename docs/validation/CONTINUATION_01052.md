@@ -74,6 +74,39 @@ extra H3, provider, sampler or VAE work is added. This is a capture correction,
 not a rendered repair. Native temporal-oracle checks verify the saved window's
 first twelve retained frames against continuous decoding.
 
+## Learned handoff and guidance reference correction
+
+The previous comparison tests used `learned_output = bicubic(source)`. That
+omitted the actual production transfer difference: the learned 3D provider can
+change temporal transitions, while high guidance reconstructed its reference
+with bicubic interpolation. Prefix rebasing alone therefore did not guarantee
+that guidance preserved a correctly reconciled learned transition.
+
+A finite nonlinear provider counterexample preserves the first transition to
+`1.192093e-7` before guidance. The current coupled-gauge direction update creates
+`0.0440133` maximum transition error and `-0.0436337` first-suffix mean change,
+while preserving the prefix exactly. This establishes an implementation
+inconsistency; it does not establish its contribution to this render's third
+decoded-frame shock. The first high prediction's independently observed change
+still requires rendered assessment.
+
+High direction/acceleration now reuse the already executed actual learned
+provider output for the matching main exact-probe endpoint. Binding verifies
+the selected probe's generated suffix and the high schedule's endpoint identity.
+The intentionally restored provider prefix is allowed to differ from the
+pre-inpaint capture. Independent shadow and spatial controls are not rebound.
+Native temporal correspondence remains unchanged; its temporary operand removes
+the learned-versus-bicubic representation difference before applying the existing
+prefix-gauge pullback. The existing scheduled guidance and RMS limit remain;
+there is no fixed clean prediction, new fade or extra model/provider evaluation.
+
+The new direction regression, moving/stationary temporal covariance, actual and
+forecast wrapper, audio ownership, source/schedule rejection and exception
+lifetime cases pass in the targeted suite (70 cases). One target video endpoint
+is retained for high, approximately 21.82 MiB for this run's FP32 24x62x62x62
+geometry, and released on success or failure. GPU overhead and rendered quality
+remain unmeasured. The existing compile-reuse change is independent of this fix.
+
 ## Timing and actual GPU reuse receipts
 
 | Seconds | Initial | Continuation | Increase |
