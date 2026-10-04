@@ -1,9 +1,13 @@
 # Heterogeneous boundary observation: qualification handoff
 
-Current status: the user reports the frame shift resolved after restoring
-`same_grid_target_control`. Retain that accepted configuration. The active
-qualification concerns continuation speed, VRAM pressure and reported overcooking; older rendered
-observations below remain specific to their earlier configurations.
+Current status: the newer continuation captures still show the frame shock and
+tone change. [Run 01115's native replay](validation/CONTINUATION_01115.md) places
+the within-token jump in the first high prediction before Flow. A new
+[protected-prefix attention candidate](validation/CONTINUATION_HIGH_ATTENTION_20261004.md)
+preserves prefix query policy through high refinement and honors configured Sol
+startup. It has no new rendered qualification. Retain the accepted
+`same_grid_target_control`; earlier acceptance and performance observations
+below remain specific to their recorded configurations.
 
 ## 2026-10-02: new captures confirm the full-grid continuation cost
 

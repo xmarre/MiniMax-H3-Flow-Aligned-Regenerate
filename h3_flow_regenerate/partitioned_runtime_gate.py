@@ -108,6 +108,9 @@ class RuntimeGateReport:
     probe_actual: int
     high_logical: int
     high_actual: int
+    high_attention_policy: str | None
+    high_prefix_attention_verified: bool
+    high_prefix_transformer_events: int
     partitioned_transformer_events: int
     partitioned_provider_creations: int
     partitioned_provider_reuses: int
@@ -3827,6 +3830,7 @@ def validate_partitioned_runtime_evidence(
     expected_audio_guided_overlap_mode: str | None = None,
     expected_audio_guided_overlap_ticks: int | None = None,
     expected_audio_position_domain: str | None = None,
+    expected_high_attention_policy: str | None = None,
     expected_frame_gauge_mode: str | None = None,
     expected_residual_mode: str | None = None,
     expected_residual_result: str | None = None,
@@ -4076,9 +4080,12 @@ def validate_partitioned_runtime_evidence(
     high_attention_plans = [
         _event_fields(event) for event in window if _event_kind(event) == "partitioned_high_attention_plan"
     ]
+    high_attention_policy = None
+    high_prefix_attention_verified = False
     if high_attention_plans:
         _require(len(high_attention_plans) == 1, "high attention must emit exactly one policy plan")
         high_attention = high_attention_plans[0]
+        high_attention_policy = high_attention.get("policy")
         _require(
             high_attention.get("policy") == PARTITIONED_HIGH_ATTENTION_POLICY,
             "high attention policy drifted",
@@ -4138,6 +4145,7 @@ def validate_partitioned_runtime_evidence(
                 )
             partitioned_logical += high_logical
             partitioned_actual += high_actual
+            high_prefix_attention_verified = True
         else:
             _require(
                 high_attention.get("exact_prefix_attention") is False
@@ -4147,6 +4155,15 @@ def validate_partitioned_runtime_evidence(
             )
     else:
         _require(not high_transformer_events, "high partition evidence is missing its policy plan")
+    if expected_high_attention_policy is not None:
+        _require(
+            expected_high_attention_policy == PARTITIONED_HIGH_ATTENTION_POLICY,
+            "unsupported expected high attention policy",
+        )
+        _require(
+            high_attention_policy == expected_high_attention_policy and high_prefix_attention_verified,
+            "run does not qualify the expected high prefix attention policy",
+        )
     _require(
         partitioned_calls == partitioned_actual,
         "partitioned transformer-call accounting does not match actual participating stages",
@@ -4311,6 +4328,9 @@ def validate_partitioned_runtime_evidence(
         probe_actual=probe_actual,
         high_logical=high_logical,
         high_actual=high_actual,
+        high_attention_policy=high_attention_policy,
+        high_prefix_attention_verified=high_prefix_attention_verified,
+        high_prefix_transformer_events=len(high_transformer_events),
         partitioned_transformer_events=len(transformer_events),
         partitioned_provider_creations=provider_creations,
         partitioned_provider_reuses=provider_reuses,

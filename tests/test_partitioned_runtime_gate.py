@@ -15,6 +15,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     AUDIO_POSITION_DOMAIN_LEGACY,
     AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
+    PARTITIONED_HIGH_ATTENTION_POLICY,
     PARTITIONED_SOL_ABI,
     RuntimeGateError,
     compare_residual_measurement_pair,
@@ -143,11 +144,26 @@ def _high_attention_metrics():
 
 
 def test_gate_accounts_for_high_prefix_attention_without_reclassifying_old_runs():
-    report = validate_partitioned_runtime_evidence(_high_attention_metrics(), _log())
+    report = validate_partitioned_runtime_evidence(
+        _high_attention_metrics(), _log(), expected_high_attention_policy=PARTITIONED_HIGH_ATTENTION_POLICY
+    )
     assert report.high_actual == 1
     assert report.logical_calls == 5
+    assert report.high_attention_policy == PARTITIONED_HIGH_ATTENTION_POLICY
+    assert report.high_prefix_attention_verified is True
+    assert report.high_prefix_transformer_events == 1
     old = validate_partitioned_runtime_evidence(_metrics(), _log())
     assert old.high_actual == report.high_actual
+    assert old.high_attention_policy is None
+    assert old.high_prefix_attention_verified is False
+    assert old.high_prefix_transformer_events == 0
+
+
+def test_historical_run_cannot_qualify_new_high_attention_policy():
+    with pytest.raises(RuntimeGateError, match="does not qualify the expected high"):
+        validate_partitioned_runtime_evidence(
+            _metrics(), _log(), expected_high_attention_policy=PARTITIONED_HIGH_ATTENTION_POLICY
+        )
 
 
 @pytest.mark.parametrize(

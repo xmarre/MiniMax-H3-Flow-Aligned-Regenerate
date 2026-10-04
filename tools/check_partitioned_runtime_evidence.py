@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from h3_flow_regenerate.partitioned_runtime_gate import (  # noqa: E402
+    PARTITIONED_HIGH_ATTENTION_POLICY,
     RuntimeGateError,
     compare_residual_measurement_pair,
     validate_partitioned_runtime_evidence,
@@ -76,6 +77,11 @@ def main() -> None:
         "--expected-frame-gauge-mode",
         choices=("off", "on-accepted", "on-rejected", "on-identity"),
         help="Require the latest partitioned frame-gauge arm/result and its zero-extra-work receipt.",
+    )
+    parser.add_argument(
+        "--expected-high-attention-policy",
+        choices=(PARTITIONED_HIGH_ATTENTION_POLICY,),
+        help="Require target-grid protected-prefix attention receipts for every actual high evaluation.",
     )
     parser.add_argument(
         "--expected-residual-mode",
@@ -158,6 +164,7 @@ def main() -> None:
             expected_audio_guided_overlap_mode=args.expected_audio_guided_overlap_mode,
             expected_audio_guided_overlap_ticks=args.expected_audio_guided_overlap_ticks,
             expected_audio_position_domain=args.expected_audio_position_domain,
+            expected_high_attention_policy=args.expected_high_attention_policy,
             expected_frame_gauge_mode=args.expected_frame_gauge_mode,
             expected_residual_mode=args.expected_residual_mode,
             expected_residual_result=args.expected_residual_result,

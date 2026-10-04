@@ -792,7 +792,11 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         softmax_diagnostic=softmax_mode,
         vdn_temporal_carrier_policy=temporal_carrier_policy,
         vdn_temporal_carrier_short_conv_spec=temporal_carrier_spec,
-        boundary_witness=configured_boundary_witness(metrics, directory=witness_directory),
+        boundary_witness=(
+            None
+            if transformer.get(FLOW_STAGE_KEY) == "high"
+            else configured_boundary_witness(metrics, directory=witness_directory)
+        ),
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
     )

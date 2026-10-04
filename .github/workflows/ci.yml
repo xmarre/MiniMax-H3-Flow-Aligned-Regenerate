@@ -171,4 +171,5 @@ jobs:
             .contracts/SolPartitioned/tests/test_native_reference_cost.py \
             .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py \
             .contracts/VDNPartitioned/tests/test_deferred_cholesky.py \
-            .contracts/VDNPartitioned/tests/test_runtime_buffers.py
+            .contracts/VDNPartitioned/tests/test_runtime_buffers.py \
+            tests/test_partitioned_native_modulation.py::test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol

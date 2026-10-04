@@ -29,7 +29,8 @@ def _plan(source_hw=(4, 6)):
 
 @pytest.mark.parametrize("source_hw", [(4, 6), (8, 12)])
 @pytest.mark.parametrize("failure", [False, True])
-def test_high_owns_target_grid_context_and_restores_low_controls(source_hw, failure):
+def test_high_owns_target_grid_context_and_restores_low_controls(source_hw, failure, monkeypatch, tmp_path):
+    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
     plan = _plan(source_hw)
     prefix = plan.prefix.clone()
     prefix_noise = plan.prefix_noise.clone()
@@ -55,6 +56,7 @@ def test_high_owns_target_grid_context_and_restores_low_controls(source_hw, fail
             assert owner.vdn_linear_diagnostic == owner.softmax_diagnostic == "normal"
             assert owner.vdn_temporal_carrier_policy == "native_grid_then_map_v1"
             assert owner.audio_position_domain == "legacy_target"
+            assert owner.boundary_witness is None
             assert options["h3_refinement"]["min_actual_prefix_steps"] == 1
             assert options["h3_refinement"]["source"] == "h3_flow_partitioned_refinement"
             assert options["h3_refinement"]["provider_note"] == "keep"
