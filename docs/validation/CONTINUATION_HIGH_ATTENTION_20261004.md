@@ -62,7 +62,7 @@ equal-grid linear fast path remain in force.
 Low/probe diagnostic selectors are temporarily normalized for this high owner:
 normal softmax and learned linear policies, native temporal carrier, exact
 prefix context, and native target-audio positions. Prior option presence and
-object identity are restored on success or failure. A source-uniform diagnostic
+object identity are restored on success or failure. A source-uniform execution
 arm keeps its native high transformer, while still receiving the fresh startup
 tag. Nested partition owners are rejected without replacing the original owner.
 
@@ -135,13 +135,30 @@ VDN-patched model rollout. VDN's uniform-grid arithmetic and workspace oracles
 are checked separately.
 
 Lifecycle tests cover equal/progressive grids, failure cleanup, original prefix
-and noise bytes, nested owner refusal, native diagnostic arms, and witness
+and noise bytes, nested owner refusal, native source-uniform execution, and witness
 omission. Runtime-gate tests reject changed geometry, key measure, startup
 exemption, learned-linear policy, or missing actual high receipts.
 
-Final local and CI results are recorded with the PR checkpoint. No CUDA
-arithmetic, memory, latency or rendered-quality result is inferred from CPU
-tests.
+Verification completed on Python 3.12 with CPU PyTorch:
+
+- Full Flow suite: **898 passed, 28 skipped**. The skips require separately
+  supplied Core sources; the new native Core/Sol test runs in the source job.
+- Selected native Core/Sol/VDN dispatch, workspace, low-VRAM, forward-lifetime,
+  grouping, factorization and runtime-buffer suite: **164 passed, 7 skipped**.
+  Its skips cover CUDA-only checks.
+- VDN partitioned linear suite, including uniform-grid reduction and dispatch:
+  **62 passed**.
+- Paired Flow/Sol/VDN source oracle, including bounded boundary-witness transport
+  and the new high attention policy: **passed**.
+- Ruff check/format, compile, wheel/sdist build, license metadata and isolated
+  wheel import: **passed**.
+- Reviewed checkpoint `283b57dbb39c8b6cea5356f0fe241d28c54fea2b`: all five CI jobs
+  passed (Python 3.10-3.13 and the pinned source-contract job).
+- Historical 01115 metrics still pass their ordinary runtime gate and are
+  rejected by the new high-attention qualification flag.
+
+No CUDA arithmetic, memory, latency or rendered-quality result is inferred from
+CPU tests or CI.
 
 ## Qualification required on the new head
 

@@ -104,6 +104,8 @@ low_probe_execution_source = source_carrier_uniform_only
 
 The learned 3D upscaler input is required. The fast continuation uses one source-uniform low/probe path followed by target-high: three continuation sampler lifetimes, two history boundaries, no duplicate shadow lifetime, and exact caller-visible prefix restoration.
 
+When low/probe uses the exact target-prefix partition, high refinement now retains dense protected-prefix local queries on the native target grid. Generated local queries keep their configured Sol selection, and high keeps its normal VDN learned linear branch and target-audio positions. The source-uniform execution path retains its native high transformer. Both paths honor configured Sol startup evaluations at target refinement. This attention-continuity candidate still needs rendered frame and tone qualification; it does not add logical model calls or sampler lifetimes.
+
 `exact_mask` protects carried audio throughout sampling with the same native input, timestep and velocity masks. The stored overlap width is ignored in this mode. The historical `sampler_mask_exact_timestep` selector aliases `exact_mask` so existing workflows load with coherent audio ownership. `sampler_mask` retains the selectable `0..16`-tick ramp for comparisons; `model_timestep_only` is an intentionally mismatched timestep diagnostic. Rendered boundary quality still requires validation with the selected model and conditioning.
 
 The partitioned learned-transfer splice also applies a bounded one-token video DC continuity correction before target-high. It does not modify the authoritative exact prefix or later suffix tokens.
