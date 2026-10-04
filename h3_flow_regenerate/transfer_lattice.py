@@ -8,19 +8,19 @@ import time
 import torch
 import torch.nn.functional as F
 
-H3_TRANSFER_LATTICE = "h3_physical_patch_lattice_v1"
+H3_TRANSFER_LATTICE = "h3_dense_patch_center_lattice_v2"
 
 
 class H3PatchLatticeTransferProvider:
     """Select the provider's encoder-to-decoder transport for a physical carrier."""
 
     def __init__(self, provider):
-        if getattr(provider, "h3_patch_lattice_api", None) != 1 or not callable(
+        if getattr(provider, "h3_patch_lattice_api", None) != 2 or not callable(
             getattr(provider, "upscale_clean_video_h3_patch_lattice", None)
         ):
             raise RuntimeError(
-                "Partitioned H3 continuation requires the upscaler provider with h3_patch_lattice_api=1. "
-                "Update MiniMax H3 Latent Upscaler-Plus to the matching transfer-lattice candidate."
+                "Partitioned H3 continuation requires the upscaler provider with h3_patch_lattice_api=2. "
+                "Update MiniMax H3 Latent Upscaler-Plus to the matching dense-transfer candidate."
             )
         self.provider = provider
         self.calls = 0

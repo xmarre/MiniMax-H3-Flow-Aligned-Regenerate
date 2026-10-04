@@ -10,7 +10,7 @@ from h3_flow_regenerate.transfer_lattice import H3PatchLatticeTransferProvider, 
 def test_physical_transfer_uses_explicit_provider_capability_once():
     calls = []
     provider = SimpleNamespace(
-        h3_patch_lattice_api=1,
+        h3_patch_lattice_api=2,
         model_name="checkpoint",
         upscale_clean_video=lambda *_a, **_k: pytest.fail("half-pixel path executed"),
         upscale_clean_video_h3_patch_lattice=lambda value, **kw: calls.append((value, kw)) or value,
@@ -26,9 +26,12 @@ def test_physical_transfer_uses_explicit_provider_capability_once():
     assert torch.equal(video, before)
 
 
-def test_legacy_provider_is_rejected_before_a_model_call():
-    with pytest.raises(RuntimeError, match="h3_patch_lattice_api=1"):
-        H3PatchLatticeTransferProvider(SimpleNamespace(upscale_clean_video=lambda: None))
+@pytest.mark.parametrize("api", [None, 1])
+def test_legacy_provider_is_rejected_before_a_model_call(api):
+    with pytest.raises(RuntimeError, match="h3_patch_lattice_api=2"):
+        H3PatchLatticeTransferProvider(
+            SimpleNamespace(h3_patch_lattice_api=api, upscale_clean_video_h3_patch_lattice=lambda: None)
+        )
 
 
 def test_same_frame_affine_diagnostic_observes_scale_and_does_not_modify_output():

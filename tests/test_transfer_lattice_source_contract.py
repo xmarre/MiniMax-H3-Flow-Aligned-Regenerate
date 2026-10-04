@@ -9,7 +9,17 @@ from h3_flow_regenerate.geometry import resize_spatial_5d_h3_patch_lattice
 from h3_flow_regenerate.transfer_lattice import H3_TRANSFER_LATTICE
 
 
-@pytest.mark.parametrize("source,target", [((46, 40), (66, 58)), ((66, 58), (46, 40))])
+@pytest.mark.parametrize(
+    "source,target",
+    [
+        ((46, 40), (66, 58)),
+        ((66, 58), (46, 40)),
+        ((36, 54), (50, 76)),
+        ((50, 76), (36, 54)),
+        ((54, 36), (76, 50)),
+        ((76, 50), (54, 36)),
+    ],
+)
 def test_upscaler_and_authoritative_prefix_use_identical_coordinate_transport(source, target):
     root = os.environ.get("H3_UPSCALER_PATH")
     if not root:

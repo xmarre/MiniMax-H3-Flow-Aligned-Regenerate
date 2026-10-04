@@ -3174,7 +3174,7 @@ def run_partitioned_progressive(
     low_latent_image = pack_streams((low_video, low_audio))[0]
     binding.metrics.event(
         "partitioned_prefix_source_resample",
-        policy="h3_physical_patch_lattice_v1",
+        policy=H3_TRANSFER_LATTICE,
         prefix_source="authoritative_exact_target_prefix",
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
