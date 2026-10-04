@@ -58,7 +58,12 @@ def test_requested_witness_missing_capability_fails_before_sampling(monkeypatch,
     from h3_flow_regenerate.partitioned_scheduler import _validate_partitioned_vdn_compat
 
     monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path / "stale-env"))
-    owner = SimpleNamespace(_vdn_forward=True, _vdn_external_sequence_api=4)
+    owner = SimpleNamespace(
+        _vdn_forward=True,
+        _vdn_external_sequence_api=4,
+        _vdn_partitioned_boundary_query_api=1,
+        _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+    )
     patcher = SimpleNamespace(
         object_patches={"diffusion_model.blocks.0.attn.forward": owner},
         model_options={WITNESS_DIRECTORY_OPTION: ""},
