@@ -1613,16 +1613,6 @@ def _prepare_handoff_guidance_reference(
         raise RuntimeError("learned handoff guidance source geometry drifted")
     if provider_output.shape[:3] != provider_input.shape[:3]:
         raise RuntimeError("learned handoff guidance target temporal geometry drifted")
-    if (
-        provider_input.device.type == "meta"
-        or provider_output.device.type == "meta"
-        or not provider_input.is_floating_point()
-        or not provider_output.is_floating_point()
-        or not bool(torch.isfinite(provider_input).all().item())
-        or not bool(torch.isfinite(provider_output).all().item())
-    ):
-        raise RuntimeError("learned handoff guidance provider pair is not finite materialized video")
-
     # PREDICT_NOISE capture precedes the sampler's output algebra. The exact
     # one-call probe subsequently multiplies by (1-sigma) and CONST inverse
     # scaling divides by the same value; that round-trip is mathematically
@@ -1650,10 +1640,24 @@ def _prepare_handoff_guidance_reference(
         coordinate=split_coordinate,
         prefix_t=prefix_t,
     )
-    owner.captured_source_prefix_delta_rms = float(prefix_delta.square().mean().sqrt().item())
-    owner.captured_source_prefix_delta_abs_max = float(prefix_delta.abs().max().item())
-    owner.captured_source_suffix_delta_rms = float(suffix_delta.square().mean().sqrt().item())
-    owner.captured_source_suffix_delta_abs_max = float(suffix_delta.abs().max().item())
+    source_delta_summary = (
+        torch.stack(
+            (
+                prefix_delta.square().mean().sqrt(),
+                prefix_delta.abs().max(),
+                suffix_delta.square().mean().sqrt(),
+                suffix_delta.abs().max(),
+            )
+        )
+        .detach()
+        .to(device="cpu", dtype=torch.float64)
+    )
+    (
+        owner.captured_source_prefix_delta_rms,
+        owner.captured_source_prefix_delta_abs_max,
+        owner.captured_source_suffix_delta_rms,
+        owner.captured_source_suffix_delta_abs_max,
+    ) = map(float, source_delta_summary.tolist())
     return owner
 
 
@@ -5024,13 +5028,9 @@ def run_partitioned_progressive(
                 video_shift=video_shift,
             )
             source_retained_bytes = (
-                handoff_guidance_reference.source_video.numel()
-                * handoff_guidance_reference.source_video.element_size()
+                handoff_guidance_reference.source_video.numel() * handoff_guidance_reference.source_video.element_size()
             )
-            target_retained_bytes = (
-                handoff_guidance_reference.video.numel()
-                * handoff_guidance_reference.video.element_size()
-            )
+            target_retained_bytes = handoff_guidance_reference.video.numel() * handoff_guidance_reference.video.element_size()
             binding.metrics.event(
                 "partitioned_handoff_guidance_reference",
                 run_id=guidance_run.run_id,

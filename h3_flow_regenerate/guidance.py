@@ -189,11 +189,7 @@ class HandoffGuidanceReference:
             raise RuntimeError("handoff guidance trajectory identity drifted")
         if not math.isclose(float(coordinate), self.coordinate, rel_tol=0.0, abs_tol=1e-7):
             raise RuntimeError("handoff guidance endpoint identity drifted")
-        if (
-            prefix_t != self.prefix_t
-            or high.shape != self.video.shape
-            or self.source_video.shape[:3] != high.shape[:3]
-        ):
+        if prefix_t != self.prefix_t or high.shape != self.video.shape or self.source_video.shape[:3] != high.shape[:3]:
             raise RuntimeError("handoff guidance target ownership drifted")
         self.calls += 1
         return self.source_video.to(high), self.video.to(high)
@@ -1111,10 +1107,6 @@ def apply_guidance(
         temporal_cache_key = registered_reference.cache_key
     else:
         trajectory_source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
-        trajectory_source_ref = trajectory_source_ref.to(
-            device=high_x0.device,
-            dtype=high_x0.dtype,
-        )
         if handoff_reference is not None:
             if config.mode == "downsample_consistency":
                 raise RuntimeError("handoff guidance requires a direction reference")
@@ -1130,7 +1122,10 @@ def apply_guidance(
                 mode=config.transfer_mode,
             )
         else:
-            source_ref = trajectory_source_ref
+            source_ref = trajectory_source_ref.to(
+                device=high_x0.device,
+                dtype=high_x0.dtype,
+            )
             ref = resize_video(
                 source_ref,
                 high_x0.shape[-2],

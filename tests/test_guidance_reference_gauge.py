@@ -692,9 +692,7 @@ def test_learned_reference_uses_actual_provider_input_after_probe_roundtrip():
 def test_learned_reference_temporal_transport_uses_actual_provider_source_pair():
     p, source, _, _, _, _, run = _learned_case()
     provider_source = source.clone()
-    provider_source[:, :, p:] += torch.linspace(
-        -0.04, 0.05, provider_source.shape[2] - p
-    ).reshape(1, 1, -1, 1, 1)
+    provider_source[:, :, p:] += torch.linspace(-0.04, 0.05, provider_source.shape[2] - p).reshape(1, 1, -1, 1, 1)
     linear = resize_video(provider_source, 12, 14)
     time = torch.arange(linear.shape[2]).reshape(1, 1, -1, 1, 1)
     learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
