@@ -10,6 +10,80 @@ from typing import Any
 
 import torch
 
+from .vae_boundary_video import (
+    H3_VAE_CHUNK_TOKENS,
+    H3_VAE_CLIP_FRAMES,
+    H3_VAE_FRAME_OVERLAP,
+    H3_VAE_TOKEN_OVERLAP,
+    H3_VAE_WINDOW_TOKENS,
+)
+
+
+class BoundaryWindowEvidence:
+    """CPU snapshots of the one native decoder window across existing stages."""
+
+    def __init__(self, exact_prefix: torch.Tensor, temporal: int):
+        prefix_t = int(exact_prefix.shape[2])
+        start = prefix_t - H3_VAE_TOKEN_OVERLAP
+        stop = start + H3_VAE_WINDOW_TOKENS
+        if start < 0 or start % H3_VAE_CHUNK_TOKENS:
+            raise ValueError("boundary-window evidence requires the native 5k+2 prefix phase")
+        if stop > temporal:
+            raise ValueError("boundary-window evidence lacks five real generated decoder-context tokens")
+        self.plan = {
+            "policy": "native_h3_boundary_decoder_window_v1",
+            "prefix_t": prefix_t,
+            "temporal": temporal,
+            "window_start_t": start,
+            "window_stop_t": stop,
+            "window_tokens": H3_VAE_WINDOW_TOKENS,
+            "token_overlap": H3_VAE_TOKEN_OVERLAP,
+            "chunk_stride_tokens": H3_VAE_CHUNK_TOKENS,
+            "decoder_chunk_output_start_frame": start // H3_VAE_CHUNK_TOKENS * H3_VAE_CLIP_FRAMES,
+            "decoded_trim_frames": start // H3_VAE_CHUNK_TOKENS * H3_VAE_CLIP_FRAMES + H3_VAE_FRAME_OVERLAP,
+            "first_retained_local_frame": H3_VAE_FRAME_OVERLAP,
+        }
+        self.tensors: dict[str, torch.Tensor] = {}
+        self.first_high_call_index: int | None = None
+        self.first_high_sigma: float | None = None
+        self.copy_wall_s = 0.0
+        self.capture("authoritative_prefix", exact_prefix)
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def capture(self, name: str, video: torch.Tensor) -> None:
+        if name in self.tensors:
+            raise RuntimeError(f"boundary-window snapshot {name!r} was reused")
+        start, stop = self.plan["window_start_t"], self.plan["window_stop_t"]
+        if name == "authoritative_prefix":
+            stop = self.plan["prefix_t"]
+        window = video[:, :, start:stop].detach()
+        if window.shape[2] != stop - start:
+            raise RuntimeError("boundary-window snapshot is missing native decoder context")
+        started = time.perf_counter()
+        self.tensors[name] = window.to(device="cpu", copy=True).contiguous()
+        self.copy_wall_s += time.perf_counter() - started
+
+    def observe_prediction(self, video, *, point, call_index, sigma, actual, sampler_input=None):
+        if point == "before_flow" and actual and self.first_high_call_index is None:
+            self.first_high_call_index = int(call_index)
+            self.first_high_sigma = float(sigma)
+            self.capture("first_high_before_flow", video)
+            if sampler_input is not None:
+                self.capture("first_high_sampler_input", sampler_input)
+        elif (
+            point == "after_flow"
+            and actual
+            and call_index == self.first_high_call_index
+            and "first_high_after_flow" not in self.tensors
+        ):
+            self.capture("first_high_after_flow", video)
+
+    def close(self):
+        self.tensors.clear()
+
 
 def _safe_component(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "unknown")).strip("-")
@@ -53,6 +127,7 @@ def export_residual_geometry_evidence(
     seed: int,
     sigma: float,
     metadata: dict[str, Any],
+    evidence_kind: str = "h3_flow_exact_prefix_residual_geometry_evidence",
 ) -> dict[str, Any]:
     """Write bounded raw tensor evidence into ComfyUI's ordinary output tree.
 
@@ -68,6 +143,7 @@ def export_residual_geometry_evidence(
         return {
             "status": "unavailable",
             "reason": "comfyui_output_directory_unavailable",
+            "extra_vae_calls": 0,
             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
         }
 
@@ -97,7 +173,7 @@ def export_residual_geometry_evidence(
             total_bytes += int(receipt["nbytes"])
         manifest = {
             "schema": 1,
-            "kind": "h3_flow_exact_prefix_residual_geometry_evidence",
+            "kind": evidence_kind,
             "session_id": str(session_id),
             "chunk_id": str(chunk_id),
             "seed": int(seed),
@@ -136,4 +212,4 @@ def export_residual_geometry_evidence(
         raise
 
 
-__all__ = ["export_residual_geometry_evidence"]
+__all__ = ["BoundaryWindowEvidence", "export_residual_geometry_evidence"]
