@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_diagnostics import (
+    PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
@@ -29,6 +31,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS,
     PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_SHADOW,
+    PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+    PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY,
+    PARTITIONED_HANDOFF_TRANSFER_LEARNED,
+    PARTITIONED_HANDOFF_TRANSFER_OPTIONS,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_KEY,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
     PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS,
@@ -40,21 +46,40 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS,
     PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
+    PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS,
+    PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
     PartitionedAudioModelTimestepContext,
     apply_partitioned_diagnostic_controls,
+    build_vdn_temporal_carrier_contract,
     normalize_audio_handoff_source,
     normalize_av_handoff_source,
     normalize_guidance_trajectory_source,
+    normalize_handoff_transfer_control,
     normalize_low_probe_execution_source,
+    normalize_partitioned_softmax_diagnostic,
     normalize_prefix_transformer_context,
     normalize_provider_boundary_stabilization,
+    normalize_spatial_stage_control,
+    normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_video_guided_overlap_tokens,
 )
 from h3_flow_regenerate.partitioned_node import (
     NODE_DISPLAY_NAME_MAPPINGS,
@@ -72,10 +97,16 @@ from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED,
     PARTITIONED_PROGRESSIVE_KEY,
     PartitionedPreflightUnsupported,
+    _BicubicSameSourceTransferProvider,
     _cache_audio_decode_witness,
+    _IdentitySameGridTransferProvider,
+    _partitioned_high_video_overlap_mask,
     _prepare_registered_guidance_reference,
+    _validate_audio_position_candidate_configuration,
     _validate_partitioned_vdn_compat,
+    _verify_partitioned_softmax_diagnostic,
     _verify_partitioned_vdn_linear_diagnostic,
+    _verify_partitioned_vdn_temporal_carrier_policy,
     _verify_prefix_transformer_context_diagnostic,
 )
 from h3_flow_regenerate.partitioned_transformer import _audio_model_timestep_kwargs
@@ -117,6 +148,11 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert "low_probe_execution_source" not in ordinary
     assert "frame_gauge_repair" not in ordinary
     assert "provider_boundary_stabilization" not in ordinary
+    assert "vdn_temporal_carrier_policy" not in ordinary
+    assert "handoff_transfer_control" not in ordinary
+    assert "spatial_stage_control" not in ordinary
+    assert "softmax_diagnostic" not in ordinary
+    assert "video_guided_overlap_tokens" not in ordinary
 
     assert diagnostic["vdn_linear_diagnostic"][0] == [
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -129,14 +165,12 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+        PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     ]
-    assert (
-        diagnostic["audio_guided_overlap_mode"][1]["default"]
-        == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP
-    )
+    assert diagnostic["audio_guided_overlap_mode"][1]["default"] == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT
     assert diagnostic["audio_guided_overlap_ticks"][1]["default"] == 4
     assert diagnostic["audio_guided_overlap_ticks"][1]["min"] == 0
-    assert diagnostic["audio_guided_overlap_ticks"][1]["max"] == 16
+    assert "max" not in diagnostic["audio_guided_overlap_ticks"][1]
     assert diagnostic["prefix_transformer_context"][0] == list(PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_OPTIONS)
     assert diagnostic["prefix_transformer_context"][1]["default"] == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
     assert diagnostic["audio_position_domain"][0] == list(PARTITIONED_AUDIO_POSITION_DOMAIN_OPTIONS)
@@ -147,10 +181,22 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["av_handoff_source"][1]["default"] == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
     assert diagnostic["guidance_trajectory_source"][0] == list(PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_OPTIONS)
     assert diagnostic["guidance_trajectory_source"][1]["default"] == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    assert diagnostic["handoff_transfer_control"][0] == list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS)
+    assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    assert diagnostic["spatial_stage_control"][0] == list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS)
+    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+    assert diagnostic["softmax_diagnostic"][0] == list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
+    assert diagnostic["softmax_diagnostic"][1]["default"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+    assert diagnostic["video_guided_overlap_tokens"][0] == "INT"
+    assert diagnostic["video_guided_overlap_tokens"][1]["default"] == 0
+    assert diagnostic["video_guided_overlap_tokens"][1]["min"] == 0
+    assert "max" not in diagnostic["video_guided_overlap_tokens"][1]
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
     assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["vdn_temporal_carrier_policy"][0] == list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
+    assert diagnostic["vdn_temporal_carrier_policy"][1]["default"] == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
     assert diagnostic["provider_boundary_stabilization"][0] == list(PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OPTIONS)
     assert (
         diagnostic["provider_boundary_stabilization"][1]["default"] == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF
@@ -185,6 +231,12 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert keys.index("low_probe_execution_source") < keys.index("frame_gauge_repair")
     assert keys.index("frame_gauge_repair") < keys.index("frame_gauge_residual_mode")
     assert keys.index("frame_gauge_residual_mode") < keys.index("provider_boundary_stabilization")
+    assert keys.index("provider_boundary_stabilization") < keys.index("capture_boundary_witness")
+    assert keys.index("capture_boundary_witness") < keys.index("vdn_temporal_carrier_policy")
+    assert keys.index("vdn_temporal_carrier_policy") < keys.index("handoff_transfer_control")
+    assert keys.index("handoff_transfer_control") < keys.index("spatial_stage_control")
+    assert keys.index("spatial_stage_control") < keys.index("softmax_diagnostic")
+    assert keys.index("softmax_diagnostic") < keys.index("video_guided_overlap_tokens")
 
 
 def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_existing_transformer_options():
@@ -230,6 +282,37 @@ def test_apply_partitioned_diagnostic_controls_is_model_local_and_preserves_exis
             },
         )
     ]
+
+
+def test_video_guided_overlap_control_is_model_local_default_off_and_opt_in():
+    model = SimpleNamespace(
+        model_options={
+            "transformer_options": {},
+            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
+        }
+    )
+    metrics = _Metrics()
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        video_guided_overlap_tokens=0,
+    )
+    assert PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY not in model.model_options
+    assert resolve_partitioned_video_guided_overlap_tokens(model.model_options) == (0, "default_off")
+
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        video_guided_overlap_tokens=4,
+    )
+    assert model.model_options[PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY] == 4
+    assert resolve_partitioned_video_guided_overlap_tokens(model.model_options) == (4, "diagnostic_node")
+    assert metrics.events[-1][1]["video_guided_overlap_tokens"] == 4
 
 
 def test_provider_boundary_stabilization_control_is_model_local_and_opt_in():
@@ -312,7 +395,7 @@ def test_ordinary_partitioned_audio_overlap_still_uses_existing_environment_or_d
     assert source == "environment_or_default"
 
 
-@pytest.mark.parametrize("bad", [-1, 17, True, 4.0, "4"])
+@pytest.mark.parametrize("bad", [-1, True, 4.0, "4"])
 def test_diagnostic_audio_overlap_rejects_noncanonical_values(bad):
     model = SimpleNamespace(model_options={"transformer_options": {}})
     with pytest.raises(ValueError):
@@ -360,7 +443,7 @@ def test_model_timestep_audio_context_changes_only_inner_forward_mask():
     assert metrics.counters["partitioned_audio_model_timestep_override_calls"] == 1
 
 
-def test_audio_timestep_context_can_restore_exact_labels_over_fractional_sampler_mask():
+def test_exact_audio_context_rejects_fractional_sampler_mask_before_forward():
     metrics = _Metrics()
     runtime = torch.ones(1, 1, 2, 8)
     runtime[..., 2:6] = torch.tensor([0.2, 0.4, 0.6, 0.8]).view(1, 1, 1, 4)
@@ -374,14 +457,48 @@ def test_audio_timestep_context_can_restore_exact_labels_over_fractional_sampler
         mask_kind="exact_authoritative",
     )
     kwargs = {"audio_denoise_mask": runtime}
-    forwarded = _audio_model_timestep_kwargs(
-        {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context},
-        kwargs,
-    )
+    with pytest.raises(RuntimeError, match="same authoritative sampler input and velocity mask"):
+        _audio_model_timestep_kwargs(
+            {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context},
+            kwargs,
+        )
     assert torch.equal(kwargs["audio_denoise_mask"], runtime)
-    assert torch.equal(forwarded["audio_denoise_mask"], exact)
     assert context.mask_kind == "exact_authoritative"
+    assert context.calls == 0
+    kwargs = {"audio_denoise_mask": exact}
+    assert _audio_model_timestep_kwargs({PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}, kwargs) is kwargs
     assert context.calls == 1
+    assert context.verification_calls == 1
+    assert metrics.counters["coherent_exact_audio_model_mask_calls"] == 1
+    assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_exact_audio_context_verifies_cfg_batch_masks_without_changing_kwargs(dtype):
+    exact = torch.ones(1, 1, 2, 8)
+    exact[..., :4] = 0
+    context = PartitionedAudioModelTimestepContext(exact, _Metrics(), 0, 4, mask_kind="exact_authoritative")
+    options = {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}
+    runtime = exact.to(dtype=dtype).repeat(2, 1, 1, 1)
+    kwargs = {"audio_denoise_mask": runtime}
+    assert _audio_model_timestep_kwargs(options, kwargs) is kwargs
+    runtime[1, ..., :1] = 1
+    with pytest.raises(RuntimeError, match="same authoritative"):
+        _audio_model_timestep_kwargs(options, kwargs)
+    assert context.verification_calls == 1
+
+
+def test_exact_audio_context_accepts_omitted_native_mask_only_for_fully_generated_audio():
+    exact = torch.ones(1, 1, 2, 8)
+    context = PartitionedAudioModelTimestepContext(exact, _Metrics(), 0, 0, mask_kind="exact_authoritative")
+    options = {PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY: context}
+    kwargs = {}
+    assert _audio_model_timestep_kwargs(options, kwargs) is kwargs
+    assert context.verification_calls == 1
+    exact[..., :1] = 0
+    with pytest.raises(RuntimeError, match="exact protected audio requires"):
+        _audio_model_timestep_kwargs(options, kwargs)
+    assert context.verification_calls == 1
 
 
 def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
@@ -429,6 +546,38 @@ def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
     _validate_partitioned_vdn_compat(
         patcher,
         required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+    )
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="temporal-carrier API"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        )
+    current._vdn_partitioned_temporal_carrier_api = 1
+    current._vdn_partitioned_temporal_carrier_policies = tuple(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
+    current._vdn_partitioned_temporal_carrier_short_conv_spec = "vdn_solve_short_conv_v1|test"
+    spec = _validate_partitioned_vdn_compat(
+        patcher,
+        required_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    )
+    assert spec == "vdn_solve_short_conv_v1|test"
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="softmax diagnostic API"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        )
+    current._vdn_partitioned_softmax_diagnostic_api = 1
+    current._vdn_partitioned_softmax_diagnostic_modes = (PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,)
+    with pytest.raises(PartitionedPreflightUnsupported, match="does not advertise"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        )
+    current._vdn_partitioned_softmax_diagnostic_modes = tuple(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
+    _validate_partitioned_vdn_compat(
+        patcher,
+        required_softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
     )
 
 
@@ -551,7 +700,8 @@ def test_vdn_raw_token_measure_verification_fails_closed_then_reports_counts():
     assert fields["raw_token_measure_prefix_frames"] == 36
 
 
-def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch):
+@pytest.mark.parametrize("guided_ticks", [4, 32, 10**30])
+def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context(monkeypatch, guided_ticks):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
@@ -589,7 +739,7 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: 4,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: guided_ticks,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP,
             "transformer_options": transformer_options,
         }
@@ -622,6 +772,8 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
         assert torch.equal(exact_denoise_mask, exact_mask)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
+        assert context.ticks == min(guided_ticks, 6)
+        assert context.audio_prefix_ticks == 6
         exact_audio = unpack_streams(call_mask, latent_shapes)[1]
         exact_audio_cond = exact_audio.amax(dim=1, keepdim=True)
         forwarded = _audio_model_timestep_kwargs(
@@ -659,6 +811,8 @@ def test_model_timestep_only_outer_keeps_sampler_mask_exact_and_restores_context
     context_events = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"]
     assert len(context_events) == 1
     assert context_events[0].fields["override_calls"] == 1
+    assert context_events[0].fields["requested_ticks"] == guided_ticks
+    assert context_events[0].fields["applied_ticks"] == min(guided_ticks, 6)
     assert context_events[0].fields["sampler_mask_modified"] is False
     assert context_events[0].fields["exact_sampler_prefix_preserved"] is True
     assert context_events[0].fields["core_audio_velocity_mask_contract"] is True
@@ -754,21 +908,25 @@ def test_sampler_mask_outer_keeps_runtime_overlap_separate_from_exact_diagnostic
     assert overlap_events[0].fields["sampler_exact_audio_prefix_preserved"] is False
 
 
-@pytest.mark.parametrize("guided_ticks", [4, 16])
-def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inner_labels(monkeypatch, guided_ticks):
+@pytest.mark.parametrize("video_overlap", [4, 8, 12, 10**30])
+@pytest.mark.parametrize("audio_overlap", [16, 32, 10**30])
+def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(
+    monkeypatch, video_overlap, audio_overlap
+):
     monkeypatch.setattr(
         "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
         lambda: True,
     )
-    video = torch.randn(1, 24, 5, 8, 12)
+    video = torch.randn(1, 24, 17, 8, 12)
     audio = torch.randn(1, 32, 2, 24)
     packed, shapes = pack_streams((video, audio))
     shapes = list(shapes)
     video_mask = torch.ones_like(video)
-    video_mask[:, :, :2] = 0
+    video_mask[:, :, :12] = 0
     audio_mask = torch.ones_like(audio)
     audio_mask[..., :20] = 0
     exact_mask = pack_streams((video_mask, audio_mask))[0]
+    exact_mask_before = exact_mask.clone()
 
     metrics = H3FlowMetrics()
     binding = FlowBinding(metrics=metrics)
@@ -792,8 +950,193 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         model_options={
             FLOW_BINDING_KEY: binding,
             PARTITIONED_PROGRESSIVE_KEY: progressive,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: audio_overlap,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
+            PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: video_overlap,
+            "transformer_options": transformer_options,
+        }
+    )
+
+    class Executor:
+        class_obj = guider
+
+    def fake_partitioned(
+        adapted,
+        call_guider,
+        call_binding,
+        config,
+        noise,
+        latent_image,
+        sampler,
+        sigmas,
+        call_mask,
+        callback,
+        disable_pbar,
+        seed,
+        latent_shapes,
+        exact_denoise_mask=None,
+    ):
+        del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
+        assert latent_shapes == shapes
+        assert exact_denoise_mask is exact_mask
+        assert call_mask is exact_mask
+        runtime_video, runtime_audio = unpack_streams(call_mask, latent_shapes)
+        exact_video, exact_audio = unpack_streams(exact_mask, latent_shapes)
+        assert torch.equal(runtime_video, exact_video)
+        assert torch.equal(runtime_audio, exact_audio)
+
+        context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
+        assert isinstance(context, PartitionedAudioModelTimestepContext)
+        exact_audio_cond = exact_audio.amax(dim=1, keepdim=True)
+        forwarded = _audio_model_timestep_kwargs(
+            transformer_options,
+            {"audio_denoise_mask": exact_audio_cond},
+        )
+        assert torch.equal(forwarded["audio_denoise_mask"], exact_audio_cond)
+        return latent_image.clone()
+
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
+        fake_partitioned,
+    )
+    result = partitioned_outer_wrapper(
+        Executor(),
+        torch.randn_like(packed),
+        packed,
+        SimpleNamespace(),
+        torch.tensor([1.0, 0.0]),
+        exact_mask,
+        None,
+        True,
+        7,
+        latent_shapes=shapes,
+    )
+
+    assert torch.equal(result, packed)
+    assert torch.equal(exact_mask, exact_mask_before)
+    assert PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY in guider.model_options
+    assert not any(event.kind == "partitioned_video_guided_overlap" for event in metrics.events)
+
+
+def test_video_overlap_is_applied_only_to_target_high_sampler_mask():
+    video = torch.randn(1, 24, 17, 8, 12)
+    audio = torch.randn(1, 32, 2, 24)
+    packed, shapes = pack_streams((video, audio))
+    del packed
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :12] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :20] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+    runtime_mask = exact_mask.clone()
+    metrics = H3FlowMetrics()
+    model_options = {
+        PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
+        "transformer_options": {},
+    }
+
+    high_mask = _partitioned_high_video_overlap_mask(
+        runtime_mask,
+        exact_mask,
+        shapes,
+        model_options,
+        metrics,
+    )
+
+    assert high_mask is not runtime_mask
+    assert torch.equal(runtime_mask, exact_mask)
+    high_video, high_audio = unpack_streams(high_mask, shapes)
+    exact_video, exact_audio = unpack_streams(exact_mask, shapes)
+    expected = torch.tensor(
+        [52 / 256, 103 / 256, 154 / 256, 205 / 256],
+        device=high_video.device,
+        dtype=high_video.dtype,
+    )
+    torch.testing.assert_close(high_video[0, 0, 8:12, 0, 0], expected)
+    assert torch.equal(high_video[:, :, :8], exact_video[:, :, :8])
+    assert torch.equal(high_video[:, :, 12:], exact_video[:, :, 12:])
+    assert torch.equal(high_audio, exact_audio)
+
+    event = [event for event in metrics.events if event.kind == "partitioned_video_guided_overlap"][-1]
+    assert event.fields["stage"] == "high"
+    assert event.fields["applied"] is True
+    assert event.fields["requested_tokens"] == 4
+    assert event.fields["video_prefix_tokens"] == 12
+    assert event.fields["hard_prefix_tokens"] == 8
+    assert event.fields["low_probe_sampler_mask_unchanged"] is True
+    assert event.fields["structural_preflight_mask_exact"] is True
+    assert event.fields["final_exact_prefix_restore"] is True
+
+
+@pytest.mark.parametrize(
+    "guided_ticks,outcome",
+    [
+        (0, "success"),
+        (4, "success"),
+        (16, "success"),
+        (16, "inference_failure"),
+        (16, "preflight_failure"),
+        (16, "zero_calls"),
+        (16, "negative_channel"),
+        (16, "oversized_channel"),
+        (16, "missing_core_contract"),
+        (16, "nested_context"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT, PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP]
+)
+def test_exact_audio_mode_keeps_native_input_labels_velocity_and_prefix_coherent(
+    monkeypatch, tmp_path, guided_ticks, mode, outcome
+):
+    monkeypatch.setattr(
+        "h3_flow_regenerate.partitioned_outer._core_has_audio_velocity_mask_contract",
+        lambda: outcome != "missing_core_contract",
+    )
+    video = torch.randn(1, 24, 5, 8, 12)
+    audio = torch.randn(1, 32, 2, 24)
+    packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :2] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :20] = 0
+    if outcome == "negative_channel":
+        audio_mask[:, :1, :, :1] = -0.5
+    elif outcome == "oversized_channel":
+        audio_mask[:, :1, :, 20:] = 1.5
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    metrics = H3FlowMetrics()
+    saved_metrics = metrics.enable_autosave(tmp_path / "metrics.json")
+    binding = FlowBinding(metrics=metrics)
+    progressive = ProgressiveTargetInputConfig(
+        source_latent_h=4,
+        source_latent_w=6,
+        transfer_mode="learned_3d",
+        frame_gauge_repair=True,
+        learned_upscaler=SimpleNamespace(
+            api_version=1,
+            kind="minimax_h3_learned_latent_upscaler",
+            model_name="diagnostic-test-provider",
+            device="cpu",
+            inference_device="cpu",
+            precision="fp32",
+            offload_after_upscale=False,
+            upscale_clean_video=lambda *args, **kwargs: None,
+        ),
+    )
+    transformer_options = {}
+    existing_context = object()
+    if outcome == "nested_context":
+        transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] = existing_context
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: progressive,
             PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY: guided_ticks,
-            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
+            PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY: mode,
             "transformer_options": transformer_options,
         }
     )
@@ -821,17 +1164,31 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         del adapted, call_guider, call_binding, config, noise, sampler, sigmas, callback, disable_pbar, seed
         assert latent_shapes == shapes
         assert torch.equal(exact_denoise_mask, exact_mask)
-        assert not torch.equal(call_mask, exact_mask)
+        assert call_mask is exact_mask
         runtime_audio = unpack_streams(call_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
-        assert bool(((runtime_audio > 0) & (runtime_audio < 1)).any().item())
+        assert not bool(((runtime_audio > 0) & (runtime_audio < 1)).any().item())
         exact_audio = unpack_streams(exact_mask, latent_shapes)[1].amax(dim=1, keepdim=True)
         context = transformer_options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
         assert isinstance(context, PartitionedAudioModelTimestepContext)
         assert context.mask_kind == "exact_authoritative"
+        assert context.audio_prefix_ticks == 20
+        assert context.ticks == 0
+        assert binding.frame_gauge_invocation_active is True
+        if outcome == "inference_failure":
+            binding.active_guidance_run = object()
+            binding.registered_guidance_reference = object()
+            binding.guidance_state.current_coordinate = 0.5
+            raise RuntimeError("inference failed")
+        if outcome == "preflight_failure":
+            raise PartitionedPreflightUnsupported("unsupported provider")
+        if outcome == "zero_calls":
+            return latent_image.clone()
+        kwargs = {"audio_denoise_mask": runtime_audio}
         forwarded = _audio_model_timestep_kwargs(
             transformer_options,
-            {"audio_denoise_mask": runtime_audio},
+            kwargs,
         )
+        assert forwarded is kwargs
         assert torch.equal(forwarded["audio_denoise_mask"], exact_audio)
         return latent_image.clone()
 
@@ -839,32 +1196,71 @@ def test_sampler_mask_exact_timestep_keeps_fractional_sampler_mask_but_exact_inn
         "h3_flow_regenerate.partitioned_outer.run_partitioned_progressive",
         fake_partitioned,
     )
-    result = partitioned_outer_wrapper(
-        Executor(),
-        torch.randn_like(packed),
-        packed,
-        SimpleNamespace(),
-        torch.tensor([1.0, 0.0]),
-        exact_mask,
-        None,
-        True,
-        7,
-        latent_shapes=shapes,
-    )
+
+    def invoke():
+        return partitioned_outer_wrapper(
+            Executor(),
+            torch.randn_like(packed),
+            packed,
+            SimpleNamespace(),
+            torch.tensor([1.0, 0.0]),
+            exact_mask,
+            None,
+            True,
+            7,
+            latent_shapes=shapes,
+        )
+
+    if outcome != "success":
+        messages = {
+            "inference_failure": "inference failed",
+            "preflight_failure": "refusing target-grid fallback",
+            "zero_calls": "zero MiniMax-H3 inner-forward calls",
+            "negative_channel": "contiguous fully protected prefix",
+            "oversized_channel": "contiguous fully protected prefix",
+            "missing_core_contract": "velocity conversion fix #15988",
+            "nested_context": "nested partitioned audio",
+        }
+        with pytest.raises(RuntimeError, match=messages[outcome]):
+            invoke()
+        assert binding.frame_gauge_invocation_active is False
+        assert binding.active_guidance_run is None
+        assert binding.registered_guidance_reference is None
+        assert binding.guidance_state.current_coordinate is None
+        assert not any(event.kind == "partitioned_exact_audio_mask_verified" for event in metrics.events)
+        if outcome == "nested_context":
+            assert transformer_options[PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY] is existing_context
+        else:
+            assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
+        return
+
+    result = invoke()
 
     assert torch.equal(result, packed)
     assert PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY not in transformer_options
     overlap = [event for event in metrics.events if event.kind == "audio_guided_overlap"][-1]
-    assert overlap.fields["sampler_mask_modified"] is True
+    assert overlap.fields["sampler_mask_modified"] is False
+    assert overlap.fields["applied"] is False
+    assert overlap.fields["effective_ticks"] == 0
+    assert overlap.fields["applied_ticks"] == 0
+    assert overlap.fields["hard_prefix_ticks"] == 20
     assert overlap.fields["model_timestep_mask_kind"] == "exact_authoritative"
     assert overlap.fields["model_timestep_mask_modified"] is False
     assert overlap.fields["inner_exact_audio_prefix_preserved"] is True
-    assert overlap.fields["sampler_exact_audio_prefix_preserved"] is False
+    assert overlap.fields["sampler_exact_audio_prefix_preserved"] is True
     context_event = [event for event in metrics.events if event.kind == "partitioned_audio_model_timestep_context"][-1]
     assert context_event.fields["mask_kind"] == "exact_authoritative"
-    assert context_event.fields["sampler_mask_modified"] is True
-    assert context_event.fields["exact_sampler_prefix_preserved"] is False
+    assert context_event.fields["applied_ticks"] == 0
+    assert context_event.fields["sampler_mask_modified"] is False
+    assert context_event.fields["exact_sampler_prefix_preserved"] is True
     assert context_event.fields["inner_exact_audio_prefix_preserved"] is True
+    assert context_event.fields["model_timestep_override_applied"] is False
+    verified = [event for event in metrics.events if event.kind == "partitioned_exact_audio_mask_verified"][-1]
+    assert verified.fields["verified_model_entries"] == 1
+    assert verified.fields["effective_overlap_ticks"] == 0
+    assert verified.fields["regenerated_prefix_restored"] is False
+    assert metrics.counters.get("partitioned_audio_model_timestep_override_calls", 0) == 0
+    assert json.loads(saved_metrics.read_text()) == metrics.snapshot()
 
 
 def test_low_probe_audio_decode_witness_is_output_domain_cpu_and_session_bounded():
@@ -936,6 +1332,219 @@ return out
 """
     assert _source_has_audio_velocity_mask_contract(old_source) is False
     assert _source_has_audio_velocity_mask_contract(fixed_source) is True
+
+
+def test_source_carrier_audio_position_allows_linear_discriminator_arms():
+    for compatible in (
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    ):
+        _validate_audio_position_candidate_configuration(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            compatible,
+        )
+
+    with pytest.raises(PartitionedPreflightUnsupported, match="source_carrier audio-position candidate"):
+        _validate_audio_position_candidate_configuration(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+        )
+
+
+def test_handoff_transfer_control_is_model_local_default_absent_and_fail_closed():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY not in model.model_options["transformer_options"]
+    assert "handoff_transfer_control" not in metrics.events[-1][1]
+
+    control = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    control_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        control,
+        control_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+    )
+    assert (
+        control.model_options["transformer_options"][PARTITIONED_HANDOFF_TRANSFER_CONTROL_KEY]
+        == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+    )
+    assert control_metrics.events[-1][1]["handoff_transfer_control"] == PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+    assert (
+        normalize_handoff_transfer_control(PARTITIONED_HANDOFF_TRANSFER_LEARNED) == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+    )
+    with pytest.raises(ValueError, match="handoff transfer control"):
+        normalize_handoff_transfer_control("invented")
+
+
+def test_spatial_stage_control_is_model_local_default_absent_and_exclusive_with_transfer_control():
+    model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    )
+    assert (
+        model.model_options["transformer_options"][PARTITIONED_SPATIAL_STAGE_CONTROL_KEY]
+        == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    )
+    assert metrics.events[-1][1]["spatial_stage_control"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    assert (
+        normalize_spatial_stage_control(PARTITIONED_SPATIAL_STAGE_PROGRESSIVE) == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+    )
+
+    with pytest.raises(ValueError, match="requires handoff_transfer_control='learned_3d'"):
+        apply_partitioned_diagnostic_controls(
+            SimpleNamespace(model_options={"transformer_options": {}}),
+            _Metrics(),
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+            audio_guided_overlap_ticks=4,
+            handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        )
+    with pytest.raises(ValueError, match="spatial-stage control"):
+        normalize_spatial_stage_control("invented")
+
+
+def test_identity_same_grid_transfer_provider_rejects_resize_and_preserves_values():
+    template = SimpleNamespace(device="cpu", precision="fp32")
+    provider = _IdentitySameGridTransferProvider(template)
+    video = torch.arange(1 * 24 * 3 * 4 * 4, dtype=torch.float32).reshape(1, 24, 3, 4, 4)
+
+    result = provider.upscale_clean_video(video, target_h=4, target_w=4)
+
+    assert provider.calls == 1
+    assert result.shape == video.shape
+    assert torch.equal(result, video)
+    assert result.data_ptr() != video.data_ptr()
+    assert provider.model_name == "diagnostic:same_grid_target_identity"
+    with pytest.raises(RuntimeError, match="spatial resize request"):
+        provider.upscale_clean_video(video, target_h=6, target_w=6)
+
+
+def test_bicubic_same_source_transfer_provider_is_deterministic_and_bounded_to_resize():
+    template = SimpleNamespace(device="cpu", precision="fp32")
+    provider = _BicubicSameSourceTransferProvider(template)
+    video = torch.arange(1 * 24 * 3 * 4 * 4, dtype=torch.float32).reshape(1, 24, 3, 4, 4)
+
+    first = provider.upscale_clean_video(video, target_h=6, target_w=6)
+    second = provider.upscale_clean_video(video, target_h=6, target_w=6)
+
+    assert provider.calls == 2
+    assert first.shape == (1, 24, 3, 6, 6)
+    assert torch.equal(first, second)
+    assert provider.model_name == "diagnostic:bicubic_same_source_control"
+    assert provider.api_version == 1
+
+
+def test_temporal_carrier_selector_is_model_local_and_default_absent():
+    default_model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_VDN_TEMPORAL_CARRIER_KEY not in default_model.model_options["transformer_options"]
+    assert "vdn_temporal_carrier_policy" not in default_metrics.events[-1][1]
+
+    candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
+    candidate_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        candidate_model,
+        candidate_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+        vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    )
+    assert (
+        candidate_model.model_options["transformer_options"][PARTITIONED_VDN_TEMPORAL_CARRIER_KEY]
+        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
+    assert (
+        candidate_metrics.events[-1][1]["vdn_temporal_carrier_policy"] == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
+    with pytest.raises(ValueError, match="requires vdn_linear_diagnostic='normal'"):
+        apply_partitioned_diagnostic_controls(
+            SimpleNamespace(model_options={"transformer_options": {}}),
+            _Metrics(),
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+            audio_guided_overlap_ticks=4,
+            vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        )
+
+
+def test_temporal_carrier_contract_is_deterministic_and_verification_is_fail_closed():
+    digest = "a" * 64
+    contract = build_vdn_temporal_carrier_contract(
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        flow_semantic_digest=digest,
+        diagnostic_mode=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        short_conv_spec="vdn_solve_short_conv_v1|test",
+    )
+    assert contract == build_vdn_temporal_carrier_contract(
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        flow_semantic_digest=digest,
+        diagnostic_mode=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        short_conv_spec="vdn_solve_short_conv_v1|test",
+    )
+    assert len(contract["numerical_digest"]) == 64
+    assert (
+        normalize_vdn_temporal_carrier_policy(PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION)
+        == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    )
+
+    metrics = H3FlowMetrics()
+    metrics.event(
+        "partitioned_vdn_temporal_carrier_stage",
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        numerical_digest="b" * 64,
+    )
+    events_before = len(metrics.events)
+    with pytest.raises(RuntimeError, match="no verified cross-grid carrier work"):
+        _verify_partitioned_vdn_temporal_carrier_policy(
+            metrics,
+            PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+            calls_before=0,
+            taps_before=0,
+            carriers_before=0,
+            rows_before=0,
+            events_before=events_before,
+        )
+    metrics.increment("partitioned_vdn_destination_grid_stencil_calls", 5)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_taps", 60)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_carriers", 40)
+    metrics.increment("partitioned_vdn_destination_grid_stencil_rows", 1000)
+    metrics.event(
+        "partitioned_vdn_temporal_carrier_stage",
+        policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        numerical_digest=contract["numerical_digest"],
+    )
+    _verify_partitioned_vdn_temporal_carrier_policy(
+        metrics,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        calls_before=0,
+        taps_before=0,
+        carriers_before=0,
+        rows_before=0,
+        events_before=events_before,
+    )
+    assert metrics.events[-1].kind == "partitioned_vdn_temporal_carrier_verified"
+    assert metrics.events[-1].fields["numerical_digest"] == contract["numerical_digest"]
 
 
 def test_source_carrier_audio_position_control_is_opt_in_and_model_local():
@@ -1118,3 +1727,62 @@ def test_frame_gauge_guidance_rejects_unaudited_sampler_before_registration():
     assert fields["status"] == "rejected"
     assert fields["sampler"] == "sample_euler"
     assert fields["supported_samplers"] == ("sample_res_multistep",)
+
+
+def test_dense_suffix_softmax_selector_is_default_absent_and_fail_closed_verified():
+    default_model = SimpleNamespace(model_options={"transformer_options": {"keep": "value"}})
+    default_metrics = _Metrics()
+    apply_partitioned_diagnostic_controls(
+        default_model,
+        default_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        audio_guided_overlap_ticks=4,
+    )
+    assert PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY not in default_model.model_options["transformer_options"]
+    assert "softmax_diagnostic" not in default_metrics.events[-1][1]
+    assert (
+        normalize_partitioned_softmax_diagnostic(PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL)
+        == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+    )
+
+    candidate_model = SimpleNamespace(model_options={"transformer_options": {}})
+    candidate_metrics = H3FlowMetrics()
+    apply_partitioned_diagnostic_controls(
+        candidate_model,
+        candidate_metrics,
+        vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+        audio_guided_overlap_ticks=4,
+        softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    )
+    assert (
+        candidate_model.model_options["transformer_options"][PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY]
+        == PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+    )
+    assert candidate_metrics.events[-1].fields["softmax_diagnostic"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+
+    with pytest.raises(RuntimeError, match="no verified suffix local-query dense work"):
+        _verify_partitioned_softmax_diagnostic(
+            candidate_metrics,
+            PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+            calls_before=0,
+            q_rows_before=0,
+            kv_rows_before=0,
+        )
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_calls", 7)
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_q_rows", 123)
+    candidate_metrics.increment("partitioned_vdn_dense_suffix_same_domain_kv_rows", 456)
+    _verify_partitioned_softmax_diagnostic(
+        candidate_metrics,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+        calls_before=0,
+        q_rows_before=0,
+        kv_rows_before=0,
+    )
+    receipt = candidate_metrics.events[-1]
+    assert receipt.kind == "partitioned_softmax_diagnostic_verified"
+    assert receipt.fields["same_gathered_domain"] is True
+    assert receipt.fields["prefix_measure_unchanged"] is True
+    assert receipt.fields["grouped_ownership_unchanged"] is True
+
+    with pytest.raises(ValueError, match="partitioned softmax diagnostic"):
+        normalize_partitioned_softmax_diagnostic("invalid")

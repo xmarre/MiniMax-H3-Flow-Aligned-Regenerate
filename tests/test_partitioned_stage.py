@@ -79,6 +79,27 @@ def test_partitioned_stage_rejects_noncanonical_or_nonreducing_geometry():
         )
 
 
+def test_partitioned_stage_same_grid_requires_explicit_diagnostic_authorization():
+    video, noise_video, internal, noise, mask, shapes = _fixture()
+    plan = build_partitioned_stage_plan(
+        mask,
+        shapes,
+        internal,
+        noise,
+        source_h=8,
+        source_w=8,
+        allow_same_grid=True,
+    )
+    assert plan.target_hw == (8, 8)
+    assert plan.source_grid == plan.target_grid == (4, 4)
+    assert plan.source_rows == plan.target_rows == 16
+    assert plan.prefix_rows == 32
+    assert plan.suffix_rows == 48
+    assert plan.partitioned_rows == 80
+    assert torch.equal(plan.prefix, video[:, :, :2])
+    assert torch.equal(plan.prefix_noise, noise_video[:, :, :2])
+
+
 def test_partitioned_mod_segments_expands_only_exact_prefix_rows():
     video, noise_video, _internal, _noise, _mask, _shapes = _fixture()
     plan = PartitionedStagePlan(
