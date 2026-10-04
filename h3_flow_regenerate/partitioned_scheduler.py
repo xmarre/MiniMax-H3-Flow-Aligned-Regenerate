@@ -170,6 +170,7 @@ from .tone_bridge import (
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
+from .transfer_lattice import H3_TRANSFER_LATTICE, H3PatchLatticeTransferProvider, measure_paired_prefix_affine
 from .vae_boundary_video import (
     VAE_WINDOW_VIDEO_POLICY,
     apply_vae_window_vertical_translation,
@@ -3141,6 +3142,12 @@ def run_partitioned_progressive(
 
     source_shapes = list(target_shapes)
     source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
+    transfer_lattice_provider = None
+    if (
+        spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
+    ):
+        transfer_lattice_provider = H3PatchLatticeTransferProvider(config.learned_upscaler)
     target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
     source_video_noise = deterministic_video_noise(
         (*target_video_noise.shape[:-2], source_h, source_w),
@@ -4007,6 +4014,8 @@ def run_partitioned_progressive(
             # the checkpoint transform itself with deterministic spatial bicubic.
             spatial_transfer_control = _BicubicSameSourceTransferProvider(config.learned_upscaler)
             effective_upscaler = spatial_transfer_control
+        else:
+            effective_upscaler = transfer_lattice_provider
         if spatial_transfer_control is not None:
             source_clean_control, _source_clean_audio_control = unpack_streams(source_x0, source_shapes)
             source_clean_sha256 = tensor_sha256(source_clean_control)
@@ -4240,6 +4249,26 @@ def run_partitioned_progressive(
             exact_overlap_fallback_trigger=str(exact_overlap_fallback_trigger),
             **provider_boundary_stabilization_receipt,
         )
+
+        if isinstance(effective_upscaler, H3PatchLatticeTransferProvider):
+            binding.metrics.event(
+                "partitioned_transfer_lattice",
+                policy=H3_TRANSFER_LATTICE,
+                prefix_projection_policy=H3_TRANSFER_LATTICE,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                resample_position="encoder_to_decoder",
+                provider_calls=effective_upscaler.calls,
+                transferred_prefix_output_discarded=True,
+                exact_prefix_modified=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+            )
+        if residual_mode == "measure":
+            binding.metrics.event(
+                "partitioned_same_frame_prefix_affine",
+                **measure_paired_prefix_affine(learned_clean, exact_prefix, prefix_t=stage_plan.prefix_t),
+            )
 
         splice_diagnostics = measure_exact_prefix_splice(
             learned_clean,
