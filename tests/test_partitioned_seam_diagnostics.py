@@ -226,6 +226,8 @@ def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
 
 
 def test_multiframe_trajectory_reports_boundary_motion_change_from_prefix_baseline():
+    from h3_flow_regenerate.seam_diagnostics import measure_translation_trajectory
+
     torch.manual_seed(457)
     video = torch.randn(1, 8, 8, 32, 40, dtype=torch.float32)
     for index in range(1, 4):
