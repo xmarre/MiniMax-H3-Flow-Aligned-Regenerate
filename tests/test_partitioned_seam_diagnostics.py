@@ -219,6 +219,40 @@ def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
     assert fields["pre_pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
     assert fields["pre_pairwise_median_dy"] == pytest.approx(1.0, abs=0.05)
     assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
+    assert fields["boundary_vs_pre_available"] is True
+    assert fields["boundary_vs_pre_dx"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_dy"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_norm_cells"] == pytest.approx(0.0, abs=0.08)
+
+
+def test_multiframe_trajectory_reports_boundary_motion_change_from_prefix_baseline():
+    torch.manual_seed(457)
+    video = torch.randn(1, 8, 8, 32, 40, dtype=torch.float32)
+    for index in range(1, 4):
+        video[:, :, index] = video[:, :, index - 1]
+    video[:, :, 4] = torch.roll(
+        video[:, :, 3],
+        shifts=(2, -1),
+        dims=(-2, -1),
+    )
+    for index in range(5, 8):
+        video[:, :, index] = video[:, :, index - 1]
+
+    fields = measure_translation_trajectory(
+        video,
+        4,
+        forward_steps=3,
+        backward_steps=3,
+        roi_fraction=1.0,
+        max_shift=3,
+    )
+
+    assert fields["boundary_vs_pre_available"] is True
+    assert fields["pre_pairwise_median_dx"] == pytest.approx(0.0, abs=0.05)
+    assert fields["pre_pairwise_median_dy"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_dx"] == pytest.approx(-1.0, abs=0.05)
+    assert fields["boundary_vs_pre_dy"] == pytest.approx(2.0, abs=0.05)
+    assert fields["boundary_vs_pre_norm_cells"] == pytest.approx(math.sqrt(5.0), abs=0.08)
 
 
 def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_independently():
@@ -233,6 +267,8 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
         "anchor_dy": [1.0],
         "pre_pairwise_median_dx": -1.0,
         "pre_pairwise_median_dy": 0.5,
+        "boundary_vs_pre_dx": -2.0,
+        "boundary_vs_pre_dy": 3.5,
         "pairwise_net_dx": -3.0,
         "pairwise_net_dy": 4.0,
         "anchor_final_dx": -2.0,
@@ -254,6 +290,8 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
     assert projected["trajectory_target_equivalent_scale_y"] == pytest.approx(1.5)
     assert projected["target_equivalent_pairwise_dx"] == pytest.approx([-6.0])
     assert projected["target_equivalent_pairwise_dy"] == pytest.approx([6.0])
+    assert projected["target_equivalent_boundary_vs_pre_dx"] == pytest.approx(-4.0)
+    assert projected["target_equivalent_boundary_vs_pre_dy"] == pytest.approx(5.25)
     assert projected["target_equivalent_pairwise_net_dx"] == pytest.approx(-6.0)
     assert projected["target_equivalent_pairwise_net_dy"] == pytest.approx(6.0)
     assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)

@@ -1,5 +1,12 @@
 # Unreleased: first-token DC support with coherent learned guidance
 
+Boundary trajectory diagnostics now report the first prefix-to-suffix translation
+relative to the median pre-boundary motion, including explicit X/Y deltas and a
+cell-space magnitude. This is observation only: it distinguishes motion already
+present in the source-stage continuation from changes introduced by learned
+transfer or target-high refinement without enabling another content-dependent
+production warp or threshold gate.
+
 Partitioned exact-prefix continuation now applies only a per-channel spatial-mean
 correction to the first generated suffix token. The four-token structural
 successor transplant is retired: a spatially varying prefix residual has no

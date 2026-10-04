@@ -238,7 +238,10 @@ def _validate_preprocess_transport() -> None:
 
 def _validate_high_attention_transport() -> None:
     from h3_flow_regenerate.metrics import H3FlowMetrics
-    from h3_flow_regenerate.partitioned_scheduler import _partitioned_high_stage_contract
+    from h3_flow_regenerate.partitioned_scheduler import (
+        VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        _partitioned_high_stage_contract,
+    )
     from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
     from h3_flow_regenerate.partitioned_prefix import PartitionedExactPrefixPlan
     from h3_flow_regenerate.runtime import _flow_stage_contract, _high_stage_contract
@@ -272,10 +275,36 @@ def _validate_high_attention_transport() -> None:
         grouped = build_partitioned_grouped_plan(
             vdn, bounds=window_bounds(47, 1, 5), anchor_frames="both", semantic_digest=flow.semantic_digest
         )
+        saw_boundary_suffix = False
+        saw_later_suffix = False
         for group in grouped.groups:
-            force_dense, diagnostic = _partitioned_local_force_dense(group, "normal")
-            if force_dense != group.query_prefix_domain or diagnostic:
-                raise SystemExit("high VDN prefix/suffix query ownership differs from low/probe")
+            force_dense, diagnostic, boundary_suffix = _partitioned_local_force_dense(
+                group,
+                "normal",
+                prefix_t=vdn.prefix_t,
+            )
+            expected_boundary_suffix = bool(
+                not group.query_prefix_domain and vdn.prefix_t in group.query_frames
+            )
+            if boundary_suffix != expected_boundary_suffix or diagnostic:
+                raise SystemExit("high VDN boundary-query discriminator drifted")
+            if group.query_prefix_domain:
+                if not force_dense:
+                    raise SystemExit("high VDN protected-prefix group lost dense ownership")
+            elif expected_boundary_suffix:
+                saw_boundary_suffix = True
+                if not force_dense:
+                    raise SystemExit(
+                        "high VDN first generated boundary group lost dense continuity"
+                    )
+            else:
+                saw_later_suffix = True
+                if force_dense:
+                    raise SystemExit("high VDN later generated group lost native sparse routing")
+        if not saw_boundary_suffix or not saw_later_suffix:
+            raise SystemExit("high VDN contract did not exercise boundary and later suffix groups")
+        if VDN_PARTITIONED_BOUNDARY_QUERY_POLICY != "boundary_suffix_local_group_dense_v1":
+            raise SystemExit("Flow boundary-query policy identity drifted")
     if options:
         raise SystemExit("high attention left sampler-stage state behind")
 
@@ -316,6 +345,10 @@ def main() -> None:
         PARTITIONED_PREFIX_TOPOLOGY,
         PartitionedExactPrefixPlan,
     )
+    from h3_flow_regenerate.partitioned_scheduler import (
+        VDN_PARTITIONED_BOUNDARY_QUERY_API as FLOW_BOUNDARY_QUERY_API,
+        VDN_PARTITIONED_BOUNDARY_QUERY_POLICY as FLOW_BOUNDARY_QUERY_POLICY,
+    )
     from h3_flow_regenerate.partitioned_transformer import (
         PARTITIONED_PREFIX_KEY as FLOW_RUNTIME_KEY,
         VDN_PARTITIONED_SEQUENCE_API as FLOW_VDN_API,
@@ -335,6 +368,8 @@ def main() -> None:
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
     from vdn_h3.partitioned_linear import partitioned_frame_contract
     from vdn_h3.partitioned_runtime import (
+        VDN_PARTITIONED_BOUNDARY_QUERY_API,
+        VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_BYPASS,
         VDN_PARTITIONED_LINEAR_DIAGNOSTIC_KEY,
@@ -401,6 +436,11 @@ def main() -> None:
         or FLOW_SOFTMAX_DENSE_SUFFIX != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
     ):
         raise SystemExit("Flow/VDN partitioned softmax diagnostic contract diverged")
+    if (
+        FLOW_BOUNDARY_QUERY_API != VDN_PARTITIONED_BOUNDARY_QUERY_API
+        or FLOW_BOUNDARY_QUERY_POLICY != VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+    ):
+        raise SystemExit("Flow/VDN continuation boundary-query contract diverged")
 
     if (
         FLOW_CARRIER_API != VDN_TEMPORAL_CARRIER_API
@@ -560,17 +600,36 @@ def main() -> None:
         descriptor = compile_descriptor(validated)
         if group.prefix_k_range is not None and group.prefix_k_range[0] != group.sink_rows:
             raise SystemExit("biased target-prefix K rows are not contiguous with the global sink")
+        expected_boundary_suffix = bool(
+            not group.query_prefix_domain and vdn_plan.prefix_t in group.query_frames
+        )
+        normal_route = _partitioned_local_force_dense(
+            group,
+            FLOW_SOFTMAX_NORMAL,
+            prefix_t=vdn_plan.prefix_t,
+        )
+        diagnostic_route = _partitioned_local_force_dense(
+            group,
+            FLOW_SOFTMAX_DENSE_SUFFIX,
+            prefix_t=vdn_plan.prefix_t,
+        )
         if group.query_prefix_domain:
-            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_NORMAL) != (True, False):
-                raise SystemExit("normal partitioned prefix group lost its existing dense ownership")
-            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_DENSE_SUFFIX) != (True, False):
+            if normal_route != (True, False, False):
+                raise SystemExit("normal partitioned prefix group lost dense ownership")
+            if diagnostic_route != (True, False, False):
                 raise SystemExit("dense-suffix diagnostic changed prefix-query ownership")
         else:
             saw_suffix_group = True
-            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_NORMAL) != (False, False):
-                raise SystemExit("normal generated-suffix group no longer uses sparse Sol selection")
-            if _partitioned_local_force_dense(group, FLOW_SOFTMAX_DENSE_SUFFIX) != (True, True):
-                raise SystemExit("dense-suffix diagnostic did not force only the existing suffix group dense")
+            if expected_boundary_suffix:
+                if normal_route != (True, False, True):
+                    raise SystemExit("normal boundary suffix group lost dense continuity")
+                if diagnostic_route != (True, False, True):
+                    raise SystemExit("dense-suffix diagnostic misclassified boundary suffix ownership")
+            else:
+                if normal_route != (False, False, False):
+                    raise SystemExit("later generated-suffix group no longer uses sparse Sol selection")
+                if diagnostic_route != (True, True, False):
+                    raise SystemExit("dense-suffix diagnostic did not force only later suffix groups dense")
             if descriptor is not None:
                 saw_mapped_descriptor = True
     if not saw_suffix_group:

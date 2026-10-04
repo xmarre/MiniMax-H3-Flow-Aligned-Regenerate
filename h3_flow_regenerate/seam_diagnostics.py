@@ -77,6 +77,7 @@ _TRAJECTORY_X_FIELDS = (
     "pairwise_cumulative_dx",
     "anchor_dx",
     "pre_pairwise_median_dx",
+    "boundary_vs_pre_dx",
     "pairwise_net_dx",
     "anchor_final_dx",
 )
@@ -86,6 +87,7 @@ _TRAJECTORY_Y_FIELDS = (
     "pairwise_cumulative_dy",
     "anchor_dy",
     "pre_pairwise_median_dy",
+    "boundary_vs_pre_dy",
     "pairwise_net_dy",
     "anchor_final_dy",
 )
@@ -335,6 +337,25 @@ def measure_translation_trajectory(
         anchor_response.append(float(shift["response"]))
         anchor_clipped.append(bool(shift["clipped"]))
 
+    pre_pairwise_median_dx = (
+        float(torch.tensor(pre_pairwise_dx).median().item()) if pre_pairwise_dx else 0.0
+    )
+    pre_pairwise_median_dy = (
+        float(torch.tensor(pre_pairwise_dy).median().item()) if pre_pairwise_dy else 0.0
+    )
+    boundary_vs_pre_available = bool(pre_pairwise_dx and pairwise_dx)
+    boundary_vs_pre_dx = (
+        float(pairwise_dx[0]) - pre_pairwise_median_dx
+        if boundary_vs_pre_available
+        else 0.0
+    )
+    boundary_vs_pre_dy = (
+        float(pairwise_dy[0]) - pre_pairwise_median_dy
+        if boundary_vs_pre_available
+        else 0.0
+    )
+    boundary_vs_pre_norm_cells = math.hypot(boundary_vs_pre_dx, boundary_vs_pre_dy)
+
     return {
         "trajectory_diagnostic_version": 1,
         "trajectory_boundary_t": boundary_t,
@@ -346,8 +367,12 @@ def measure_translation_trajectory(
         "pre_pairwise_dy": pre_pairwise_dy,
         "pre_pairwise_response": pre_pairwise_response,
         "pre_pairwise_clipped": pre_pairwise_clipped,
-        "pre_pairwise_median_dx": float(torch.tensor(pre_pairwise_dx).median().item()) if pre_pairwise_dx else 0.0,
-        "pre_pairwise_median_dy": float(torch.tensor(pre_pairwise_dy).median().item()) if pre_pairwise_dy else 0.0,
+        "pre_pairwise_median_dx": pre_pairwise_median_dx,
+        "pre_pairwise_median_dy": pre_pairwise_median_dy,
+        "boundary_vs_pre_available": boundary_vs_pre_available,
+        "boundary_vs_pre_dx": boundary_vs_pre_dx,
+        "boundary_vs_pre_dy": boundary_vs_pre_dy,
+        "boundary_vs_pre_norm_cells": boundary_vs_pre_norm_cells,
         "pairwise_dx": pairwise_dx,
         "pairwise_dy": pairwise_dy,
         "pairwise_response": pairwise_response,
