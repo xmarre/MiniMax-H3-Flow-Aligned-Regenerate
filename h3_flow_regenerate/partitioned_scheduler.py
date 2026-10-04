@@ -5030,7 +5030,9 @@ def run_partitioned_progressive(
             source_retained_bytes = (
                 handoff_guidance_reference.source_video.numel() * handoff_guidance_reference.source_video.element_size()
             )
-            target_retained_bytes = handoff_guidance_reference.video.numel() * handoff_guidance_reference.video.element_size()
+            target_retained_bytes = (
+                handoff_guidance_reference.video.numel() * handoff_guidance_reference.video.element_size()
+            )
             binding.metrics.event(
                 "partitioned_handoff_guidance_reference",
                 run_id=guidance_run.run_id,
