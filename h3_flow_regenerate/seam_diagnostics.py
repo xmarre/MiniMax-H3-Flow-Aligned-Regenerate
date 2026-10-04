@@ -337,23 +337,11 @@ def measure_translation_trajectory(
         anchor_response.append(float(shift["response"]))
         anchor_clipped.append(bool(shift["clipped"]))
 
-    pre_pairwise_median_dx = (
-        float(torch.tensor(pre_pairwise_dx).median().item()) if pre_pairwise_dx else 0.0
-    )
-    pre_pairwise_median_dy = (
-        float(torch.tensor(pre_pairwise_dy).median().item()) if pre_pairwise_dy else 0.0
-    )
+    pre_pairwise_median_dx = float(torch.tensor(pre_pairwise_dx).median().item()) if pre_pairwise_dx else 0.0
+    pre_pairwise_median_dy = float(torch.tensor(pre_pairwise_dy).median().item()) if pre_pairwise_dy else 0.0
     boundary_vs_pre_available = bool(pre_pairwise_dx and pairwise_dx)
-    boundary_vs_pre_dx = (
-        float(pairwise_dx[0]) - pre_pairwise_median_dx
-        if boundary_vs_pre_available
-        else 0.0
-    )
-    boundary_vs_pre_dy = (
-        float(pairwise_dy[0]) - pre_pairwise_median_dy
-        if boundary_vs_pre_available
-        else 0.0
-    )
+    boundary_vs_pre_dx = float(pairwise_dx[0]) - pre_pairwise_median_dx if boundary_vs_pre_available else 0.0
+    boundary_vs_pre_dy = float(pairwise_dy[0]) - pre_pairwise_median_dy if boundary_vs_pre_available else 0.0
     boundary_vs_pre_norm_cells = math.hypot(boundary_vs_pre_dx, boundary_vs_pre_dy)
 
     return {

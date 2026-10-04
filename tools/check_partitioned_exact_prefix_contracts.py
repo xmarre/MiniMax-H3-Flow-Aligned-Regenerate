@@ -283,9 +283,7 @@ def _validate_high_attention_transport() -> None:
                 "normal",
                 prefix_t=vdn.prefix_t,
             )
-            expected_boundary_suffix = bool(
-                not group.query_prefix_domain and vdn.prefix_t in group.query_frames
-            )
+            expected_boundary_suffix = bool(not group.query_prefix_domain and vdn.prefix_t in group.query_frames)
             if boundary_suffix != expected_boundary_suffix or diagnostic:
                 raise SystemExit("high VDN boundary-query discriminator drifted")
             if group.query_prefix_domain:
@@ -294,9 +292,7 @@ def _validate_high_attention_transport() -> None:
             elif expected_boundary_suffix:
                 saw_boundary_suffix = True
                 if not force_dense:
-                    raise SystemExit(
-                        "high VDN first generated boundary group lost dense continuity"
-                    )
+                    raise SystemExit("high VDN first generated boundary group lost dense continuity")
             else:
                 saw_later_suffix = True
                 if force_dense:
@@ -600,9 +596,7 @@ def main() -> None:
         descriptor = compile_descriptor(validated)
         if group.prefix_k_range is not None and group.prefix_k_range[0] != group.sink_rows:
             raise SystemExit("biased target-prefix K rows are not contiguous with the global sink")
-        expected_boundary_suffix = bool(
-            not group.query_prefix_domain and vdn_plan.prefix_t in group.query_frames
-        )
+        expected_boundary_suffix = bool(not group.query_prefix_domain and vdn_plan.prefix_t in group.query_frames)
         normal_route = _partitioned_local_force_dense(
             group,
             FLOW_SOFTMAX_NORMAL,
