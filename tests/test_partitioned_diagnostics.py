@@ -1018,7 +1018,7 @@ def test_video_overlap_survives_exact_audio_mode_and_keeps_original_exact_mask(
     assert not any(event.kind == "partitioned_video_guided_overlap" for event in metrics.events)
 
 
-def test_video_overlap_is_applied_only_to_target_high_sampler_mask():
+def test_partitioned_video_overlap_request_keeps_target_high_exact_prefix_context():
     video = torch.randn(1, 24, 17, 8, 12)
     audio = torch.randn(1, 32, 2, 24)
     packed, shapes = pack_streams((video, audio))
@@ -1042,31 +1042,54 @@ def test_video_overlap_is_applied_only_to_target_high_sampler_mask():
         shapes,
         model_options,
         metrics,
+        prefix_t=12,
     )
 
-    assert high_mask is not runtime_mask
-    assert torch.equal(runtime_mask, exact_mask)
+    assert high_mask is runtime_mask
+    assert torch.equal(high_mask, exact_mask)
     high_video, high_audio = unpack_streams(high_mask, shapes)
     exact_video, exact_audio = unpack_streams(exact_mask, shapes)
-    expected = torch.tensor(
-        [52 / 256, 103 / 256, 154 / 256, 205 / 256],
-        device=high_video.device,
-        dtype=high_video.dtype,
-    )
-    torch.testing.assert_close(high_video[0, 0, 8:12, 0, 0], expected)
-    assert torch.equal(high_video[:, :, :8], exact_video[:, :, :8])
-    assert torch.equal(high_video[:, :, 12:], exact_video[:, :, 12:])
+    assert torch.equal(high_video, exact_video)
     assert torch.equal(high_audio, exact_audio)
 
     event = [event for event in metrics.events if event.kind == "partitioned_video_guided_overlap"][-1]
     assert event.fields["stage"] == "high"
-    assert event.fields["applied"] is True
+    assert event.fields["applied"] is False
     assert event.fields["requested_tokens"] == 4
+    assert event.fields["applied_tokens"] == 0
     assert event.fields["video_prefix_tokens"] == 12
-    assert event.fields["hard_prefix_tokens"] == 8
-    assert event.fields["low_probe_sampler_mask_unchanged"] is True
-    assert event.fields["structural_preflight_mask_exact"] is True
-    assert event.fields["final_exact_prefix_restore"] is True
+    assert event.fields["hard_prefix_tokens"] == 12
+    assert event.fields["sampler_mask_modified"] is False
+    assert event.fields["model_mask_modified"] is False
+    assert event.fields["high_sampler_video_mask_exact"] is True
+    assert event.fields["high_model_video_context_exact"] is True
+    assert event.fields["retired_prefix_release"] is True
+    assert event.fields["reason"] == "retired_discarded_prefix_context_01093"
+
+
+def test_partitioned_video_overlap_rejects_preexisting_high_video_mask_mutation():
+    video = torch.randn(1, 24, 17, 8, 12)
+    audio = torch.randn(1, 32, 2, 24)
+    _packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :12] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :20] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+    runtime_mask = exact_mask.clone()
+    runtime_video, _ = unpack_streams(runtime_mask, shapes)
+    runtime_video[:, :, 11] = 1.0
+
+    with pytest.raises(RuntimeError, match="already differs from authoritative exact-prefix context"):
+        _partitioned_high_video_overlap_mask(
+            runtime_mask,
+            exact_mask,
+            shapes,
+            {PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 6, "transformer_options": {}},
+            H3FlowMetrics(),
+            prefix_t=12,
+        )
 
 
 @pytest.mark.parametrize(

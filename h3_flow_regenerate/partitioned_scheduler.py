@@ -180,12 +180,6 @@ from .vae_boundary_video import (
     repair_vae_window_vertical_residual,
     validate_vae_window_vertical_candidate,
 )
-from .video_guided_overlap import apply_video_guided_overlap_mask
-from .video_overlap_closure import (
-    VIDEO_OVERLAP_CLOSURE_POLICY,
-    validate_video_overlap_closure_options,
-    video_overlap_closure,
-)
 
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
@@ -505,13 +499,21 @@ def _partitioned_high_video_overlap_mask(
     latent_shapes: list[tuple[int, ...]],
     model_options: dict[str, Any],
     metrics,
+    *,
+    prefix_t: int,
 ) -> torch.Tensor:
-    """Apply the opt-in video overlap only to the target-high sampler mask.
+    """Keep target-high video context exact even when an old overlap width is requested.
 
-    Structural prefix discovery and the heterogeneous low/probe stages must see
-    the caller-owned exact video mask. Releasing protected video tokens before
-    preflight makes those stages unable to prove a contiguous exact prefix and,
-    more importantly, would change the handoff state we are trying to preserve.
+    Run 01093 falsified the prefix-release interpretation of video overlap.  The
+    old path repainted the tail of the caller-owned carried prefix during early
+    high evaluations and restored those bytes only after sampling.  H3 therefore
+    generated the suffix against context that was later discarded.  Wider
+    overlap increases the amount of discarded context and can worsen the visible
+    boundary.
+
+    Preserve the public non-negative width for workflow compatibility and report
+    the request, but do not mutate the exact-prefix video mask.  Audio mask
+    ownership remains independent.
     """
 
     tokens, source = resolve_partitioned_video_guided_overlap_tokens(model_options)
@@ -521,30 +523,47 @@ def _partitioned_high_video_overlap_mask(
         raise RuntimeError("video guided overlap requires an authoritative exact output mask")
     if tuple(exact_mask.shape) != tuple(runtime_mask.shape):
         raise RuntimeError("video guided overlap exact/runtime mask geometry mismatch")
+    if type(prefix_t) is not int or prefix_t <= 0 or prefix_t >= int(latent_shapes[0][2]):
+        raise RuntimeError("retired video overlap received invalid exact-prefix ownership")
 
-    high_mask, report = apply_video_guided_overlap_mask(
-        runtime_mask,
-        latent_shapes,
-        tokens=tokens,
-    )
-    if not bool(report.get("applied")):
-        raise RuntimeError(
-            f"requested target-high video guided overlap could not be applied: {report.get('reason', 'unknown')}"
-        )
-    report.update(
+    runtime_video, _runtime_audio = unpack_streams(runtime_mask, latent_shapes)
+    exact_video, _exact_audio = unpack_streams(exact_mask, latent_shapes)
+    if not torch.equal(runtime_video, exact_video.to(device=runtime_video.device, dtype=runtime_video.dtype)):
+        raise RuntimeError("target-high video mask already differs from authoritative exact-prefix context")
+
+    metrics.event(
+        "partitioned_video_guided_overlap",
+        requested_tokens=tokens,
+        applied_tokens=0,
+        width_limited_by_prefix=tokens > prefix_t,
+        applied=False,
+        reason="retired_discarded_prefix_context_01093",
+        video_prefix_tokens=prefix_t,
+        video_total_tokens=int(latent_shapes[0][2]),
+        hard_prefix_tokens=prefix_t,
+        ramp_values=[],
         configuration_source=source,
-        sampler_mask_modified=True,
+        sampler_mask_modified=False,
+        model_mask_modified=False,
         stage="high",
         low_probe_sampler_mask_unchanged=True,
         structural_preflight_mask_exact=True,
+        high_sampler_video_mask_exact=True,
+        high_model_video_context_exact=True,
         final_exact_prefix_restore=True,
-        policy="partitioned_video_high_sampler_overlap_exact_tail_v3",
-        ramp_scope="initial_high_mask_upper_bound",
-        temporal_closure_policy=VIDEO_OVERLAP_CLOSURE_POLICY,
+        policy="partitioned_video_high_exact_context_v4",
+        retired_policy="partitioned_video_high_sampler_overlap_exact_tail_v3",
+        retired_closure_policy="video_prefix_release_then_exact_tail_v1",
+        retired_prefix_release=True,
+        hardware_verdict="falsified_01093_rendered_shift_shock_tone_and_overlap_worsening",
         partitioned_exact_prefix=True,
+        extra_h3_nfe=0,
+        extra_provider_calls=0,
+        extra_vae_calls=0,
+        extra_sampler_lifetimes=0,
+        extra_history_boundaries=0,
     )
-    metrics.event("partitioned_video_guided_overlap", **report)
-    return high_mask
+    return runtime_mask
 
 
 def _cuda_allocator_checkpoint(metrics, stage: str) -> None:
@@ -2833,8 +2852,6 @@ def run_partitioned_progressive(
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
         initial_model_options
     )
-    if resolve_partitioned_video_guided_overlap_tokens(initial_model_options)[0] > 0:
-        validate_video_overlap_closure_options(initial_model_options)
     _validate_low_probe_execution_source_configuration(
         low_probe_execution_source,
         prefix_transformer_context=prefix_transformer_context,
@@ -5086,6 +5103,7 @@ def run_partitioned_progressive(
             target_shapes,
             model_options,
             binding.metrics,
+            prefix_t=stage_plan.prefix_t,
         )
         if boundary_window_evidence is not None:
             high_video_mask, _ = unpack_streams(high_denoise_mask, target_shapes)
@@ -5097,15 +5115,6 @@ def run_partitioned_progressive(
         with (
             _flow_stage_contract(guider, "high"),
             _high_stage_contract(guider),
-            video_overlap_closure(
-                guider,
-                high_denoise_mask,
-                target_shapes,
-                prefix_t=stage_plan.prefix_t,
-                tokens=resolve_partitioned_video_guided_overlap_tokens(model_options)[0],
-                sigmas=high_sigmas,
-                metrics=binding.metrics,
-            ),
             high_boundary_contract(
                 binding,
                 high_boundary_context,
