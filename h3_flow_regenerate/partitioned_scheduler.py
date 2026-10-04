@@ -4353,7 +4353,7 @@ def run_partitioned_progressive(
             PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
         )
         exact_overlap_dc_support_policy = (
-            "bounded_linear_return_v2" if exact_overlap_fallback_requested else "first_suffix_only_v1"
+            "bounded_linear_return_v2" if len(exact_overlap_dc_weights) > 1 else "first_suffix_only_v1"
         )
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
