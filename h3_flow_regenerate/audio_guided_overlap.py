@@ -19,15 +19,14 @@ from .geometry import unpack_streams
 
 AUDIO_GUIDED_OVERLAP_ENV = "H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS"
 DEFAULT_AUDIO_GUIDED_OVERLAP_TICKS = 4
-MAX_AUDIO_GUIDED_OVERLAP_TICKS = 16
 _MASK_QUANTIZATION_LEVELS = 256.0
 
 
 def validate_audio_guided_overlap_ticks(value: int, *, source: str = "audio guided overlap") -> int:
     """Validate an explicit overlap width without consulting process environment."""
 
-    if type(value) is not int or not 0 <= value <= MAX_AUDIO_GUIDED_OVERLAP_TICKS:
-        raise ValueError(f"{source} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}], got {value!r}")
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{source} must be a non-negative integer, got {value!r}")
     return int(value)
 
 
@@ -40,7 +39,7 @@ def configured_audio_guided_overlap_ticks() -> int:
     try:
         ticks = int(str(raw_value).strip())
     except ValueError as exc:
-        message = f"{AUDIO_GUIDED_OVERLAP_ENV} must be an integer in [0, {MAX_AUDIO_GUIDED_OVERLAP_TICKS}]"
+        message = f"{AUDIO_GUIDED_OVERLAP_ENV} must be a non-negative integer"
         raise ValueError(message) from exc
     return validate_audio_guided_overlap_ticks(ticks, source=AUDIO_GUIDED_OVERLAP_ENV)
 
@@ -387,18 +386,21 @@ def apply_audio_guided_overlap_mask(
     Video is byte-for-byte untouched. The original mask remains caller-owned
     and is required for final exact-prefix canonicalization.
 
-    All-one audio (ordinary first chunk), all-protected audio, and exact
-    prefixes too short to leave at least one fully protected tick are expected
-    no-ops. Any other partially protected but non-canonical audio layout is
-    rejected rather than silently applying a heuristic to unknown semantics.
+    All-one audio (ordinary first chunk) and all-protected audio are expected
+    no-ops. The applied width uses the available carried prefix, including the
+    whole prefix when requested. Non-canonical partially protected layouts
+    retain their existing rejection.
     """
 
     ticks = int(ticks)
     report: dict[str, Any] = {
         "requested_ticks": ticks,
+        "applied_ticks": 0,
+        "width_limited_by_prefix": False,
         "applied": False,
         "reason": "disabled" if ticks <= 0 else "pending",
         "audio_prefix_ticks": 0,
+        "hard_prefix_ticks": 0,
         "ramp_values": [],
         "mask_grid": "ceil_1_over_256",
         "original_exact_output_restore": True,
@@ -434,6 +436,7 @@ def apply_audio_guided_overlap_mask(
             {
                 "reason": "no_generated_audio_suffix",
                 "audio_prefix_ticks": temporal,
+                "hard_prefix_ticks": temporal,
             }
         )
         return denoise_mask, report
@@ -448,21 +451,23 @@ def apply_audio_guided_overlap_mask(
         raise ValueError(
             "audio guided overlap requires a contiguous exact audio prefix followed by a fully generated suffix"
         )
-    if ticks >= prefix:
-        report["reason"] = "exact_audio_prefix_too_short"
-        return denoise_mask, report
-
-    raw_ramp = torch.arange(1, ticks + 1, device=audio_mask.device, dtype=torch.float32) / float(ticks + 1)
+    overlap_ticks = min(ticks, prefix)
+    raw_ramp = torch.arange(1, overlap_ticks + 1, device=audio_mask.device, dtype=torch.float32) / float(
+        overlap_ticks + 1
+    )
     ramp = torch.ceil(raw_ramp * _MASK_QUANTIZATION_LEVELS) / _MASK_QUANTIZATION_LEVELS
     ramp = ramp.to(dtype=audio_mask.dtype)
-    audio_mask[..., prefix - ticks : prefix] = ramp.view(1, 1, 1, -1)
+    audio_mask[..., prefix - overlap_ticks : prefix] = ramp.view(1, 1, 1, -1)
     report.update(
         {
             "applied": True,
+            "applied_ticks": overlap_ticks,
+            "width_limited_by_prefix": ticks > prefix,
             "reason": "exact_audio_prefix_tail",
             "audio_prefix_ticks": prefix,
+            "hard_prefix_ticks": prefix - overlap_ticks,
             "ramp_values": [float(value) for value in ramp.detach().to(device="cpu", dtype=torch.float32).tolist()],
-            "ramp_start_tick": prefix - ticks,
+            "ramp_start_tick": prefix - overlap_ticks,
             "ramp_stop_tick": prefix,
         }
     )

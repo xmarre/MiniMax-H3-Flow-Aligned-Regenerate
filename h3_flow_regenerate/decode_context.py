@@ -7,8 +7,11 @@ frames. No sampler input, saved chunk, or audio tensor is changed.
 
 from __future__ import annotations
 
+import logging
+
 import torch
 
+LOG = logging.getLogger(__name__)
 _CYCLE = 5
 _CYCLE_FRAMES = 17
 _PREFIX_REMAINDER = 2
@@ -85,6 +88,14 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
     report = (
         f"H3 Continuum decode context: {joined}/{max(0, len(videos) - 1)} exact boundaries. "
         "Use the original assembly plan; added frames are trimmed by Assemble.\n" + "\n".join(reports)
+    )
+    LOG.info(
+        "H3 Flow video decode-context receipt exact_boundaries=%d total_boundaries=%d "
+        "right_context_latents=%d boundaries=%s",
+        joined,
+        max(0, len(videos) - 1),
+        _CYCLE,
+        reports,
     )
     return output, report
 
