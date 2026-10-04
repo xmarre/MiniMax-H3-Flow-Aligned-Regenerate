@@ -817,21 +817,50 @@ def _exact_audio_metrics():
     return metrics
 
 
-def test_exact_audio_evidence_accepts_verified_native_masks_without_label_overrides():
+@pytest.mark.parametrize("mode", ["exact_mask", "sampler_mask_exact_timestep"])
+@pytest.mark.parametrize("modern_log", [False, True])
+def test_exact_audio_evidence_accepts_verified_native_masks_without_label_overrides(mode, modern_log):
     metrics = _exact_audio_metrics()
+    metrics["events"][-1]["fields"]["mode"] = mode
     receipt = validate_coherent_exact_audio_evidence(metrics)
     assert receipt["verified_model_entries"] == 3
-    log = _log().replace("mode=model_timestep_only ticks=4 applied=True", "mode=exact_mask ticks=16 applied=False")
+    width = "requested_ticks=16 applied_ticks=0" if modern_log else "ticks=16"
+    log = _log().replace("mode=model_timestep_only ticks=4 applied=True", f"mode={mode} {width} applied=False")
     report = validate_partitioned_runtime_evidence(
         metrics,
         log,
         require_audio_overlap=False,
-        expected_audio_guided_overlap_mode="exact_mask",
+        expected_audio_guided_overlap_mode=mode,
         expected_audio_guided_overlap_ticks=16,
         expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
     )
     assert report.audio_position_candidate_verified is True
     assert report.audio_position_model_timestep_override_calls == 0
+    assert report.audio_guided_overlap_mode == mode
+    assert report.audio_guided_overlap_ticks == 16
+    assert report.audio_guided_overlap_active is False
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        "mode=exact_mask requested_ticks=16 applied_ticks=1 applied=False",
+        "mode=exact_mask requested_ticks=16 applied_ticks=0 applied=True",
+        "mode=exact_mask requested_ticks=15 applied_ticks=0 applied=False",
+        "mode=sampler_mask_exact_timestep requested_ticks=16 applied_ticks=0 applied=False",
+    ],
+)
+def test_exact_audio_replay_rejects_applied_support_or_log_metric_drift(receipt):
+    log = _log().replace("mode=model_timestep_only ticks=4 applied=True", receipt)
+    with pytest.raises(RuntimeGateError):
+        validate_partitioned_runtime_evidence(
+            _exact_audio_metrics(),
+            log,
+            require_audio_overlap=False,
+            expected_audio_guided_overlap_mode="exact_mask",
+            expected_audio_guided_overlap_ticks=16,
+            expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+        )
 
 
 @pytest.mark.parametrize(

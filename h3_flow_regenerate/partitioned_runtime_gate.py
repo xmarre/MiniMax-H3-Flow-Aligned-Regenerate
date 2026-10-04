@@ -60,7 +60,9 @@ VDN_LINEAR_ACTIVE_MARKER = (
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 _AUDIO_OVERLAP_RE = re.compile(
     r"partitioned audio guided overlap mode=(?P<mode>\S+) "
-    r"ticks=(?P<ticks>\d+)\b applied=(?P<applied>True|False)\b"
+    r"(?:ticks=(?P<ticks>\d+)|"
+    r"requested_ticks=(?P<requested_ticks>\d+) applied_ticks=(?P<applied_ticks>\d+))\b "
+    r"applied=(?P<applied>True|False)\b"
 )
 AUDIO_POSITION_DOMAIN_LEGACY = "legacy_target"
 AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
@@ -4155,8 +4157,19 @@ def validate_partitioned_runtime_evidence(
     audio_overlap_receipts = list(_AUDIO_OVERLAP_RE.finditer(log_text))
     latest_audio_overlap = audio_overlap_receipts[-1] if audio_overlap_receipts else None
     audio_overlap_mode = latest_audio_overlap.group("mode") if latest_audio_overlap is not None else None
-    audio_overlap_ticks = int(latest_audio_overlap.group("ticks")) if latest_audio_overlap is not None else None
+    audio_overlap_ticks = (
+        int(latest_audio_overlap.group("requested_ticks") or latest_audio_overlap.group("ticks"))
+        if latest_audio_overlap is not None
+        else None
+    )
     audio_overlap_applied = latest_audio_overlap is not None and latest_audio_overlap.group("applied") == "True"
+    audio_effective_ticks = (
+        int(latest_audio_overlap.group("applied_ticks"))
+        if latest_audio_overlap is not None and latest_audio_overlap.group("applied_ticks") is not None
+        else audio_overlap_ticks
+        if audio_overlap_applied
+        else 0
+    )
     audio_overlap = bool(audio_overlap_applied and audio_overlap_ticks == 4)
     if require_vdn_linear:
         _require(
@@ -4177,7 +4190,10 @@ def validate_partitioned_runtime_evidence(
         if exact_audio_expected:
             receipt = validate_coherent_exact_audio_evidence(metrics)
             _require(receipt.get("mode") == expected_audio_guided_overlap_mode, "exact-audio receipt mode drifted")
-            _require(not audio_overlap_applied, "exact-audio mode must not apply a sampler overlap ramp")
+            _require(
+                not audio_overlap_applied and audio_effective_ticks == 0,
+                "exact-audio mode must not apply a sampler overlap ramp",
+            )
         _require(
             (audio_overlap_applied or exact_audio_expected)
             and audio_overlap_mode == expected_audio_guided_overlap_mode,

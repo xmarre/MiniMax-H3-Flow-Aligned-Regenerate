@@ -118,6 +118,11 @@ not required to obtain the already-exported bundle.
   `upscaler_prefix_output_discarded`. The validator now accepts either boolean
   proof, rejects conflicting aliases, and rejects missing or non-boolean proof.
   This repairs evidence replay, not sampling or rendered continuity.
+- The exact-audio log now separates `requested_ticks` and `applied_ticks`. The
+  validator's older `ticks` parser missed that receipt. Replay now accepts both
+  forms and requires zero effective support for an expected exact-audio mode.
+  The actual run selects the historical exact-mode alias with requested width
+  16 and applied width zero; this does not alter the video diagnosis.
 - The green source tests and CI recorded for `a928e31e` establish code contracts,
   not a visual fix. This follow-up changes qualification documentation and the
   offline validator only; production sampler arithmetic stays unchanged.
