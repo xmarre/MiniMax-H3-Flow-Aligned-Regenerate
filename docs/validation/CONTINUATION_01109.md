@@ -126,3 +126,26 @@ not required to obtain the already-exported bundle.
 - The green source tests and CI recorded for `a928e31e` establish code contracts,
   not a visual fix. This follow-up changes qualification documentation and the
   offline validator only; production sampler arithmetic stays unchanged.
+
+## Follow-up source validation
+
+- Supplied metrics/log replay passes with the actual audio alias, requested
+  width 16, zero effective overlap, and source-carrier audio positions. It
+  identifies 17 continuation calls: 11 actual and six forecast, including six
+  high calls with four actual. Sol requested/kernel Q counts both equal
+  5,818,750. This is ordinary runtime and coherent-audio evidence replay; the
+  matched DoRA/frame-registration approval checks are not selected because
+  their required loader reports are not supplied.
+- Focused offline runtime-gate regressions: **127 passed**.
+- Full local Python 3.12 CPU suite: **868 passed, 27 skipped**. Native source
+  tests skipped locally run separately in source-contract CI.
+- Ruff check/format and compileall pass; `git diff --check` passes.
+- The reviewed source is mirrored at `9b9e1b53` on
+  `mirror/01109-boundary-qualification-20261004`. Its
+  [CI run](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/actions/runs/37181114543)
+  passes all five jobs, including the existing Python 3.10-3.13 matrix,
+  native/sibling contracts, builds and isolated-wheel validation. Consolidation
+  adds only this qualification record after that green source tree.
+
+These checks establish validator compatibility and source correctness, not
+rendered acceptance. No further sampling run is claimed by this follow-up.
