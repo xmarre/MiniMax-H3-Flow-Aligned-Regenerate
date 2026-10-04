@@ -1,11 +1,10 @@
 """Bounded high-stage boundary ownership and model-output observations.
 
 The exact-prefix continuation owns the caller prefix at the framework boundary.
-High-stage corrections, when selected, operate only on existing model
-predictions: fixed-reference anchors remain available for historical evidence,
-while the production candidate rebases each model-native prediction onto the
-authoritative prefix and releases that gauge correction across bounded generated
-suffix support. No model, sampler, provider, or VAE work is added.
+Its high-stage direction reference uses the handoff's coupled representation
+support or its one-token channel-mean correction. Fixed-reference anchors and
+model-prediction bridges remain available for historical evidence. No model,
+sampler, provider, or VAE work is added.
 """
 
 from __future__ import annotations
@@ -18,6 +17,8 @@ from typing import Any
 import torch
 
 from .geometry import pack_streams, unpack_streams
+from .guidance import ExactPrefixGuidanceGauge, HandoffGuidanceReference
+from .residual_evidence import BoundaryWindowEvidence
 from .seam_diagnostics import measure_translation_trajectory
 
 HIGH_BOUNDARY_REFERENCE_POLICY = "handoff_clean_boundary_reference_v1"
@@ -360,7 +361,9 @@ class HighStageBoundaryReferenceAnchor:
 
 class HighStageBoundaryTrace:
     max_calls = 16
-    suffix_tokens = 4
+    # A phase-aligned H3 boundary decoder window consumes five generated
+    # tokens. Observing only the four-token bridge omits its support exit.
+    suffix_tokens = 5
 
     def __init__(
         self,
@@ -369,6 +372,7 @@ class HighStageBoundaryTrace:
         shapes,
         *,
         prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
+        window_evidence: BoundaryWindowEvidence | None = None,
     ):
         self.metrics = metrics
         self.prefix_t = int(exact_prefix.shape[2])
@@ -377,17 +381,25 @@ class HighStageBoundaryTrace:
         self.prefix_witness = str(prefix_witness)
         self.calls = 0
         self.previous_prediction = None
+        self.window_evidence = window_evidence
 
-    def observe(self, packed, *, point, call_index, sigma, actual):
+    def observe(self, packed, *, point, call_index, sigma, actual, sampler_input=None):
         if call_index >= self.max_calls:
             return
         started = time.perf_counter()
         video, _ = unpack_streams(packed, self.shapes)
+        if self.window_evidence is not None:
+            input_video = unpack_streams(sampler_input, self.shapes)[0] if sampler_input is not None else None
+            self.window_evidence.observe_prediction(
+                video, point=point, call_index=call_index, sigma=sigma, actual=actual, sampler_input=input_video
+            )
         suffix = video[:, :, self.prefix_t : self.prefix_t + self.suffix_tokens].detach()
         # torch.cat owns this bounded witness; never modify a sampler operand.
         witness = torch.cat((self.exact_tail.to(suffix), suffix), dim=2)
         trajectories = {
-            name: measure_translation_trajectory(witness, 1, backward_steps=0, roi_fraction=fraction)
+            name: measure_translation_trajectory(
+                witness, 1, forward_steps=int(suffix.shape[2]), backward_steps=0, roi_fraction=fraction
+            )
             for name, fraction in (("upper45", 0.45), ("full", 1.0))
         }
         delta_rms = None
@@ -395,7 +407,7 @@ class HighStageBoundaryTrace:
             delta_rms = float((suffix.float() - self.previous_prediction.float()).square().mean().sqrt().item())
         self.metrics.event(
             "partitioned_high_boundary_prediction",
-            policy="high_boundary_prediction_v1",
+            policy="high_boundary_prediction_v2",
             point=point,
             call_index=call_index,
             sigma=float(sigma),
@@ -431,6 +443,10 @@ def high_boundary_contract(
     exact_denoise_mask: torch.Tensor | None = None,
     prefix_witness: str = "authoritative_exact_tail_after_inpaint_restore",
     prediction_gauge_bridge_weights: tuple[float, ...] | None = None,
+    guidance_reference_gauge_weights: tuple[float, ...] | None = None,
+    guidance_reference_dc_metrics: dict[str, Any] | None = None,
+    window_evidence: BoundaryWindowEvidence | None = None,
+    handoff_guidance_reference: HandoffGuidanceReference | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -439,12 +455,36 @@ def high_boundary_contract(
         or binding.high_boundary_trace is not None
         or binding.high_boundary_anchor is not None
         or binding.high_prediction_bridge is not None
+        or getattr(binding, "guidance_reference_gauge", None) is not None
+        or getattr(binding, "handoff_guidance_reference", None) is not None
     ):
         raise RuntimeError("nested high-stage boundary ownership is unsupported")
     binding.guidance_protected_prefix_t = int(exact_prefix.shape[2])
     anchor = None
     prediction_bridge = None
+    reference_gauge = None
     try:
+        if handoff_guidance_reference is not None:
+            binding.handoff_guidance_reference = handoff_guidance_reference
+        reference_weights = guidance_reference_gauge_weights
+        dc_only = False
+        if (
+            reference_weights is None
+            and guidance_reference_dc_metrics is not None
+            and binding.registered_guidance_reference is None
+            and binding.guidance is not None
+            and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_enabled") is True
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_prefix_t") == binding.guidance_protected_prefix_t
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_corrected_tokens") == 1
+            and guidance_reference_dc_metrics.get("suffix_dc_bridge_first_weight") == 1.0
+            and float(guidance_reference_dc_metrics.get("suffix_dc_bridge_delta_rms", 0.0)) > 0.0
+        ):
+            reference_weights = (1.0,)
+            dc_only = True
+        if reference_weights is not None:
+            reference_gauge = ExactPrefixGuidanceGauge(exact_prefix, reference_weights, spatial_mean_only=dc_only)
+            binding.guidance_reference_gauge = reference_gauge
         if prediction_gauge_bridge_weights is not None:
             prediction_bridge = HighStagePredictionGaugeBridge(
                 binding.metrics,
@@ -470,6 +510,7 @@ def high_boundary_contract(
                 exact_prefix,
                 shapes,
                 prefix_witness=prefix_witness,
+                window_evidence=window_evidence,
             )
         yield
     finally:
@@ -480,7 +521,30 @@ def high_boundary_contract(
         binding.high_boundary_anchor = None
         binding.high_prediction_bridge = None
         binding.guidance_protected_prefix_t = 0
+        if handoff_guidance_reference is not None:
+            binding.handoff_guidance_reference = None
+            handoff_guidance_reference.close()
+        if reference_gauge is not None:
+            binding.guidance_reference_gauge = None
+            reference_gauge.close()
+            binding.metrics.event(
+                "partitioned_guidance_reference_gauge_complete",
+                policy=reference_gauge.policy,
+                spatial_mean_only=reference_gauge.spatial_mean_only,
+                calls=reference_gauge.calls,
+                prefix_t=reference_gauge.prefix_t,
+                support_tokens=min(len(reference_gauge.weights), int(shapes[0][2]) - reference_gauge.prefix_t),
+                temporal_weights=list(reference_gauge.weights),
+                authoritative_prefix_modified=False,
+                source_trajectory_modified=False,
+                temporal_correspondence_reference_modified=False,
+                spatial_warp_applied=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+                extra_vae_calls=0,
+            )
         if trace is not None:
+            trace.window_evidence = None
             binding.metrics.event(
                 "partitioned_high_boundary_trace_complete",
                 prediction_calls=trace.calls,
