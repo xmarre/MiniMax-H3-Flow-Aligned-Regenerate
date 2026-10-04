@@ -5,6 +5,12 @@ or tone outcome. PR #93 remains a draft stacked directly on Flow #89. The
 accepted `same_grid_target_control` stays available and unchanged. Progressive
 low-to-high continuation remains unqualified for the reported artifact.
 
+Follow-up: [01119's native and regional review](CONTINUATION_01119.md) verifies
+this policy on all four actual high calls. The supplied assembled video permits
+separate forest-motion and foreground-tone checks; its large whole-frame motion
+estimate does not establish a uniform frame translation. This is a different
+seed and geometry from 01115, and rendered acceptance remains unqualified.
+
 ## Evidence and causal limits
 
 [Run 01115's native tensor/decoder review](CONTINUATION_01115.md) reproduces a

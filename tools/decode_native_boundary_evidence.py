@@ -275,7 +275,9 @@ def main() -> None:
                     "trajectory": motion,
                     "tone": tone._profile(tone._sample_rgb(frames[2:])),
                 }
-                torch.save(pixels[index], args.output / f"{name}.pt")
+                # A view serializes its complete backing batch, including the
+                # other stages. Own only this stage's pixels in its artifact.
+                torch.save(pixels[index].clone(), args.output / f"{name}.pt")
             del frames, pixels
         report["wall_s"] = time.monotonic() - started
         (args.output / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
