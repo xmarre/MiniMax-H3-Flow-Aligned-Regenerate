@@ -171,6 +171,19 @@ component intact. A rejected structural registration does not authorize a full
 residual correction. Registered references, guidance off, downsample consistency
 and zero-offset DC handoffs retain their existing behavior.
 
+After hardware run 01097, this DC-only rule is also the production exact-overlap
+fallback. The newer four-token structural+DC successor taper is retired. 01097
+ran with exact target-high video context and the actual learned provider pair,
+but still rendered the shock while that taper transplanted a roughly 0.41 RMS
+zero-spatial-mean exact-vs-learned residual into generated content. Matching a
+raw latent frame difference after an additive spatial transform is not an
+equivariance contract for H3 or the VAE. Production therefore no longer moves
+spatial structure from the authoritative prefix into any generated suffix token
+and no longer releases such a gauge over later suffix tokens. Only the older
+first-token per-channel spatial mean correction remains. The historical
+representation-bridge primitive stays in the package for source regression and
+diagnostic evidence, not for production mutation.
+
 The `guidance` receipt records `reference_gauge_used` and
 `reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` for coupled
 support or `exact_prefix_guidance_reference_dc_v1` for channel means.

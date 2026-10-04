@@ -90,16 +90,14 @@ def _schedule():
     return high_sigmas, split_coordinate
 
 
-def test_video_boundary_production_contract_fails_closed_to_residual_only():
+def test_video_boundary_production_contract_fails_closed_to_dc_only():
     assert partitioned_scheduler.PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED is False
-    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0, 0.75, 0.5, 0.25)
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0,)
     assert (
         partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
-        == "source_residual_handoff_plus_coupled_successor_overlap_v4"
+        == "source_residual_handoff_plus_one_token_dc_v5"
     )
-    assert (
-        partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_coupled_successor_taper_v4"
-    )
+    assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_dc_only_v5"
 
 
 def test_frame_gauge_transaction_calibrates_video_and_guidance_independently():
@@ -182,7 +180,7 @@ def test_guidance_only_rejection_keeps_video_boundary_eligible_for_exact_overlap
     assert trigger == ("guidance_rejected_after_video_boundary_acceptance:unsupported_sampler_contract")
 
 
-def test_exact_overlap_bridge_preserves_provider_native_first_transition():
+def test_exact_overlap_bridge_retires_structural_transplant_and_applies_only_one_token_dc():
     generator = torch.Generator().manual_seed(60089)
     learned = torch.randn(1, 24, 9, 18, 20, generator=generator)
     exact_prefix = learned[:, :, :4].clone()
@@ -195,51 +193,86 @@ def test_exact_overlap_bridge_preserves_provider_native_first_transition():
     exact_prefix = exact_prefix + residual
     target_video = torch.randn(learned.shape, generator=generator)
     target_before = target_video.clone()
-    weights = partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
 
     mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
         target_video,
         learned,
         exact_prefix,
         sigma=0.8,
-        weights=weights,
+        weights=partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
     )
-    restored = corrected.clone()
-    restored[:, :, :4] = exact_prefix
 
-    torch.testing.assert_close(
-        restored[:, :, 4] - restored[:, :, 3],
-        learned[:, :, 4] - learned[:, :, 3],
-        rtol=1e-5,
-        atol=1e-6,
-    )
     delta = exact_prefix[:, :, -1].float() - learned[:, :, 3].float()
     dc_delta = delta.mean(dim=(-2, -1), keepdim=True)
-    expected_step = -0.25 * delta
-    for offset in range(1, 4):
-        corrected_step = restored[:, :, 4 + offset].float() - restored[:, :, 3 + offset].float()
-        native_step = learned[:, :, 4 + offset].float() - learned[:, :, 3 + offset].float()
-        torch.testing.assert_close(corrected_step - native_step, expected_step, rtol=1e-5, atol=1e-6)
-    corrected_exit = restored[:, :, 8].float() - restored[:, :, 7].float()
-    native_exit = learned[:, :, 8].float() - learned[:, :, 7].float()
-    torch.testing.assert_close(corrected_exit - native_exit, expected_step, rtol=1e-5, atol=1e-6)
+    correction = corrected[:, :, 4].float() - learned[:, :, 4].float()
+    torch.testing.assert_close(correction, dc_delta.expand_as(correction), rtol=0.0, atol=2e-6)
+    centered = correction - correction.mean(dim=(-2, -1), keepdim=True)
+    torch.testing.assert_close(centered, torch.zeros_like(centered), rtol=0.0, atol=2e-6)
 
-    assert representation["suffix_representation_bridge_corrected_tokens"] == 4
-    assert representation["suffix_representation_bridge_successor_safe"] is True
-    assert representation["suffix_representation_bridge_max_weight_step"] == pytest.approx(0.25)
-    assert dc["suffix_dc_bridge_corrected_tokens"] == 4
-    for offset, weight in enumerate(weights):
-        correction = corrected[:, :, 4 + offset].float() - learned[:, :, 4 + offset].float()
-        torch.testing.assert_close(
-            correction.mean(dim=(-2, -1), keepdim=True),
-            weight * dc_delta,
-            rtol=1e-5,
-            atol=1e-6,
-        )
-    assert torch.equal(mapped[:, :, :4], target_before[:, :, :4])
-    assert torch.equal(mapped[:, :, 8:], target_before[:, :, 8:])
+    assert representation["suffix_representation_bridge_accepted"] is False
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 0
+    assert representation["suffix_representation_bridge_production_retired"] is True
+    assert representation["suffix_representation_bridge_reason"].startswith("hardware_falsified_01097")
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    assert dc["suffix_dc_bridge_first_weight"] == 1.0
+    assert dc["suffix_dc_bridge_last_weight"] == 1.0
+
     assert torch.equal(corrected[:, :, :4], learned[:, :, :4])
-    assert torch.equal(corrected[:, :, 8:], learned[:, :, 8:])
+    assert torch.equal(corrected[:, :, 5:], learned[:, :, 5:])
+    assert torch.equal(mapped[:, :, :4], target_before[:, :, :4])
+    assert torch.equal(mapped[:, :, 5:], target_before[:, :, 5:])
+    torch.testing.assert_close(
+        mapped[:, :, 4].float() - target_before[:, :, 4].float(),
+        0.2 * dc_delta.expand_as(mapped[:, :, 4]),
+        rtol=0.0,
+        atol=2e-6,
+    )
+
+
+def test_exact_overlap_bridge_zero_mean_structural_residual_is_a_production_noop():
+    generator = torch.Generator().manual_seed(60090)
+    learned = torch.randn(1, 24, 7, 12, 14, generator=generator)
+    exact_prefix = learned[:, :, :3].clone()
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, 12),
+        torch.linspace(-1.0, 1.0, 14),
+        indexing="ij",
+    )
+    structural = (0.31 * xx - 0.19 * yy).reshape(1, 1, 1, 12, 14)
+    structural = structural - structural.mean(dim=(-2, -1), keepdim=True)
+    exact_prefix = exact_prefix + structural
+    target_video = torch.randn(learned.shape, generator=generator)
+
+    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
+        target_video,
+        learned,
+        exact_prefix,
+        sigma=0.7,
+        weights=(1.0,),
+    )
+
+    torch.testing.assert_close(corrected, learned, rtol=0.0, atol=2e-6)
+    torch.testing.assert_close(mapped, target_video, rtol=0.0, atol=2e-6)
+    assert representation["suffix_representation_bridge_production_retired"] is True
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 0
+    assert dc["suffix_dc_bridge_corrected_tokens"] == 1
+    assert dc["suffix_dc_bridge_delta_rms"] == pytest.approx(0.0, abs=2e-6)
+
+
+def test_exact_overlap_bridge_rejects_retired_multi_token_transport():
+    generator = torch.Generator().manual_seed(60091)
+    learned = torch.randn(1, 24, 7, 12, 14, generator=generator)
+    exact_prefix = learned[:, :, :3].clone()
+    target_video = torch.randn(learned.shape, generator=generator)
+
+    with pytest.raises(RuntimeError, match="one-token DC-only"):
+        _apply_partitioned_exact_overlap_bridge(
+            target_video,
+            learned,
+            exact_prefix,
+            sigma=0.7,
+            weights=(1.0, 0.75, 0.5, 0.25),
+        )
 
 
 def test_boundary_motion_gate_compact_witness_matches_full_translation():

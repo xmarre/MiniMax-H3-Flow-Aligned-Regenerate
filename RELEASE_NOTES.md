@@ -1,3 +1,31 @@
+# Unreleased: retire the four-token structural successor transplant after 01097
+
+Run 01097 keeps the target-high video mask/context exact for every evaluation and
+uses the actual learned provider source/target pair for high guidance, yet the
+rendered frame-shift/shock/tone defect survives. The remaining production
+boundary mutation was the v4 exact-overlap bridge: it copied the complete
+exact-vs-learned residual into the first generated token and tapered that
+spatially varying gauge across four suffix tokens with weights
+`(1.0, 0.75, 0.5, 0.25)`.
+
+That construction only preserves a raw latent tensor difference algebraically.
+H3 and the VAE are nonlinear and are not required to be equivariant to adding
+the same spatially varying field to neighboring frames. 01097 demonstrates the
+mismatch directly: the bridge's structural residual is about **0.409 RMS**, yet
+the measured phase motion changes substantially across the same boundary even
+though the algebraic difference test passes.
+
+Production now retires that structural transport and returns to the historically
+qualified one-token DC bridge from v0.3.0/v0.3.8. Only the per-channel spatial
+mean of the exact-vs-learned prefix residual is added to the first generated
+token. No spatially varying prefix structure is injected into generated content,
+no correction is tapered through later suffix tokens, and the authoritative
+prefix remains unchanged. The historical representation-bridge primitive remains
+available for diagnostics/tests only. Receipts identify
+`partitioned_exact_overlap_dc_only_v5`, zero structural support and the 01097
+hardware retirement. This is a behavioral candidate; rendered acceptance still
+requires a matched hardware rerun.
+
 # Unreleased: reconcile continuation guidance with the exact-prefix handoff
 
 Partitioned continuation now compares high-stage direction guidance in the same

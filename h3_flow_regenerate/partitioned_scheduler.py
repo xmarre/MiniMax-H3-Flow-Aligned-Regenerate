@@ -193,9 +193,12 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # one fine-search quantum as measurement-floor degradation, never as evidence
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
-PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_coupled_successor_taper_v4"
-PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0, 0.75, 0.5, 0.25)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_coupled_successor_overlap_v4"
+PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_dc_only_v5"
+# Kept under the historical public constant name for source/tests that import it.
+# 01097 falsified the spatially varying 4-token transplant as a rendered repair.
+# Production now retains only the v0.3.0/v0.3.8 one-token channel-mean bridge.
+PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_one_token_dc_v5"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -1572,32 +1575,45 @@ def _apply_partitioned_exact_overlap_bridge(
     sigma: float,
     weights: tuple[float, ...] = (1.0,),
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
-    """Reconcile the measured exact/learned overlap before authoritative restore.
+    """Apply only the hardware-qualified one-token DC continuity correction.
 
-    The structural and spatial-mean/DC components share one temporal support.
-    Their sum at suffix token j is w_j * (E_p - L_p).  Weight 1.0 on suffix
-    token 0 preserves the provider-native prefix -> first-suffix transition;
-    each successor transition, including the support exit, then pays only its
-    weight difference times the full residual.  Independently shortening DC
-    support would restore a full spatial-mean discontinuity at that exit.
+    01097 ran with exact target-high video context and the actual learned
+    provider source/target guidance pair, yet the rendered shock survived while
+    the then-production bridge transplanted a ~0.41 RMS spatially varying
+    exact-vs-learned residual into four future tokens.  Equality of raw latent
+    frame differences under that additive transplant is not an equivariance
+    contract for H3 or the VAE; the run itself showed materially different
+    phase motion after the transplant.
+
+    Retain the older v0.3.0/v0.3.8 correction that has a narrower claim:
+    preserve only the per-channel spatial mean at the first generated token.
+    Never move spatial structure from the authoritative prefix into generated
+    content, and never taper a representation gauge through later suffix rows.
     """
 
+    normalized_weights = tuple(float(weight) for weight in weights)
+    if normalized_weights != (1.0,):
+        raise RuntimeError(
+            "production exact-overlap repair is one-token DC-only after 01097; "
+            "multi-token or structural successor transport is retired"
+        )
     prefix_t = int(exact_prefix.shape[2])
-    structured_clean, representation_metrics = apply_suffix_representation_bridge(
-        learned_clean,
-        exact_prefix,
-        requested=True,
-        weights=weights,
+    representation_metrics = disabled_suffix_representation_bridge_metrics(
+        prefix_t=prefix_t,
+        requested=False,
+        weights=(1.0,),
+    )
+    representation_metrics.update(
+        suffix_representation_bridge_reason="hardware_falsified_01097_non_equivariant_structural_transplant",
+        suffix_representation_bridge_production_retired=True,
+        suffix_representation_bridge_hardware_verdict="01097_rendered_shift_shock_tone_survived_exact_high_context",
     )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
-        structured_clean,
+        learned_clean,
         exact_prefix,
-        weights=weights,
+        weights=(1.0,),
     )
-    corrected_tokens = max(
-        int(representation_metrics["suffix_representation_bridge_corrected_tokens"]),
-        int(dc_metrics["suffix_dc_bridge_corrected_tokens"]),
-    )
+    corrected_tokens = int(dc_metrics["suffix_dc_bridge_corrected_tokens"])
     if corrected_tokens < 1:
         return target_video.clone(), corrected_clean, representation_metrics, dc_metrics
     mapped_state = map_clean_bridge_to_conditional_state(
@@ -4359,6 +4375,10 @@ def run_partitioned_progressive(
             dc_support_tokens=int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
             dc_temporal_weights=list(exact_overlap_dc_weights),
             suffix_outside_support_modified=False,
+            structural_bridge_retired=True,
+            structural_bridge_hardware_verdict="falsified_01097_rendered_shock_after_exact_high_context",
+            structural_support_tokens=0,
+            production_correction="one_token_per_channel_spatial_mean_only",
             extra_h3_nfe=0,
             extra_provider_calls=0,
             extra_vae_calls=0,
