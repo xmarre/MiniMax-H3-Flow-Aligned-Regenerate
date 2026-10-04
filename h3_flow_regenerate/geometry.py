@@ -353,6 +353,7 @@ def resize_spatial_5d_h3_patch_lattice(
             align_corners=True,
         )
         out[first:last] = mapped.to(tensor.dtype)
+        del mapped
     return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4)
 
 

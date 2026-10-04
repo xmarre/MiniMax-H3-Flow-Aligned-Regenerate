@@ -1,3 +1,12 @@
+# Unreleased: continuous dense transfer
+
+Partitioned learned handoffs use a continuous spatial transform for the source
+prefix carrier and learned encoder features. Phase-separated interpolation could
+duplicate narrow latent features. The matching upscaler must advertise
+`h3_patch_lattice_api=2`; update both companion PR overlays. Ordinary upscaling
+retains its existing interpolation. Trained-checkpoint continuity remains under
+runtime qualification.
+
 # Unreleased: first-token DC support with coherent learned guidance
 
 Boundary trajectory diagnostics now report the first prefix-to-suffix translation
