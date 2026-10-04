@@ -36,7 +36,7 @@ both equal 3,944,000. This verifies runtime ownership and the selected exact-aud
 alias with requested width 16 and applied width zero. It is not rendered
 acceptance, frame-gauge approval, or a DoRA loader approval.
 
-## Decoder replay checkpoint
+## Full native decoder replay
 
 The offline replay uses the unmodified MiniMax-H3 VAE implementation from Core
 `6b4e05dc30d65740ce8931434607b9907996fb0e` and the official
@@ -44,23 +44,109 @@ The offline replay uses the unmodified MiniMax-H3 VAE implementation from Core
 is identity in Core's MiniMax-H3 video latent format; VAE channel normalization is
 owned by the native decoder.
 
-Initial paired runs use native 16x16 spatial tiles at latent origins `(0,33)` and
-`(0,11)`, all seven temporal tokens, and FP32 decoder arithmetic. Protected
-prediction tokens are restored from the supplied authoritative bytes before
-decode. They compare provider native, provider with exact prefix, pre-high DC,
-first actual high predictions, and final output without rerunning H3 or the
-learned provider.
+The completed replay executes all seven temporal tokens and the native spatial
+blend across 28 tiles, producing `736x1312` frames. Latent tile origins are
+`y=[0,10,20,30]`, `x=[0,11,22,33,44,55,66]`. Protected prediction tokens are
+restored from the supplied authoritative bytes before decode. The six clean
+stage comparisons do not rerun H3, the provider or the sampler.
 
-The `(0,33)` tile has a pronounced final third-frame motion change absent in the
-provider-native tile. Exact-prefix restoration also changes decoded tone before
-high sampling. The other tile has different motion and ambiguous large later
-estimates. These are local counterfactuals: they do not reproduce the full-frame
-spatial blend or the preceding temporal blend. Full-frame replay must decide the
-global localization before another production actuator is selected.
+The full-frame run uses CPU BF16 decoder arithmetic with native PyTorch SDPA.
+Five stages were decoded together; the after-Flow stage was replayed separately
+with the same checkpoint, decoder and spatial blend. Initial FP32 tile runs at
+`(0,33)` and `(0,11)` showed region-dependent motion, so tile measurements alone
+were not promoted to global evidence. The FP32 native CPU attention/SDPA tile
+comparison has RGB RMS below `1.2e-7`; sampled BF16/FP32 tile differences are
+approximately `0.0023-0.0026` RGB RMS. Production decoder precision and checkpoint
+identity are not reported, so the full replay is not a pixel-exact hardware run.
 
-No new production sampler mutation is selected at this checkpoint. In particular,
-tile evidence cannot justify another spatial-residual transplant, prefix release,
-or prediction/VAE warp.
+The same pinned Continuum trajectory implementation measures all stages. The
+table uses the transition into the third retained frame, raw decoder frames
+`9 -> 10`. This pair is inside the current native window, beyond its temporal
+blend, and inside the first generated latent token.
+
+| Clean stage | Upper45 dx / dy, px | Full dx / dy, px |
+| --- | ---: | ---: |
+| Native provider, including its own prefix | -0.201 / -0.292 | +0.590 / -0.139 |
+| Provider with authoritative prefix | +0.659 / +0.204 | +1.838 / +0.595 |
+| Pre-high, exact prefix and one-token DC | +0.411 / +0.105 | +0.884 / +0.059 |
+| First actual high prediction, before Flow | +0.811 / +3.280 | +2.384 / +2.615 |
+| First actual high prediction, after Flow | +0.561 / +3.114 | +2.329 / +2.518 |
+| Final clean output | +2.213 / +4.395 | +2.911 / +4.502 |
+| Supplied final decoded receipt | +2.215 / +4.386 | +2.893 / +4.504 |
+
+Final replay dy differs from the supplied receipt by `+0.008531 px` in upper45
+and `-0.002738 px` in full. This reproduces the surviving within-token jump from
+the captured final clean window with an independent native decode. It is not an
+assembly-only shock: the supplied duplicate overlap is byte exact in all 22
+sampled frames, and seam assembly replaces zero frames.
+
+The large third-frame jump is already present in the first high prediction
+before Flow's correction. The first correction leaves it present; subsequent
+refinement ends with the larger final jump. The pre-Flow capture includes the
+executing model and other patches, so this localizes the onset to the
+pre-high-to-high-prediction transition without identifying a particular model,
+conditioning, noise-transport or external-patch operation as its cause. It also
+does not reconstruct the counterfactual later sampler trajectory with Flow off.
+
+## Tone in the same decoded frames
+
+These are matched native decoded stage observations at the first retained frame:
+
+| Clean stage | Luma mean | Luma p05 | Luma p95 | Luma deviation |
+| --- | ---: | ---: | ---: | ---: |
+| Native provider | 0.359700 | 0.065626 | 0.793879 | 0.244470 |
+| Provider with authoritative prefix | 0.365869 | 0.060575 | 0.821315 | 0.256172 |
+| Pre-high DC | 0.363924 | 0.055521 | 0.823289 | 0.258219 |
+| First high, before Flow | 0.370195 | 0.060787 | 0.827796 | 0.256346 |
+| First high, after Flow | 0.369207 | 0.059802 | 0.828215 | 0.256912 |
+| Final | 0.371492 | 0.059841 | 0.831532 | 0.258274 |
+
+Replacing only the provider prefix increases decoded contrast and lowers its
+dark-tail value before high sampling. The DC bridge lowers the dark tail further
+in this pre-high counterfactual. High refinement changes that pattern again;
+there is no demonstrated single exposure/gain correction. Mean, quantiles and
+deviation respond to motion and composition as well as tone. These observations
+do not validate removing DC from a full sampled run, or calibrating exposure
+against an independently composed prior frame.
+
+## Admission and remaining limits
+
+[The offline replay tool](../../tools/decode_native_boundary_evidence.py) checks
+all eight hashes, shapes, finite values, native window phase, actual-provider
+provenance, protected pre-high/final bytes and the exact initial mask before
+loading decoder weights. It accepts only the six clean comparison stages;
+sampler input and masks are inspected but never decoded as clean video. Stage
+batching bounds full-frame canvas memory. Reports identify the VAE and source
+hashes, precision and device, and explicitly mark rendered acceptance false.
+
+The preceding seven-token decoder window is not supplied. Its temporal blend
+cannot be reconstructed, so the first pair against the preceding decoded frame
+and all pre-boundary/anchor comparisons use raw unblended prefix frames. They are
+not assembled-boundary comparisons. The subsequent retained pairs and post tone
+in the table use the native current-window spatial blend. No VAE encode/decode
+round trip, guessed padding, latent-motion surrogate or additional H3 evaluation
+is substituted for the captured operands.
+
+All measurements and supplied receipt comparisons are retained in
+[the machine-readable native replay report](CONTINUATION_01115_NATIVE_DECODE.json).
+This evidence narrows the investigation but does not validate a replacement
+production actuator. PR #93 remains a rendered-failed draft. The existing
+`same_grid_target_control` and companion stack are preserved; prefix release,
+spatial transplants, prediction/VAE warps and fixed successor guards remain
+retired. No additional generation is requested by this review.
+
+## Verification
+
+- Native full spatial replay completed for all six clean stages with the real
+  decoder checkpoint and unmodified Core spatial blending.
+- Evidence admission regressions: 13 passed, including corrupted bytes,
+  rehashed non-finite operands, changed protected bytes/masks, escaped paths,
+  altered phase/trim, missing operands and forecast/wrong-provider provenance.
+- Full local suite: 881 passed, 27 skipped; native source oracles run separately.
+- Focused decode-context, native temporal-source and replay-admission suite with
+  the reviewed Core checkout: 39 passed.
+- Ruff check/format and compile checks pass.
+- Sampling code is unchanged from `71de5dd2`; no rendered repair is claimed.
 
 ## Evidence identity
 

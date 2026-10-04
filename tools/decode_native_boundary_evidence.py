@@ -2,8 +2,8 @@
 """Decode saved H3 stage operands with Core's native seven-token VAE window.
 
 This is an offline counterfactual replay, independent of production sampling.
-The preceding decoder window is absent from this bundle: the first retained
-frame and later frames are reproduced, but the preceding temporal blend is not.
+The preceding decoder window is absent from this bundle: eight retained frames
+are replayed, but the preceding temporal blend is not.
 """
 
 from __future__ import annotations
@@ -188,6 +188,17 @@ def main() -> None:
             raise ValueError("unsupported native decoder checkpoint")
         with torch.device("meta"):
             vae = native.MiniMaxH3VideoVAE(operations=comfy.ops.manual_cast, num_layers=layers)
+        geometry = (
+            vae.clip_length,
+            vae.tokens_chunk_size,
+            vae.token_overlap,
+            vae.frame_pre_padding,
+            vae.vae_ratio_t,
+            vae.vae_ratio,
+            vae.tile_size,
+        )
+        if geometry != (17, 5, 2, 3, 4, 16, 256):
+            raise ValueError("Core's native video VAE geometry changed")
         loaded = vae.load_state_dict(selected, strict=False, assign=True)
         if loaded.unexpected_keys or any(not k.startswith(("encoder.", "quant_conv.")) for k in loaded.missing_keys):
             raise ValueError("native decoder checkpoint is incomplete or incompatible")

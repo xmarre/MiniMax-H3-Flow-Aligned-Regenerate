@@ -1,5 +1,8 @@
 # Continuation 01109: DC-only candidate fails rendered acceptance
 
+Follow-up: [01115 supplies all native tensors and reproduces the high-prediction
+shock with the native VAE](CONTINUATION_01115.md).
+
 The user reports that frame-shift, shock and tone changes remain in the completed
 01109 render and supplies two adjacent boundary snapshots. The run executes the
 current DC-only contract; it is a failed rendered qualification, not evidence
