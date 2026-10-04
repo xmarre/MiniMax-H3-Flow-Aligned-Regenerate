@@ -4098,10 +4098,8 @@ def validate_partitioned_runtime_evidence(
             "high attention consumed the low/probe startup exemption",
         )
         _require(
-            high_attention.get("generated_local_queries")
-            == "boundary_dense_then_native_sol_selection"
-            and high_attention.get("boundary_query_policy")
-            == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+            high_attention.get("generated_local_queries") == "boundary_dense_then_native_sol_selection"
+            and high_attention.get("boundary_query_policy") == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
             and high_attention.get("high_linear_diagnostic") == "normal"
             and high_attention.get("high_softmax_diagnostic") == "normal"
             and high_attention.get("high_audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
@@ -4171,9 +4169,7 @@ def validate_partitioned_runtime_evidence(
         )
 
     boundary_query_events = [
-        _event_fields(event)
-        for event in window
-        if _event_kind(event) == "partitioned_vdn_boundary_suffix_dense"
+        _event_fields(event) for event in window if _event_kind(event) == "partitioned_vdn_boundary_suffix_dense"
     ]
     if expected_boundary_query_policy is not None:
         _require(

@@ -1013,13 +1013,9 @@ def _validate_partitioned_vdn_compat(
             raise RuntimeError("requested boundary witness requires paired VDN witness API 1 before sampling")
         if int(getattr(owner, "_vdn_partitioned_boundary_query_api", 0)) != VDN_PARTITIONED_BOUNDARY_QUERY_API:
             raise PartitionedPreflightUnsupported(
-                "partitioned exact-prefix requires paired VDN boundary-query API "
-                f"v{VDN_PARTITIONED_BOUNDARY_QUERY_API}"
+                f"partitioned exact-prefix requires paired VDN boundary-query API v{VDN_PARTITIONED_BOUNDARY_QUERY_API}"
             )
-        if (
-            getattr(owner, "_vdn_partitioned_boundary_query_policy", None)
-            != VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
-        ):
+        if getattr(owner, "_vdn_partitioned_boundary_query_policy", None) != VDN_PARTITIONED_BOUNDARY_QUERY_POLICY:
             raise PartitionedPreflightUnsupported(
                 "installed VDN bridge does not advertise the required continuation "
                 f"boundary-query policy {VDN_PARTITIONED_BOUNDARY_QUERY_POLICY!r}"

@@ -96,7 +96,6 @@ def _metrics() -> dict:
     }
 
 
-
 def _boundary_query_event(stage: str, *, prefix_t: int = 2):
     return _event(
         "partitioned_vdn_boundary_suffix_dense",
@@ -199,10 +198,7 @@ def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
     missing["events"] = [
         event
         for event in missing["events"]
-        if not (
-            event["kind"] == "partitioned_vdn_boundary_suffix_dense"
-            and event["fields"].get("stage") == "probe"
-        )
+        if not (event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"].get("stage") == "probe")
     ]
     with pytest.raises(RuntimeGateError, match="every actual partitioned model call"):
         validate_partitioned_runtime_evidence(
@@ -212,11 +208,7 @@ def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
         )
 
     drifted = _high_attention_metrics()
-    receipt = next(
-        event
-        for event in drifted["events"]
-        if event["kind"] == "partitioned_vdn_boundary_suffix_dense"
-    )
+    receipt = next(event for event in drifted["events"] if event["kind"] == "partitioned_vdn_boundary_suffix_dense")
     receipt["fields"]["later_suffix_sparse"] = False
     with pytest.raises(RuntimeGateError, match="receipt drifted"):
         validate_partitioned_runtime_evidence(
@@ -226,11 +218,7 @@ def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
         )
 
     wrong_group = _high_attention_metrics()
-    receipt = next(
-        event
-        for event in wrong_group["events"]
-        if event["kind"] == "partitioned_vdn_boundary_suffix_dense"
-    )
+    receipt = next(event for event in wrong_group["events"] if event["kind"] == "partitioned_vdn_boundary_suffix_dense")
     receipt["fields"]["query_frames"] = [3, 4]
     with pytest.raises(RuntimeGateError, match="first generated local-query group"):
         validate_partitioned_runtime_evidence(
