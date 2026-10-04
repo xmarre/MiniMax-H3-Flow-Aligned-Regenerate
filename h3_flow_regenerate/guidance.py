@@ -11,6 +11,65 @@ from .contracts import TrajectoryRun, TrajectorySample
 from .geometry import resize_video
 from .sigma import interpolate_coordinate
 
+EXACT_PREFIX_GUIDANCE_GAUGE_POLICY = "exact_prefix_guidance_reference_coupled_v1"
+EXACT_PREFIX_GUIDANCE_DC_GAUGE_POLICY = "exact_prefix_guidance_reference_dc_v1"
+
+
+class ExactPrefixGuidanceGauge:
+    """Carry authoritative prefix data while comparing references in its gauge.
+
+    Coupled handoffs use their full measured residual and temporal support.
+    DC-only handoffs compare only channel means over their first suffix token.
+    Source trajectory tensors remain caller-owned and untouched.
+    """
+
+    def __init__(self, exact_prefix: torch.Tensor, weights: tuple[float, ...], *, spatial_mean_only: bool = False):
+        if exact_prefix.ndim != 5 or not exact_prefix.is_floating_point() or exact_prefix.shape[2] < 1:
+            raise ValueError("guidance reference gauge requires a floating video prefix")
+        if (
+            not weights
+            or weights[0] != 1.0
+            or any(not math.isfinite(w) or not 0 < w <= 1 for w in weights)
+            or any(a < b for a, b in pairwise(weights))
+        ):
+            raise ValueError("guidance reference gauge requires the coupled handoff support")
+        if not isinstance(spatial_mean_only, bool) or (spatial_mean_only and weights != (1.0,)):
+            raise ValueError("DC guidance reference gauge requires first-suffix-only support")
+        self.prefix_t = int(exact_prefix.shape[2])
+        self.weights = tuple(weights)
+        self.spatial_mean_only = spatial_mean_only
+        self.policy = EXACT_PREFIX_GUIDANCE_DC_GAUGE_POLICY if spatial_mean_only else EXACT_PREFIX_GUIDANCE_GAUGE_POLICY
+        last = exact_prefix[:, :, -1:].detach()
+        self.anchor_shape = tuple(last.shape)
+        self.anchor = last.float().mean(dim=(-2, -1), keepdim=True) if spatial_mean_only else last.clone()
+        self.calls = 0
+
+    def __deepcopy__(self, memo):
+        # Recursive model-options copies share this one high-lifetime owner.
+        memo[id(self)] = self
+        return self
+
+    def residual(self, reference: torch.Tensor, *, prefix_t: int) -> torch.Tensor:
+        if self.anchor is None:
+            raise RuntimeError("guidance reference gauge used outside its high lifetime")
+        if prefix_t != self.prefix_t or not 0 < prefix_t < reference.shape[2]:
+            raise RuntimeError("guidance reference gauge prefix ownership differs")
+        last = reference[:, :, prefix_t - 1 : prefix_t]
+        if tuple(last.shape) != self.anchor_shape:
+            raise RuntimeError("guidance reference gauge target geometry differs")
+        if self.spatial_mean_only:
+            last = last.float().mean(dim=(-2, -1), keepdim=True)
+        self.calls += 1
+        return self.anchor.to(last) - last
+
+    def add_to(self, operand: torch.Tensor, residual: torch.Tensor, *, scale=1.0) -> None:
+        for offset, weight in enumerate(self.weights[: max(0, operand.shape[2] - self.prefix_t)]):
+            index = self.prefix_t + offset
+            operand[:, :, index : index + 1].add_(residual * (weight * scale))
+
+    def close(self) -> None:
+        self.anchor = None
+
 
 @dataclass(frozen=True, slots=True)
 class GuidanceConfig:
@@ -65,6 +124,81 @@ class RegisteredGuidanceReference:
     temporal_search_radius: int
 
 
+class HandoffGuidanceReference:
+    """The exact source/target tensor pair executed by the learned handoff.
+
+    The trajectory run still owns endpoint identity and schedule provenance, but
+    the provider input is the authoritative source representation for the learned
+    target. The one-call probe can pass through sampler output algebra after the
+    PREDICT_NOISE capture, so requiring bit identity with the captured tensor
+    would reject a valid handoff and would also make temporal guidance compare a
+    learned target against a source tensor the provider did not actually consume.
+    """
+
+    def __init__(
+        self,
+        source_video: torch.Tensor,
+        video: torch.Tensor,
+        *,
+        run_id: str,
+        coordinate: float,
+        prefix_t: int,
+    ):
+        if (
+            source_video.ndim != 5
+            or video.ndim != 5
+            or not source_video.is_floating_point()
+            or not video.is_floating_point()
+            or source_video.device.type == "meta"
+            or video.device.type == "meta"
+            or source_video.shape[:3] != video.shape[:3]
+            or not bool(torch.isfinite(source_video).all().item())
+            or not bool(torch.isfinite(video).all().item())
+            or type(prefix_t) is not int
+            or not 0 < prefix_t < video.shape[2]
+            or not math.isfinite(coordinate)
+            or not 0 <= coordinate <= 1
+        ):
+            raise ValueError("handoff guidance requires a finite source/target video pair and endpoint")
+        self.source_video = source_video.detach().clone()
+        self.video = video.detach().clone()
+        self.run_id = str(run_id)
+        self.coordinate = float(coordinate)
+        self.prefix_t = prefix_t
+        self.calls = 0
+        self.captured_source_prefix_delta_rms = 0.0
+        self.captured_source_prefix_delta_abs_max = 0.0
+        self.captured_source_suffix_delta_rms = 0.0
+        self.captured_source_suffix_delta_abs_max = 0.0
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def resolve(
+        self,
+        high: torch.Tensor,
+        *,
+        run_id: str,
+        coordinate: float,
+        prefix_t: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.source_video is None or self.video is None:
+            raise RuntimeError("handoff guidance used outside its high lifetime")
+        if str(run_id) != self.run_id:
+            raise RuntimeError("handoff guidance trajectory identity drifted")
+        if not math.isclose(float(coordinate), self.coordinate, rel_tol=0.0, abs_tol=1e-7):
+            raise RuntimeError("handoff guidance endpoint identity drifted")
+        if prefix_t != self.prefix_t or high.shape != self.video.shape or self.source_video.shape[:3] != high.shape[:3]:
+            raise RuntimeError("handoff guidance target ownership drifted")
+        self.calls += 1
+        return self.source_video.to(high), self.video.to(high)
+
+    def close(self) -> None:
+        self.source_video = None
+        self.video = None
+
+
 @dataclass(slots=True)
 class _TemporalCorrespondence:
     coordinate: float
@@ -116,6 +250,11 @@ class GuidanceState:
     last_temporal_search_radius: int | None = None
     last_temporal_cross_prefix_pairs_disabled: int = 0
     last_registered_reference_used: bool = False
+    last_reference_gauge_used: bool = False
+    last_reference_gauge_policy: str | None = None
+    last_temporal_reference_gauge_used: bool = False
+    last_handoff_reference_used: bool = False
+    last_temporal_handoff_reference_used: bool = False
 
     def reset(self) -> None:
         self.start_coordinate = None
@@ -150,6 +289,11 @@ class GuidanceState:
         self.last_temporal_search_radius = None
         self.last_temporal_cross_prefix_pairs_disabled = 0
         self.last_registered_reference_used = False
+        self.last_reference_gauge_used = False
+        self.last_reference_gauge_policy = None
+        self.last_temporal_reference_gauge_used = False
+        self.last_handoff_reference_used = False
+        self.last_temporal_handoff_reference_used = False
 
 
 _PHASE_PRIORITY = {
@@ -873,6 +1017,8 @@ def apply_guidance(
     sigma: float | None = None,
     registered_reference: RegisteredGuidanceReference | None = None,
     protected_prefix_t: int = 0,
+    reference_gauge: ExactPrefixGuidanceGauge | None = None,
+    handoff_reference: HandoffGuidanceReference | None = None,
 ) -> torch.Tensor:
     if config.mode == "off":
         return high_x0
@@ -906,7 +1052,10 @@ def apply_guidance(
     temporal_radius = config.temporal_search_radius
     temporal_cache_key = None
     source_ref = None
+    native_target_ref = None
     if registered_reference is not None:
+        if handoff_reference is not None:
+            raise RuntimeError("registered and native handoff guidance references cannot be combined")
         if config.mode == "downsample_consistency":
             raise RuntimeError("registered frame-gauge guidance does not support downsample_consistency")
         if str(registered_reference.run_id) != str(run.run_id):
@@ -957,18 +1106,39 @@ def apply_guidance(
         temporal_radius = int(registered_reference.temporal_search_radius)
         temporal_cache_key = registered_reference.cache_key
     else:
-        source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
-        source_ref = source_ref.to(
-            device=high_x0.device,
-            dtype=high_x0.dtype,
-        )
-        ref = resize_video(
-            source_ref,
-            high_x0.shape[-2],
-            high_x0.shape[-1],
-            mode=config.transfer_mode,
-        )
+        trajectory_source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
+        if handoff_reference is not None:
+            if config.mode == "downsample_consistency":
+                raise RuntimeError("handoff guidance requires a direction reference")
+            if coordinate > handoff_reference.coordinate + 1e-7:
+                raise RuntimeError("high-stage sampler evaluated above the learned handoff endpoint")
+            source_ref, ref = handoff_reference.resolve(
+                high_x0, run_id=run.run_id, coordinate=reference_coordinate, prefix_t=prefix_t
+            )
+            native_target_ref = resize_video(
+                source_ref,
+                high_x0.shape[-2],
+                high_x0.shape[-1],
+                mode=config.transfer_mode,
+            )
+        else:
+            source_ref = trajectory_source_ref.to(
+                device=high_x0.device,
+                dtype=high_x0.dtype,
+            )
+            ref = resize_video(
+                source_ref,
+                high_x0.shape[-2],
+                high_x0.shape[-1],
+                mode=config.transfer_mode,
+            )
         temporal_reference = source_ref
+
+    reference_residual = None
+    if reference_gauge is not None:
+        if registered or config.mode == "downsample_consistency":
+            raise RuntimeError("exact-prefix guidance gauge requires an unregistered direction reference")
+        reference_residual = reference_gauge.residual(ref, prefix_t=prefix_t)
 
     if state.start_coordinate is None:
         state.start_coordinate = coordinate
@@ -982,6 +1152,8 @@ def apply_guidance(
         "direction+temporal",
     }:
         direction_delta = ref - high_x0
+        if reference_residual is not None:
+            reference_gauge.add_to(direction_delta, reference_residual)
         if registered:
             assert temporal_validity is not None
             residual = _masked_low_frequency_projection(
@@ -1036,6 +1208,8 @@ def apply_guidance(
     temporal_correction = torch.zeros_like(high_x0)
     temporal_match = None
     temporal_cache_hit = False
+    temporal_reference_gauge_used = False
+    temporal_handoff_reference_used = False
     guided = high_x0 + direction_correction
     if temporal_active:
         temporal_match, temporal_cache_hit = _temporal_correspondence(
@@ -1049,8 +1223,27 @@ def apply_guidance(
             cache_key=temporal_cache_key,
         )
         if temporal_match is not None:
+            temporal_high = guided
+            if native_target_ref is not None:
+                # The source matcher and its innovations still describe the
+                # native low-grid trajectory. Remove the learned-transfer
+                # representation difference before applying that operator.
+                # Add the resulting correction to the learned representation,
+                # without replacing or freezing the current high prediction.
+                temporal_high = guided - ref + native_target_ref
+                temporal_handoff_reference_used = True
+            if reference_residual is not None:
+                # Correspondence and reference innovations describe the native
+                # source representation. Pull the target operand back into that
+                # same representation before transporting it. The resulting
+                # correction can then be added in the reconciled representation:
+                # subtracting the gauge only after transport would miss W(delta).
+                if temporal_high is guided:
+                    temporal_high = guided.clone()
+                reference_gauge.add_to(temporal_high, reference_residual, scale=-1.0)
+                temporal_reference_gauge_used = True
             temporal_delta = _temporal_alignment_correction(
-                guided,
+                temporal_high,
                 temporal_reference,
                 temporal_match,
                 transfer_mode=config.transfer_mode,
@@ -1073,6 +1266,8 @@ def apply_guidance(
         assert high_state is not None
         assert sigma_value is not None
         reference_velocity = (high_state - ref) / sigma_value
+        if reference_residual is not None:
+            reference_gauge.add_to(reference_velocity, reference_residual, scale=-1.0 / sigma_value)
         high_velocity = (high_state - guided) / sigma_value
 
         if state.current_coordinate is not None:
@@ -1148,6 +1343,11 @@ def apply_guidance(
         min(prefix_t, max(0, high_x0.shape[2] - 1)) if temporal_active else 0
     )
     state.last_registered_reference_used = registered
+    state.last_reference_gauge_used = reference_residual is not None
+    state.last_reference_gauge_policy = reference_gauge.policy if reference_residual is not None else None
+    state.last_temporal_reference_gauge_used = temporal_reference_gauge_used
+    state.last_handoff_reference_used = handoff_reference is not None
+    state.last_temporal_handoff_reference_used = temporal_handoff_reference_used
 
     if temporal_match is None:
         state.last_temporal_confidence_mean = 0.0
