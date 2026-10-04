@@ -1611,11 +1611,30 @@ def _prepare_handoff_guidance_reference(
         raise RuntimeError("learned handoff guidance lost its exact probe endpoint")
     if source_ref.shape != provider_input.shape or not 0 < prefix_t < source_ref.shape[2]:
         raise RuntimeError("learned handoff guidance source geometry drifted")
-    # The provider receives the restored physical prefix, whereas capture occurs
-    # before native inpaint output restoration. The generated suffix must be the
-    # exact selected probe, not a different main/shadow trajectory.
-    if not torch.equal(source_ref[:, :, prefix_t:].to(provider_input), provider_input[:, :, prefix_t:]):
-        raise RuntimeError("learned handoff guidance provider input differs from selected probe")
+    if provider_output.shape[:3] != provider_input.shape[:3]:
+        raise RuntimeError("learned handoff guidance target temporal geometry drifted")
+    if (
+        provider_input.device.type == "meta"
+        or provider_output.device.type == "meta"
+        or not provider_input.is_floating_point()
+        or not provider_output.is_floating_point()
+        or not bool(torch.isfinite(provider_input).all().item())
+        or not bool(torch.isfinite(provider_output).all().item())
+    ):
+        raise RuntimeError("learned handoff guidance provider pair is not finite materialized video")
+
+    # PREDICT_NOISE capture precedes the sampler's output algebra. The exact
+    # one-call probe subsequently multiplies by (1-sigma) and CONST inverse
+    # scaling divides by the same value; that round-trip is mathematically
+    # identity but is not required to be bit-exact in floating point. The
+    # provider then consumes this returned probe after authoritative prefix
+    # restoration. Bind guidance to that actual provider input/output pair while
+    # retaining the captured run only for endpoint and trajectory provenance.
+    captured_source = source_ref.to(device=provider_input.device, dtype=provider_input.dtype)
+    captured_delta = provider_input.float() - captured_source.float()
+    prefix_delta = captured_delta[:, :, :prefix_t]
+    suffix_delta = captured_delta[:, :, prefix_t:]
+
     for sigma in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist():
         coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
         _, endpoint, _ = time_matched_reference_info(run, coordinate)
@@ -1623,9 +1642,19 @@ def _prepare_handoff_guidance_reference(
             endpoint, split_coordinate, rel_tol=0.0, abs_tol=1e-7
         ):
             raise RuntimeError("learned handoff guidance high schedule changes endpoint identity")
-    if provider_output.shape[:3] != provider_input.shape[:3]:
-        raise RuntimeError("learned handoff guidance target temporal geometry drifted")
-    return HandoffGuidanceReference(provider_output, run_id=run.run_id, coordinate=split_coordinate, prefix_t=prefix_t)
+
+    owner = HandoffGuidanceReference(
+        provider_input,
+        provider_output,
+        run_id=run.run_id,
+        coordinate=split_coordinate,
+        prefix_t=prefix_t,
+    )
+    owner.captured_source_prefix_delta_rms = float(prefix_delta.square().mean().sqrt().item())
+    owner.captured_source_prefix_delta_abs_max = float(prefix_delta.abs().max().item())
+    owner.captured_source_suffix_delta_rms = float(suffix_delta.square().mean().sqrt().item())
+    owner.captured_source_suffix_delta_abs_max = float(suffix_delta.abs().max().item())
+    return owner
 
 
 def _prepare_registered_guidance_reference(
@@ -4994,14 +5023,29 @@ def run_partitioned_progressive(
                 high_sigmas=high_sigmas,
                 video_shift=video_shift,
             )
+            source_retained_bytes = (
+                handoff_guidance_reference.source_video.numel()
+                * handoff_guidance_reference.source_video.element_size()
+            )
+            target_retained_bytes = (
+                handoff_guidance_reference.video.numel()
+                * handoff_guidance_reference.video.element_size()
+            )
             binding.metrics.event(
                 "partitioned_handoff_guidance_reference",
                 run_id=guidance_run.run_id,
                 reference_coordinate=split_coordinate,
-                source="actual_learned_provider_output",
+                source="actual_learned_provider_pair",
+                source_shape=tuple(handoff_guidance_reference.source_video.shape),
                 target_shape=tuple(provider_native_clean.shape),
-                retained_bytes=handoff_guidance_reference.video.numel()
-                * handoff_guidance_reference.video.element_size(),
+                source_retained_bytes=source_retained_bytes,
+                target_retained_bytes=target_retained_bytes,
+                retained_bytes=source_retained_bytes + target_retained_bytes,
+                captured_source_prefix_delta_rms=handoff_guidance_reference.captured_source_prefix_delta_rms,
+                captured_source_prefix_delta_abs_max=handoff_guidance_reference.captured_source_prefix_delta_abs_max,
+                captured_source_suffix_delta_rms=handoff_guidance_reference.captured_source_suffix_delta_rms,
+                captured_source_suffix_delta_abs_max=handoff_guidance_reference.captured_source_suffix_delta_abs_max,
+                native_temporal_correspondence_source="actual_provider_input",
                 native_temporal_correspondence_preserved=True,
                 extra_provider_calls=0,
                 extra_h3_nfe=0,

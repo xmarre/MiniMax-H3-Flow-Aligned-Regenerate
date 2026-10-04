@@ -125,48 +125,81 @@ class RegisteredGuidanceReference:
 
 
 class HandoffGuidanceReference:
-    """One actual learned transfer of the selected low/probe endpoint.
+    """The exact source/target tensor pair executed by the learned handoff.
 
-    This is a representation map, not spatial registration or a high prediction
-    anchor. It changes the reference used by the existing scheduled guidance.
-    Native source correspondence remains in its original representation.
+    The trajectory run still owns endpoint identity and schedule provenance, but
+    the provider input is the authoritative source representation for the learned
+    target. The one-call probe can pass through sampler output algebra after the
+    PREDICT_NOISE capture, so requiring bit identity with the captured tensor
+    would reject a valid handoff and would also make temporal guidance compare a
+    learned target against a source tensor the provider did not actually consume.
     """
 
-    def __init__(self, video: torch.Tensor, *, run_id: str, coordinate: float, prefix_t: int):
+    def __init__(
+        self,
+        source_video: torch.Tensor,
+        video: torch.Tensor,
+        *,
+        run_id: str,
+        coordinate: float,
+        prefix_t: int,
+    ):
         if (
-            video.ndim != 5
+            source_video.ndim != 5
+            or video.ndim != 5
+            or not source_video.is_floating_point()
             or not video.is_floating_point()
+            or source_video.device.type == "meta"
             or video.device.type == "meta"
+            or source_video.shape[:3] != video.shape[:3]
+            or not bool(torch.isfinite(source_video).all().item())
             or not bool(torch.isfinite(video).all().item())
             or type(prefix_t) is not int
             or not 0 < prefix_t < video.shape[2]
             or not math.isfinite(coordinate)
             or not 0 <= coordinate <= 1
         ):
-            raise ValueError("handoff guidance requires a finite target video and endpoint")
+            raise ValueError("handoff guidance requires a finite source/target video pair and endpoint")
+        self.source_video = source_video.detach().clone()
         self.video = video.detach().clone()
         self.run_id = str(run_id)
         self.coordinate = float(coordinate)
         self.prefix_t = prefix_t
         self.calls = 0
+        self.captured_source_prefix_delta_rms = 0.0
+        self.captured_source_prefix_delta_abs_max = 0.0
+        self.captured_source_suffix_delta_rms = 0.0
+        self.captured_source_suffix_delta_abs_max = 0.0
 
     def __deepcopy__(self, memo):
         memo[id(self)] = self
         return self
 
-    def resolve(self, high: torch.Tensor, *, run_id: str, coordinate: float, prefix_t: int) -> torch.Tensor:
-        if self.video is None:
+    def resolve(
+        self,
+        high: torch.Tensor,
+        *,
+        run_id: str,
+        coordinate: float,
+        prefix_t: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.source_video is None or self.video is None:
             raise RuntimeError("handoff guidance used outside its high lifetime")
         if str(run_id) != self.run_id:
             raise RuntimeError("handoff guidance trajectory identity drifted")
         if not math.isclose(float(coordinate), self.coordinate, rel_tol=0.0, abs_tol=1e-7):
             raise RuntimeError("handoff guidance endpoint identity drifted")
-        if prefix_t != self.prefix_t or high.shape != self.video.shape:
+        if (
+            prefix_t != self.prefix_t
+            or high.shape != self.video.shape
+            or self.source_video.shape[:3] != high.shape[:3]
+        ):
             raise RuntimeError("handoff guidance target ownership drifted")
         self.calls += 1
-        return self.video.to(high)
+        return self.source_video.to(high), self.video.to(high)
 
     def close(self) -> None:
+        self.source_video = None
         self.video = None
 
 
@@ -1077,25 +1110,32 @@ def apply_guidance(
         temporal_radius = int(registered_reference.temporal_search_radius)
         temporal_cache_key = registered_reference.cache_key
     else:
-        source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
-        source_ref = source_ref.to(
+        trajectory_source_ref, reference_coordinate, reference_clamped = time_matched_reference_info(run, coordinate)
+        trajectory_source_ref = trajectory_source_ref.to(
             device=high_x0.device,
             dtype=high_x0.dtype,
-        )
-        ref = resize_video(
-            source_ref,
-            high_x0.shape[-2],
-            high_x0.shape[-1],
-            mode=config.transfer_mode,
         )
         if handoff_reference is not None:
             if config.mode == "downsample_consistency":
                 raise RuntimeError("handoff guidance requires a direction reference")
             if coordinate > handoff_reference.coordinate + 1e-7:
                 raise RuntimeError("high-stage sampler evaluated above the learned handoff endpoint")
-            native_target_ref = ref
-            ref = handoff_reference.resolve(
+            source_ref, ref = handoff_reference.resolve(
                 high_x0, run_id=run.run_id, coordinate=reference_coordinate, prefix_t=prefix_t
+            )
+            native_target_ref = resize_video(
+                source_ref,
+                high_x0.shape[-2],
+                high_x0.shape[-1],
+                mode=config.transfer_mode,
+            )
+        else:
+            source_ref = trajectory_source_ref
+            ref = resize_video(
+                source_ref,
+                high_x0.shape[-2],
+                high_x0.shape[-1],
+                mode=config.transfer_mode,
             )
         temporal_reference = source_ref
 
