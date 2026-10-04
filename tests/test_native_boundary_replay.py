@@ -104,6 +104,7 @@ def test_replay_rejects_byte_corruption_before_decoder_import(bundle):
     [
         ("nonfinite", "non-finite"),
         ("prefix", "protected clean prefix"),
+        ("prefix_zero_sign", "protected clean prefix"),
         ("mask", "initial high video mask"),
         ("path", "path leaves"),
         ("window", "window geometry drifted"),
@@ -127,6 +128,13 @@ def test_replay_rejects_semantically_invalid_operands_even_with_updated_hashes(b
         value = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
         value[0] = float("nan") if mutation == "nonfinite" else 1e3
         write_operand(directory, manifest, name, value.reshape(entry["shape"]))
+    elif mutation == "prefix_zero_sign":
+        # Signed zero compares equal numerically but violates byte ownership.
+        for name in ("authoritative_prefix", "pre_high_exact_restored", "final_post_high_internal_clean"):
+            entry = manifest["tensor_bytes"][name]
+            value = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+            value[0] = -0.0 if name == "final_post_high_internal_clean" else 0.0
+            write_operand(directory, manifest, name, value.reshape(entry["shape"]))
     elif mutation == "path":
         manifest["tensor_bytes"]["provider_native_clean"]["file"] = "../outside.bin"
     elif mutation == "window":

@@ -93,7 +93,10 @@ def load_bundle(directory: Path) -> tuple[dict, dict[str, torch.Tensor]]:
     ):
         raise ValueError("native boundary window geometry drifted")
     for name in ("pre_high_exact_restored", "final_post_high_internal_clean"):
-        if not torch.equal(values[name][:, :, :2], values["authoritative_prefix"]):
+        if not torch.equal(
+            values[name][:, :, :2].contiguous().view(torch.int32),
+            values["authoritative_prefix"].view(torch.int32),
+        ):
             raise ValueError(f"protected clean prefix differs from authoritative bytes: {name}")
     expected_mask = torch.ones_like(values["initial_high_video_mask"])
     expected_mask[:, :, :2] = 0

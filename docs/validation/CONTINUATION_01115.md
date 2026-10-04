@@ -77,8 +77,8 @@ blend, and inside the first generated latent token.
 Final replay dy differs from the supplied receipt by `+0.008531 px` in upper45
 and `-0.002738 px` in full. This reproduces the surviving within-token jump from
 the captured final clean window with an independent native decode. It is not an
-assembly-only shock: the supplied duplicate overlap is byte exact in all 22
-sampled frames, and seam assembly replaces zero frames.
+assembly-only shock: sampled RGB in the supplied duplicate overlap matches
+exactly in all 22 frames, and seam assembly replaces zero frames.
 
 The large third-frame jump is already present in the first high prediction
 before Flow's correction. The first correction leaves it present; subsequent
@@ -139,12 +139,13 @@ retired. No additional generation is requested by this review.
 
 - Native full spatial replay completed for all six clean stages with the real
   decoder checkpoint and unmodified Core spatial blending.
-- Evidence admission regressions: 13 passed, including corrupted bytes,
-  rehashed non-finite operands, changed protected bytes/masks, escaped paths,
+- Evidence admission regressions: 14 passed, including corrupted bytes,
+  rehashed non-finite operands, changed protected bytes/masks (including signed
+  zero), escaped paths,
   altered phase/trim, missing operands and forecast/wrong-provider provenance.
-- Full local suite: 881 passed, 27 skipped; native source oracles run separately.
+- Full local suite: 882 passed, 27 skipped; native source oracles run separately.
 - Focused decode-context, native temporal-source and replay-admission suite with
-  the reviewed Core checkout: 39 passed.
+  the reviewed Core checkout: 40 passed.
 - Ruff check/format and compile checks pass.
 - Sampling code is unchanged from `71de5dd2`; no rendered repair is claimed.
 
