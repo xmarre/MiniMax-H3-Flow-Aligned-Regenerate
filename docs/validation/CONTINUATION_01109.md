@@ -113,5 +113,11 @@ not required to obtain the already-exported bundle.
 
 - Metrics SHA256: `af7463c500aa8a48c2795bd9dc7d1c9661ee04264daa40a1f8cbd160d8029a13`.
 - Process log SHA256: `b0fb5e26468f824346ca0f903af83df83b0c94e0d82e0e2d348350189eb9372c`.
-- This follow-up changes qualification documentation only. The green source tests
-  and CI recorded for `a928e31e` establish code contracts, not a visual fix.
+- Replay exposed an offline receipt-name drift: the partitioned scheduler emits
+  `transferred_prefix_output_discarded`, while the gate still required the older
+  `upscaler_prefix_output_discarded`. The validator now accepts either boolean
+  proof, rejects conflicting aliases, and rejects missing or non-boolean proof.
+  This repairs evidence replay, not sampling or rendered continuity.
+- The green source tests and CI recorded for `a928e31e` establish code contracts,
+  not a visual fix. This follow-up changes qualification documentation and the
+  offline validator only; production sampler arithmetic stays unchanged.

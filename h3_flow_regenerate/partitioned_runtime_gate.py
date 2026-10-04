@@ -3963,9 +3963,16 @@ def validate_partitioned_runtime_evidence(
         transfer.get("learned_transfer_performed") is True,
         "learned_3d transfer did not execute",
     )
+    # Partitioned transfer names this independently of the selected provider;
+    # historical uniform-grid receipts used the upscaler-specific name.
+    prefix_discard_receipts = [
+        transfer[key]
+        for key in ("transferred_prefix_output_discarded", "upscaler_prefix_output_discarded")
+        if key in transfer
+    ]
     _require(
-        transfer.get("upscaler_prefix_output_discarded") is True,
-        "upscaled prefix output was not discarded",
+        bool(prefix_discard_receipts) and all(value is True for value in prefix_discard_receipts),
+        "transferred prefix output was not discarded or its receipts disagree",
     )
     _require(
         transfer.get("authoritative_target_prefix_restored") is True,

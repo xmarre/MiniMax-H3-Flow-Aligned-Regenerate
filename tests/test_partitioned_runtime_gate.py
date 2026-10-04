@@ -55,7 +55,7 @@ def _metrics() -> dict:
         _event(
             "partitioned_transfer",
             learned_transfer_performed=True,
-            upscaler_prefix_output_discarded=True,
+            transferred_prefix_output_discarded=True,
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
             deprecated_mixed_grid_repairs_applied=False,
@@ -161,6 +161,44 @@ def test_partitioned_runtime_gate_accepts_complete_evidence():
     assert report.audio_guided_overlap_active is True
     assert report.audio_guided_overlap_mode == "model_timestep_only"
     assert report.audio_guided_overlap_ticks == 4
+
+
+@pytest.mark.parametrize(
+    "receipts",
+    [
+        {"transferred_prefix_output_discarded": True},
+        {"upscaler_prefix_output_discarded": True},
+        {"transferred_prefix_output_discarded": True, "upscaler_prefix_output_discarded": True},
+    ],
+)
+def test_runtime_gate_accepts_current_and_historical_prefix_discard_receipts(receipts):
+    metrics = _metrics()
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer.pop("transferred_prefix_output_discarded")
+    transfer.update(receipts)
+    assert validate_partitioned_runtime_evidence(metrics, _log()).high_actual == 1
+
+
+@pytest.mark.parametrize(
+    "receipts",
+    [
+        {},
+        {"transferred_prefix_output_discarded": False},
+        {"upscaler_prefix_output_discarded": False},
+        {"transferred_prefix_output_discarded": 1},
+        {"upscaler_prefix_output_discarded": "true"},
+        {"transferred_prefix_output_discarded": True, "upscaler_prefix_output_discarded": False},
+        {"transferred_prefix_output_discarded": False, "upscaler_prefix_output_discarded": True},
+        {"transferred_prefix_output_discarded": None, "upscaler_prefix_output_discarded": True},
+    ],
+)
+def test_runtime_gate_rejects_missing_false_or_conflicting_prefix_discard_receipts(receipts):
+    metrics = _metrics()
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer.pop("transferred_prefix_output_discarded")
+    transfer.update(receipts)
+    with pytest.raises(RuntimeGateError, match="transferred prefix output was not discarded or its receipts disagree"):
+        validate_partitioned_runtime_evidence(metrics, _log())
 
 
 def _metrics_with_high_video_guard(**setup_overrides):
