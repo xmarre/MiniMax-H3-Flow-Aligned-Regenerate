@@ -79,9 +79,12 @@ def native():
     )
 
 
-def _sample(native, *, tokens, close, dtype=torch.float32):
+def _sample(native, *, tokens, close, dtype=torch.float32, release_prefix=True):
     latent, shapes, exact = _case()
-    runtime, _ = apply_video_guided_overlap_mask(exact, shapes, tokens=tokens)
+    if release_prefix:
+        runtime, _ = apply_video_guided_overlap_mask(exact, shapes, tokens=tokens)
+    else:
+        runtime = exact
     original = runtime.clone()
     noise = torch.zeros_like(latent)
     sigmas = torch.tensor([0.88, 0.84, 0.8, 0.73, 0.63, 0.44, 0.0], dtype=dtype)
@@ -206,6 +209,36 @@ def test_native_sampling_closes_context_before_final_prefix_restoration(native, 
     assert receipt["failed"] is False
     assert receipt["final_prefix_mask_max"] == 0
     assert receipt["exact_model_context_before_completion"] is True
+
+
+def test_native_exact_high_context_avoids_discarded_prefix_release_bias(native):
+    released, latent, shapes, exact, _, _ = _sample(
+        native,
+        tokens=6,
+        close=False,
+        release_prefix=True,
+    )
+    exact_context, _, _, _, publications, _ = _sample(
+        native,
+        tokens=6,
+        close=False,
+        release_prefix=False,
+    )
+    released, _ = _canonicalize_exact_masked_output(released, latent, exact)
+    exact_context, _ = _canonicalize_exact_masked_output(exact_context, latent, exact)
+    released_video, _ = unpack_streams(released, shapes)
+    exact_video, _ = unpack_streams(exact_context, shapes)
+    source_video, _ = unpack_streams(latent, shapes)
+
+    # Final exact-prefix restoration cannot undo suffix evolution caused by a
+    # temporarily repainted carried prefix. Keeping that context exact from the
+    # first model evaluation removes the synthetic temporal-denoiser bias.
+    assert (released_video[:, :, 12] - source_video[:, :, 12]).abs().max().item() > 0.01
+    torch.testing.assert_close(exact_video[:, :, 12], source_video[:, :, 12], atol=1e-6, rtol=0)
+    for publication in publications:
+        video, _ = unpack_streams(publication, shapes)
+        exact_video_mask, _ = unpack_streams(exact, shapes)
+        assert torch.equal(video, exact_video_mask)
 
 
 @pytest.mark.parametrize("sigmas", [[0.8, 0.0], [0.8, 0.4, 0.0]])
