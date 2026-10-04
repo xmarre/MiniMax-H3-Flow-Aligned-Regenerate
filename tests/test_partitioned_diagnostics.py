@@ -191,6 +191,8 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["video_guided_overlap_tokens"][1]["default"] == 0
     assert diagnostic["video_guided_overlap_tokens"][1]["min"] == 0
     assert "max" not in diagnostic["video_guided_overlap_tokens"][1]
+    assert "retired_prefix_release=true" in diagnostic["video_guided_overlap_tokens"][1]["tooltip"]
+    assert "do not feather" in diagnostic["video_guided_overlap_tokens"][1]["tooltip"]
     assert diagnostic["low_probe_execution_source"][0] == list(PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_OPTIONS)
     assert diagnostic["low_probe_execution_source"][1]["default"] == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"

@@ -455,9 +455,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
-        # Append-only after every historical control. This releases only a short
-        # tail of the caller-owned video prefix during sampler lifetime; the
-        # original exact mask still restores the visible prefix on return.
+        # Append-only historical control. Keep the uncapped integer in the node
+        # so old workflows deserialize unchanged and matched hardware reruns can
+        # preserve the requested width. Run 01093 retired the prefix-release
+        # mutation; positive values are now provenance only.
         spec["required"]["video_guided_overlap_tokens"] = (
             "INT",
             {
@@ -465,13 +466,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "min": 0,
                 "step": 1,
                 "tooltip": (
-                    "Sampling-side video overlap width in H3 temporal latent tokens. 0 is exact/off. "
-                    "Any positive integer feathers the last carried video tokens early in target-high sampling. "
-                    "The release closes before the final two scheduled evaluations so sampling finishes with "
-                    "exact carried context. Schedules with at most two evaluations keep exact context throughout. "
-                    "Caller-visible prefix latents remain byte-exact. The applied width uses at most the available "
-                    "carried video prefix; requested and applied widths are reported separately. "
-                    "Diagnostic until rendered-qualified."
+                    "Legacy video-overlap width in H3 temporal latent tokens. The value remains uncapped for "
+                    "workflow compatibility and matched-run provenance. After hardware run 01093, positive values "
+                    "do not feather or regenerate carried video tokens: target-high keeps the authoritative exact "
+                    "video prefix for every evaluation and reports requested_tokens with applied_tokens=0 and "
+                    "retired_prefix_release=true. Set 0 for ordinary use. Audio overlap is independent."
                 ),
             },
         )

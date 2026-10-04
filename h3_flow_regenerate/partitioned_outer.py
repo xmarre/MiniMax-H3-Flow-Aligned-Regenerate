@@ -143,10 +143,11 @@ def partitioned_outer_wrapper(
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
         PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
     )
-    # Video overlap is a target-high sampler policy, not a structural mask.
-    # Keep the caller/runtime mask untouched here so partitioned preflight and
-    # low/probe retain exact-prefix ownership. The scheduler applies the video
-    # ramp only when it enters the high sampler lifetime.
+    # The historical video-overlap selector remains model-local for workflow
+    # compatibility and execution provenance, but run 01093 retired its
+    # target-high prefix-release mutation. Keep the caller/runtime video mask
+    # exact here; the scheduler reports the requested width and verifies exact
+    # target-high context without repainting carried video tokens.
     runtime_denoise_mask = denoise_mask
 
     guided_report = None
@@ -182,10 +183,9 @@ def partitioned_outer_wrapper(
         if sampler_mask_mode:
             runtime_denoise_mask = guided_mask
         elif guided_mode == PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_MODEL_TIMESTEP or exact_audio_mode:
-            # Audio remains exact/model-timestep-only, but any independently
-            # requested video sampler overlap must survive this branch.
-            # With video overlap disabled runtime_denoise_mask is still the
-            # caller-owned exact mask, so the historical path is unchanged.
+            # Audio remains exact/model-timestep-only. The independent legacy
+            # video-overlap selector is only provenance after 01093, so it does
+            # not alter this runtime mask.
             pass
         else:
             raise RuntimeError(f"unsupported partitioned audio guided-overlap mode {guided_mode!r}")

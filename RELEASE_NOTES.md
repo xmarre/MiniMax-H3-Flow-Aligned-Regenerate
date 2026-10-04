@@ -15,7 +15,32 @@ No model/provider/VAE evaluations or sampler lifetimes are added. Initial chunks
 inactive guidance and handoffs without the coupled bridge retain their existing
 behavior. Rendered boundary quality and GPU overhead still need qualification.
 
-# Unreleased: close temporary video overlap before completion
+# Unreleased: retire discarded video-prefix context after 01093
+
+Run 01093 executed the corrected learned provider-pair guidance path but still
+reproduced the rendered frame-shift/shock/tone defect while six carried video
+tokens were temporarily released during target-high sampling. The first
+target-high prediction recreated substantial boundary displacement before Flow
+guidance materially changed it. Larger overlap had also been observed to worsen
+the rendered boundary.
+
+Partitioned exact-prefix video therefore no longer repaints carried-prefix rows
+for a positive `video_guided_overlap_tokens` request. The control remains an
+uncapped non-negative integer so historical workflows and matched runs deserialize
+unchanged, but it is provenance-only: target-high keeps the authoritative exact
+video mask/context for every evaluation, reports `applied_tokens=0` and
+`retired_prefix_release=true`, and installs no temporary Core mask/APPLY_MODEL
+owner. A foreign `denoise_mask_function` fails closed rather than allowing an
+uncertified exact-context claim. Audio overlap remains independent. No H3,
+provider, VAE, sampler-lifetime or history-boundary work is added.
+
+The native Core oracle demonstrates the failure mode directly: final exact-prefix
+restoration cannot undo suffix evolution caused while the model saw temporarily
+repainted carried context, whereas exact high context removes that synthetic
+temporal-denoiser bias. Rendered acceptance still requires a matched hardware
+rerun.
+
+# Historical candidate: close temporary video overlap before completion (retired after 01093)
 
 Target-high video overlap now returns to exact carried-context conditioning
 before its final two scheduled evaluations. Previously it held the repaint mask
@@ -39,11 +64,12 @@ uses the same validation. Applied support uses the available carried prefix,
 including the whole prefix when requested; an oversized request no longer
 silently disables overlap. Receipts distinguish requested and applied widths.
 
-Defaults stay video `0` and audio `4`. Video overlap remains target-high-only;
-low/probe ownership, cross-stream isolation, Core mask quantization and final
-exact-prefix restoration are preserved. Exact-audio mode retains zero effective
-audio overlap. Wider overlap requires rendered qualification and can change
-boundary motion or tone. No model or decoder invocation is added.
+Defaults stay video `0` and audio `4`. The video width remains accepted and
+reported at target-high, but after 01093 it no longer releases carried video
+prefix rows; positive values are provenance-only and keep exact video context.
+Low/probe ownership, cross-stream isolation and final exact-prefix restoration
+remain preserved. Exact-audio mode retains zero effective audio overlap. No
+model or decoder invocation is added.
 
 # Unreleased: exact-audio mask correction (qualification pending)
 
