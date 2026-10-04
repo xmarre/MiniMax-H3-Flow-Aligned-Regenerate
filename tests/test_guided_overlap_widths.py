@@ -35,35 +35,36 @@ def _case(dtype=torch.float32):
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("requested", [8, 12, 10**30])
-def test_wider_video_overlap_is_high_only_and_restores_the_entire_original_prefix(dtype, requested):
+def test_wider_video_overlap_widths_remain_uncapped_but_exact_prefix_context_is_not_released(dtype, requested):
     latent, shapes, exact_mask = _case(dtype)
     original = exact_mask.clone()
     metrics = H3FlowMetrics()
     options = {PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: requested}
 
-    high_mask = _partitioned_high_video_overlap_mask(exact_mask, exact_mask, shapes, options, metrics)
+    high_mask = _partitioned_high_video_overlap_mask(
+        exact_mask,
+        exact_mask,
+        shapes,
+        options,
+        metrics,
+        prefix_t=12,
+    )
 
     video, audio = unpack_streams(high_mask, shapes)
     old_video, old_audio = unpack_streams(original, shapes)
-    used = min(requested, 12)
-    start = 12 - used
-    numerators = (
-        [29, 57, 86, 114, 143, 171, 200, 228] if used == 8 else [20, 40, 60, 79, 99, 119, 138, 158, 178, 197, 217, 237]
-    )
-    expected = torch.tensor(numerators, dtype=dtype) / 256
-    torch.testing.assert_close(video[0, 0, start:12, 0, 0], expected)
-    torch.testing.assert_close(video[-1, -1, start:12, -1, -1], expected)
-    assert torch.equal(video[:, :, :start], old_video[:, :, :start])
-    assert torch.equal(video[:, :, 12:], old_video[:, :, 12:])
+    assert high_mask is exact_mask
+    assert torch.equal(video, old_video)
     assert torch.equal(audio, old_audio)
     assert torch.equal(exact_mask, original)
     fields = metrics.events[-1].fields
     assert fields["requested_tokens"] == requested
-    assert fields["applied_tokens"] == used
-    assert fields["hard_prefix_tokens"] == start
+    assert fields["applied_tokens"] == 0
+    assert fields["hard_prefix_tokens"] == 12
     assert fields["width_limited_by_prefix"] is (requested > 12)
     assert fields["stage"] == "high"
-    assert fields["low_probe_sampler_mask_unchanged"] is True
+    assert fields["sampler_mask_modified"] is False
+    assert fields["high_model_video_context_exact"] is True
+    assert fields["retired_prefix_release"] is True
     assert fields["final_exact_prefix_restore"] is True
 
     sampled = latent + high_mask
