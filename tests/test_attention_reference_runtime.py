@@ -985,6 +985,29 @@ def test_continuum_refine_state_requires_exact_capture_provenance(monkeypatch):
         )
 
 
+@pytest.mark.parametrize("turbo", [0.5, 1.0])
+def test_trajectory_receipt_captures_applied_vdn_strength_without_mutating_options(turbo):
+    shapes = [(1, 24, 2, 4, 4), (1, 32, 2, 5)]
+    config = {"api": 1, "checkpoint": "stage", "lora_mode": "bypass", "strengths": {"default": 1.0, "turbo": turbo}}
+    binding = FlowBinding(trajectory=H3FlowTrajectory(), capture_enabled=True)
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {"vdn_h3_adapter_config_v1": config}},
+        original_conds={},
+    )
+
+    def sample_euler():
+        pass
+
+    _begin_capture(
+        binding, guider, SimpleNamespace(sampler_function=sample_euler), torch.tensor([1.0, 0.5, 0.0]), shapes
+    )
+    event = next(event for event in binding.metrics.events if event.kind == "trajectory_begin")
+    assert event.fields["sampler"] == "sample_euler"
+    assert event.fields["vdn_adapter_config"] == config
+    assert config["strengths"]["turbo"] == turbo
+    _finish_capture(binding, error=RuntimeError("test receipt only"))
+
+
 def test_active_flow_state_rejects_parallel_multigpu_model_calls():
     video = torch.zeros(1, 24, 1, 4, 4)
     audio = torch.zeros(1, 32, 2, 5)
