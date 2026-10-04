@@ -183,6 +183,7 @@ def test_gate_accounts_for_high_prefix_attention_without_reclassifying_old_runs(
     assert old.high_prefix_attention_verified is False
     assert old.high_prefix_transformer_events == 0
 
+
 def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
     metrics = _high_attention_metrics()
     validate_partitioned_runtime_evidence(
