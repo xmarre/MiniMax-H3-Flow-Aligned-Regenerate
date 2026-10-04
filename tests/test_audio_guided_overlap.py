@@ -140,16 +140,19 @@ def test_audio_guided_overlap_all_protected_audio_is_expected_noop():
     assert report["audio_prefix_ticks"] == 11
 
 
-def test_audio_guided_overlap_short_exact_prefix_preserves_native_path():
+def test_audio_guided_overlap_can_release_the_whole_exact_prefix():
     _packed, shapes, mask = _packed_case(audio_prefix=4)
     original = mask.clone()
 
     runtime_mask, report = apply_audio_guided_overlap_mask(mask, shapes, ticks=4)
 
-    assert runtime_mask is mask
+    assert runtime_mask is not mask
     assert torch.equal(mask, original)
-    assert report["applied"] is False
-    assert report["reason"] == "exact_audio_prefix_too_short"
+    audio_mask = unpack_streams(runtime_mask, shapes)[1]
+    torch.testing.assert_close(audio_mask[0, 0, 0, :4], _core_grid_ramp(audio_mask.dtype))
+    assert report["applied"] is True
+    assert report["applied_ticks"] == 4
+    assert report["hard_prefix_ticks"] == 0
     assert report["audio_prefix_ticks"] == 4
 
 
@@ -226,12 +229,12 @@ def test_fallback_sampler_sees_guided_audio_but_return_restores_original_exact_p
 def test_explicit_audio_guided_overlap_validation_rejects_bool_and_out_of_range_values():
     assert validate_audio_guided_overlap_ticks(0) == 0
     assert validate_audio_guided_overlap_ticks(16) == 16
+    assert validate_audio_guided_overlap_ticks(32) == 32
+    assert validate_audio_guided_overlap_ticks(10**30) == 10**30
     with pytest.raises(ValueError):
         validate_audio_guided_overlap_ticks(True)
     with pytest.raises(ValueError):
         validate_audio_guided_overlap_ticks(-1)
-    with pytest.raises(ValueError):
-        validate_audio_guided_overlap_ticks(17)
 
 
 def test_audio_latent_boundary_measurement_reports_fixed_physical_windows():

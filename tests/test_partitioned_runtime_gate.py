@@ -17,8 +17,10 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     PARTITIONED_SOL_ABI,
     RuntimeGateError,
     compare_residual_measurement_pair,
+    validate_coherent_exact_audio_evidence,
     validate_partitioned_runtime_evidence,
 )
+from h3_flow_regenerate.partitioned_scheduler import PARTITIONED_EXACT_OVERLAP_POLICY
 from h3_flow_regenerate.residual_geometry import measure_residual_geometry
 
 
@@ -561,24 +563,24 @@ def test_partitioned_runtime_gate_uses_latest_audio_overlap_receipt_and_exact_ex
     with pytest.raises(RuntimeGateError, match="latest partitioned audio guided overlap"):
         validate_partitioned_runtime_evidence(_metrics(), log_text)
 
-    exact_log = _log().replace(
+    selected_log = _log().replace(
         "mode=model_timestep_only",
-        "mode=sampler_mask_exact_timestep",
+        "mode=sampler_mask",
     )
     report = validate_partitioned_runtime_evidence(
         _metrics(),
-        exact_log,
-        expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        selected_log,
+        expected_audio_guided_overlap_mode="sampler_mask",
         expected_audio_guided_overlap_ticks=4,
     )
-    assert report.audio_guided_overlap_mode == "sampler_mask_exact_timestep"
+    assert report.audio_guided_overlap_mode == "sampler_mask"
     assert report.audio_guided_overlap_ticks == 4
 
     with pytest.raises(RuntimeGateError, match="mode differs from expectation"):
         validate_partitioned_runtime_evidence(
             _metrics(),
             _log(),
-            expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+            expected_audio_guided_overlap_mode="sampler_mask",
         )
     with pytest.raises(RuntimeGateError, match="width differs from expectation"):
         validate_partitioned_runtime_evidence(
@@ -742,6 +744,101 @@ def test_partitioned_runtime_gate_accepts_source_carrier_candidate_receipts():
     assert report.audio_position_candidate_verified is True
     assert report.audio_position_candidate_block0_calls == 2
     assert report.audio_position_model_timestep_override_calls == 2
+
+
+def _exact_audio_metrics():
+    metrics = _candidate_metrics()
+    verified = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_audio_position_domain_verified")
+    verified["model_timestep_override_calls"] = 0
+    metrics["events"].append(
+        _event(
+            "partitioned_exact_audio_mask_verified",
+            policy="coherent_exact_audio_mask_v1",
+            mode="exact_mask",
+            requested_overlap_ticks=16,
+            verified_model_entries=3,
+            effective_overlap_ticks=0,
+            sampler_input_mask_exact=True,
+            model_timestep_mask_exact=True,
+            model_velocity_mask_exact=True,
+            final_prefix_exact=True,
+            fail_closed=True,
+            timestep_override_applied=False,
+            regenerated_prefix_restored=False,
+            extra_h3_nfe=0,
+            extra_sampler_lifetimes=0,
+            extra_history_boundaries=0,
+            extra_provider_calls=0,
+            extra_vae_calls=0,
+        )
+    )
+    return metrics
+
+
+def test_exact_audio_evidence_accepts_verified_native_masks_without_label_overrides():
+    metrics = _exact_audio_metrics()
+    receipt = validate_coherent_exact_audio_evidence(metrics)
+    assert receipt["verified_model_entries"] == 3
+    log = _log().replace("mode=model_timestep_only ticks=4 applied=True", "mode=exact_mask ticks=16 applied=False")
+    report = validate_partitioned_runtime_evidence(
+        metrics,
+        log,
+        require_audio_overlap=False,
+        expected_audio_guided_overlap_mode="exact_mask",
+        expected_audio_guided_overlap_ticks=16,
+        expected_audio_position_domain=AUDIO_POSITION_DOMAIN_SOURCE,
+    )
+    assert report.audio_position_candidate_verified is True
+    assert report.audio_position_model_timestep_override_calls == 0
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("verified_model_entries", 0),
+        ("effective_overlap_ticks", 4),
+        ("model_velocity_mask_exact", False),
+        ("sampler_input_mask_exact", False),
+        ("model_timestep_mask_exact", False),
+        ("timestep_override_applied", True),
+        ("regenerated_prefix_restored", True),
+        ("extra_h3_nfe", 1),
+        ("extra_vae_calls", 1),
+        ("extra_provider_calls", 1),
+    ],
+)
+def test_exact_audio_evidence_rejects_incoherence_and_added_work(name, value):
+    metrics = _exact_audio_metrics()
+    metrics["events"][-1]["fields"][name] = value
+    with pytest.raises(RuntimeGateError):
+        validate_coherent_exact_audio_evidence(metrics)
+
+
+def test_exact_audio_evidence_cannot_reuse_an_earlier_continuation_receipt():
+    metrics = _exact_audio_metrics()
+    metrics["events"].append(_event("partitioned_stage_plan"))
+    with pytest.raises(RuntimeGateError, match="one coherent"):
+        validate_coherent_exact_audio_evidence(metrics)
+
+
+def test_exact_audio_expectation_rejects_legacy_ramp_without_coherent_receipt():
+    log = _log().replace("mode=model_timestep_only", "mode=sampler_mask_exact_timestep")
+    with pytest.raises(RuntimeGateError, match="one coherent"):
+        validate_partitioned_runtime_evidence(
+            _candidate_metrics(),
+            log,
+            expected_audio_guided_overlap_mode="sampler_mask_exact_timestep",
+        )
+
+
+def test_exact_audio_expectation_rejects_applied_ramp_even_with_receipt():
+    log = _log().replace("mode=model_timestep_only", "mode=exact_mask")
+    with pytest.raises(RuntimeGateError, match="must not apply"):
+        validate_partitioned_runtime_evidence(
+            _exact_audio_metrics(),
+            log,
+            expected_audio_guided_overlap_mode="exact_mask",
+        )
 
 
 def test_partitioned_runtime_gate_keeps_legacy_gate_backward_compatible():
@@ -1743,6 +1840,146 @@ def test_runtime_gate_accepts_exact_overlap_after_hardware_invalidated_rigid_sha
 
     assert report.frame_gauge_verified is True
     assert report.frame_gauge_result == "shadow_only"
+
+
+def _install_current_coupled_overlap_receipt(arm):
+    if arm == "inactive":
+        metrics = _install_frame_gauge_transfer(_metrics(), mode="off", result="off")
+        metrics["events"].insert(-2, _frame_gauge_event())
+    elif arm in {"veto", "guidance"}:
+        metrics = _install_exact_overlap_fallback_receipt(_metrics())
+    else:
+        metrics = _install_shadow_exact_overlap_fallback_receipt(_metrics())
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    frame = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge")
+    requested = arm != "inactive"
+    applied = arm not in {"inactive", "noop"}
+    weights = [1.0, 0.75, 0.5, 0.25] if requested else [1.0]
+    transfer.update(
+        splice_clean_source="actual_clean_postprocess",
+        suffix_dc_bridge_policy="successor_safe_linear_v2" if requested else "one_token_spatial_mean_v1",
+        suffix_dc_bridge_corrected_tokens=len(weights),
+        suffix_dc_bridge_first_weight=weights[0],
+        suffix_dc_bridge_last_weight=weights[-1],
+        suffix_dc_bridge_delta_rms=0.0 if arm == "noop" else 0.23,
+    )
+    overlap = transfer.setdefault("partitioned_exact_overlap_bridge", {})
+    overlap.update(
+        policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+        requested=requested,
+        applied=applied,
+        state_mapping="conditional_renoise_affine" if applied else "disabled_or_noop",
+        authoritative_prefix_modified=False,
+        later_suffix_extrapolated=applied,
+        suffix_support_policy="bounded_linear_return_v2" if applied else "first_suffix_only_v1",
+        suffix_support_tokens=4 if applied else 0,
+        suffix_outside_support_modified=False,
+        suffix_representation_bridge_enabled=applied,
+        suffix_representation_bridge_accepted=applied,
+        suffix_representation_bridge_corrected_tokens=4 if applied else 0,
+        suffix_representation_bridge_structural_rms=0.4 if applied else 0.0,
+        suffix_representation_bridge_reason="exact_overlap_structural_residual_successor_distributed"
+        if applied
+        else "structural_overlap_already_matched",
+        suffix_representation_bridge_centered_error_before=0.4 if applied else 0.0,
+        suffix_representation_bridge_successor_safe=True,
+        suffix_representation_bridge_temporal_weights=weights,
+        suffix_representation_bridge_max_weight_step=0.25 if requested else 1.0,
+        dc_support_policy="bounded_linear_return_v2" if requested else "first_suffix_only_v1",
+        dc_support_tokens=len(weights),
+        dc_temporal_weights=weights.copy(),
+    )
+    frame.update(
+        exact_overlap_fallback_policy=PARTITIONED_EXACT_OVERLAP_POLICY,
+        exact_overlap_fallback_requested=requested,
+        exact_overlap_fallback_applied=applied,
+    )
+    if arm == "guidance":
+        reason = "unsupported_sampler_contract"
+        trigger = f"guidance_rejected_after_video_boundary_acceptance:{reason}"
+        frame.update(
+            reason=reason,
+            boundary_motion=_accepted_v2_boundary_motion(),
+            guidance_registration={"status": "rejected", "reason": reason},
+            exact_overlap_fallback_trigger=trigger,
+        )
+        transfer["frame_gauge_reason"] = reason
+        overlap["trigger"] = trigger
+    if arm == "dc_only":
+        overlap.update(
+            suffix_representation_bridge_enabled=False,
+            suffix_representation_bridge_accepted=False,
+            suffix_representation_bridge_corrected_tokens=0,
+            suffix_representation_bridge_structural_rms=0.0,
+            suffix_representation_bridge_reason="structural_overlap_already_matched",
+            suffix_representation_bridge_centered_error_before=0.0,
+        )
+    return metrics
+
+
+@pytest.mark.parametrize("arm", ["shadow", "veto", "guidance", "inactive", "dc_only", "noop"])
+def test_runtime_gate_accepts_current_coupled_overlap_receipts(arm):
+    expected_mode = "off" if arm == "inactive" else "on-rejected" if arm in {"veto", "guidance"} else "on-shadow_only"
+    report = validate_partitioned_runtime_evidence(
+        _install_current_coupled_overlap_receipt(arm), _log(), expected_frame_gauge_mode=expected_mode
+    )
+    assert report.frame_gauge_verified is True
+
+
+@pytest.mark.parametrize(
+    ("location", "field", "value", "error"),
+    [
+        ("overlap", "dc_temporal_weights", [1.0], "DC weights drifted"),
+        ("overlap", "dc_support_tokens", 1, "DC support drifted"),
+        ("transfer", "suffix_dc_bridge_corrected_tokens", 1, "DC support does not match"),
+        ("transfer", "suffix_dc_bridge_policy", "one_token_spatial_mean_v1", "DC policy does not match"),
+        ("transfer", "suffix_dc_bridge_first_weight", 0.75, "DC endpoint weights drifted"),
+        ("transfer", "suffix_dc_bridge_last_weight", 1.0, "DC endpoint weights drifted"),
+        ("overlap", "suffix_representation_bridge_temporal_weights", [1.0, 0.75, 0.6, 0.25], "weights drifted"),
+        (
+            "frame",
+            "exact_overlap_fallback_policy",
+            "partitioned_exact_overlap_structural_plus_dc_v1",
+            "receipts differ",
+        ),
+        ("overlap", "policy", "partitioned_exact_overlap_structural_plus_dc_v1", "receipts differ"),
+    ],
+)
+def test_runtime_gate_rejects_uncoupled_current_overlap_receipts(location, field, value, error):
+    metrics = _install_current_coupled_overlap_receipt("guidance")
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    targets = {
+        "transfer": transfer,
+        "overlap": transfer["partitioned_exact_overlap_bridge"],
+        "frame": next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge"),
+    }
+    targets[location][field] = value
+    with pytest.raises(RuntimeGateError, match=error):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+def test_runtime_gate_rejects_current_transaction_without_transfer_overlap():
+    metrics = _install_current_coupled_overlap_receipt("guidance")
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    del transfer["partitioned_exact_overlap_bridge"]
+    with pytest.raises(RuntimeGateError, match="coupled exact-overlap transaction and transfer receipts differ"):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+def test_runtime_gate_rejects_current_noop_overlap_with_nonzero_dc():
+    metrics = _install_current_coupled_overlap_receipt("noop")
+    transfer = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_transfer")
+    transfer["suffix_dc_bridge_delta_rms"] = 0.23
+    with pytest.raises(RuntimeGateError, match="inactive coupled exact-overlap receipt reports a nonzero correction"):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-shadow_only")
+
+
+def test_runtime_gate_rejects_current_guidance_overlap_with_failed_video_boundary():
+    metrics = _install_current_coupled_overlap_receipt("guidance")
+    frame = next(event["fields"] for event in metrics["events"] if event["kind"] == "partitioned_frame_gauge")
+    frame["boundary_motion"]["status"] = "rejected"
+    with pytest.raises(RuntimeGateError, match="outside an eligible frame-gauge arm"):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
 
 
 def test_runtime_gate_rejects_successor_safe_shadow_overlap_with_weight_drift():
