@@ -128,10 +128,7 @@ from .partitioned_stage import (
     tensor_sha256,
 )
 from .partitioned_transformer import VDN_PARTITIONED_SEQUENCE_API
-from .representation_bridge import (
-    apply_suffix_representation_bridge,
-    disabled_suffix_representation_bridge_metrics,
-)
+from .representation_bridge import disabled_suffix_representation_bridge_metrics
 from .residual_evidence import BoundaryWindowEvidence, export_residual_geometry_evidence
 from .residual_geometry import (
     RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -5151,15 +5148,12 @@ def run_partitioned_progressive(
                 prediction_gauge_bridge_weights=(
                     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS if high_prediction_gauge_bridge_enabled else None
                 ),
-                guidance_reference_gauge_weights=(
-                    PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
-                    if exact_overlap_applied
-                    and binding.registered_guidance_reference is None
-                    and binding.guidance is not None
-                    and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
-                    else None
-                ),
-                guidance_reference_dc_metrics=(dc_metrics if not exact_overlap_applied else None),
+                # 01097 retired the structural exact-prefix gauge together with
+                # the structural successor transplant.  Direction/temporal/
+                # acceleration comparisons may only rebase the same one-token
+                # channel-mean component that production state actually owns.
+                guidance_reference_gauge_weights=None,
+                guidance_reference_dc_metrics=dc_metrics,
                 window_evidence=boundary_window_evidence,
                 handoff_guidance_reference=handoff_guidance_reference,
             ),

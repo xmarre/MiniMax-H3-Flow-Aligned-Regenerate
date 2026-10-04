@@ -179,8 +179,10 @@ zero-spatial-mean exact-vs-learned residual into generated content. Matching a
 raw latent frame difference after an additive spatial transform is not an
 equivariance contract for H3 or the VAE. Production therefore no longer moves
 spatial structure from the authoritative prefix into any generated suffix token
-and no longer releases such a gauge over later suffix tokens. Only the older
-first-token per-channel spatial mean correction remains. The historical
+and no longer releases such a gauge over later suffix tokens. High-stage
+direction/temporal/acceleration reference rebasing follows the same ownership:
+it is channel-mean-only over that first suffix token, never the retired full
+spatial residual. Only the older first-token per-channel spatial mean correction remains. The historical
 representation-bridge primitive stays in the package for source regression and
 diagnostic evidence, not for production mutation.
 

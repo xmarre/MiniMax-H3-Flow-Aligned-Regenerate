@@ -35,7 +35,10 @@ transplant rather than add another rigid/prediction/VAE actuator. The v5 path
 restores the older hardware-qualified one-token DC correction only:
 per-channel spatial mean is applied to the first generated token, no spatial
 structure is copied from the exact prefix, and every later suffix token remains
-unchanged. Rigid registration, high-prediction gauge repair, VAE-window repair
+unchanged. The high guidance reference gauge is likewise forced to
+channel-mean-only first-token support; otherwise guidance would silently
+reintroduce the retired structural residual even after the state mutation was
+removed. Rigid registration, high-prediction gauge repair, VAE-window repair
 and video-prefix release remain disabled.
 
 This document records localization and the next candidate. It does not claim

@@ -275,6 +275,39 @@ def test_exact_overlap_bridge_rejects_retired_multi_token_transport():
         )
 
 
+def test_dc_only_production_contract_does_not_authorize_structural_guidance_gauge():
+    exact_prefix = torch.randn(1, 24, 3, 12, 14)
+    dc_metrics = {
+        "suffix_dc_bridge_enabled": True,
+        "suffix_dc_bridge_prefix_t": 3,
+        "suffix_dc_bridge_corrected_tokens": 1,
+        "suffix_dc_bridge_first_weight": 1.0,
+        "suffix_dc_bridge_delta_rms": 0.25,
+    }
+
+    from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.runtime import FlowBinding
+
+    binding = FlowBinding(metrics=H3FlowMetrics(), guidance=GuidanceConfig(mode="direction"))
+    shapes = [(1, 24, 7, 12, 14), (1, 32, 2, 8)]
+    with high_boundary_contract(
+        binding,
+        exact_prefix,
+        shapes,
+        measure=False,
+        guidance_reference_gauge_weights=None,
+        guidance_reference_dc_metrics=dc_metrics,
+    ):
+        gauge = binding.guidance_reference_gauge
+        assert gauge is not None
+        assert gauge.spatial_mean_only is True
+        assert gauge.weights == (1.0,)
+        reference = torch.randn(1, 24, 7, 12, 14)
+        residual = gauge.residual(reference, prefix_t=3)
+        assert residual.shape == (1, 24, 1, 1, 1)
+
+
 def test_boundary_motion_gate_compact_witness_matches_full_translation():
     exact_full = _rigid_textured_video()
     learned = _rigid_textured_video(shift_x=-1)
