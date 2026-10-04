@@ -1,5 +1,9 @@
 # Continuation 01097: exact high context still fails rendered continuity
 
+Follow-up: [01097's DC-only candidate also fails in 01109](CONTINUATION_01109.md).
+The candidate rationale and pre-render limitations below describe the state at
+the time of this review, not current rendered qualification.
+
 Run 01097 follows 01093 after target-high video-prefix release was retired.
 It is not a matched comparison: source/target spatial geometries changed from
 `54x36 -> 76x50` to `32x58 -> 46x82`. The legacy node value remains

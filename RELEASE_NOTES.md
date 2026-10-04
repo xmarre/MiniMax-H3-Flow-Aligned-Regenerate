@@ -1,4 +1,4 @@
-# Unreleased: first-token DC continuity with coherent learned guidance
+# Unreleased: first-token DC support with coherent learned guidance
 
 Partitioned exact-prefix continuation now applies only a per-channel spatial-mean
 correction to the first generated suffix token. The four-token structural
@@ -17,12 +17,13 @@ and zero structural support. The offline validator accepts this ownership contra
 and continues to replay historical policies; it rejects structural reactivation,
 later-token correction and mismatched transaction/transfer receipts.
 
-The prior coupled path failed rendered continuity acceptance. This change is a
-behavioral candidate, with source tests for its mutation scope and guidance
-ownership. It still requires a matched render to qualify frame-shift, shock and
-tone continuity. Removing the structural transplant may expose a native learned
-boundary mismatch that the prior algebraic correction concealed. See
-[continuation evidence](docs/validation/CONTINUATION_01097.md).
+Both the prior coupled path and the current DC-only path failed rendered
+continuity acceptance. Source tests establish mutation scope and guidance
+ownership, but the frame-shift, shock and tone defect remains unresolved. The
+current bridge must not be treated as a qualified visual fix. The native boundary
+tensor export is the next evidence for choosing a correction. See the
+[current qualification](docs/validation/CONTINUATION_01109.md) and
+[preceding candidate rationale](docs/validation/CONTINUATION_01097.md).
 
 # Unreleased: retire discarded video-prefix context after 01093
 

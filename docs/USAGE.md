@@ -177,6 +177,8 @@ The `partitioned_exact_overlap_bridge` receipt reports
 `later_suffix_extrapolated=false`. An eligible nonzero DC fallback reports
 `applied=true` and `suffix_support_tokens=1`; otherwise its fallback support is
 zero. This receipt describes the correction's scope, not rendered acceptance.
+The current DC-only path still exhibits the rendered frame-shift, shock and tone
+defect; it is not a qualified visual continuity fix.
 
 Production `guidance` receipts report `reference_gauge_used` and
 `reference_gauge_policy=exact_prefix_guidance_reference_dc_v1` for a nonzero DC
