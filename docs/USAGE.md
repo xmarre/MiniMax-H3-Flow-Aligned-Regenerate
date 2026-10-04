@@ -150,18 +150,15 @@ All-generated first chunks and fully protected audio are no-ops. Other non-canon
 
 ### Guided overlap controls
 
-When partitioned continuation applies the coupled exact-prefix handoff bridge,
-high-stage direction guidance also compares its reference in that representation.
-For each reference, it measures the authoritative last-prefix frame minus the
-reference's corresponding frame and adds that residual to the direction
-comparison across the handoff's existing coupled suffix support. This prevents
-guidance from undoing an already reconciled first transition. Acceleration
-reference velocity uses the same corrected comparison. Temporal guidance pulls
-its high-grid operand back into the source representation before evaluating
-the native motion innovation, then adds the correction to the reconciled
-operand. Its warp must transport the residual as well as its endpoint value.
-Source trajectory tensors and source-grid temporal correspondence remain unchanged. This operation does
-not register or warp frames and is separate from sampler overlap width.
+Historical coupled exact-prefix bridge experiments also carried their full
+structural residual into high-stage direction/acceleration/temporal reference
+comparisons so guidance would not immediately undo the same mutation. That
+full-spatial reference gauge remains implemented for source regression, but
+01097 retires it from the production partitioned continuation path together with
+the structural successor transplant. Production high guidance now receives only
+the one-token channel-mean gauge described below. Source trajectory tensors and
+source-grid temporal correspondence remain unchanged; this comparison logic does
+not register/warp frames and is separate from sampler overlap width.
 
 The one-token DC handoff also rebases an unregistered direction reference when
 its measured offset is nonzero. This path compares only per-channel spatial

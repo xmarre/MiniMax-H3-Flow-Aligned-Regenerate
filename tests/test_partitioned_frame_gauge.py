@@ -10,6 +10,8 @@ from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
 from h3_flow_regenerate.frame_gauge import GUIDANCE_REFERENCE_POLICY, translate_video_cells
 from h3_flow_regenerate.geometry import geometry_from_video
 from h3_flow_regenerate.guidance import GuidanceConfig
+from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
+from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_runtime_gate import RuntimeGateError, _validate_boundary_motion_receipt
 from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_exact_overlap_bridge,
@@ -19,6 +21,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _partitioned_exact_overlap_fallback_eligibility,
     _prepare_registered_guidance_reference,
 )
+from h3_flow_regenerate.runtime import FlowBinding
 from h3_flow_regenerate.sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 
@@ -284,10 +287,6 @@ def test_dc_only_production_contract_does_not_authorize_structural_guidance_gaug
         "suffix_dc_bridge_first_weight": 1.0,
         "suffix_dc_bridge_delta_rms": 0.25,
     }
-
-    from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
-    from h3_flow_regenerate.metrics import H3FlowMetrics
-    from h3_flow_regenerate.runtime import FlowBinding
 
     binding = FlowBinding(metrics=H3FlowMetrics(), guidance=GuidanceConfig(mode="direction"))
     shapes = [(1, 24, 7, 12, 14), (1, 32, 2, 8)]

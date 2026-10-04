@@ -26,22 +26,19 @@ available for diagnostics/tests only. Receipts identify
 hardware retirement. This is a behavioral candidate; rendered acceptance still
 requires a matched hardware rerun.
 
-# Unreleased: reconcile continuation guidance with the exact-prefix handoff
+# Historical candidate: coupled continuation guidance gauge (structural arm retired after 01097)
 
-Partitioned continuation now compares high-stage direction guidance in the same
-exact-prefix representation as its coupled learned-transfer bridge. Previously
-the handoff corrected the generated boundary, then guidance could pull it back
-toward an uncorrected low-grid reference. The reference comparison reuses the
-handoff's structural and DC support together. It preserves source trajectory
-tensors and source-grid temporal correspondence. Acceleration reference velocity
-uses the same comparison correction when that mode is selected.
+The earlier coupled bridge carried its structural+DC handoff residual into
+high-stage direction/acceleration/temporal reference comparisons so guidance did
+not immediately undo the same state mutation. The actual-provider source/target
+ownership correction remains valid, but 01097 retires the full-spatial gauge
+from production along with the structural successor transplant.
 
-The high-stage owner retains one authoritative video frame and releases it on
-success or failure, including recursively copied options and receipt failures.
-Execution reports reference use and support separately from video mask closure.
-No model/provider/VAE evaluations or sampler lifetimes are added. Initial chunks,
-inactive guidance and handoffs without the coupled bridge retain their existing
-behavior. Rendered boundary quality and GPU overhead still need qualification.
+Current production keeps the actual learned provider pair and native temporal
+correspondence, while any exact-prefix reference rebasing is limited to the same
+one-token per-channel spatial mean owned by the DC bridge. The owner remains
+high-lifetime-scoped and adds no model/provider/VAE evaluation or sampler
+lifetime.
 
 # Unreleased: retire discarded video-prefix context after 01093
 
