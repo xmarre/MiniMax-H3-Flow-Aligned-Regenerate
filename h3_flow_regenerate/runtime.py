@@ -15,8 +15,10 @@ import torch
 from .contracts import H3FlowTrajectory, TrajectorySample
 from .geometry import geometry_from_video, pack_streams, resize_spatial_5d, unpack_streams
 from .guidance import (
+    ExactPrefixGuidanceGauge,
     GuidanceConfig,
     GuidanceState,
+    HandoffGuidanceReference,
     RegisteredGuidanceReference,
     apply_guidance,
 )
@@ -84,6 +86,8 @@ class FlowBinding:
     guidance_run_id: str | None = None
     guidance_state: GuidanceState = field(default_factory=GuidanceState)
     registered_guidance_reference: RegisteredGuidanceReference | None = None
+    guidance_reference_gauge: ExactPrefixGuidanceGauge | None = None
+    handoff_guidance_reference: HandoffGuidanceReference | None = None
     guidance_protected_prefix_t: int = 0
     high_boundary_trace: Any = None
     high_boundary_anchor: Any = None
@@ -336,6 +340,9 @@ def _begin_capture(
         padded=(geometry.padded_h, geometry.padded_w),
         spatial_padding=not geometry.patch_safe,
         trajectory_bytes=binding.trajectory.bytes,
+        vdn_adapter_config=(getattr(guider, "model_options", None) or {})
+        .get("transformer_options", {})
+        .get("vdn_h3_adapter_config_v1"),
     )
 
 
@@ -567,7 +574,9 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             actual=actual,
         )
     if boundary_trace is not None:
-        boundary_trace.observe(result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+        boundary_trace.observe(
+            result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual, sampler_input=x
+        )
 
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
@@ -594,6 +603,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             sigma=sigma,
             registered_reference=binding.registered_guidance_reference,
             protected_prefix_t=binding.guidance_protected_prefix_t,
+            reference_gauge=binding.guidance_reference_gauge,
+            handoff_reference=binding.handoff_guidance_reference,
         )
         guidance_elapsed_ms = (time.perf_counter() - guidance_started) * 1000.0
         result, _ = pack_streams((guided_video, audio_x0))
@@ -626,6 +637,11 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             temporal_search_radius=binding.guidance_state.last_temporal_search_radius,
             temporal_cross_prefix_pairs_disabled=(binding.guidance_state.last_temporal_cross_prefix_pairs_disabled),
             registered_reference_used=binding.guidance_state.last_registered_reference_used,
+            reference_gauge_used=binding.guidance_state.last_reference_gauge_used,
+            reference_gauge_policy=binding.guidance_state.last_reference_gauge_policy,
+            temporal_reference_gauge_used=binding.guidance_state.last_temporal_reference_gauge_used,
+            handoff_reference_used=binding.guidance_state.last_handoff_reference_used,
+            temporal_handoff_reference_used=binding.guidance_state.last_temporal_handoff_reference_used,
             protected_prefix_t=binding.guidance_protected_prefix_t,
             actual=actual,
             solver_phase=(
