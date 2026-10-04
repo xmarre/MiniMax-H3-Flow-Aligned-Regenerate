@@ -183,6 +183,21 @@ copies, and releases it on success or failure. It adds no H3, provider or
 VAE evaluation. The comparison consistency tests do not establish rendered seam
 acceptance or GPU overhead.
 
+When exact-prefix continuation uses the actual learned handoff and its matching
+main low/probe trajectory, direction and acceleration reuse that learned
+endpoint as their transfer reference. Rebuilding it with bicubic interpolation
+would compare a different temporal transition even after prefix rebasing.
+Temporal guidance still uses native source matches and innovations: its temporary
+high operand removes both the learned-transfer difference and the existing
+prefix representation residual before transport. The current high prediction
+continues to evolve under the existing weights, schedule and RMS bound.
+The endpoint is retained only for the high lifetime and released on success or
+failure. `handoff_reference_used` and `temporal_handoff_reference_used` identify
+these executed comparisons. Registered, same-grid, bicubic and independent
+shadow controls retain their existing reference contracts. No additional H3,
+provider, sampler or VAE evaluation is added. This comparison correction requires
+rendered qualification; it is not a decoded boundary acceptance claim.
+
 The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Video overlap is applied only to the target-high sampler mask. Low/probe sampling and structural prefix discovery keep the authoritative exact mask. Audio overlap follows the selected audio mode; `exact_mask` keeps its effective overlap at zero regardless of the stored width.
 
 For an applied width `N`, the initial carried-prefix tail envelope uses a monotonic `i/(N+1)` denoise ramp on Core H3's 1/256 mask grid. A request that reaches or exceeds the available prefix can feather the entire carried prefix early in sampling. Ramp allocation uses the actual prefix width, so an oversized request does not create an oversized tensor. The initial video receipt separates `requested_tokens` and `applied_tokens`, records `width_limited_by_prefix` and `hard_prefix_tokens`, and marks its ramp as an initial upper bound.

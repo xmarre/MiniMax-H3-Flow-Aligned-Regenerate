@@ -17,7 +17,7 @@ from typing import Any
 import torch
 
 from .geometry import pack_streams, unpack_streams
-from .guidance import ExactPrefixGuidanceGauge
+from .guidance import ExactPrefixGuidanceGauge, HandoffGuidanceReference
 from .residual_evidence import BoundaryWindowEvidence
 from .seam_diagnostics import measure_translation_trajectory
 
@@ -446,6 +446,7 @@ def high_boundary_contract(
     guidance_reference_gauge_weights: tuple[float, ...] | None = None,
     guidance_reference_dc_metrics: dict[str, Any] | None = None,
     window_evidence: BoundaryWindowEvidence | None = None,
+    handoff_guidance_reference: HandoffGuidanceReference | None = None,
 ):
     """Keep high-stage ownership, bounded correction, and evidence scoped to one lifetime."""
 
@@ -455,6 +456,7 @@ def high_boundary_contract(
         or binding.high_boundary_anchor is not None
         or binding.high_prediction_bridge is not None
         or getattr(binding, "guidance_reference_gauge", None) is not None
+        or getattr(binding, "handoff_guidance_reference", None) is not None
     ):
         raise RuntimeError("nested high-stage boundary ownership is unsupported")
     binding.guidance_protected_prefix_t = int(exact_prefix.shape[2])
@@ -462,6 +464,8 @@ def high_boundary_contract(
     prediction_bridge = None
     reference_gauge = None
     try:
+        if handoff_guidance_reference is not None:
+            binding.handoff_guidance_reference = handoff_guidance_reference
         reference_weights = guidance_reference_gauge_weights
         dc_only = False
         if (
@@ -517,6 +521,9 @@ def high_boundary_contract(
         binding.high_boundary_anchor = None
         binding.high_prediction_bridge = None
         binding.guidance_protected_prefix_t = 0
+        if handoff_guidance_reference is not None:
+            binding.handoff_guidance_reference = None
+            handoff_guidance_reference.close()
         if reference_gauge is not None:
             binding.guidance_reference_gauge = None
             reference_gauge.close()

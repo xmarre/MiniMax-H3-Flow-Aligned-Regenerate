@@ -41,7 +41,7 @@ from .geometry import (
     resize_video,
     unpack_streams,
 )
-from .guidance import RegisteredGuidanceReference, time_matched_reference_info
+from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
@@ -1586,6 +1586,50 @@ def _apply_partitioned_exact_overlap_bridge(
         corrected_tokens=corrected_tokens,
     )
     return mapped_state, corrected_clean, representation_metrics, dc_metrics
+
+
+def _prepare_handoff_guidance_reference(
+    *,
+    run: Any,
+    provider_input: torch.Tensor,
+    provider_output: torch.Tensor,
+    prefix_t: int,
+    split_coordinate: float,
+    high_sigmas: torch.Tensor,
+    video_shift: float,
+) -> HandoffGuidanceReference:
+    """Bind an already executed learned transfer to its exact guidance endpoint."""
+
+    source_ref, resolved, clamped = time_matched_reference_info(run, split_coordinate)
+    exact_probe = any(
+        sample.provenance == "actual"
+        and sample.phase == "handoff_probe"
+        and math.isclose(float(sample.coordinate), split_coordinate, rel_tol=0.0, abs_tol=1e-7)
+        for sample in run.samples
+    )
+    if clamped or not exact_probe or not math.isclose(resolved, split_coordinate, rel_tol=0.0, abs_tol=1e-7):
+        raise RuntimeError("learned handoff guidance lost its exact probe endpoint")
+    if source_ref.shape != provider_input.shape or not 0 < prefix_t < source_ref.shape[2]:
+        raise RuntimeError("learned handoff guidance source geometry drifted")
+    # The provider receives the restored physical prefix, whereas capture occurs
+    # before native inpaint output restoration. The generated suffix must be the
+    # selected probe, not a different main/shadow trajectory. Native KSAMPLER
+    # multiplies/divides that probe by (1-sigma), so allow only arithmetic
+    # roundoff in this identity check, not a content/quality tolerance.
+    source_suffix = source_ref[:, :, prefix_t:].to(provider_input)
+    precision = torch.finfo(provider_input.dtype).eps
+    if not torch.allclose(source_suffix, provider_input[:, :, prefix_t:], rtol=4 * precision, atol=0):
+        raise RuntimeError("learned handoff guidance provider input differs from selected probe")
+    for sigma in high_sigmas[:-1].detach().to(device="cpu", dtype=torch.float64).tolist():
+        coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+        _, endpoint, _ = time_matched_reference_info(run, coordinate)
+        if coordinate > split_coordinate + 1e-7 or not math.isclose(
+            endpoint, split_coordinate, rel_tol=0.0, abs_tol=1e-7
+        ):
+            raise RuntimeError("learned handoff guidance high schedule changes endpoint identity")
+    if provider_output.shape[:3] != provider_input.shape[:3]:
+        raise RuntimeError("learned handoff guidance target temporal geometry drifted")
+    return HandoffGuidanceReference(provider_output, run_id=run.run_id, coordinate=split_coordinate, prefix_t=prefix_t)
 
 
 def _prepare_registered_guidance_reference(
@@ -3229,6 +3273,7 @@ def run_partitioned_progressive(
     binding.metrics.increment("handoff_exact_probe_nfe")
     _cuda_allocator_checkpoint(binding.metrics, "after_primary_probe")
     boundary_window_evidence = None
+    handoff_guidance_reference = None
     try:
         _verify_prefix_transformer_context_diagnostic(
             binding.metrics,
@@ -4934,7 +4979,41 @@ def run_partitioned_progressive(
             binding.registered_guidance_reference = None
             binding.guidance_state.reset()
 
-        # Release full clean-domain registration witnesses before target-high.
+        if (
+            guidance_run is not None
+            and binding.guidance.mode in {"direction", "direction+temporal", "direction+acceleration"}
+            and binding.registered_guidance_reference is None
+            and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
+            and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            and splice_clean_source in {"actual_clean_postprocess", "actual_provider"}
+        ):
+            handoff_guidance_reference = _prepare_handoff_guidance_reference(
+                run=guidance_run,
+                provider_input=clean_video,
+                provider_output=provider_native_clean,
+                prefix_t=stage_plan.prefix_t,
+                split_coordinate=split_coordinate,
+                high_sigmas=high_sigmas,
+                video_shift=video_shift,
+            )
+            binding.metrics.event(
+                "partitioned_handoff_guidance_reference",
+                run_id=guidance_run.run_id,
+                reference_coordinate=split_coordinate,
+                source="actual_learned_provider_output",
+                target_shape=tuple(provider_native_clean.shape),
+                retained_bytes=handoff_guidance_reference.video.numel()
+                * handoff_guidance_reference.video.element_size(),
+                native_temporal_correspondence_preserved=True,
+                extra_provider_calls=0,
+                extra_h3_nfe=0,
+                extra_sampler_lifetimes=0,
+            )
+
+        # Release registration witnesses. Only the one actual learned guidance
+        # endpoint remains owned for high; it is released on success or failure.
         del restored_clean
         del corrected_clean
         del learned_clean
@@ -5007,6 +5086,7 @@ def run_partitioned_progressive(
                 ),
                 guidance_reference_dc_metrics=(dc_metrics if not exact_overlap_applied else None),
                 window_evidence=boundary_window_evidence,
+                handoff_guidance_reference=handoff_guidance_reference,
             ),
         ):
             result = executor(
@@ -5753,6 +5833,8 @@ def run_partitioned_progressive(
     finally:
         if boundary_window_evidence is not None:
             boundary_window_evidence.close()
+        if handoff_guidance_reference is not None:
+            handoff_guidance_reference.close()
 
 
 __all__ = [

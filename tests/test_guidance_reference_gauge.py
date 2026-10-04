@@ -10,12 +10,19 @@ import torch
 import h3_flow_regenerate.guidance as guidance
 from h3_flow_regenerate.contracts import TrajectoryRun, TrajectorySample
 from h3_flow_regenerate.geometry import geometry_from_video, pack_streams, resize_video, unpack_streams
-from h3_flow_regenerate.guidance import ExactPrefixGuidanceGauge, GuidanceConfig, GuidanceState, apply_guidance
+from h3_flow_regenerate.guidance import (
+    ExactPrefixGuidanceGauge,
+    GuidanceConfig,
+    GuidanceState,
+    HandoffGuidanceReference,
+    apply_guidance,
+)
 from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
+    _prepare_handoff_guidance_reference,
 )
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
 
@@ -426,3 +433,259 @@ def test_inactive_high_contract_retains_baseline_binding_surface():
     with high_boundary_contract(binding, torch.ones(1, 24, 3, 8, 8), [], measure=False):
         assert not hasattr(binding, "guidance_reference_gauge")
     assert not hasattr(binding, "guidance_reference_gauge")
+
+
+def _learned_case(dtype=torch.float32):
+    p, source, linear, _, _, run = _case(dtype)
+    time = torch.arange(linear.shape[2], dtype=dtype).reshape(1, 1, -1, 1, 1)
+    # An allowed nonlinear 3D provider changes the temporal transition as well
+    # as spatial detail. A bicubic fake cannot exercise this transfer mismatch.
+    learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
+    exact = learned[:, :, :p].clone()
+    exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, learned.shape[-1], dtype=dtype)
+    _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
+        learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
+    )
+    high[:, :, :p] = exact
+    return p, source, linear, learned, exact, high, run
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("cutoff", [0.25, 1.0])
+def test_actual_learned_handoff_reference_preserves_its_native_transition(dtype, cutoff):
+    p, source, _, learned, exact, high, run = _learned_case(dtype)
+    config = GuidanceConfig(cutoff=cutoff)
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    old = apply_guidance(
+        high, run=run, coordinate=0.2, config=config, state=GuidanceState(), protected_prefix_t=p, reference_gauge=gauge
+    )
+    native_transition = learned[:, :, p] - learned[:, :, p - 1]
+    assert (old[:, :, p] - exact[:, :, -1] - native_transition).abs().max() > 0.04
+    owner = _prepare_handoff_guidance_reference(
+        run=run,
+        provider_input=source,
+        provider_output=learned,
+        prefix_t=p,
+        split_coordinate=0.2,
+        high_sigmas=torch.tensor([0.2, 0.1, 0.0]),
+        video_shift=1.0,
+    )
+    state = GuidanceState()
+    for coordinate in (0.2, 0.1):
+        result = apply_guidance(
+            high,
+            run=run,
+            coordinate=coordinate,
+            config=config,
+            state=state,
+            protected_prefix_t=p,
+            reference_gauge=gauge,
+            handoff_reference=owner,
+        )
+        torch.testing.assert_close(result, high, atol=6e-7, rtol=1e-6)
+        torch.testing.assert_close(result[:, :, p] - exact[:, :, -1], native_transition, atol=6e-7, rtol=1e-6)
+        assert torch.equal(result[:, :, :p], exact)
+        assert state.last_handoff_reference_used
+    assert owner.calls == 2
+    assert all(torch.equal(sample.video_x0, source) for sample in run.samples)
+
+
+@pytest.mark.parametrize("moving", [False, True])
+def test_learned_reference_temporal_transport_is_covariant_and_keeps_native_matches(moving):
+    p, _, _, _, _, _, run = _learned_case()
+    texture = torch.randn(1, 24, 1, 8, 10, generator=torch.Generator().manual_seed(713))
+    source = torch.cat([torch.roll(texture, i if moving else 0, dims=-1) for i in range(10)], dim=2)
+    linear = resize_video(source, 12, 14)
+    time = torch.arange(10).reshape(1, 1, -1, 1, 1)
+    learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
+    exact = learned[:, :, :p].clone()
+    exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, 14)
+    _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
+        learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
+    )
+    high[:, :, :p] = exact
+    baseline = linear.clone()
+    baseline[:, :, :p] = exact
+    run = replace(run, samples=tuple(replace(sample, video_x0=source.clone()) for sample in run.samples))
+    config = GuidanceConfig(
+        mode="direction+temporal",
+        direction_weight=0.0 if moving else 0.35,
+        temporal_weight=0.3,
+        temporal_min_similarity=0.1,
+        temporal_min_margin=0.001,
+        temporal_search_radius=2,
+        cutoff=1.0,
+        max_correction_rms_ratio=10.0,
+    )
+    state, baseline_state = GuidanceState(), GuidanceState()
+    owner = HandoffGuidanceReference(learned, run_id=run.run_id, coordinate=0.2, prefix_t=p)
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    cached = None
+    for coordinate in (0.2, 0.1):
+        expected = apply_guidance(
+            baseline, run=run, coordinate=coordinate, config=config, state=baseline_state, protected_prefix_t=p
+        )
+        result = apply_guidance(
+            high,
+            run=run,
+            coordinate=coordinate,
+            config=config,
+            state=state,
+            protected_prefix_t=p,
+            reference_gauge=gauge,
+            handoff_reference=owner,
+        )
+        torch.testing.assert_close(
+            result[:, :, p:] - high[:, :, p:], expected[:, :, p:] - baseline[:, :, p:], atol=6e-7, rtol=1e-5
+        )
+        assert torch.equal(result[:, :, :p], exact)
+        assert state.last_temporal_valid_fraction > 0
+        assert state.last_temporal_handoff_reference_used and state.last_temporal_reference_gauge_used
+        assert torch.equal(state.temporal_cache.backward_flow, baseline_state.temporal_cache.backward_flow)
+        assert torch.equal(state.temporal_cache.backward_confidence, baseline_state.temporal_cache.backward_confidence)
+        if cached is not None:
+            assert state.temporal_cache is cached and state.last_temporal_cache_hit
+        cached = state.temporal_cache
+
+
+def test_learned_reference_guidance_allows_high_prediction_to_evolve():
+    p, _, _, learned, exact, high, run = _learned_case()
+    prediction = high.clone()
+    prediction[:, :, p:] += 0.1
+    result = apply_guidance(
+        prediction,
+        run=run,
+        coordinate=0.2,
+        config=GuidanceConfig(cutoff=1.0),
+        state=GuidanceState(),
+        protected_prefix_t=p,
+        reference_gauge=ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25)),
+        handoff_reference=HandoffGuidanceReference(learned, run_id=run.run_id, coordinate=0.2, prefix_t=p),
+    )
+    torch.testing.assert_close(
+        result[:, :, p:] - high[:, :, p:], torch.full_like(high[:, :, p:], 0.065), atol=6e-7, rtol=0
+    )
+    assert torch.equal(result[:, :, :p], exact)
+
+
+@pytest.mark.parametrize("actual", [False, True])
+def test_production_wrapper_uses_learned_endpoint_without_changing_audio(actual):
+    p, _, _, learned, exact, high, run = _learned_case()
+    audio = torch.randn(1, 32, 2, 8)
+    packed, shapes = pack_streams((high, audio))
+    binding = FlowBinding(guidance=GuidanceConfig(), active_guidance_run=run)
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding}, inner_model=SimpleNamespace(latent_shapes=shapes)
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options, seed):
+            return x.clone()
+
+    owner = HandoffGuidanceReference(learned, run_id=run.run_id, coordinate=0.2, prefix_t=p)
+    with high_boundary_contract(
+        binding,
+        exact,
+        shapes,
+        measure=False,
+        guidance_reference_gauge_weights=(1.0, 0.75, 0.5, 0.25),
+        handoff_guidance_reference=owner,
+    ):
+        result = flow_predict_wrapper(
+            Executor(),
+            packed,
+            torch.tensor([0.5]),
+            model_options={"transformer_options": {"spectrum_h3_actual": actual}},
+            seed=17,
+        )
+    video_out, audio_out = unpack_streams(result, shapes)
+    torch.testing.assert_close(video_out, high, atol=6e-7, rtol=1e-6)
+    assert torch.equal(audio_out, audio) and torch.equal(video_out[:, :, :p], exact)
+    receipt = next(e.fields for e in binding.metrics.events if e.kind == "guidance")
+    assert receipt["handoff_reference_used"] and receipt["actual"] is actual
+    assert owner.calls == 1 and owner.video is None and binding.handoff_guidance_reference is None
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_learned_reference_high_lifetime_releases_recursive_clones(failure):
+    _, _, _, learned, exact, high, run = _learned_case()
+    binding = FlowBinding(guidance=GuidanceConfig())
+    owner = HandoffGuidanceReference(learned, run_id=run.run_id, coordinate=0.2, prefix_t=3)
+    try:
+        with high_boundary_contract(
+            binding, exact, [tuple(high.shape)], measure=False, handoff_guidance_reference=owner
+        ):
+            clone = copy.deepcopy(binding.handoff_guidance_reference)
+            assert clone is owner
+            assert owner.video.data_ptr() != learned.data_ptr()
+            if failure:
+                raise RuntimeError("sampler failure")
+    except RuntimeError as exc:
+        assert failure and str(exc) == "sampler failure"
+    assert binding.handoff_guidance_reference is None and owner.video is None
+    with pytest.raises(RuntimeError, match="outside its high lifetime"):
+        clone.resolve(high, run_id=run.run_id, coordinate=0.2, prefix_t=3)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing_probe", "wrong_source", "wrong_geometry", "above_endpoint", "changes_endpoint"]
+)
+def test_learned_reference_preparation_rejects_unmatched_source_or_schedule(mutation):
+    p, source, _, learned, _, _, run = _learned_case()
+    high_sigmas = torch.tensor([0.2, 0.1, 0.0])
+    if mutation == "missing_probe":
+        run = replace(run, samples=tuple(replace(sample, phase="single") for sample in run.samples))
+    elif mutation == "wrong_source":
+        source = source.clone()
+        source[:, :, p] += 0.1
+    elif mutation == "wrong_geometry":
+        source = source[..., :-1]
+    elif mutation == "above_endpoint":
+        high_sigmas = torch.tensor([0.3, 0.1, 0.0])
+    elif mutation == "changes_endpoint":
+        run = replace(run, samples=(*run.samples, replace(run.samples[-1], coordinate=0.1)))
+    with pytest.raises(RuntimeError, match="learned handoff guidance"):
+        _prepare_handoff_guidance_reference(
+            run=run,
+            provider_input=source,
+            provider_output=learned,
+            prefix_t=p,
+            split_coordinate=0.2,
+            high_sigmas=high_sigmas,
+            video_shift=1.0,
+        )
+
+
+def test_learned_reference_accepts_provider_restored_prefix_without_relabeling_suffix():
+    p, source, _, learned, _, _, run = _learned_case()
+    restored = source.clone()
+    restored[:, :, :p] += 0.5
+    owner = _prepare_handoff_guidance_reference(
+        run=run,
+        provider_input=restored,
+        provider_output=learned,
+        prefix_t=p,
+        split_coordinate=0.2,
+        high_sigmas=torch.tensor([0.2, 0.1, 0.0]),
+        video_shift=1.0,
+    )
+    assert torch.equal(owner.video, learned)
+
+
+def test_learned_reference_accepts_native_probe_inverse_noise_scaling_roundoff():
+    p, source, _, learned, _, _, run = _learned_case()
+    sigma = torch.tensor(0.87804878)
+    native_return = source * (1.0 - sigma) / (1.0 - sigma)
+    assert not torch.equal(native_return[:, :, p:], source[:, :, p:])
+    owner = _prepare_handoff_guidance_reference(
+        run=run,
+        provider_input=native_return,
+        provider_output=learned,
+        prefix_t=p,
+        split_coordinate=0.2,
+        high_sigmas=torch.tensor([0.2, 0.1, 0.0]),
+        video_shift=1.0,
+    )
+    assert torch.equal(owner.video, learned)
