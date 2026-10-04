@@ -215,7 +215,7 @@ def test_exact_overlap_bridge_retires_structural_transplant_and_applies_only_one
     assert representation["suffix_representation_bridge_accepted"] is False
     assert representation["suffix_representation_bridge_corrected_tokens"] == 0
     assert representation["suffix_representation_bridge_production_retired"] is True
-    assert representation["suffix_representation_bridge_reason"].startswith("hardware_falsified_01097")
+    assert representation["suffix_representation_bridge_reason"] == "structural_successor_transport_retired"
     assert dc["suffix_dc_bridge_corrected_tokens"] == 1
     assert dc["suffix_dc_bridge_first_weight"] == 1.0
     assert dc["suffix_dc_bridge_last_weight"] == 1.0

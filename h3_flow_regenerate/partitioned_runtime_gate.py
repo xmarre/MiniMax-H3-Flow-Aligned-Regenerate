@@ -67,11 +67,13 @@ AUDIO_POSITION_DOMAIN_SOURCE = "source_carrier"
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_structural_plus_dc_v1"
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY = "partitioned_exact_overlap_successor_safe_v2"
 PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY = "partitioned_exact_overlap_coupled_successor_taper_v4"
+PARTITIONED_EXACT_OVERLAP_DC_POLICY = "partitioned_exact_overlap_dc_only_v5"
 PARTITIONED_EXACT_OVERLAP_POLICIES = frozenset(
     {
         PARTITIONED_EXACT_OVERLAP_POLICY,
         PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY,
         PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
+        PARTITIONED_EXACT_OVERLAP_DC_POLICY,
     }
 )
 PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS = [1.0, 0.75, 0.5, 0.25]
@@ -2372,7 +2374,8 @@ def _coupled_overlap_guidance_rejection(receipt: dict[str, Any], trigger: str) -
     guidance = receipt.get("guidance_registration")
     reason = str(receipt.get("reason", ""))
     return bool(
-        receipt.get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
+        receipt.get("exact_overlap_fallback_policy")
+        in {PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY, PARTITIONED_EXACT_OVERLAP_DC_POLICY}
         and receipt.get("result") == "rejected"
         and bool(reason)
         and isinstance(boundary, dict)
@@ -2414,15 +2417,22 @@ def _validate_frame_gauge_transfer(
     )
     overlap = transfer.get("partitioned_exact_overlap_bridge")
     coupled_policy = isinstance(overlap, dict) and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
+    dc_policy = isinstance(overlap, dict) and overlap.get("policy") == PARTITIONED_EXACT_OVERLAP_DC_POLICY
     coupled_requested = coupled_policy and overlap.get("requested") is True
     frames = [_event_fields(event) for event in window if _event_kind(event) == "partitioned_frame_gauge"]
-    if coupled_policy or (
-        len(frames) == 1 and frames[0].get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
+    if (
+        coupled_policy
+        or dc_policy
+        or (
+            len(frames) == 1
+            and frames[0].get("exact_overlap_fallback_policy")
+            in {PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY, PARTITIONED_EXACT_OVERLAP_DC_POLICY}
+        )
     ):
         _require(
-            coupled_policy
+            (coupled_policy or dc_policy)
             and len(frames) == 1
-            and frames[0].get("exact_overlap_fallback_policy") == PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY
+            and frames[0].get("exact_overlap_fallback_policy") == overlap.get("policy")
             and frames[0].get("exact_overlap_fallback_requested") is overlap.get("requested")
             and frames[0].get("exact_overlap_fallback_applied") is overlap.get("applied"),
             "coupled exact-overlap transaction and transfer receipts differ",
@@ -2462,7 +2472,7 @@ def _validate_frame_gauge_transfer(
         "frame-gauge transfer changed DC routing for the selected arm",
     )
     allowed_clean_sources = {expected_clean_source}
-    if coupled_policy and not accepted:
+    if (coupled_policy or dc_policy) and not accepted:
         allowed_clean_sources.add("actual_clean_postprocess")
     _require(
         transfer.get("splice_clean_source") in allowed_clean_sources,
@@ -2485,6 +2495,38 @@ def _validate_frame_gauge_transfer(
         )
         requested = overlap.get("requested") is True
         applied = overlap.get("applied") is True
+        if dc_policy:
+            delta_rms = _finite_number(transfer.get("suffix_dc_bridge_delta_rms"))
+            _require(
+                delta_rms >= 0.0 and applied is (requested and delta_rms > 0.0),
+                "DC-only exact-overlap application differs from its measured offset",
+            )
+            _require(
+                transfer.get("suffix_dc_bridge_enabled") is True
+                and _close_number(transfer.get("suffix_dc_bridge_first_weight"), 1.0, atol=1e-12)
+                and _close_number(transfer.get("suffix_dc_bridge_last_weight"), 1.0, atol=1e-12)
+                and overlap.get("dc_support_policy") == "first_suffix_only_v1"
+                and overlap.get("dc_support_tokens") == 1
+                and overlap.get("dc_temporal_weights") == [1.0],
+                "DC-only exact-overlap channel-mean support drifted",
+            )
+            _require(
+                overlap.get("structural_bridge_retired") is True
+                and overlap.get("structural_support_tokens") == 0
+                and overlap.get("production_correction") == "one_token_per_channel_spatial_mean_only"
+                and overlap.get("suffix_representation_bridge_requested") is False
+                and overlap.get("suffix_representation_bridge_enabled") is False
+                and overlap.get("suffix_representation_bridge_accepted") is False
+                and overlap.get("suffix_representation_bridge_corrected_tokens") == 0,
+                "DC-only exact-overlap reactivated structural transport",
+            )
+            _require(
+                overlap.get("later_suffix_extrapolated") is False
+                and overlap.get("suffix_support_policy") == "first_suffix_only_v1"
+                and overlap.get("suffix_support_tokens") == (1 if applied else 0)
+                and overlap.get("suffix_outside_support_modified") is False,
+                "DC-only exact-overlap changed later suffix tokens",
+            )
         _require(
             overlap.get("authoritative_prefix_modified") is False,
             "partitioned exact-overlap repair altered authoritative prefix ownership",
@@ -2552,7 +2594,7 @@ def _validate_frame_gauge_transfer(
                 enabled and result == "shadow_only" and trigger == FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON
             )
             eligible_guidance = bool(
-                coupled_policy
+                (coupled_policy or dc_policy)
                 and enabled
                 and len(frames) == 1
                 and _coupled_overlap_guidance_rejection(frames[0], trigger)
@@ -2568,11 +2610,12 @@ def _validate_frame_gauge_transfer(
         if applied:
             _require(requested, "partitioned exact-overlap repair applied without being requested")
             dc_only = bool(
-                coupled_policy
+                (coupled_policy or dc_policy)
                 and overlap.get("suffix_representation_bridge_accepted") is False
                 and overlap.get("suffix_representation_bridge_enabled") is False
                 and int(overlap.get("suffix_representation_bridge_corrected_tokens", -1)) == 0
-                and overlap.get("suffix_representation_bridge_reason") == "structural_overlap_already_matched"
+                and overlap.get("suffix_representation_bridge_reason")
+                == ("structural_successor_transport_retired" if dc_policy else "structural_overlap_already_matched")
                 and _finite_number(overlap.get("suffix_representation_bridge_centered_error_before")) == 0.0
                 and _finite_number(transfer.get("suffix_dc_bridge_delta_rms")) > 0.0
             )
@@ -2607,7 +2650,7 @@ def _validate_frame_gauge_transfer(
                 )
             else:
                 _require(
-                    corrected_tokens == 1,
+                    corrected_tokens == (0 if dc_policy else 1),
                     "historical exact-overlap repair changed more than the first suffix token",
                 )
             _require(

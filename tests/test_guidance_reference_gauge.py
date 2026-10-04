@@ -24,7 +24,19 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_suffix_dc_bridge,
     _prepare_handoff_guidance_reference,
 )
+from h3_flow_regenerate.representation_bridge import apply_suffix_representation_bridge
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
+from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
+
+
+def _historical_coupled_bridge(state, learned, exact, *, sigma, weights):
+    """Keep the retired representation's guidance counterexamples replayable."""
+    structured, representation = apply_suffix_representation_bridge(learned, exact, weights=weights)
+    corrected, dc = apply_suffix_dc_bridge(structured, exact, weights=weights)
+    mapped = map_clean_bridge_to_conditional_state(
+        state, learned, corrected, sigma=sigma, prefix_t=exact.shape[2], corrected_tokens=len(weights)
+    )
+    return mapped, corrected, representation, dc
 
 
 def _case(dtype=torch.float32):
@@ -37,7 +49,7 @@ def _case(dtype=torch.float32):
     native = resize_video(source, 12, 14)
     exact = native[:, :, :prefix_t].clone()
     exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, 14).to(dtype)
-    _, corrected, _, _ = _apply_partitioned_exact_overlap_bridge(
+    _, corrected, _, _ = _historical_coupled_bridge(
         native.clone(), native, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
     )
     corrected[:, :, :prefix_t] = exact
@@ -223,9 +235,7 @@ def test_temporal_transport_respects_the_reconciled_representation(dc_only, movi
     if dc_only:
         _, high, _ = _apply_partitioned_suffix_dc_bridge(native.clone(), native, exact, sigma=0.8, enabled=True)
     else:
-        _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
-            native.clone(), native, exact, sigma=0.8, weights=weights
-        )
+        _, high, _, _ = _historical_coupled_bridge(native.clone(), native, exact, sigma=0.8, weights=weights)
     high[:, :, :p] = exact
     original_high = high.clone()
     baseline = native.clone()
@@ -443,7 +453,7 @@ def _learned_case(dtype=torch.float32):
     learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
     exact = learned[:, :, :p].clone()
     exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, learned.shape[-1], dtype=dtype)
-    _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
+    _, high, _, _ = _historical_coupled_bridge(
         learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
     )
     high[:, :, :p] = exact
@@ -491,7 +501,8 @@ def test_actual_learned_handoff_reference_preserves_its_native_transition(dtype,
 
 
 @pytest.mark.parametrize("moving", [False, True])
-def test_learned_reference_temporal_transport_is_covariant_and_keeps_native_matches(moving):
+@pytest.mark.parametrize("dc_only", [False, True])
+def test_learned_reference_temporal_transport_is_covariant_and_keeps_native_matches(moving, dc_only):
     p, _, _, _, _, _, run = _learned_case()
     texture = torch.randn(1, 24, 1, 8, 10, generator=torch.Generator().manual_seed(713))
     source = torch.cat([torch.roll(texture, i if moving else 0, dims=-1) for i in range(10)], dim=2)
@@ -500,9 +511,12 @@ def test_learned_reference_temporal_transport_is_covariant_and_keeps_native_matc
     learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
     exact = learned[:, :, :p].clone()
     exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, 14)
-    _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
-        learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
-    )
+    if dc_only:
+        _, high, _, _ = _apply_partitioned_exact_overlap_bridge(learned.clone(), learned, exact, sigma=0.8)
+    else:
+        _, high, _, _ = _historical_coupled_bridge(
+            learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
+        )
     high[:, :, :p] = exact
     baseline = linear.clone()
     baseline[:, :, :p] = exact
@@ -519,7 +533,7 @@ def test_learned_reference_temporal_transport_is_covariant_and_keeps_native_matc
     )
     state, baseline_state = GuidanceState(), GuidanceState()
     owner = HandoffGuidanceReference(source, learned, run_id=run.run_id, coordinate=0.2, prefix_t=p)
-    gauge = ExactPrefixGuidanceGauge(exact, (1.0, 0.75, 0.5, 0.25))
+    gauge = ExactPrefixGuidanceGauge(exact, (1.0,) if dc_only else (1.0, 0.75, 0.5, 0.25), spatial_mean_only=dc_only)
     cached = None
     for coordinate in (0.2, 0.1):
         expected = apply_guidance(
@@ -698,7 +712,7 @@ def test_learned_reference_temporal_transport_uses_actual_provider_source_pair()
     learned = 1.12 * linear + 0.3 * torch.tanh(linear) + 0.12 * time
     exact = learned[:, :, :p].clone()
     exact[:, :, -1] += 0.2 + torch.linspace(-0.1, 0.1, learned.shape[-1])
-    _, high, _, _ = _apply_partitioned_exact_overlap_bridge(
+    _, high, _, _ = _historical_coupled_bridge(
         learned.clone(), learned, exact, sigma=0.8, weights=(1.0, 0.75, 0.5, 0.25)
     )
     high[:, :, :p] = exact
@@ -758,3 +772,54 @@ def test_learned_reference_temporal_transport_uses_actual_provider_source_pair()
     assert state.last_temporal_handoff_reference_used
     assert torch.equal(state.temporal_cache.backward_flow, expected_state.temporal_cache.backward_flow)
     assert torch.equal(state.temporal_cache.backward_confidence, expected_state.temporal_cache.backward_confidence)
+
+
+@pytest.mark.parametrize("actual", [False, True])
+@pytest.mark.parametrize("cutoff", [0.25, 1.0])
+def test_production_wrapper_combines_actual_learned_pair_with_dc_only_handoff(actual, cutoff):
+    p, source, _, learned, exact, _, run = _learned_case()
+    _, high, representation, dc = _apply_partitioned_exact_overlap_bridge(learned.clone(), learned, exact, sigma=0.8)
+    high[:, :, :p] = exact
+    audio = torch.randn(1, 32, 2, 8, generator=torch.Generator().manual_seed(714))
+    packed, shapes = pack_streams((high, audio))
+    binding = FlowBinding(guidance=GuidanceConfig(cutoff=cutoff), active_guidance_run=run)
+    owner = _prepare_handoff_guidance_reference(
+        run=run,
+        provider_input=source,
+        provider_output=learned,
+        prefix_t=p,
+        split_coordinate=0.2,
+        high_sigmas=torch.tensor([0.2, 0.1, 0.0]),
+        video_shift=1.0,
+    )
+    guider = SimpleNamespace(
+        model_options={FLOW_BINDING_KEY: binding}, inner_model=SimpleNamespace(latent_shapes=shapes)
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, x, timestep, model_options, seed):
+            return x.clone()
+
+    with high_boundary_contract(
+        binding, exact, shapes, measure=False, guidance_reference_dc_metrics=dc, handoff_guidance_reference=owner
+    ):
+        gauge = binding.guidance_reference_gauge
+        result = flow_predict_wrapper(
+            Executor(),
+            packed,
+            torch.tensor([0.7]),
+            model_options={"transformer_options": {FLOW_STAGE_KEY: "high", "spectrum_h3_actual": actual}},
+            seed=17,
+        )
+        assert gauge.spatial_mean_only and gauge.weights == (1.0,)
+    video_out, audio_out = unpack_streams(result, shapes)
+    torch.testing.assert_close(video_out, high, atol=8e-7, rtol=1e-6)
+    assert torch.equal(audio_out, audio) and torch.equal(video_out[:, :, :p], exact)
+    assert torch.equal(video_out[:, :, p + 1 :], high[:, :, p + 1 :])
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 0
+    assert gauge.anchor is None and owner.source_video is None and owner.video is None
+    receipt = next(e.fields for e in binding.metrics.events if e.kind == "guidance")
+    assert receipt["handoff_reference_used"] and receipt["reference_gauge_used"]
+    assert receipt["reference_gauge_policy"] == "exact_prefix_guidance_reference_dc_v1"

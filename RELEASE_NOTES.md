@@ -1,44 +1,28 @@
-# Unreleased: retire the four-token structural successor transplant after 01097
+# Unreleased: first-token DC continuity with coherent learned guidance
 
-Run 01097 keeps the target-high video mask/context exact for every evaluation and
-uses the actual learned provider source/target pair for high guidance, yet the
-rendered frame-shift/shock/tone defect survives. The remaining production
-boundary mutation was the v4 exact-overlap bridge: it copied the complete
-exact-vs-learned residual into the first generated token and tapered that
-spatially varying gauge across four suffix tokens with weights
-`(1.0, 0.75, 0.5, 0.25)`.
+Partitioned exact-prefix continuation now applies only a per-channel spatial-mean
+correction to the first generated suffix token. The four-token structural
+successor transplant is retired: a spatially varying prefix residual has no
+established equivariance contract with H3 or its decoder. The exact prefix,
+later generated tokens and handoff noise remain unchanged by the bridge.
 
-That construction only preserves a raw latent tensor difference algebraically.
-H3 and the VAE are nonlinear and are not required to be equivariant to adding
-the same spatially varying field to neighboring frames. 01097 demonstrates the
-mismatch directly: the bridge's structural residual is about **0.409 RMS**, yet
-the measured phase motion changes substantially across the same boundary even
-though the algebraic difference test passes.
+High-stage direction, acceleration and temporal comparisons use the same
+first-token channel-mean correction. They retain the actual learned provider
+source/target pair and the native source temporal correspondence. Historical
+structural bridge/guidance primitives remain available for regression evidence.
+No model/provider/VAE evaluation, sampler lifetime or history boundary is added.
 
-Production now retires that structural transport and returns to the historically
-qualified one-token DC bridge from v0.3.0/v0.3.8. Only the per-channel spatial
-mean of the exact-vs-learned prefix residual is added to the first generated
-token. No spatially varying prefix structure is injected into generated content,
-no correction is tapered through later suffix tokens, and the authoritative
-prefix remains unchanged. The historical representation-bridge primitive remains
-available for diagnostics/tests only. Receipts identify
-`partitioned_exact_overlap_dc_only_v5`, zero structural support and the 01097
-hardware retirement. This is a behavioral candidate; rendered acceptance still
-requires a matched hardware rerun.
+Receipts identify `partitioned_exact_overlap_dc_only_v5`, DC support of one token
+and zero structural support. The offline validator accepts this ownership contract
+and continues to replay historical policies; it rejects structural reactivation,
+later-token correction and mismatched transaction/transfer receipts.
 
-# Historical candidate: coupled continuation guidance gauge (structural arm retired after 01097)
-
-The earlier coupled bridge carried its structural+DC handoff residual into
-high-stage direction/acceleration/temporal reference comparisons so guidance did
-not immediately undo the same state mutation. The actual-provider source/target
-ownership correction remains valid, but 01097 retires the full-spatial gauge
-from production along with the structural successor transplant.
-
-Current production keeps the actual learned provider pair and native temporal
-correspondence, while any exact-prefix reference rebasing is limited to the same
-one-token per-channel spatial mean owned by the DC bridge. The owner remains
-high-lifetime-scoped and adds no model/provider/VAE evaluation or sampler
-lifetime.
+The prior coupled path failed rendered continuity acceptance. This change is a
+behavioral candidate, with source tests for its mutation scope and guidance
+ownership. It still requires a matched render to qualify frame-shift, shock and
+tone continuity. Removing the structural transplant may expose a native learned
+boundary mismatch that the prior algebraic correction concealed. See
+[continuation evidence](docs/validation/CONTINUATION_01097.md).
 
 # Unreleased: retire discarded video-prefix context after 01093
 

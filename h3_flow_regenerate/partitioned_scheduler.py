@@ -191,9 +191,8 @@ FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
 # strong enough to veto an otherwise strongly supported transaction.
 FRAME_GAUGE_BOUNDARY_MAX_DEGRADATION_CELLS = 0.0625
 PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_dc_only_v5"
-# Kept under the historical public constant name for source/tests that import it.
-# 01097 falsified the spatially varying 4-token transplant as a rendered repair.
-# Production now retains only the v0.3.0/v0.3.8 one-token channel-mean bridge.
+# Keep the existing name for integrations that import the support contract.
+# Only the first generated token owns a channel-mean correction.
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
 PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_one_token_dc_v5"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
@@ -1572,26 +1571,18 @@ def _apply_partitioned_exact_overlap_bridge(
     sigma: float,
     weights: tuple[float, ...] = (1.0,),
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
-    """Apply only the hardware-qualified one-token DC continuity correction.
+    """Preserve the provider's first-transition channel means after prefix restore.
 
-    01097 ran with exact target-high video context and the actual learned
-    provider source/target guidance pair, yet the rendered shock survived while
-    the then-production bridge transplanted a ~0.41 RMS spatially varying
-    exact-vs-learned residual into four future tokens.  Equality of raw latent
-    frame differences under that additive transplant is not an equivariance
-    contract for H3 or the VAE; the run itself showed materially different
-    phase motion after the transplant.
-
-    Retain the older v0.3.0/v0.3.8 correction that has a narrower claim:
-    preserve only the per-channel spatial mean at the first generated token.
-    Never move spatial structure from the authoritative prefix into generated
-    content, and never taper a representation gauge through later suffix rows.
+    A spatially varying prefix residual is not a model or decoder symmetry.
+    Do not transplant it into generated content or extrapolate it through later
+    suffix tokens. Map only the first-token DC correction onto the existing
+    conditional state, preserving its noise and all other tokens.
     """
 
     normalized_weights = tuple(float(weight) for weight in weights)
     if normalized_weights != (1.0,):
         raise RuntimeError(
-            "production exact-overlap repair is one-token DC-only after 01097; "
+            "production exact-overlap repair is one-token DC-only; "
             "multi-token or structural successor transport is retired"
         )
     prefix_t = int(exact_prefix.shape[2])
@@ -1601,9 +1592,9 @@ def _apply_partitioned_exact_overlap_bridge(
         weights=(1.0,),
     )
     representation_metrics.update(
-        suffix_representation_bridge_reason="hardware_falsified_01097_non_equivariant_structural_transplant",
+        suffix_representation_bridge_reason="structural_successor_transport_retired",
         suffix_representation_bridge_production_retired=True,
-        suffix_representation_bridge_hardware_verdict="01097_rendered_shift_shock_tone_survived_exact_high_context",
+        suffix_representation_bridge_hardware_verdict="rendered_continuity_unqualified",
     )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         learned_clean,
@@ -4279,11 +4270,7 @@ def run_partitioned_progressive(
                 else None
             ),
             dc_bridge_applied=True,
-            dc_policy=(
-                "bounded_exact_overlap_spatial_mean_v2"
-                if exact_overlap_fallback_requested
-                else "existing_one_token_spatial_mean_v1"
-            ),
+            dc_policy="existing_one_token_spatial_mean_v1",
             dc_order=(
                 "after_spatial_registration_before_conditional_renoise"
                 if frame_gauge_accepted
@@ -4373,7 +4360,7 @@ def run_partitioned_progressive(
             dc_temporal_weights=list(exact_overlap_dc_weights),
             suffix_outside_support_modified=False,
             structural_bridge_retired=True,
-            structural_bridge_hardware_verdict="falsified_01097_rendered_shock_after_exact_high_context",
+            structural_bridge_hardware_verdict="rendered_continuity_unqualified",
             structural_support_tokens=0,
             production_correction="one_token_per_channel_spatial_mean_only",
             extra_h3_nfe=0,
@@ -4948,6 +4935,10 @@ def run_partitioned_progressive(
                 "dc_support_tokens": int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)),
                 "dc_temporal_weights": list(exact_overlap_dc_weights),
                 "suffix_outside_support_modified": False,
+                "structural_bridge_retired": True,
+                "structural_bridge_hardware_verdict": "rendered_continuity_unqualified",
+                "structural_support_tokens": 0,
+                "production_correction": "one_token_per_channel_spatial_mean_only",
                 **representation_metrics,
             },
             **dc_metrics,
@@ -5148,10 +5139,8 @@ def run_partitioned_progressive(
                 prediction_gauge_bridge_weights=(
                     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS if high_prediction_gauge_bridge_enabled else None
                 ),
-                # 01097 retired the structural exact-prefix gauge together with
-                # the structural successor transplant.  Direction/temporal/
-                # acceleration comparisons may only rebase the same one-token
-                # channel-mean component that production state actually owns.
+                # Guidance must use the same first-token channel-mean correction
+                # as the handoff state, without a spatial residual transplant.
                 guidance_reference_gauge_weights=None,
                 guidance_reference_dc_metrics=dc_metrics,
                 window_evidence=boundary_window_evidence,

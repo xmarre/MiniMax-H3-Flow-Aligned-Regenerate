@@ -19,7 +19,9 @@ from h3_flow_regenerate.partitioned_scheduler import (
     _partitioned_exact_overlap_fallback_eligibility,
     _resolve_partitioned_transfer_clean,
 )
+from h3_flow_regenerate.representation_bridge import apply_suffix_representation_bridge
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
 
 
 def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residual():
@@ -323,7 +325,7 @@ def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
 
 
-def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_and_scope():
+def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_means_and_scope():
     torch.manual_seed(77)
     learned = torch.randn(1, 24, 5, 8, 10, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
@@ -348,13 +350,19 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
         sigma=sigma,
     )
 
-    assert representation["suffix_representation_bridge_accepted"] is True
-    assert representation["suffix_representation_bridge_corrected_tokens"] == 1
+    assert representation["suffix_representation_bridge_accepted"] is False
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 0
     assert dc["suffix_dc_bridge_corrected_tokens"] == 1
 
     native_transition = learned[:, :, 2].float() - learned[:, :, 1].float()
     restored_transition = corrected[:, :, 2].float() - exact[:, :, 1].float()
-    assert torch.allclose(restored_transition, native_transition, rtol=0.0, atol=2e-6)
+    torch.testing.assert_close(
+        restored_transition.mean(dim=(-2, -1)), native_transition.mean(dim=(-2, -1)), rtol=0.0, atol=2e-6
+    )
+    correction = corrected[:, :, 2] - learned[:, :, 2]
+    torch.testing.assert_close(
+        correction - correction.mean(dim=(-2, -1), keepdim=True), torch.zeros_like(correction), rtol=0.0, atol=2e-6
+    )
 
     assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
     assert torch.equal(corrected[:, :, 3:], learned[:, :, 3:])
@@ -366,7 +374,7 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
     assert torch.allclose(mapped, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual():
+def test_historical_representation_successor_support_bounds_relocated_residual():
     torch.manual_seed(78)
     learned = torch.randn(1, 24, 8, 8, 10, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
@@ -378,12 +386,10 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
     state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
     weights = (1.0, 0.75, 0.5, 0.25)
 
-    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
-        state,
-        learned,
-        exact,
-        sigma=sigma,
-        weights=weights,
+    structured, representation = apply_suffix_representation_bridge(learned, exact, weights=weights)
+    corrected, dc = apply_suffix_dc_bridge(structured, exact, weights=weights)
+    mapped = map_clean_bridge_to_conditional_state(
+        state, learned, corrected, sigma=sigma, prefix_t=2, corrected_tokens=len(weights)
     )
 
     delta = exact[:, :, 1].float() - learned[:, :, 1].float()
@@ -410,7 +416,7 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
 @pytest.mark.parametrize("residual_kind", ["dc_only", "centered_only", "mixed"])
 @pytest.mark.parametrize("sigma", [0.0, 0.8])
 @pytest.mark.parametrize("suffix_t", [4, 6])
-def test_production_overlap_bounds_full_residual_and_preserves_renoise(residual_kind, sigma, suffix_t):
+def test_production_overlap_preserves_noise_and_limits_correction_to_first_token_means(residual_kind, sigma, suffix_t):
     prefix_t = 2
     weights = PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
     learned = torch.zeros(1, 24, prefix_t + suffix_t, 8, 10)
@@ -429,8 +435,8 @@ def test_production_overlap_bounds_full_residual_and_preserves_renoise(residual_
         state, learned, exact, sigma=sigma, weights=weights
     )
     expected = learned.clone()
-    for offset, weight in enumerate(weights):
-        expected[:, :, prefix_t + offset] += weight * delta
+    mean_delta = (exact[:, :, -1] - learned[:, :, prefix_t - 1]).mean(dim=(-2, -1), keepdim=True)
+    expected[:, :, prefix_t] += mean_delta
     torch.testing.assert_close(corrected, expected, rtol=0.0, atol=1e-6)
     torch.testing.assert_close(
         mapped, conditional_renoise_target(expected, sigma=sigma, noise=noise), rtol=0.0, atol=1e-6
@@ -439,19 +445,16 @@ def test_production_overlap_bounds_full_residual_and_preserves_renoise(residual_
     restored = corrected.clone()
     restored[:, :, :prefix_t] = exact
     torch.testing.assert_close(
-        restored[:, :, prefix_t] - restored[:, :, prefix_t - 1],
-        learned[:, :, prefix_t] - learned[:, :, prefix_t - 1],
+        (restored[:, :, prefix_t] - restored[:, :, prefix_t - 1]).mean(dim=(-2, -1)),
+        (learned[:, :, prefix_t] - learned[:, :, prefix_t - 1]).mean(dim=(-2, -1)),
         rtol=0.0,
         atol=1e-6,
     )
-    for offset in range(1, min(len(weights) + 1, suffix_t)):
-        j = prefix_t + offset
-        correction_step = (corrected[:, :, j] - corrected[:, :, j - 1]) - (learned[:, :, j] - learned[:, :, j - 1])
-        torch.testing.assert_close(correction_step, -0.25 * delta.expand_as(correction_step), rtol=0.0, atol=1e-6)
-    if residual_kind != "centered_only":
-        assert dc_metrics["suffix_dc_bridge_corrected_tokens"] == 4
-        assert dc_metrics["suffix_dc_bridge_first_weight"] == 1.0
-        assert dc_metrics["suffix_dc_bridge_last_weight"] == 0.25
+    correction = corrected[:, :, prefix_t] - learned[:, :, prefix_t]
+    torch.testing.assert_close(correction, mean_delta.expand_as(correction), rtol=0.0, atol=1e-6)
+    assert dc_metrics["suffix_dc_bridge_corrected_tokens"] == 1
+    assert dc_metrics["suffix_dc_bridge_first_weight"] == 1.0
+    assert dc_metrics["suffix_dc_bridge_last_weight"] == 1.0
     assert torch.equal(corrected[:, :, :prefix_t], learned_before[:, :, :prefix_t])
     assert torch.equal(corrected[:, :, prefix_t + len(weights) :], learned_before[:, :, prefix_t + len(weights) :])
     assert torch.equal(mapped[:, :, :prefix_t], state_before[:, :, :prefix_t])

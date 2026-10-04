@@ -150,15 +150,12 @@ All-generated first chunks and fully protected audio are no-ops. Other non-canon
 
 ### Guided overlap controls
 
-Historical coupled exact-prefix bridge experiments also carried their full
-structural residual into high-stage direction/acceleration/temporal reference
-comparisons so guidance would not immediately undo the same mutation. That
-full-spatial reference gauge remains implemented for source regression, but
-01097 retires it from the production partitioned continuation path together with
-the structural successor transplant. Production high guidance now receives only
-the one-token channel-mean gauge described below. Source trajectory tensors and
-source-grid temporal correspondence remain unchanged; this comparison logic does
-not register/warp frames and is separate from sampler overlap width.
+Partitioned continuation applies a one-token channel-mean handoff correction.
+High-stage direction, acceleration and temporal comparisons use that same DC-only
+representation. The historical full-spatial guidance gauge remains implemented
+for regression coverage; production does not select it. Source trajectory tensors
+and source-grid temporal correspondence remain unchanged. This comparison logic
+is separate from sampler overlap width.
 
 The one-token DC handoff also rebases an unregistered direction reference when
 its measured offset is nonzero. This path compares only per-channel spatial
@@ -168,32 +165,23 @@ component intact. A rejected structural registration does not authorize a full
 residual correction. Registered references, guidance off, downsample consistency
 and zero-offset DC handoffs retain their existing behavior.
 
-After hardware run 01097, this DC-only rule is also the production exact-overlap
-fallback. The newer four-token structural+DC successor taper is retired. 01097
-ran with exact target-high video context and the actual learned provider pair,
-but still rendered the shock while that taper transplanted a roughly 0.41 RMS
-zero-spatial-mean exact-vs-learned residual into generated content. Matching a
-raw latent frame difference after an additive spatial transform is not an
-equivariance contract for H3 or the VAE. Production therefore no longer moves
-spatial structure from the authoritative prefix into any generated suffix token
-and no longer releases such a gauge over later suffix tokens. High-stage
-direction/temporal/acceleration reference rebasing follows the same ownership:
-it is channel-mean-only over that first suffix token, never the retired full
-spatial residual. Only the older first-token per-channel spatial mean correction remains. The historical
-representation-bridge primitive stays in the package for source regression and
-diagnostic evidence, not for production mutation.
+The production exact-overlap fallback follows the same DC-only rule. It adds
+only the per-channel spatial mean of the exact-vs-learned last-prefix residual to
+the first generated token. It never copies the spatially varying residual or
+tapers a correction through later tokens. The historical representation-bridge
+primitive remains available for source regression and diagnostic evidence.
 
-The `guidance` receipt records `reference_gauge_used` and
-`reference_gauge_policy=exact_prefix_guidance_reference_coupled_v1` for coupled
-support or `exact_prefix_guidance_reference_dc_v1` for channel means.
-`temporal_reference_gauge_used` records an executed temporal pullback; it is
-false when temporal guidance is off or there are no usable correspondences.
-`partitioned_guidance_reference_gauge_complete` records calls and support. The
-owner retains one authoritative frame for coupled support or one mean per
-batch/channel for DC support during one high sampler lifetime, including option
-copies, and releases it on success or failure. It adds no H3, provider or
-VAE evaluation. The comparison consistency tests do not establish rendered seam
-acceptance or GPU overhead.
+The `partitioned_exact_overlap_bridge` receipt reports
+`policy=partitioned_exact_overlap_dc_only_v5`, `structural_support_tokens=0`,
+`dc_support_tokens=1`, `dc_temporal_weights=[1.0]` and
+`later_suffix_extrapolated=false`. An eligible nonzero DC fallback reports
+`applied=true` and `suffix_support_tokens=1`; otherwise its fallback support is
+zero. This receipt describes the correction's scope, not rendered acceptance.
+
+Production `guidance` receipts report `reference_gauge_used` and
+`reference_gauge_policy=exact_prefix_guidance_reference_dc_v1` for a nonzero DC
+handoff. The historical coupled oracle uses
+`exact_prefix_guidance_reference_coupled_v1`.
 
 When exact-prefix continuation uses the actual learned handoff and its matching
 main low/probe trajectory, direction and acceleration reuse the learned provider
