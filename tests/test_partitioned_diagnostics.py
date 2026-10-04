@@ -503,21 +503,28 @@ def test_exact_audio_context_accepts_omitted_native_mask_only_for_fully_generate
     assert context.verification_calls == 1
 
 
-def test_vdn_bypass_preflight_rejects_stale_bridge_without_capability_api():
+def test_vdn_bypass_preflight_requires_boundary_query_capability_and_policy():
     stale = SimpleNamespace(_vdn_forward=True, _vdn_external_sequence_api=4)
     patcher = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": stale})
-    _validate_partitioned_vdn_compat(
-        patcher,
-        required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-    )
-    with pytest.raises(PartitionedPreflightUnsupported, match="diagnostic API"):
+    with pytest.raises(PartitionedPreflightUnsupported, match="boundary-query API"):
         _validate_partitioned_vdn_compat(
             patcher,
-            required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+            required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         )
+
+    stale._vdn_partitioned_boundary_query_api = 1
+    stale._vdn_partitioned_boundary_query_policy = "old_boundary_policy"
+    with pytest.raises(PartitionedPreflightUnsupported, match="boundary-query policy"):
+        _validate_partitioned_vdn_compat(
+            patcher,
+            required_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+        )
+
     current = SimpleNamespace(
         _vdn_forward=True,
         _vdn_external_sequence_api=4,
+        _vdn_partitioned_boundary_query_api=1,
+        _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
         _vdn_partitioned_linear_diagnostic_api=1,
     )
     patcher.object_patches["diffusion_model.blocks.0.attn.forward"] = current

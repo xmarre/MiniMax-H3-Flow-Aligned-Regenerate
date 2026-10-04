@@ -200,6 +200,8 @@ PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_res
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
+VDN_PARTITIONED_BOUNDARY_QUERY_API = 1
+VDN_PARTITIONED_BOUNDARY_QUERY_POLICY = "boundary_suffix_local_group_dense_v1"
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 
 
@@ -838,7 +840,8 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
             temporal=int(plan.temporal),
             target_hw=plan.target_hw,
             protected_prefix_local_queries="dense" if exact_prefix_attention else "native",
-            generated_local_queries="native_sol_selection",
+            generated_local_queries="boundary_dense_then_native_sol_selection",
+            boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
             startup_density_exemption=False,
             refinement_source="h3_flow_partitioned_refinement",
             high_linear_diagnostic="normal",
@@ -1008,6 +1011,19 @@ def _validate_partitioned_vdn_compat(
         matched += 1
         if boundary_witness_requested and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
             raise RuntimeError("requested boundary witness requires paired VDN witness API 1 before sampling")
+        if int(getattr(owner, "_vdn_partitioned_boundary_query_api", 0)) != VDN_PARTITIONED_BOUNDARY_QUERY_API:
+            raise PartitionedPreflightUnsupported(
+                "partitioned exact-prefix requires paired VDN boundary-query API "
+                f"v{VDN_PARTITIONED_BOUNDARY_QUERY_API}"
+            )
+        if (
+            getattr(owner, "_vdn_partitioned_boundary_query_policy", None)
+            != VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+        ):
+            raise PartitionedPreflightUnsupported(
+                "installed VDN bridge does not advertise the required continuation "
+                f"boundary-query policy {VDN_PARTITIONED_BOUNDARY_QUERY_POLICY!r}"
+            )
         if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
             raise PartitionedPreflightUnsupported(
                 f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"

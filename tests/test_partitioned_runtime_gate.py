@@ -17,6 +17,7 @@ from h3_flow_regenerate.partitioned_runtime_gate import (
     PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
     PARTITIONED_HIGH_ATTENTION_POLICY,
     PARTITIONED_SOL_ABI,
+    VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
     RuntimeGateError,
     compare_residual_measurement_pair,
     validate_coherent_exact_audio_evidence,
@@ -95,6 +96,24 @@ def _metrics() -> dict:
     }
 
 
+
+def _boundary_query_event(stage: str, *, prefix_t: int = 2):
+    return _event(
+        "partitioned_vdn_boundary_suffix_dense",
+        policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        stage=stage,
+        prefix_t=prefix_t,
+        query_frames=[prefix_t, prefix_t + 1],
+        q_rows=48,
+        kv_rows=240,
+        query_prefix_domain=False,
+        grouped_qkv_unchanged=True,
+        prefix_measure_unchanged=True,
+        later_suffix_sparse=True,
+        extra_model_calls=0,
+    )
+
+
 def _high_attention_metrics():
     metrics = _metrics()
     events = metrics["events"]
@@ -102,12 +121,15 @@ def _high_attention_metrics():
     events[1]["fields"]["stage"] = "low"
     first_high = next(i for i, event in enumerate(events) if event["fields"].get("stage") == "high")
     events[first_high:first_high] = [
+        _boundary_query_event("low"),
+        _boundary_query_event("probe"),
         _event(
             "partitioned_high_attention_plan",
             policy="exact_prefix_query_continuity_v1",
             exact_prefix_attention=True,
             protected_prefix_local_queries="dense",
-            generated_local_queries="native_sol_selection",
+            generated_local_queries="boundary_dense_then_native_sol_selection",
+            boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
             startup_density_exemption=False,
             refinement_source="h3_flow_partitioned_refinement",
             high_linear_diagnostic="normal",
@@ -134,6 +156,7 @@ def _high_attention_metrics():
                 "audio_position_domain": "legacy_target",
             },
         ),
+        _boundary_query_event("high"),
     ]
     metrics["counters"].update(
         partitioned_transformer_calls=3,
@@ -145,7 +168,10 @@ def _high_attention_metrics():
 
 def test_gate_accounts_for_high_prefix_attention_without_reclassifying_old_runs():
     report = validate_partitioned_runtime_evidence(
-        _high_attention_metrics(), _log(), expected_high_attention_policy=PARTITIONED_HIGH_ATTENTION_POLICY
+        _high_attention_metrics(),
+        _log(),
+        expected_high_attention_policy=PARTITIONED_HIGH_ATTENTION_POLICY,
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
     )
     assert report.high_actual == 1
     assert report.logical_calls == 5
@@ -157,6 +183,61 @@ def test_gate_accounts_for_high_prefix_attention_without_reclassifying_old_runs(
     assert old.high_attention_policy is None
     assert old.high_prefix_attention_verified is False
     assert old.high_prefix_transformer_events == 0
+
+
+
+
+def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
+    metrics = _high_attention_metrics()
+    validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+    )
+
+    missing = _high_attention_metrics()
+    missing["events"] = [
+        event
+        for event in missing["events"]
+        if not (
+            event["kind"] == "partitioned_vdn_boundary_suffix_dense"
+            and event["fields"].get("stage") == "probe"
+        )
+    ]
+    with pytest.raises(RuntimeGateError, match="every actual partitioned model call"):
+        validate_partitioned_runtime_evidence(
+            missing,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+
+    drifted = _high_attention_metrics()
+    receipt = next(
+        event
+        for event in drifted["events"]
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense"
+    )
+    receipt["fields"]["later_suffix_sparse"] = False
+    with pytest.raises(RuntimeGateError, match="receipt drifted"):
+        validate_partitioned_runtime_evidence(
+            drifted,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+
+    wrong_group = _high_attention_metrics()
+    receipt = next(
+        event
+        for event in wrong_group["events"]
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense"
+    )
+    receipt["fields"]["query_frames"] = [3, 4]
+    with pytest.raises(RuntimeGateError, match="first generated local-query group"):
+        validate_partitioned_runtime_evidence(
+            wrong_group,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
 
 
 def test_historical_run_cannot_qualify_new_high_attention_policy():

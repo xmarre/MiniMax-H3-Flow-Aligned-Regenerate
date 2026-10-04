@@ -58,6 +58,7 @@ VDN_LINEAR_ACTIVE_MARKER = (
     "partitioned exact-prefix: grouped VDN softmax active; variable-grid linear complement active"
 )
 PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
+VDN_PARTITIONED_BOUNDARY_QUERY_POLICY = "boundary_suffix_local_group_dense_v1"
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 _AUDIO_OVERLAP_RE = re.compile(
     r"partitioned audio guided overlap mode=(?P<mode>\S+) "
@@ -3831,6 +3832,7 @@ def validate_partitioned_runtime_evidence(
     expected_audio_guided_overlap_ticks: int | None = None,
     expected_audio_position_domain: str | None = None,
     expected_high_attention_policy: str | None = None,
+    expected_boundary_query_policy: str | None = None,
     expected_frame_gauge_mode: str | None = None,
     expected_residual_mode: str | None = None,
     expected_residual_result: str | None = None,
@@ -4096,7 +4098,10 @@ def validate_partitioned_runtime_evidence(
             "high attention consumed the low/probe startup exemption",
         )
         _require(
-            high_attention.get("generated_local_queries") == "native_sol_selection"
+            high_attention.get("generated_local_queries")
+            == "boundary_dense_then_native_sol_selection"
+            and high_attention.get("boundary_query_policy")
+            == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
             and high_attention.get("high_linear_diagnostic") == "normal"
             and high_attention.get("high_softmax_diagnostic") == "normal"
             and high_attention.get("high_audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
@@ -4164,6 +4169,43 @@ def validate_partitioned_runtime_evidence(
             high_attention_policy == expected_high_attention_policy and high_prefix_attention_verified,
             "run does not qualify the expected high prefix attention policy",
         )
+
+    boundary_query_events = [
+        _event_fields(event)
+        for event in window
+        if _event_kind(event) == "partitioned_vdn_boundary_suffix_dense"
+    ]
+    if expected_boundary_query_policy is not None:
+        _require(
+            expected_boundary_query_policy == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+            "unsupported expected VDN boundary-query policy",
+        )
+        _require(
+            len(boundary_query_events) == partitioned_actual,
+            "VDN boundary-query policy did not reach every actual partitioned model call",
+        )
+        expected_prefix_t = plan_fields.get("prefix_temporal_length")
+        for fields in boundary_query_events:
+            query_frames = fields.get("query_frames")
+            _require(
+                fields.get("policy") == expected_boundary_query_policy
+                and fields.get("prefix_t") == expected_prefix_t
+                and fields.get("query_prefix_domain") is False
+                and fields.get("grouped_qkv_unchanged") is True
+                and fields.get("prefix_measure_unchanged") is True
+                and fields.get("later_suffix_sparse") is True
+                and fields.get("extra_model_calls") == 0,
+                "VDN boundary-query policy receipt drifted",
+            )
+            _require(
+                isinstance(query_frames, (list, tuple))
+                and len(query_frames) > 0
+                and all(type(frame) is int for frame in query_frames)
+                and query_frames[0] == expected_prefix_t
+                and all(frame >= expected_prefix_t for frame in query_frames),
+                "VDN boundary-query receipt does not own the first generated local-query group",
+            )
+
     _require(
         partitioned_calls == partitioned_actual,
         "partitioned transformer-call accounting does not match actual participating stages",

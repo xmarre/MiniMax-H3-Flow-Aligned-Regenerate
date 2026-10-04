@@ -84,6 +84,14 @@ def main() -> None:
         help="Require target-grid protected-prefix attention receipts for every actual high evaluation.",
     )
     parser.add_argument(
+        "--expected-boundary-query-policy",
+        choices=("boundary_suffix_local_group_dense_v1",),
+        help=(
+            "Require the paired VDN bridge to keep the first generated local-query "
+            "group dense on every actual partitioned model call."
+        ),
+    )
+    parser.add_argument(
         "--expected-residual-mode",
         choices=("off", "measure"),
         help="Validate the staged exact-prefix residual-geometry mode.",
@@ -165,6 +173,7 @@ def main() -> None:
             expected_audio_guided_overlap_ticks=args.expected_audio_guided_overlap_ticks,
             expected_audio_position_domain=args.expected_audio_position_domain,
             expected_high_attention_policy=args.expected_high_attention_policy,
+            expected_boundary_query_policy=args.expected_boundary_query_policy,
             expected_frame_gauge_mode=args.expected_frame_gauge_mode,
             expected_residual_mode=args.expected_residual_mode,
             expected_residual_result=args.expected_residual_result,
