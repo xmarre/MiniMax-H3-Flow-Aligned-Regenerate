@@ -184,19 +184,37 @@ VAE evaluation. The comparison consistency tests do not establish rendered seam
 acceptance or GPU overhead.
 
 When exact-prefix continuation uses the actual learned handoff and its matching
-main low/probe trajectory, direction and acceleration reuse that learned
-endpoint as their transfer reference. Rebuilding it with bicubic interpolation
+main low/probe trajectory, direction and acceleration reuse the learned provider
+output as their transfer reference. Rebuilding it with bicubic interpolation
 would compare a different temporal transition even after prefix rebasing.
-Temporal guidance still uses native source matches and innovations: its temporary
-high operand removes both the learned-transfer difference and the existing
-prefix representation residual before transport. The current high prediction
-continues to evolve under the existing weights, schedule and RMS bound.
-The endpoint is retained only for the high lifetime and released on success or
-failure. `handoff_reference_used` and `temporal_handoff_reference_used` identify
-these executed comparisons. Registered, same-grid, bicubic and independent
-shadow controls retain their existing reference contracts. No additional H3,
-provider, sampler or VAE evaluation is added. This comparison correction requires
-rendered qualification; it is not a decoded boundary acceptance claim.
+
+The learned reference owns the exact source/target pair that the provider
+actually executed. The source side is the post-probe sampler result after
+authoritative source-grid prefix restoration; the target side is the learned
+provider output before exact target-grid prefix replacement. The trajectory
+capture still owns run identity, endpoint provenance and high-schedule
+qualification. It is not required to be bit-identical to the provider source:
+the one-call probe is captured at the PREDICT_NOISE boundary, then passes through
+the sampler's mathematically cancelling `(1-sigma)` output scaling and FLOW_AV
+inverse scaling before it reaches the provider. Floating-point round trips can
+therefore differ without representing a different trajectory.
+
+Temporal correspondence and innovations use the actual provider source tensor,
+while the temporary target operand removes the learned-transfer difference and
+the existing prefix representation residual before transport. This keeps source
+and target in the same executed handoff pair instead of mixing the provider
+target with a stale pre-sampler capture. The current high prediction continues
+to evolve under the existing weights, schedule and RMS bound.
+
+The source/target pair is retained only for the high lifetime and released on
+success or failure. For the 62x40x44 -> 62x58x64 FP32 continuation geometry this
+is about 31.1 MiB total retained video state. `handoff_reference_used` and
+`temporal_handoff_reference_used` identify executed comparisons, while
+`partitioned_handoff_guidance_reference` reports the captured-versus-provider
+source deltas. Registered, same-grid, bicubic and independent shadow controls
+retain their existing reference contracts. No additional H3, provider, sampler
+or VAE evaluation is added. This comparison correction requires rendered
+qualification; it is not a decoded boundary acceptance claim.
 
 The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Video overlap is applied only to the target-high sampler mask. Low/probe sampling and structural prefix discovery keep the authoritative exact mask. Audio overlap follows the selected audio mode; `exact_mask` keeps its effective overlap at zero regardless of the stored width.
 

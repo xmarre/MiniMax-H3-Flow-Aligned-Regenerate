@@ -5054,8 +5054,8 @@ def run_partitioned_progressive(
                 extra_sampler_lifetimes=0,
             )
 
-        # Release registration witnesses. Only the one actual learned guidance
-        # endpoint remains owned for high; it is released on success or failure.
+        # Release registration witnesses. Only the executed learned source/target
+        # guidance pair remains owned for high; it is released on success or failure.
         del restored_clean
         del corrected_clean
         del learned_clean

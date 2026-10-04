@@ -90,15 +90,36 @@ inconsistency; it does not establish its contribution to this render's third
 decoded-frame shock. The first high prediction's independently observed change
 still requires rendered assessment.
 
-High direction/acceleration now reuse the already executed actual learned
-provider output for the matching main exact-probe endpoint. Binding verifies
-the selected probe's generated suffix and the high schedule's endpoint identity.
-The intentionally restored provider prefix is allowed to differ from the
-pre-inpaint capture. Independent shadow and spatial controls are not rebound.
-Native temporal correspondence remains unchanged; its temporary operand removes
-the learned-versus-bicubic representation difference before applying the existing
-prefix-gauge pullback. The existing scheduled guidance and RMS limit remain;
-there is no fixed clean prediction, new fade or extra model/provider evaluation.
+High direction/acceleration reuse the already executed learned provider output
+for the matching main exact-probe endpoint. The first implementation also
+required the provider input suffix to be byte-identical to the PREDICT_NOISE
+trajectory capture. Run 01088 falsified that invariant before target-high began:
+the learned transfer completed, main exact-partitioned guidance selected seven
+exact samples, and preparation then raised
+`learned handoff guidance provider input differs from selected probe`.
+
+The probe capture occurs before the sampler output path. The one-call probe then
+multiplies its denoised result by `(1-sigma)`, while FLOW_AV's CONST inverse
+noise scaling divides by the same quantity. That round trip is mathematically
+identity but not byte identity in floating point. MiniMax H3's latent-format
+scale is 1.0, so latent-format conversion does not explain the mismatch.
+
+The corrected binding therefore owns the exact source/target tensor pair that
+the learned provider actually executed. The captured trajectory remains the
+authority for run identity, exact endpoint provenance and high-schedule
+qualification; value differences between the capture and provider input are
+measured, not treated as trajectory replacement. Temporal correspondence uses
+the provider input, and its temporary target operand removes the
+learned-transfer difference before the existing prefix-gauge pullback.
+Independent shadow and spatial controls are not rebound. The existing scheduled
+guidance and RMS limit remain; there is no fixed clean prediction, new fade or
+extra model/provider evaluation.
+
+01088 never entered continuation target-high and therefore neither accepts nor
+rejects the rendered boundary correction. A qualifying rerun must emit
+`partitioned_handoff_guidance_reference`, then show
+`handoff_reference_used=true`; temporal guidance calls with usable matches must
+also show `temporal_handoff_reference_used=true`.
 
 The new direction regression, moving/stationary temporal covariance, actual and
 forecast wrapper, audio ownership, source/schedule rejection and exception
