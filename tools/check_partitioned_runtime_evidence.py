@@ -59,13 +59,13 @@ def main() -> None:
     parser.add_argument("--expected-forecast", type=int)
     parser.add_argument(
         "--expected-audio-guided-overlap-mode",
-        choices=("sampler_mask", "model_timestep_only", "sampler_mask_exact_timestep"),
-        help="Require the latest applied partitioned audio guided-overlap mode.",
+        choices=("sampler_mask", "model_timestep_only", "sampler_mask_exact_timestep", "exact_mask"),
+        help="Require the latest partitioned audio mode and coherent native-mask receipt for exact modes.",
     )
     parser.add_argument(
         "--expected-audio-guided-overlap-ticks",
         type=int,
-        help="Require the latest applied partitioned audio guided-overlap width.",
+        help="Require the requested overlap width; exact modes must verify zero effective overlap separately.",
     )
     parser.add_argument(
         "--expected-audio-position-domain",

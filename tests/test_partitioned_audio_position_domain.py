@@ -201,23 +201,21 @@ def test_candidate_execution_gate_fails_closed_then_accepts_actual_block_zero():
     assert metrics.events[-1][1]["actual_block0_calls"] == 1
 
 
-def test_candidate_contract_requires_heterogeneous_context_and_normal_vdn():
-    _validate_audio_position_candidate_configuration(
-        PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-        PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+def test_candidate_contract_requires_heterogeneous_context_and_supported_vdn_mode():
+    for mode in (
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-    )
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
+    ):
+        _validate_audio_position_candidate_configuration(
+            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            mode,
+        )
     with pytest.raises(PartitionedPreflightUnsupported):
         _validate_audio_position_candidate_configuration(
             PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
-        )
-    with pytest.raises(PartitionedPreflightUnsupported):
-        _validate_audio_position_candidate_configuration(
-            PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
-            PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         )
 
 

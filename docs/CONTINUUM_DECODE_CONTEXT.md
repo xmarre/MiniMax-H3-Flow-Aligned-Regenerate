@@ -52,6 +52,12 @@ the report. No approximate equality, implicit resizing, color matching, or
 replacement of generated suffix latents is used. Such boundaries require a
 different correction; a `0/N` report means this fix did not activate.
 
+The console also records `H3 Flow video decode-context receipt`, including
+`exact_boundaries`, `total_boundaries`, `right_context_latents`, and each boundary's
+activation or skip reason. Executing the node alone does not establish that it
+supplied future context; inspect this receipt or the report for actual activation.
+The receipt does not change the node's tensors, assembly plan, or decode schedule.
+
 ## Evidence and limits
 
 The regression oracle executes the pinned native VAE's actual temporal window,
