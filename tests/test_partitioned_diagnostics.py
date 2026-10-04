@@ -1030,6 +1030,9 @@ def test_partitioned_video_overlap_request_keeps_target_high_exact_prefix_contex
     audio_mask[..., :20] = 0
     exact_mask = pack_streams((video_mask, audio_mask))[0]
     runtime_mask = exact_mask.clone()
+    _runtime_video, runtime_audio = unpack_streams(runtime_mask, shapes)
+    runtime_audio[..., 18:20] = 0.5
+    runtime_audio_expected = runtime_audio.clone()
     metrics = H3FlowMetrics()
     model_options = {
         PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 4,
@@ -1046,11 +1049,11 @@ def test_partitioned_video_overlap_request_keeps_target_high_exact_prefix_contex
     )
 
     assert high_mask is runtime_mask
-    assert torch.equal(high_mask, exact_mask)
     high_video, high_audio = unpack_streams(high_mask, shapes)
     exact_video, exact_audio = unpack_streams(exact_mask, shapes)
     assert torch.equal(high_video, exact_video)
-    assert torch.equal(high_audio, exact_audio)
+    assert torch.equal(high_audio, runtime_audio_expected)
+    assert not torch.equal(high_audio, exact_audio)
 
     event = [event for event in metrics.events if event.kind == "partitioned_video_guided_overlap"][-1]
     assert event.fields["stage"] == "high"
@@ -1065,6 +1068,32 @@ def test_partitioned_video_overlap_request_keeps_target_high_exact_prefix_contex
     assert event.fields["high_model_video_context_exact"] is True
     assert event.fields["retired_prefix_release"] is True
     assert event.fields["reason"] == "retired_discarded_prefix_context_01093"
+
+
+def test_partitioned_video_overlap_exact_context_rejects_foreign_mask_owner():
+    video = torch.randn(1, 24, 17, 8, 12)
+    audio = torch.randn(1, 32, 2, 24)
+    _packed, shapes = pack_streams((video, audio))
+    shapes = list(shapes)
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :12] = 0
+    audio_mask = torch.ones_like(audio)
+    audio_mask[..., :20] = 0
+    exact_mask = pack_streams((video_mask, audio_mask))[0]
+
+    with pytest.raises(RuntimeError, match="denoise_mask_function is owned"):
+        _partitioned_high_video_overlap_mask(
+            exact_mask,
+            exact_mask,
+            shapes,
+            {
+                PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY: 6,
+                "denoise_mask_function": lambda *args, **kwargs: exact_mask,
+                "transformer_options": {},
+            },
+            H3FlowMetrics(),
+            prefix_t=12,
+        )
 
 
 def test_partitioned_video_overlap_rejects_preexisting_high_video_mask_mutation():

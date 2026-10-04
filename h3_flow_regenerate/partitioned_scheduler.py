@@ -523,6 +523,10 @@ def _partitioned_high_video_overlap_mask(
         raise RuntimeError("video guided overlap requires an authoritative exact output mask")
     if tuple(exact_mask.shape) != tuple(runtime_mask.shape):
         raise RuntimeError("video guided overlap exact/runtime mask geometry mismatch")
+    if model_options.get("denoise_mask_function") is not None:
+        raise RuntimeError(
+            "retired video overlap cannot certify exact target-high video context while denoise_mask_function is owned"
+        )
     if type(prefix_t) is not int or prefix_t <= 0 or prefix_t >= int(latent_shapes[0][2]):
         raise RuntimeError("retired video overlap received invalid exact-prefix ownership")
 
