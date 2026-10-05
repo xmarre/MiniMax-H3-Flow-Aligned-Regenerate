@@ -4,6 +4,7 @@
 This is an offline counterfactual replay, independent of production sampling.
 The preceding decoder window is absent from this bundle: eight retained frames
 are replayed, but the preceding temporal blend is not.
+Target-band auxiliary full-video and low-grid snapshots are not replayed here.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def load_bundle(directory: Path) -> tuple[dict, dict[str, torch.Tensor]]:
     directory = directory.resolve()
     manifest = json.loads((directory / "manifest.json").read_text())
     metadata = manifest["metadata"]
+    band = metadata.get("provider_clean_provenance") == "actual_learned_provider_before_target_band_splice"
     if (
         manifest.get("schema") != 1
         or manifest.get("kind") != "h3_flow_native_boundary_decoder_window_evidence"
@@ -44,14 +46,35 @@ def load_bundle(directory: Path) -> tuple[dict, dict[str, torch.Tensor]]:
         or metadata.get("first_high_actual") is not True
         or metadata.get("decoder_comparison_prefix") != "replace_with_authoritative_prefix_bytes"
         or metadata.get("process_latent_out_required_before_vae") is not True
-        or metadata.get("provider_clean_provenance") != "actual_clean_postprocess"
+        or (not band and metadata.get("provider_clean_provenance") != "actual_clean_postprocess")
     ):
         raise ValueError("unsupported native boundary evidence contract")
     entries = manifest["tensor_bytes"]
-    if set(entries) != TENSOR_NAMES:
+    expected_names = TENSOR_NAMES
+    if band:
+        tokens = metadata.get("target_band_tokens")
+        transfer_start = metadata.get("target_band_transfer_start_t")
+        window = metadata["window"]
+        if (
+            type(tokens) is not int
+            or tokens <= 0
+            or type(transfer_start) is not int
+            or transfer_start != window["prefix_t"] + tokens
+            or transfer_start >= window["temporal"]
+            or metadata.get("full_video_snapshots") is not True
+            or metadata.get("full_video_temporal_start_t") != 0
+            or metadata.get("low_probe_native_carrier_decodable") is not False
+        ):
+            raise ValueError("unsupported target-band evidence contract")
+        auxiliary = {"source_probe_clean", "low_probe_native_carrier_clean"}
+        expected_names = TENSOR_NAMES | auxiliary | {name + "_full" for name in TENSOR_NAMES | auxiliary}
+    if set(entries) != expected_names:
         raise ValueError("native boundary evidence must contain all eight stage operands")
     values = {}
-    for name, entry in entries.items():
+    # Only the eight validated target-grid window operands enter this replay.
+    # Auxiliary full timelines and padded carriers have separate geometries.
+    for name in TENSOR_NAMES:
+        entry = entries[name]
         path = (directory / entry["file"]).resolve()
         if not path.is_relative_to(directory):
             raise ValueError(f"tensor path leaves the evidence bundle: {name}")

@@ -351,18 +351,21 @@ def _events(metrics, kind):
     return [event.fields for event in metrics.events if event.kind == kind]
 
 
-def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(monkeypatch):
+def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(monkeypatch, tmp_path):
+    import runpy
     import sys
+    from pathlib import Path
 
     import h3_flow_regenerate.partitioned_scheduler as scheduler
 
     monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
     monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
     exported = []
+    native_export = scheduler.export_residual_geometry_evidence
 
     def export(tensors, **kwargs):
         exported.append(({name: value.clone() for name, value in tensors.items()}, kwargs))
-        return {"status": "exported"}
+        return native_export(tensors, **kwargs)
 
     monkeypatch.setattr(scheduler, "export_residual_geometry_evidence", export)
     extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 4}
@@ -372,6 +375,9 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
         extra_transformer_options=extra,
         guidance_mode="direction",
     )
+    import folder_paths
+
+    monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
     measured = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
@@ -404,6 +410,12 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     final, _ = unpack_streams(measured.result, measured.shapes)
     assert torch.equal(tensors["final_post_high_internal_clean_full"], final)
     assert measured.binding.high_boundary_trace is None
+    receipt = _events(measured.metrics, "partitioned_boundary_window_evidence")[-1]
+    replay = runpy.run_path(str(Path(__file__).parents[1] / "tools" / "decode_native_boundary_evidence.py"))
+    manifest, window_values = replay["load_bundle"](tmp_path / receipt["bundle"])
+    assert set(window_values) == replay["TENSOR_NAMES"]
+    assert manifest["metadata"]["target_band_transfer_start_t"] == 16
+    assert torch.equal(window_values["provider_native_clean"], provider[:, :, 10:17])
 
 
 @pytest.mark.parametrize(
