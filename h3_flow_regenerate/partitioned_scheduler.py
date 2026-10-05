@@ -5592,13 +5592,17 @@ def run_partitioned_progressive(
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-            and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             and splice_clean_source in {"actual_clean_postprocess", "actual_provider"}
         ):
+            # Under target-band control the high stage starts from the identity
+            # band and the learned tail (with its head-boundary DC correction), so
+            # guidance binds to that actual clean operand rather than to the
+            # provider's discarded rendering of the band.
             handoff_guidance_reference = _prepare_handoff_guidance_reference(
                 run=guidance_run,
                 provider_input=clean_video,
-                provider_output=provider_native_clean,
+                provider_output=corrected_clean if target_band is not None else provider_native_clean,
                 prefix_t=stage_plan.prefix_t,
                 split_coordinate=split_coordinate,
                 high_sigmas=high_sigmas,
