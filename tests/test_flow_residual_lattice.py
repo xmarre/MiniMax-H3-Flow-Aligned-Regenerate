@@ -97,11 +97,13 @@ def test_constant_drift_retains_dc_without_group_size_attenuation():
     assert report["target_drift_rms"] == pytest.approx(0.25)
 
 
-def test_same_grid_residual_is_byte_exact_and_does_not_alias_input():
-    source = torch.randn(1, 3, 2, 8, 12, generator=torch.Generator().manual_seed(12))
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_same_grid_residual_is_byte_exact_and_does_not_alias_input(dtype):
+    source = torch.randn(1, 3, 2, 8, 12, generator=torch.Generator().manual_seed(12)).to(dtype)
     initial = torch.randn_like(source)
     actual, report = refine_h3_flow_residual(source, initial, target_h=8, target_w=12, seed=7, noise_scale=1.7)
     assert torch.equal(actual, source)
+    assert actual.dtype == source.dtype
     assert actual.data_ptr() != source.data_ptr()
     assert report["identity"] is True
 

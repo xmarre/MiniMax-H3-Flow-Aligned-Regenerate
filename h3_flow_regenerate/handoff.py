@@ -494,7 +494,7 @@ def refine_h3_flow_residual(
     target_drift = resize_spatial_5d_h3_patch_lattice(drift, target_h, target_w)
     target = gaussian * noise_scale + target_drift
     if report["identity"]:
-        target = source.clone()
+        target = source_residual.clone()
     if not bool(torch.isfinite(target).all().item()):
         raise RuntimeError("dense drift transfer produced a non-finite target residual")
     report["gaussian_projection_rms_error"] = report.pop("projection_rms_error")
@@ -511,9 +511,9 @@ def refine_h3_flow_residual(
         source_drift_rms=float(drift.square().mean().sqrt().item()),
         target_drift_rms=float(target_drift.square().mean().sqrt().item()),
         source_residual_rms=float(source.square().mean().sqrt().item()),
-        target_residual_rms=float(target.square().mean().sqrt().item()),
+        target_residual_rms=float(target.float().square().mean().sqrt().item()),
         source_residual_mean=float(source.mean().item()),
-        target_residual_mean=float(target.mean().item()),
+        target_residual_mean=float(target.float().mean().item()),
     )
     return target, report
 
