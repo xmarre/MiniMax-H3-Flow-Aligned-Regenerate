@@ -29,6 +29,8 @@ from .partitioned_diagnostics import (
     normalize_vdn_linear_diagnostic,
 )
 from .partitioned_prefix import (
+    PARTITIONED_NATIVE_CARRIER_SOURCE,
+    PARTITIONED_NATIVE_CARRIER_TARGET,
     PARTITIONED_PREFIX_KEY,
     PARTITIONED_PREFIX_TOPOLOGY,
     PartitionedExactPrefixPlan,
@@ -38,6 +40,7 @@ from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStagePlan,
     PartitionedStageRuntime,
+    PartitionedTargetBandGeometry,
     partitioned_carrier_layout,
     partitioned_mod_segments,
     partitioned_positions_for_runtime,
@@ -57,7 +60,7 @@ _DEPRECATED_MIXED_GRID_KEYS = (
 
 def _vdn_external_contract(plan: PartitionedExactPrefixPlan) -> dict:
     flow = plan.to_contract()
-    return {
+    contract = {
         "api": VDN_PARTITIONED_SEQUENCE_API,
         "mode": VDN_PARTITIONED_SEQUENCE_MODE,
         "topology": PARTITIONED_PREFIX_TOPOLOGY,
@@ -69,6 +72,9 @@ def _vdn_external_contract(plan: PartitionedExactPrefixPlan) -> dict:
         "target_rows_per_frame": plan.target_rows,
         "flow_semantic_digest": flow["semantic_digest"],
     }
+    if plan.native_carrier_grid != PARTITIONED_NATIVE_CARRIER_SOURCE:
+        contract["native_carrier_rows_per_frame"] = plan.native_rows_per_frame
+    return contract
 
 
 def _preprocess_chain(previous):
@@ -389,13 +395,26 @@ def partitioned_diffusion_wrapper(
     if not isinstance(runtime, PartitionedStageRuntime):
         raise RuntimeError("partitioned exact-prefix stage contract must be a runtime owner object")
 
-    plan = runtime.plan
+    # ``owner`` owns the authoritative protected prefix. ``plan`` is the attention
+    # geometry published to VDN and Sol: the owner itself, or the target-band head
+    # geometry whose ``prefix_t`` covers the protected prefix plus the band.
+    owner = runtime.plan
+    band = runtime.target_band
+    plan = owner if band is None else band
     metrics = runtime.metrics
     if runtime.audio_position_domain == PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE:
         metrics.increment("partitioned_audio_position_candidate_wrapper_entries")
     inner = executor.class_obj
-    if not isinstance(plan, PartitionedStagePlan) or metrics is None or len(inner.blocks) == 0:
+    if not isinstance(owner, PartitionedStagePlan) or metrics is None or len(inner.blocks) == 0:
         raise RuntimeError("partitioned exact-prefix requires a valid stage plan and metrics owner")
+    if band is not None and (
+        not isinstance(band, PartitionedTargetBandGeometry)
+        or band.protected_t != owner.prefix_t
+        or band.temporal != owner.temporal
+        or (band.source_h, band.source_w) != (owner.source_h, owner.source_w)
+        or band.target_hw != owner.target_hw
+    ):
+        raise RuntimeError("target-band geometry does not match the protected-prefix stage plan")
     prefix_context = str(runtime.prefix_transformer_context)
     if prefix_context not in (
         PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
@@ -405,10 +424,13 @@ def partitioned_diffusion_wrapper(
     attention_override = options.get("optimized_attention_override")
     if getattr(attention_override, "_h3_flow_attention_override", False):
         raise RuntimeError("partitioned exact-prefix does not support uniform-grid Flow Attention Lab overrides")
-    if tuple(x[0].shape) != (1, 24, plan.temporal, plan.source_h, plan.source_w):
+    carrier_hw = owner.target_hw if band is not None else (owner.source_h, owner.source_w)
+    if tuple(x[0].shape) != (1, 24, owner.temporal, *carrier_hw):
         raise RuntimeError("stale partitioned exact-prefix plan does not match sampler geometry")
-    if tuple(plan.prefix_noise.shape) != tuple(plan.prefix.shape):
+    if tuple(owner.prefix_noise.shape) != tuple(owner.prefix.shape):
         raise RuntimeError("partitioned exact-prefix plan is missing protected-prefix sampler noise")
+    if band is not None and prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        raise RuntimeError("target-band continuation requires the exact target-grid prefix transformer context")
 
     if prefix_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE:
         # Diagnostic only: keep Core's complete low/probe hidden sequence on the
@@ -443,16 +465,32 @@ def partitioned_diffusion_wrapper(
     import comfy.ldm.minimax.model as native
 
     payload = dict(minimax_payload or {})
-    layout = partitioned_carrier_layout(
-        native,
-        plan,
-        context.shape[1],
-        x[1].shape[-1],
-        payload,
-    )
+    if band is None:
+        layout = partitioned_carrier_layout(
+            native,
+            owner,
+            context.shape[1],
+            x[1].shape[-1],
+            payload,
+        )
+    else:
+        # The sampler state is on the uniform target grid: the native layout is
+        # Core's own target layout and only the transformer sequence is partitioned.
+        layout = native.PackedLayout(
+            context.shape[1],
+            owner.temporal,
+            *owner.target_hw,
+            x[1].shape[-1],
+            keyframes=payload.get("keyframes"),
+            refs=payload.get("refs"),
+        )
     payload["layout"] = layout
     video_start, video_end, _ = layout.segments[-1]
-    carrier_prefix_rows = plan.prefix_t * plan.source_rows
+    carrier_prefix_rows = plan.prefix_t * (plan.target_rows if band is not None else plan.source_rows)
+    if band is not None:
+        if video_end - video_start != band.native_rows:
+            raise RuntimeError("target-band native layout does not match the target-grid sampler state")
+        tail_rows = band.tail_native_rows(x[0].device) + int(video_start)
     positions, position_policy = partitioned_positions_for_runtime(native, runtime, layout)
     partitioned_layout = copy.copy(layout)
     partitioned_layout.position_ids = positions
@@ -494,6 +532,9 @@ def partitioned_diffusion_wrapper(
         target_grid_h=int(plan.target_grid[0]),
         target_grid_w=int(plan.target_grid[1]),
         same_grid_control=plan.source_grid == plan.target_grid,
+        native_carrier_grid=(
+            PARTITIONED_NATIVE_CARRIER_TARGET if band is not None else PARTITIONED_NATIVE_CARRIER_SOURCE
+        ),
     )
     partition_contract = partition_plan.to_contract()
     if runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
@@ -542,11 +583,23 @@ def partitioned_diffusion_wrapper(
                 # the authoritative target-grid prefix.  The low-grid carrier
                 # prefix is never presented to the transformer as exact context.
                 aug = float(native.VISUAL_COND_TIMESTEP)
-                prefix = plan.prefix.to(device=img.device, dtype=torch.float32)
-                prefix_noise = plan.prefix_noise.to(device=img.device, dtype=torch.float32)
+                prefix = owner.prefix.to(device=img.device, dtype=torch.float32)
+                prefix_noise = owner.prefix_noise.to(device=img.device, dtype=torch.float32)
                 prefix_rows = native.patchify_video(aug * prefix + (1.0 - aug) * prefix_noise)
                 prefix_embed = inner.video_patch_proj(prefix_rows).to(img)
-                img = torch.cat((img[:video_start], prefix_embed, img[video_start + carrier_prefix_rows :]))
+                if band is None:
+                    img = torch.cat((img[:video_start], prefix_embed, img[video_start + carrier_prefix_rows :]))
+                else:
+                    # Band rows are the sampler's own target-grid state; tail rows
+                    # are gathered from each frame's reduced-grid storage window.
+                    img = torch.cat(
+                        (
+                            img[:video_start],
+                            prefix_embed,
+                            img[video_start + band.protected_rows : video_start + band.prefix_rows],
+                            img.index_select(0, tail_rows),
+                        )
+                    )
                 metrics.increment("partitioned_transformer_calls")
                 metrics.event(
                     "partitioned_exact_prefix_transformer",
@@ -556,6 +609,11 @@ def partitioned_diffusion_wrapper(
                     video_start=int(video_start),
                     temporal=int(plan.temporal),
                     prefix_t=int(plan.prefix_t),
+                    protected_prefix_t=int(owner.prefix_t),
+                    target_band_t=int(band.band_t) if band is not None else 0,
+                    native_carrier_grid=(
+                        PARTITIONED_NATIVE_CARRIER_TARGET if band is not None else PARTITIONED_NATIVE_CARRIER_SOURCE
+                    ),
                     source_rows_per_frame=int(plan.source_rows),
                     target_rows_per_frame=int(plan.target_rows),
                     prefix_log_key_measure=float(partition_plan.prefix_log_key_measure),
@@ -655,15 +713,27 @@ def partitioned_diffusion_wrapper(
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
             if layer == len(inner.blocks) - 1:
-                # Prefix transformer outputs are context-only.  Native low-grid
-                # unpatchify receives only genuine low-grid suffix carrier rows.
-                result = torch.cat(
-                    (
-                        result[:video_start],
-                        result.new_zeros((carrier_prefix_rows, result.shape[1])),
-                        result[video_start + plan.prefix_rows :],
+                if band is None:
+                    # Prefix transformer outputs are context-only.  Native low-grid
+                    # unpatchify receives only genuine low-grid suffix carrier rows.
+                    result = torch.cat(
+                        (
+                            result[:video_start],
+                            result.new_zeros((carrier_prefix_rows, result.shape[1])),
+                            result[video_start + plan.prefix_rows :],
+                        )
                     )
-                )
+                else:
+                    # Return to Core's native target-grid rows: the protected prefix
+                    # and the tail padding stay zero, band rows return in place, and
+                    # tail rows return to their reduced-grid storage window.
+                    native_rows = result.new_zeros((int(layout.seq_len), result.shape[1]))
+                    native_rows[:video_start] = result[:video_start]
+                    native_rows[video_start + band.protected_rows : video_start + band.prefix_rows] = result[
+                        video_start + band.protected_rows : video_start + band.prefix_rows
+                    ]
+                    native_rows.index_copy_(0, tail_rows, result[video_start + band.prefix_rows :])
+                    result = native_rows
                 output = {**output, "img": result}
             return output
 
@@ -680,7 +750,10 @@ def partitioned_diffusion_wrapper(
         **kwargs,
     )
     video = output[0].clone()
-    video[:, :, : plan.prefix_t] = 0
+    video[:, :, : owner.prefix_t] = 0
+    if band is not None:
+        video[:, :, band.head_t :, band.source_h :] = 0
+        video[:, :, band.head_t :, : band.source_h, band.source_w :] = 0
     return [video, output[1]]
 
 
