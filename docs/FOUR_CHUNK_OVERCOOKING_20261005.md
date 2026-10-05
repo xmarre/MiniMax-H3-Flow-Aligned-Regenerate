@@ -108,6 +108,7 @@ exclude effects of earlier low-stage forecasts.
 | Latent Upscaler | `fc58fb80246bc58383929d21e78f54cf87d6507a` |
 | ComfyUI Core | `5c460d8172fe30761ff67c0df3d5643bb74e0d70` |
 | Spectrum | `5161f0457bc8c52535212d6783eee73f439e1537` |
+| Sol | `95fe29887d68de7fb40cd5ee1fadb5df536d1a6e` |
 
 No decode/re-encode loop between Continuum chunks, repeated adapter injection,
 or guidance-history leakage was found in these sources. Exact-prefix integrity
@@ -131,9 +132,23 @@ and [published normalization specification](https://huggingface.co/LBH-123-AI/Mi
 Existing targeted checks: stage/native-modulation/guidance-gauge/primary-execution
 suite 84 passed, 10 skipped; diagnostic/guidance-gauge/residual-lattice/frame-gauge
 suite 225 passed; fresh-clone/single-wrapper/fresh-stage-call checks 3 passed.
-Suites overlap and their counts must not be added as unique coverage. Native
-modulation tests were skipped because Core was not on the test import path.
-These CPU checks do not validate trained-checkpoint video quality.
+Suites overlap and their counts must not be added as unique coverage. The ten
+initially skipped native-modulation tests were subsequently executed against
+the audited Core and Sol revisions with PyTorch 2.10.0+cpu; all ten passed.
+
+| Additional executed checks | Result |
+| --- | --- |
+| Flow native modulation, mask protection, and same-grid probe/high parity against Core and Sol | 10 passed |
+| VDN hook ownership, clone replacement, stale ejection, external-hook order, and twelve pseudo-continuation lifetimes | 5 passed |
+| Continuum ordered conditioning and masked-reference preservation | 2 passed |
+| Spectrum history isolation across stages/seeds | 4 passed |
+| Spectrum isolated runtime on MODEL clone | 1 passed |
+
+The native arithmetic harness uses small initialized weights on CPU, including
+FP32/BF16 video cases and reference/no-reference cases. Sol's device-admission
+predicate is bypassed in that existing CPU harness. These checks establish
+specific structural properties; they do not qualify a GPU backend or validate
+trained-checkpoint four-chunk video quality. No test files were changed.
 
 ## Next discriminating reproduction
 
