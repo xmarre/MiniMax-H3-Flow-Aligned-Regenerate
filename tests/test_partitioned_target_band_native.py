@@ -262,7 +262,8 @@ def test_band_forward_through_real_blocks_ignores_padding_and_prefix_carrier(mon
     assert not torch.equal(other[0][:, :, PROTECTED_T:head], baseline[0][:, :, PROTECTED_T:head])
 
 
-def test_sol_history_recognizes_the_actual_band_replacement_closure():
+@pytest.mark.parametrize("carrier", ["band", "source", "same_grid"])
+def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     interop = pytest.importorskip("sol_h3.interop")
@@ -275,9 +276,18 @@ def test_sol_history_recognizes_the_actual_band_replacement_closure():
     for block in dm.blocks:
         block.forward = lambda img, *_args, **_kw: img.clone()
     geometry, owner, *_rest, video, mask = _band_inputs(generator)
+    if carrier != "band":
+        hw = TARGET_HW if carrier == "same_grid" else SOURCE_HW
+        owner = PartitionedStagePlan(owner.prefix, TEMPORAL, *hw, owner.prefix_noise)
+        video = torch.randn(1, 24, TEMPORAL, *hw, generator=generator)
+        mask = torch.ones(1, 1, TEMPORAL, *hw)
+        mask[:, :, :PROTECTED_T] = 0
+    plan = geometry if carrier == "band" else owner
     audio = torch.randn(1, 32, 2, 9, generator=generator)
     context = torch.randn(1, 3, 8, generator=generator)
-    runtime = PartitionedStageRuntime(plan=owner, metrics=H3FlowMetrics(), target_band=geometry)
+    runtime = PartitionedStageRuntime(
+        plan=owner, metrics=H3FlowMetrics(), target_band=geometry if carrier == "band" else None
+    )
     captured = {}
 
     class Capture:
@@ -298,10 +308,12 @@ def test_sol_history_recognizes_the_actual_band_replacement_closure():
         )
     assert len(captured) == len(dm.blocks)
     for (_kind, index), patch in captured.items():
+        assert interop._closure_values(patch) is not None
         resolved = history._partitioned_flow_replacement_identity(interop, patch, index)
         assert resolved is not None
         identity, _previous = resolved
         # native rows, partitioned rows, video start, temporal, head, source/target rows, target hw
-        assert identity[5:10] == (TEMPORAL, geometry.head_t, geometry.source_rows, geometry.target_rows, TARGET_HW)
-        assert identity[2] - identity[4] == geometry.native_rows
-        assert identity[3] - identity[4] == geometry.partitioned_rows
+        assert identity[5:10] == (TEMPORAL, plan.prefix_t, plan.source_rows, plan.target_rows, TARGET_HW)
+        native_rows = geometry.native_rows if carrier == "band" else TEMPORAL * plan.source_rows
+        assert identity[2] - identity[4] == native_rows
+        assert identity[3] - identity[4] == plan.partitioned_rows
