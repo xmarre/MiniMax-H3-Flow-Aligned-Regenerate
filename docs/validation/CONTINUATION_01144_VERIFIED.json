@@ -1,0 +1,2063 @@
+{
+  "evidence_identity": {
+    "metrics_01144_.json": "80b484a523ba9324bfb6bb5259c53af439564ed88681ca3eacaf060bdebb8a1e",
+    "Pasted text(20261004-233048).txt": "42b2bf9ce77ae3e76039c2e875ada0f010d6debcf70107388399e1f83a9963b5",
+    "manifest(2).json": "dabb13393c1433ebe91666a3506b92536c80a68d845db82ead52f1a480493d6d"
+  },
+  "manifest": {
+    "chunk_id": "2",
+    "decoded_media": {
+      "extra_vae_calls": 0,
+      "reason": "Flow owns latent-stage tensors but does not own the already-produced raw-decode/retained/assembled media required by the design gate",
+      "status": "external_workflow_evidence_required"
+    },
+    "kind": "h3_flow_native_boundary_decoder_window_evidence",
+    "metadata": {
+      "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
+      "domain": "model_internal_clean_except_sampler_input_and_mask",
+      "extra_h3_nfe": 0,
+      "extra_provider_calls": 0,
+      "extra_vae_calls": 0,
+      "first_high_actual": true,
+      "first_high_call_index": 0,
+      "first_high_sigma": 0.8780487775802612,
+      "initial_mask_domain": "initial_high_sampler_and_model_video_denoise_mask",
+      "policy": "native_boundary_decoder_window_evidence_v1",
+      "prediction_prefix": "native_model_prediction_not_recanonicalized",
+      "process_latent_out_required_before_vae": true,
+      "provider_clean_provenance": "actual_clean_postprocess",
+      "registration_acceptance_required": false,
+      "registration_reason": "already_aligned",
+      "registration_result": "identity",
+      "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
+      "window": {
+        "chunk_stride_tokens": 5,
+        "decoded_trim_frames": 39,
+        "decoder_chunk_output_start_frame": 34,
+        "first_retained_local_frame": 5,
+        "policy": "native_h3_boundary_decoder_window_v1",
+        "prefix_t": 12,
+        "temporal": 47,
+        "token_overlap": 2,
+        "window_start_t": 10,
+        "window_stop_t": 17,
+        "window_tokens": 7
+      }
+    },
+    "schema": 1,
+    "seed": 16182742365559695871,
+    "session_id": "continuum",
+    "sigma": 0.8780487775802612,
+    "tensor_bytes": {
+      "authoritative_prefix": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "authoritative_prefix.bin",
+        "nbytes": 738048,
+        "sha256": "edf85610f8be1e23fa40c44528990281b698d2f13dbec9f7ba0df8097a0ea49c",
+        "shape": [
+          1,
+          24,
+          2,
+          62,
+          62
+        ]
+      },
+      "final_post_high_internal_clean": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "final_post_high_internal_clean.bin",
+        "nbytes": 2583168,
+        "sha256": "e2222f32b003a82c4c1476166f946da5a9f549d30785424db78b9862bddeda51",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "first_high_after_flow": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "first_high_after_flow.bin",
+        "nbytes": 2583168,
+        "sha256": "b5643fc725cd6ce44e01e75b8677df6426ee018bca56b4f321390097d3a85b27",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "first_high_before_flow": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "first_high_before_flow.bin",
+        "nbytes": 2583168,
+        "sha256": "36e3d95bfbf6196732e209d84a6ecd5fafb0459a3e8fd76cf84cdd62b04e6c35",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "first_high_sampler_input": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "first_high_sampler_input.bin",
+        "nbytes": 2583168,
+        "sha256": "429baef396522548c25363ec6b759ad619516aa3671e7e5f8a901b1625d88286",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "initial_high_video_mask": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "initial_high_video_mask.bin",
+        "nbytes": 2583168,
+        "sha256": "141b4cccabdff22dce956061cb810915b7ce9a1c8dd24428a179330e40ec357e",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "pre_high_exact_restored": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "pre_high_exact_restored.bin",
+        "nbytes": 2583168,
+        "sha256": "d7f01bf01919a7652f99dee21325ff8cc7968acb437604814dc3ae63a7298d50",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      },
+      "provider_native_clean": {
+        "byte_order": "native_torch_contiguous",
+        "dtype": "torch.float32",
+        "file": "provider_native_clean.bin",
+        "nbytes": 2583168,
+        "sha256": "4faf253d2b1611db531633b2e34d8cf72ed4b93d57375fa3ac8526e70491ca85",
+        "shape": [
+          1,
+          24,
+          7,
+          62,
+          62
+        ]
+      }
+    }
+  },
+  "metrics_receipts": [
+    {
+      "fields": {
+        "audio_position_domain": "source_carrier",
+        "configured_progressive_source_hw": [
+          44,
+          44
+        ],
+        "coordinate": 0.3749999936359625,
+        "deprecated_mixed_grid_contract_active": false,
+        "handoff_split_preserved_from_configured_source": true,
+        "index": 10,
+        "input_mode": "partitioned_exact_prefix",
+        "partitioned_video_rows": 28472,
+        "prefix_exact_latent_resized_for_transformer": false,
+        "prefix_target_grid_rows_injected": true,
+        "prefix_target_hw": [
+          62,
+          62
+        ],
+        "prefix_temporal_length": 12,
+        "prefix_transformer_context": "exact_target_partitioned",
+        "prefix_video_rows": 11532,
+        "requested_coordinate": 0.35,
+        "same_grid_control_active": false,
+        "selected_coordinate": 0.35,
+        "selection": "fixed",
+        "sigma": 0.8780487775802612,
+        "source_shape": [
+          1,
+          24,
+          47,
+          44,
+          44
+        ],
+        "spatial_stage_control": "progressive_low_to_high",
+        "suffix_source_hw": [
+          44,
+          44
+        ],
+        "suffix_temporal_length": 35,
+        "suffix_video_rows": 16940,
+        "target_hw": [
+          62,
+          62
+        ],
+        "transfer_mode": "learned_3d_suffix_context",
+        "vdn_linear_diagnostic": "normal",
+        "vdn_temporal_carrier_policy": "native_grid_then_map_v1"
+      },
+      "kind": "partitioned_stage_plan",
+      "timestamp_ns": 1791156230243303492
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.002977775852422737,
+          -0.06530183166770202,
+          -0.09458912517436181,
+          -0.19736429103806885
+        ],
+        "anchor_dy": [
+          0.032308606282568424,
+          0.35597164128088177,
+          0.8981599596189935,
+          0.8823275498779446
+        ],
+        "anchor_final_dx": -0.19736429103806885,
+        "anchor_final_dy": 0.8823275498779446,
+        "anchor_response": [
+          62.59627578681429,
+          37.754158369415556,
+          35.36334711334711,
+          27.734897595387885
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.017271892656345343,
+        "boundary_vs_pre_dy": -0.016804130896234067,
+        "boundary_vs_pre_norm_cells": 0.024097657378054086,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.002977775852422737,
+          -0.03739095935090872,
+          -0.1535694109183087,
+          -0.16520089566037716
+        ],
+        "pairwise_cumulative_dy": [
+          0.032308606282568424,
+          0.2545437031718856,
+          0.4712658968541029,
+          0.48144738343885446
+        ],
+        "pairwise_dx": [
+          -0.002977775852422737,
+          -0.03441318349848598,
+          -0.11617845156739998,
+          -0.01163148474206846
+        ],
+        "pairwise_dy": [
+          0.032308606282568424,
+          0.2222350968893172,
+          0.21672219368221726,
+          0.01018148658475156
+        ],
+        "pairwise_net_dx": -0.16520089566037716,
+        "pairwise_net_dy": 0.48144738343885446,
+        "pairwise_response": [
+          23.773124622385154,
+          13.338025939908647,
+          12.592360579881749,
+          28.370137108634058
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.020249668285995705,
+          0.008694451293059267,
+          -0.06353113276290218
+        ],
+        "pre_pairwise_dy": [
+          0.049112736893081405,
+          -0.014229223357930362,
+          0.1270296248904183
+        ],
+        "pre_pairwise_median_dx": -0.02024966850876808,
+        "pre_pairwise_median_dy": 0.04911273717880249,
+        "pre_pairwise_response": [
+          36.91303676225405,
+          51.371422176060406,
+          25.216771422251593
+        ],
+        "roi": "upper45",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_native",
+        "target_equivalent_anchor_dx": [
+          -0.004195956882959311,
+          -0.09201621734994377,
+          -0.1332846763820553,
+          -0.2781042282809152
+        ],
+        "target_equivalent_anchor_dy": [
+          0.0455257633981646,
+          0.5015964036230607,
+          1.2655890340085818,
+          1.2432797293734674
+        ],
+        "target_equivalent_anchor_final_dx": -0.2781042282809152,
+        "target_equivalent_anchor_final_dy": 1.2432797293734674,
+        "target_equivalent_boundary_vs_pre_dx": 0.024337666924850256,
+        "target_equivalent_boundary_vs_pre_dy": -0.023678548081057096,
+        "target_equivalent_pairwise_cumulative_dx": [
+          -0.004195956882959311,
+          -0.0526872609035532,
+          -0.216393260839435,
+          -0.23278308024871328
+        ],
+        "target_equivalent_pairwise_cumulative_dy": [
+          0.0455257633981646,
+          0.35867521810583886,
+          0.6640564910216905,
+          0.678403131209295
+        ],
+        "target_equivalent_pairwise_dx": [
+          -0.004195956882959311,
+          -0.04849130402059389,
+          -0.1637059999358818,
+          -0.016389819409278285
+        ],
+        "target_equivalent_pairwise_dy": [
+          0.0455257633981646,
+          0.31314945470767425,
+          0.3053812729158516,
+          0.014346640187604471
+        ],
+        "target_equivalent_pairwise_net_dx": -0.23278308024871328,
+        "target_equivalent_pairwise_net_dy": 0.678403131209295,
+        "target_equivalent_pre_pairwise_dx": [
+          -0.02853362349390304,
+          0.012251272276583514,
+          -0.08952114162045308
+        ],
+        "target_equivalent_pre_pairwise_dy": [
+          0.0692043110766147,
+          -0.020050269277083692,
+          0.1789962896183167
+        ],
+        "target_equivalent_pre_pairwise_median_dx": -0.02853362380780957,
+        "target_equivalent_pre_pairwise_median_dy": 0.0692043114792217,
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_measurement_hw": [
+          44,
+          44
+        ],
+        "trajectory_roi_fraction": 0.45,
+        "trajectory_target_equivalent_hw": [
+          62,
+          62
+        ],
+        "trajectory_target_equivalent_scale_x": 1.4090909090909092,
+        "trajectory_target_equivalent_scale_y": 1.4090909090909092
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339398768041
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.01842596190538651,
+          -0.05953672026898166,
+          -0.8428606515577349,
+          -0.9028414629232504
+        ],
+        "anchor_dy": [
+          -0.03858988897363011,
+          0.19203164296223074,
+          0.9703936570474738,
+          1.116893035926938
+        ],
+        "anchor_final_dx": -0.9028414629232504,
+        "anchor_final_dy": 1.116893035926938,
+        "anchor_response": [
+          74.5096388599006,
+          40.78529872430041,
+          37.62824403853628,
+          27.922775352218466
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.03385574934515709,
+        "boundary_vs_pre_dy": -0.024483208334541956,
+        "boundary_vs_pre_norm_cells": 0.04178084793388819,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.01842596190538651,
+          -0.06363146321741411,
+          -0.48931276702517024,
+          -0.5145394327404141
+        ],
+        "pairwise_cumulative_dy": [
+          -0.03858988897363011,
+          0.2351787025715971,
+          0.7499501286530842,
+          0.8102110324151799
+        ],
+        "pairwise_dx": [
+          -0.01842596190538651,
+          -0.0452055013120276,
+          -0.4256813038077561,
+          -0.025226665715243884
+        ],
+        "pairwise_dy": [
+          -0.03858988897363011,
+          0.2737685915452272,
+          0.5147714260814871,
+          0.060260903762095676
+        ],
+        "pairwise_net_dx": -0.5145394327404141,
+        "pairwise_net_dy": 0.8102110324151799,
+        "pairwise_response": [
+          24.269076814725175,
+          13.84374407674492,
+          9.269571961835936,
+          28.63053419271524
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.052281709966110604,
+          0.006409734477532668,
+          -0.06802724593544623
+        ],
+        "pre_pairwise_dy": [
+          -0.014106680605671959,
+          -0.01642380784011632,
+          0.04516546182759464
+        ],
+        "pre_pairwise_median_dx": -0.052281711250543594,
+        "pre_pairwise_median_dy": -0.014106680639088154,
+        "pre_pairwise_response": [
+          31.542105095505406,
+          41.394061811160256,
+          27.545515444814445
+        ],
+        "roi": "full",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_native",
+        "target_equivalent_anchor_dx": [
+          -0.02596385541213554,
+          -0.08389265128811052,
+          -1.1876672817404448,
+          -1.2721856977554893
+        ],
+        "target_equivalent_anchor_dy": [
+          -0.0543766617355697,
+          0.2705900423558706,
+          1.3673728803850769,
+          1.5738038233515945
+        ],
+        "target_equivalent_anchor_final_dx": -1.2721856977554893,
+        "target_equivalent_anchor_final_dy": 1.5738038233515945,
+        "target_equivalent_boundary_vs_pre_dx": 0.04770582862272135,
+        "target_equivalent_boundary_vs_pre_dy": -0.034499066289581846,
+        "target_equivalent_pairwise_cumulative_dx": [
+          -0.02596385541213554,
+          -0.0896625163518108,
+          -0.6894861717172853,
+          -0.7250328370433109
+        ],
+        "target_equivalent_pairwise_cumulative_dy": [
+          -0.0543766617355697,
+          0.3313881718054323,
+          1.0567479085566187,
+          1.1416610002213898
+        ],
+        "target_equivalent_pairwise_dx": [
+          -0.02596385541213554,
+          -0.06369866093967526,
+          -0.5998236553654746,
+          -0.035546665326025476
+        ],
+        "target_equivalent_pairwise_dy": [
+          -0.0543766617355697,
+          0.385764833541002,
+          0.7253597367511864,
+          0.08491309166477118
+        ],
+        "target_equivalent_pairwise_net_dx": -0.7250328370433109,
+        "target_equivalent_pairwise_net_dy": 1.1416610002213898,
+        "target_equivalent_pre_pairwise_dx": [
+          -0.07366968222497404,
+          0.009031898581977851,
+          -0.09585657381812879
+        ],
+        "target_equivalent_pre_pairwise_dy": [
+          -0.019877595398901396,
+          -0.023142638320163906,
+          0.06364224166615609
+        ],
+        "target_equivalent_pre_pairwise_median_dx": -0.07366968403485688,
+        "target_equivalent_pre_pairwise_median_dy": -0.019877595445987856,
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_measurement_hw": [
+          44,
+          44
+        ],
+        "trajectory_roi_fraction": 1.0,
+        "trajectory_target_equivalent_hw": [
+          62,
+          62
+        ],
+        "trajectory_target_equivalent_scale_x": 1.4090909090909092,
+        "trajectory_target_equivalent_scale_y": 1.4090909090909092
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339423387295
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.0029777731716655077,
+          -0.06530183814405376,
+          -0.09458911765779425,
+          -0.19736429103806885
+        ],
+        "anchor_dy": [
+          0.03230861444383823,
+          0.3559716992517581,
+          0.8981599830845848,
+          0.8823275498779446
+        ],
+        "anchor_final_dx": -0.19736429103806885,
+        "anchor_final_dy": 0.8823275498779446,
+        "anchor_response": [
+          62.59626810151251,
+          37.75416247970936,
+          35.36334711334711,
+          27.734897595387885
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.017271895337102574,
+        "boundary_vs_pre_dy": -0.016804115284383664,
+        "boundary_vs_pre_norm_cells": 0.02409764841279502,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.0029777731716655077,
+          -0.03739095667015149,
+          -0.15356940823755147,
+          -0.16520089297961993
+        ],
+        "pairwise_cumulative_dy": [
+          0.03230861444383823,
+          0.25454371133315545,
+          0.4712659050153727,
+          0.48144739160012423
+        ],
+        "pairwise_dx": [
+          -0.0029777731716655077,
+          -0.03441318349848598,
+          -0.11617845156739998,
+          -0.01163148474206846
+        ],
+        "pairwise_dy": [
+          0.03230861444383823,
+          0.2222350968893172,
+          0.21672219368221726,
+          0.01018148658475156
+        ],
+        "pairwise_net_dx": -0.16520089297961993,
+        "pairwise_net_dy": 0.48144739160012423,
+        "pairwise_response": [
+          23.77312387200096,
+          13.338025939908647,
+          12.592360579881749,
+          28.370137108634058
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.020249668285995705,
+          0.008694449542540755,
+          -0.06353112864924763
+        ],
+        "pre_pairwise_dy": [
+          0.04911273126931987,
+          -0.014229224524353268,
+          0.1270296248904183
+        ],
+        "pre_pairwise_median_dx": -0.02024966850876808,
+        "pre_pairwise_median_dy": 0.04911272972822189,
+        "pre_pairwise_response": [
+          36.91303676225405,
+          51.371422176060406,
+          25.216771422251593
+        ],
+        "roi": "upper45",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_exact_context",
+        "target_equivalent_anchor_dx": [
+          -0.0041959531055286705,
+          -0.09201622647571212,
+          -0.13328466579052828,
+          -0.2781042282809152
+        ],
+        "target_equivalent_anchor_dy": [
+          0.04552577489813569,
+          0.5015964853092956,
+          1.265589067073733,
+          1.2432797293734674
+        ],
+        "target_equivalent_anchor_final_dx": -0.2781042282809152,
+        "target_equivalent_anchor_final_dy": 1.2432797293734674,
+        "target_equivalent_boundary_vs_pre_dx": 0.024337670702280902,
+        "target_equivalent_boundary_vs_pre_dy": -0.02367852608254062,
+        "target_equivalent_pairwise_cumulative_dx": [
+          -0.0041959531055286705,
+          -0.05268725712612256,
+          -0.21639325706200435,
+          -0.23278307647128263
+        ],
+        "target_equivalent_pairwise_cumulative_dy": [
+          0.04552577489813569,
+          0.35867522960581,
+          0.6640565025216616,
+          0.678403142709266
+        ],
+        "target_equivalent_pairwise_dx": [
+          -0.0041959531055286705,
+          -0.04849130402059389,
+          -0.1637059999358818,
+          -0.016389819409278285
+        ],
+        "target_equivalent_pairwise_dy": [
+          0.04552577489813569,
+          0.31314945470767425,
+          0.3053812729158516,
+          0.014346640187604471
+        ],
+        "target_equivalent_pairwise_net_dx": -0.23278307647128263,
+        "target_equivalent_pairwise_net_dy": 0.678403142709266,
+        "target_equivalent_pre_pairwise_dx": [
+          -0.02853362349390304,
+          0.012251269809943793,
+          -0.08952113582393985
+        ],
+        "target_equivalent_pre_pairwise_dy": [
+          0.06920430315222346,
+          -0.020050270920679607,
+          0.1789962896183167
+        ],
+        "target_equivalent_pre_pairwise_median_dx": -0.02853362380780957,
+        "target_equivalent_pre_pairwise_median_dy": 0.06920430098067631,
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_measurement_hw": [
+          44,
+          44
+        ],
+        "trajectory_roi_fraction": 0.45,
+        "trajectory_target_equivalent_hw": [
+          62,
+          62
+        ],
+        "trajectory_target_equivalent_scale_x": 1.4090909090909092,
+        "trajectory_target_equivalent_scale_y": 1.4090909090909092
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339439423318
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.018425965225281143,
+          -0.05953671639896469,
+          -0.8428606515577349,
+          -0.9028414511827306
+        ],
+        "anchor_dy": [
+          -0.03858988897363011,
+          0.19203164296223074,
+          0.9703936588727495,
+          1.116893035926938
+        ],
+        "anchor_final_dx": -0.9028414511827306,
+        "anchor_final_dy": 1.116893035926938,
+        "anchor_response": [
+          74.50963307873909,
+          40.78529591661472,
+          37.62824148893072,
+          27.922775352218466
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.033855738574681854,
+        "boundary_vs_pre_dy": -0.024483213922477404,
+        "boundary_vs_pre_norm_cells": 0.041780842480866665,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.018425965225281143,
+          -0.06363146653730875,
+          -0.4893127703450648,
+          -0.5145394360603087
+        ],
+        "pairwise_cumulative_dy": [
+          -0.03858988897363011,
+          0.2351787025715971,
+          0.7499501286530842,
+          0.8102110324151799
+        ],
+        "pairwise_dx": [
+          -0.018425965225281143,
+          -0.0452055013120276,
+          -0.4256813038077561,
+          -0.025226665715243884
+        ],
+        "pairwise_dy": [
+          -0.03858988897363011,
+          0.2737685915452272,
+          0.5147714260814871,
+          0.060260903762095676
+        ],
+        "pairwise_net_dx": -0.5145394360603087,
+        "pairwise_net_dy": 0.8102110324151799,
+        "pairwise_response": [
+          24.269076814725175,
+          13.84374407674492,
+          9.269571961835936,
+          28.63053419271524
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.052281704203049756,
+          0.006409733857017603,
+          -0.06802723289184148
+        ],
+        "pre_pairwise_dy": [
+          -0.014106674873363296,
+          -0.01642381044514677,
+          0.04516545747648714
+        ],
+        "pre_pairwise_median_dx": -0.052281703799963,
+        "pre_pairwise_median_dy": -0.014106675051152706,
+        "pre_pairwise_response": [
+          31.542105142556277,
+          41.39405733158886,
+          27.545518425358594
+        ],
+        "roi": "full",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_exact_context",
+        "target_equivalent_anchor_dx": [
+          -0.025963860090168885,
+          -0.0838926458349048,
+          -1.1876672817404448,
+          -1.2721856812120296
+        ],
+        "target_equivalent_anchor_dy": [
+          -0.0543766617355697,
+          0.2705900423558706,
+          1.3673728829570562,
+          1.5738038233515945
+        ],
+        "target_equivalent_anchor_final_dx": -1.2721856812120296,
+        "target_equivalent_anchor_final_dy": 1.5738038233515945,
+        "target_equivalent_boundary_vs_pre_dx": 0.047705813446142616,
+        "target_equivalent_boundary_vs_pre_dy": -0.03449907416349089,
+        "target_equivalent_pairwise_cumulative_dx": [
+          -0.025963860090168885,
+          -0.08966252102984415,
+          -0.6894861763953186,
+          -0.7250328417213442
+        ],
+        "target_equivalent_pairwise_cumulative_dy": [
+          -0.0543766617355697,
+          0.3313881718054323,
+          1.0567479085566187,
+          1.1416610002213898
+        ],
+        "target_equivalent_pairwise_dx": [
+          -0.025963860090168885,
+          -0.06369866093967526,
+          -0.5998236553654746,
+          -0.035546665326025476
+        ],
+        "target_equivalent_pairwise_dy": [
+          -0.0543766617355697,
+          0.385764833541002,
+          0.7253597367511864,
+          0.08491309166477118
+        ],
+        "target_equivalent_pairwise_net_dx": -0.7250328417213442,
+        "target_equivalent_pairwise_net_dy": 1.1416610002213898,
+        "target_equivalent_pre_pairwise_dx": [
+          -0.07366967410429738,
+          0.009031897707615713,
+          -0.09585655543850391
+        ],
+        "target_equivalent_pre_pairwise_dy": [
+          -0.019877587321557373,
+          -0.023142641990888634,
+          0.06364223553505007
+        ],
+        "target_equivalent_pre_pairwise_median_dx": -0.0736696735363115,
+        "target_equivalent_pre_pairwise_median_dy": -0.019877587572078814,
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_measurement_hw": [
+          44,
+          44
+        ],
+        "trajectory_roi_fraction": 1.0,
+        "trajectory_target_equivalent_hw": [
+          62,
+          62
+        ],
+        "trajectory_target_equivalent_scale_x": 1.4090909090909092,
+        "trajectory_target_equivalent_scale_y": 1.4090909090909092
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339451738611
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.002396889824265842,
+          -0.056713021722888446,
+          -0.07991972674897489,
+          -0.15100787980130434
+        ],
+        "anchor_dy": [
+          0.025761023890980086,
+          0.32653123691572217,
+          1.159643191069623,
+          1.0954293783956768
+        ],
+        "anchor_final_dx": -0.15100787980130434,
+        "anchor_final_dy": 1.0954293783956768,
+        "anchor_response": [
+          79.03383842026719,
+          38.121536872055344,
+          31.39601343967891,
+          24.063756707667334
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.01181725798935234,
+        "boundary_vs_pre_dy": -0.012142709660522142,
+        "boundary_vs_pre_norm_cells": 0.016943818468298386,
+        "diagnostic_only": true,
+        "extra_h3_nfe": 0,
+        "extra_history_boundaries": 0,
+        "extra_provider_calls": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_vae_calls": 0,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.002396889824265842,
+          -0.028269565568314236,
+          -0.10358267176277605,
+          -0.11282780822000076
+        ],
+        "pairwise_cumulative_dy": [
+          0.025761023890980086,
+          0.1986251886885699,
+          0.3919951430280759,
+          0.3989232594791525
+        ],
+        "pairwise_dx": [
+          -0.002396889824265842,
+          -0.025872675744048394,
+          -0.07531310619446181,
+          -0.009245136457224707
+        ],
+        "pairwise_dy": [
+          0.025761023890980086,
+          0.17286416479758981,
+          0.19336995433950602,
+          0.006928116451076621
+        ],
+        "pairwise_net_dx": -0.11282780822000076,
+        "pairwise_net_dy": 0.3989232594791525,
+        "pairwise_response": [
+          26.023082583806,
+          11.814928711299707,
+          10.230514700923427,
+          26.997467912617722
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.014214147467155607,
+          0.006172594388658601,
+          -0.041684910673336954
+        ],
+        "pre_pairwise_dy": [
+          0.03790373184071212,
+          -0.011293204185349539,
+          0.09946170259558754
+        ],
+        "pre_pairwise_median_dx": -0.014214147813618183,
+        "pre_pairwise_median_dy": 0.03790373355150223,
+        "pre_pairwise_response": [
+          36.320147148953815,
+          52.19484375793131,
+          23.22425517448713
+        ],
+        "production_gate": false,
+        "roi": "upper45",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_exact_context_bicubic_shadow",
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 0.45,
+        "transfer_mode": "bicubic"
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339492735251
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.011136280141375202,
+          -0.03498357776505989,
+          -1.1664650067123852,
+          -1.2214251561335558
+        ],
+        "anchor_dy": [
+          -0.02045491074962196,
+          0.137780149244226,
+          1.271476117914134,
+          1.3809957665532961
+        ],
+        "anchor_final_dx": -1.2214251561335558,
+        "anchor_final_dy": 1.3809957665532961,
+        "anchor_response": [
+          84.18691325249637,
+          42.007592781585885,
+          22.864697930917366,
+          17.120912911704735
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.02529155299852119,
+        "boundary_vs_pre_dy": -0.01521728576911268,
+        "boundary_vs_pre_norm_cells": 0.029516579057469475,
+        "diagnostic_only": true,
+        "extra_h3_nfe": 0,
+        "extra_history_boundaries": 0,
+        "extra_provider_calls": 0,
+        "extra_sampler_lifetimes": 0,
+        "extra_vae_calls": 0,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.011136280141375202,
+          -0.044960330465410564,
+          -0.09337751416560719,
+          -0.1069944974821633
+        ],
+        "pairwise_cumulative_dy": [
+          -0.02045491074962196,
+          0.22128650277686598,
+          0.6471169391550083,
+          0.6878696353099266
+        ],
+        "pairwise_dx": [
+          -0.011136280141375202,
+          -0.03382405032403536,
+          -0.04841718370019662,
+          -0.013616983316556114
+        ],
+        "pairwise_dy": [
+          -0.02045491074962196,
+          0.24174141352648795,
+          0.42583043637814233,
+          0.04075269615491831
+        ],
+        "pairwise_net_dx": -0.1069944974821633,
+        "pairwise_net_dy": 0.6878696353099266,
+        "pairwise_response": [
+          28.260728464204814,
+          12.144589545886896,
+          7.22996846039397,
+          26.86880157968245
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.036427834987802714,
+          0.005087162696129487,
+          -0.04065398489887446
+        ],
+        "pre_pairwise_dy": [
+          -0.005237624921623726,
+          -0.010101687221498654,
+          0.034150412373070954
+        ],
+        "pre_pairwise_median_dx": -0.03642783313989639,
+        "pre_pairwise_median_dy": -0.005237624980509281,
+        "pre_pairwise_response": [
+          33.94693262444455,
+          47.18928489401476,
+          28.64771897410964
+        ],
+        "production_gate": false,
+        "roi": "full",
+        "source_hw": [
+          44,
+          44
+        ],
+        "stage": "source_low_exact_context_bicubic_shadow",
+        "target_hw": [
+          62,
+          62
+        ],
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 1.0,
+        "transfer_mode": "bicubic"
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156339521028045
+    },
+    {
+      "fields": {
+        "extra_h3_nfe": 0,
+        "extra_history_boundaries": 0,
+        "extra_sampler_lifetimes": 0,
+        "generated_suffix_only": true,
+        "initial_effective_residual_rms": 1.0009503364562988,
+        "initial_source_noise_rms": 1.0009503364562988,
+        "model_noise_scale": 1.0,
+        "policy": "source_residual_patch_refinement_v1",
+        "prefix_t": 12,
+        "residual_domain": "effective_flow_residual_carried_state_units",
+        "residual_rms": 1.0024560689926147,
+        "residual_vs_initial_cosine": 0.9995581207834124,
+        "residual_vs_initial_rms": 0.029816748574376106,
+        "source": "same_sigma_source_state_minus_clean_probe"
+      },
+      "kind": "partitioned_handoff_residual_provenance",
+      "timestamp_ns": 1791156339530098716
+    },
+    {
+      "fields": {
+        "extra_h3_nfe": 0,
+        "frame_gauge_repair_enabled": true,
+        "gaussian_marginal_if_source_standard": true,
+        "group_size_max": 4,
+        "group_size_min": 1,
+        "identity": false,
+        "innovation_coarse_group_sum_zero": true,
+        "innovation_seed": 16182821750619634006,
+        "policy": "source_residual_patch_refinement_v1",
+        "projection_max_abs_error": 3.4868717193603516e-06,
+        "projection_rms_error": 3.160248962560745e-07,
+        "residual_domain": "effective_flow_residual_carried_state_units",
+        "residual_source": "same_sigma_source_state_minus_clean_probe",
+        "source_hw": [
+          44,
+          44
+        ],
+        "source_patch_grid": [
+          22,
+          22
+        ],
+        "source_residual_mean": -0.0002974646631628275,
+        "source_residual_rms": 1.0017720460891724,
+        "source_state_reconstruction_max_abs_error": 7.152557373046875e-07,
+        "source_state_reconstruction_rms_error": 6.170706257080383e-08,
+        "target_hw": [
+          62,
+          62
+        ],
+        "target_patch_grid": [
+          31,
+          31
+        ],
+        "target_residual_mean": -0.0004041250213049352,
+        "target_residual_rms": 1.0010775327682495
+      },
+      "kind": "partitioned_handoff_noise",
+      "timestamp_ns": 1791156345568642159
+    },
+    {
+      "fields": {
+        "exact_prefix_modified": false,
+        "extra_h3_nfe": 0,
+        "extra_provider_calls": 0,
+        "policy": "h3_dense_patch_center_lattice_v2",
+        "prefix_projection_policy": "h3_dense_patch_center_lattice_v2",
+        "provider_calls": 1,
+        "resample_position": "encoder_to_decoder",
+        "source_hw": [
+          44,
+          44
+        ],
+        "target_hw": [
+          62,
+          62
+        ],
+        "transferred_prefix_output_discarded": true
+      },
+      "kind": "partitioned_transfer_lattice",
+      "timestamp_ns": 1791156345571062217
+    },
+    {
+      "fields": {
+        "channels": [
+          2,
+          6,
+          10,
+          23,
+          4,
+          17,
+          9,
+          7
+        ],
+        "elapsed_ms": 65.54212599803577,
+        "exact_prefix_sample_sha256": "d79f8996d6d29ba180971f701b821d4799fdfb8d12840fa917ca7655cd5dd1b4",
+        "extra_h3_nfe": 0,
+        "extra_provider_calls": 0,
+        "fit_is_diagnostic_not_causal_proof": true,
+        "frames": [
+          {
+            "affine_displacement_gradients": [
+              [
+                0.00479093287140131,
+                0.0006586737581528723
+              ],
+              [
+                -0.00638624606654048,
+                -0.002327956724911928
+              ]
+            ],
+            "affine_huber": 0.06188422814011574,
+            "center_dx_dy_cells": [
+              -0.012944136746227741,
+              -0.09072978049516678
+            ],
+            "frame": 8,
+            "normalized_tile_rms_3x3": [
+              0.2494245320558548,
+              0.27746209502220154,
+              0.25657540559768677,
+              0.21790745854377747,
+              0.24039100110530853,
+              0.21037133038043976,
+              0.30484461784362793,
+              0.2581057548522949,
+              0.24595075845718384
+            ],
+            "zero_huber": 0.06318644434213638
+          },
+          {
+            "affine_displacement_gradients": [
+              [
+                0.0032606911845505238,
+                0.0006855633691884577
+              ],
+              [
+                -0.0018154708668589592,
+                -0.0013318679993972182
+              ]
+            ],
+            "affine_huber": 0.058866724371910095,
+            "center_dx_dy_cells": [
+              -0.0017327078385278583,
+              -0.11272062361240387
+            ],
+            "frame": 9,
+            "normalized_tile_rms_3x3": [
+              0.24270190298557281,
+              0.26154622435569763,
+              0.245221346616745,
+              0.2134469747543335,
+              0.23802189528942108,
+              0.20451804995536804,
+              0.2969316244125366,
+              0.25156211853027344,
+              0.24934284389019012
+            ],
+            "zero_huber": 0.05989508330821991
+          },
+          {
+            "affine_displacement_gradients": [
+              [
+                0.0015244688838720322,
+                0.0020137964747846127
+              ],
+              [
+                -0.0023852940648794174,
+                -0.0034312638454139233
+              ]
+            ],
+            "affine_huber": 0.09112841635942459,
+            "center_dx_dy_cells": [
+              0.008893223479390144,
+              -0.11563064903020859
+            ],
+            "frame": 10,
+            "normalized_tile_rms_3x3": [
+              0.2843325138092041,
+              0.2975013256072998,
+              0.3177507817745209,
+              0.28551188111305237,
+              0.3139508068561554,
+              0.34935152530670166,
+              0.34200701117515564,
+              0.2959364950656891,
+              0.3405258059501648
+            ],
+            "zero_huber": 0.0924936905503273
+          },
+          {
+            "affine_displacement_gradients": [
+              [
+                0.007184722926467657,
+                0.001427154173143208
+              ],
+              [
+                -0.0008653006516396999,
+                -0.0014117988757789135
+              ]
+            ],
+            "affine_huber": 0.06935717910528183,
+            "center_dx_dy_cells": [
+              0.0336180217564106,
+              -0.0910315215587616
+            ],
+            "frame": 11,
+            "normalized_tile_rms_3x3": [
+              0.2201262265443802,
+              0.22721239924430847,
+              0.3035982549190521,
+              0.20061780512332916,
+              0.24526457488536835,
+              0.35676318407058716,
+              0.295634001493454,
+              0.2382294088602066,
+              0.32809120416641235
+            ],
+            "zero_huber": 0.07078590989112854
+          }
+        ],
+        "learned_prefix_sample_sha256": "1628234afec1e4aa55d53da9e625536a8cc265c4e69f3fc51e7dd7ddc3618806",
+        "output_mutated": false,
+        "policy": "same_frame_prefix_affine_diagnostic_v1",
+        "sign_convention": "sample learned at (x-dx,y-dy) to compare with exact at (x,y)",
+        "status": "measured"
+      },
+      "kind": "partitioned_same_frame_prefix_affine",
+      "timestamp_ns": 1791156345636651918
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.02234360960518,
+          0.01341767037463608,
+          -0.33401035158727593,
+          -0.3823175695202784
+        ],
+        "anchor_dy": [
+          0.0820894626036675,
+          0.6555117553234744,
+          1.0697817119674768,
+          1.1769650074734386
+        ],
+        "anchor_final_dx": -0.3823175695202784,
+        "anchor_final_dy": 1.1769650074734386,
+        "anchor_response": [
+          66.98746602113054,
+          42.24065417327825,
+          26.34440692096255,
+          17.730976064434177
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.03880589815582158,
+        "boundary_vs_pre_dy": 0.011665568973162899,
+        "boundary_vs_pre_norm_cells": 0.04052139226566158,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.02234360960518,
+          -0.08707938835923838,
+          -0.4278394563156816,
+          -0.46893523058881653
+        ],
+        "pairwise_cumulative_dy": [
+          0.0820894626036675,
+          0.362267027942966,
+          0.9937358095474098,
+          1.0300698709093408
+        ],
+        "pairwise_dx": [
+          -0.02234360960518,
+          -0.06473577875405838,
+          -0.3407600679564432,
+          -0.04109577427313492
+        ],
+        "pairwise_dy": [
+          0.0820894626036675,
+          0.2801775653392985,
+          0.6314687816044438,
+          0.036334061361930944
+        ],
+        "pairwise_net_dx": -0.46893523058881653,
+        "pairwise_net_dy": 1.0300698709093408,
+        "pairwise_response": [
+          24.77863681455848,
+          14.046861908641532,
+          9.350279753903614,
+          25.705767526114606
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.06114950893030598,
+          0.011617388380475956,
+          -0.06744651254788417
+        ],
+        "pre_pairwise_dy": [
+          0.07042389440860937,
+          -0.01798256610435404,
+          0.11111835797406344
+        ],
+        "pre_pairwise_median_dx": -0.06114950776100159,
+        "pre_pairwise_median_dy": 0.07042389363050461,
+        "pre_pairwise_response": [
+          34.07200376045878,
+          48.973351431176354,
+          27.05488862750927
+        ],
+        "roi": "upper45",
+        "stage": "learned_native",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 0.45
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156347061296794
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.024980900196713736,
+          0.011768850435278425,
+          -0.3407544534871434,
+          -0.22791653481646038
+        ],
+        "anchor_dy": [
+          0.06480141127928916,
+          0.76873175634423,
+          1.0710124489486808,
+          1.1892789084298667
+        ],
+        "anchor_final_dx": -0.22791653481646038,
+        "anchor_final_dy": 1.1892789084298667,
+        "anchor_response": [
+          72.54176401538254,
+          47.43595547271069,
+          28.123950041798018,
+          19.83000108570046
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.0017772844597870804,
+        "boundary_vs_pre_dy": 0.010531836696712413,
+        "boundary_vs_pre_norm_cells": 0.010680745491641436,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.024980900196713736,
+          -0.08971668471028296,
+          -0.43047675266672614,
+          -0.47157252693986107
+        ],
+        "pairwise_cumulative_dy": [
+          0.06480141127928916,
+          0.3449789491512518,
+          0.9764477307556956,
+          1.0127817921176265
+        ],
+        "pairwise_dx": [
+          -0.024980900196713736,
+          -0.06473578451356922,
+          -0.3407600679564432,
+          -0.04109577427313492
+        ],
+        "pairwise_dy": [
+          0.06480141127928916,
+          0.28017753787196265,
+          0.6314687816044438,
+          0.036334061361930944
+        ],
+        "pairwise_net_dx": -0.47157252693986107,
+        "pairwise_net_dy": 1.0127817921176265,
+        "pairwise_response": [
+          22.701779540753837,
+          14.046861908641532,
+          9.350279753903614,
+          25.705767526114606
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.026758184942529666,
+          0.0083960703773476,
+          -0.07276544534115664
+        ],
+        "pre_pairwise_dy": [
+          0.054269572866297626,
+          -0.017768949500349882,
+          0.1637134189414552
+        ],
+        "pre_pairwise_median_dx": -0.026758184656500816,
+        "pre_pairwise_median_dy": 0.05426957458257675,
+        "pre_pairwise_response": [
+          34.97141108656527,
+          49.2217634048327,
+          19.485770042406614
+        ],
+        "roi": "upper45",
+        "stage": "exact_restored_pre_high",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 0.45
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156347075941753
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.021499867341877865,
+          -0.1183269639884078,
+          -0.8695940906472013,
+          -1.5673068732280007
+        ],
+        "anchor_dy": [
+          -0.012894589365227152,
+          0.42861024700289374,
+          1.318273029628735,
+          2.0189748031209382
+        ],
+        "anchor_final_dx": -1.5673068732280007,
+        "anchor_final_dy": 2.0189748031209382,
+        "anchor_response": [
+          77.00746809272914,
+          32.29459689518027,
+          25.52786532070874,
+          22.278996887873156
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.05763483534061725,
+        "boundary_vs_pre_dy": -0.03411724782059901,
+        "boundary_vs_pre_norm_cells": 0.06697582282878077,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.021499867341877865,
+          -0.15984836707587696,
+          -1.0050301264475734,
+          -1.0439454136254884
+        ],
+        "pairwise_cumulative_dy": [
+          -0.012894589365227152,
+          0.5242262705287907,
+          1.4975084591207923,
+          1.5910307067556746
+        ],
+        "pairwise_dx": [
+          -0.021499867341877865,
+          -0.1383484997339991,
+          -0.8451817593716964,
+          -0.03891528717791513
+        ],
+        "pairwise_dy": [
+          -0.012894589365227152,
+          0.5371208598940178,
+          0.9732821885920017,
+          0.09352224763488222
+        ],
+        "pairwise_net_dx": -1.0439454136254884,
+        "pairwise_net_dy": 1.5910307067556746,
+        "pairwise_response": [
+          26.00151305206492,
+          13.438076756229293,
+          22.42037878946469,
+          25.54532972920967
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.1037072077413527,
+          0.0076295310014391545,
+          -0.07913470532142869
+        ],
+        "pre_pairwise_dy": [
+          0.0212226589814091,
+          -0.017049929137336897,
+          0.06293161295818951
+        ],
+        "pre_pairwise_median_dx": -0.07913470268249512,
+        "pre_pairwise_median_dy": 0.021222658455371857,
+        "pre_pairwise_response": [
+          28.473679988401162,
+          44.133958321917824,
+          27.358893148042277
+        ],
+        "roi": "full",
+        "stage": "learned_native",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 1.0
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156347099170790
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.021968503175128263,
+          -0.09489805353675088,
+          -0.869297752251456,
+          -1.588995723921649
+        ],
+        "anchor_dy": [
+          -0.013296690225990641,
+          0.49120136131761316,
+          1.2977258327631591,
+          2.028113722539277
+        ],
+        "anchor_final_dx": -1.588995723921649,
+        "anchor_final_dy": 2.028113722539277,
+        "anchor_response": [
+          91.22399016152131,
+          30.698331889531676,
+          25.413119802815242,
+          23.278730965804844
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.04293809396232291,
+        "boundary_vs_pre_dy": -0.012641046584041941,
+        "boundary_vs_pre_norm_cells": 0.044760205225816266,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.021968503175128263,
+          -0.16031700290912737,
+          -1.0054987622808238,
+          -1.0444140494587388
+        ],
+        "pairwise_cumulative_dy": [
+          -0.013296690225990641,
+          0.5238241696680271,
+          1.4971063582600288,
+          1.590628605894911
+        ],
+        "pairwise_dx": [
+          -0.021968503175128263,
+          -0.1383484997339991,
+          -0.8451817593716964,
+          -0.03891528717791513
+        ],
+        "pairwise_dy": [
+          -0.013296690225990641,
+          0.5371208598940178,
+          0.9732821885920017,
+          0.09352224763488222
+        ],
+        "pairwise_net_dx": -1.0444140494587388,
+        "pairwise_net_dy": 1.590628605894911,
+        "pairwise_response": [
+          32.626099079118404,
+          13.438076756229293,
+          22.42037878946469,
+          25.54532972920967
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.06490660022436599,
+          0.009192460735077857,
+          -0.08601225619249048
+        ],
+        "pre_pairwise_dy": [
+          -0.000655643613023752,
+          -0.013252939214707856,
+          0.07979891812475512
+        ],
+        "pre_pairwise_median_dx": -0.06490659713745117,
+        "pre_pairwise_median_dy": -0.0006556436419487,
+        "pre_pairwise_response": [
+          33.225266788137354,
+          44.72901710663328,
+          25.937964430198203
+        ],
+        "roi": "full",
+        "stage": "exact_restored_pre_high",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 1.0
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156347110939348
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.05039288220263893,
+          -0.01830147490037265,
+          -0.4326705429057869,
+          -0.5097874974677558
+        ],
+        "anchor_dy": [
+          0.12651957780137776,
+          0.8763973085327474,
+          1.1312956897143966,
+          0.9535283488444809
+        ],
+        "anchor_final_dx": -0.5097874974677558,
+        "anchor_final_dy": 0.9535283488444809,
+        "anchor_response": [
+          73.41652765569371,
+          45.96985416336674,
+          31.35452730057272,
+          18.279851071513068
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": -0.023634697546138117,
+        "boundary_vs_pre_dy": 0.07225000321880101,
+        "boundary_vs_pre_norm_cells": 0.0760175104381496,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.05039288220263893,
+          -0.07374175671822829,
+          -0.1826142975574488,
+          -0.2306636098870591
+        ],
+        "pairwise_cumulative_dy": [
+          0.12651957780137776,
+          0.3464524169067333,
+          0.8655557115617845,
+          0.8999483105732095
+        ],
+        "pairwise_dx": [
+          -0.05039288220263893,
+          -0.023348874515589358,
+          -0.10887254083922049,
+          -0.048049312329610315
+        ],
+        "pairwise_dy": [
+          0.12651957780137776,
+          0.21993283910535552,
+          0.5191032946550512,
+          0.03439259901142499
+        ],
+        "pairwise_net_dx": -0.2306636098870591,
+        "pairwise_net_dy": 0.8999483105732095,
+        "pairwise_response": [
+          22.483667572465578,
+          13.228237011608705,
+          9.8447819857056,
+          21.65127737114483
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.026758184942529666,
+          0.0083960703773476,
+          -0.07276544534115664
+        ],
+        "pre_pairwise_dy": [
+          0.054269572866297626,
+          -0.017768949500349882,
+          0.1637134189414552
+        ],
+        "pre_pairwise_median_dx": -0.026758184656500816,
+        "pre_pairwise_median_dy": 0.05426957458257675,
+        "pre_pairwise_response": [
+          34.97141108656527,
+          49.2217634048327,
+          19.485770042406614
+        ],
+        "roi": "upper45",
+        "stage": "final_post_high",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 0.45
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156428182551267
+    },
+    {
+      "fields": {
+        "anchor_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "anchor_dx": [
+          -0.034228786656333166,
+          -0.2327954124383302,
+          -0.8633638353347275,
+          -1.4123549824162382
+        ],
+        "anchor_dy": [
+          -0.0008157906488247193,
+          0.5365265254292515,
+          1.1956835587837655,
+          1.8664554060894902
+        ],
+        "anchor_final_dx": -1.4123549824162382,
+        "anchor_final_dy": 1.8664554060894902,
+        "anchor_response": [
+          103.37915792828865,
+          28.637951705584985,
+          27.94511599380402,
+          23.58489486923236
+        ],
+        "boundary_vs_pre_available": true,
+        "boundary_vs_pre_dx": 0.030677810481118006,
+        "boundary_vs_pre_dy": -0.0001601470068760193,
+        "boundary_vs_pre_norm_cells": 0.030678228485021837,
+        "pairwise_clipped": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "pairwise_cumulative_dx": [
+          -0.034228786656333166,
+          -0.08363444173293408,
+          -0.914690331042654,
+          -0.9496045404233366
+        ],
+        "pairwise_cumulative_dy": [
+          -0.0008157906488247193,
+          0.45610981583673466,
+          1.4231884543242506,
+          1.531336228110589
+        ],
+        "pairwise_dx": [
+          -0.034228786656333166,
+          -0.049405655076600906,
+          -0.8310558893097199,
+          -0.03491420938068273
+        ],
+        "pairwise_dy": [
+          -0.0008157906488247193,
+          0.45692560648555935,
+          0.967078638487516,
+          0.1081477737863384
+        ],
+        "pairwise_net_dx": -0.9496045404233366,
+        "pairwise_net_dy": 1.531336228110589,
+        "pairwise_response": [
+          32.387742793250766,
+          13.791198863968633,
+          20.41086927710448,
+          21.356031828703443
+        ],
+        "pre_pairwise_clipped": [
+          false,
+          false,
+          false
+        ],
+        "pre_pairwise_dx": [
+          -0.06490660022436599,
+          0.009192460735077857,
+          -0.08601225619249048
+        ],
+        "pre_pairwise_dy": [
+          -0.000655643613023752,
+          -0.013252939214707856,
+          0.07979891812475512
+        ],
+        "pre_pairwise_median_dx": -0.06490659713745117,
+        "pre_pairwise_median_dy": -0.0006556436419487,
+        "pre_pairwise_response": [
+          33.225266788137354,
+          44.72901710663328,
+          25.937964430198203
+        ],
+        "roi": "full",
+        "stage": "final_post_high",
+        "trajectory_backward_steps": 3,
+        "trajectory_boundary_t": 12,
+        "trajectory_diagnostic_version": 1,
+        "trajectory_forward_steps": 4,
+        "trajectory_max_shift_cells": 4,
+        "trajectory_roi_fraction": 1.0
+      },
+      "kind": "partitioned_multiframe_trajectory",
+      "timestamp_ns": 1791156428193735647
+    },
+    {
+      "fields": {
+        "deprecated_mixed_grid_contract_active": false,
+        "final_over_transfer_exact_seam_lowpass_ratio": 0.7769550523733849,
+        "final_over_transfer_exact_seam_rms_ratio": 0.8924672669970986,
+        "final_over_transfer_exact_seam_spatial_mean_ratio": 0.8107041161865434,
+        "final_over_transfer_native_seam_lowpass_ratio": 0.9527698948202006,
+        "final_over_transfer_native_seam_rms_ratio": 1.0009005314112405,
+        "final_over_transfer_native_seam_spatial_mean_ratio": 0.986037854311128,
+        "final_prefix_exact": true,
+        "final_seam_lowpass_kernel": 5,
+        "final_seam_lowpass_rms": 0.2813996374607086,
+        "final_seam_rms": 0.4976211488246918,
+        "final_seam_spatial_mean_rms": 0.1421455591917038,
+        "high_boundary_context_tokens": 12,
+        "high_prediction_gauge_bridge_enabled": false,
+        "high_prediction_gauge_bridge_hardware_verdict": "falsified_00715_no_decoded_frame_shift_improvement",
+        "high_prediction_gauge_bridge_policy": "model_native_prefix_gauge_release_v1",
+        "high_prediction_gauge_bridge_release_boundary_t": null,
+        "high_prediction_gauge_bridge_support_tokens": 0,
+        "high_prediction_gauge_bridge_weights": [],
+        "high_stage_first_call_actual": true,
+        "total_chunk_sampler_elapsed_ms": 186436.74037699748,
+        "vae_window_video_plan": {},
+        "vae_window_video_policy": "h3_vae_boundary_window_vertical_plateau_release_v1",
+        "vae_window_video_repair_applied": false,
+        "vae_window_video_repair_armed": false,
+        "vae_window_video_repair_reason": "safe_video_topology_not_active",
+        "vae_window_video_selected_dy_cells": null,
+        "video_boundary_repair_contract": "source_residual_handoff_plus_one_token_dc_v5"
+      },
+      "kind": "partitioned_exact_prefix_complete",
+      "timestamp_ns": 1791156428213443929
+    }
+  ],
+  "native_replay_status": "completed_one_native_tile_interior_only",
+  "rendered_acceptance": false,
+  "native_replay_scope": {
+    "full_frame_spatial_blend_reproduced": false,
+    "preceding_temporal_blend_reproduced": false,
+    "production_sampling_rerun": false,
+    "decoder_checkpoint_precision": "unquantized_fp16",
+    "decoder_arithmetic": "float32_cpu",
+    "production_decoder_precision": "int8_convrot"
+  }
+}

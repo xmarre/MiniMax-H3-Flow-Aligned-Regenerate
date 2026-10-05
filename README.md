@@ -93,7 +93,7 @@ low_frequency_cutoff       = 0.25
 temporal_weight            = 0.20
 vdn_linear_diagnostic      = normal
 audio_guided_overlap_ticks = 4
-audio_guided_overlap_mode  = sampler_mask_exact_timestep
+audio_guided_overlap_mode  = exact_mask
 prefix_transformer_context = exact_target_partitioned
 audio_position_domain      = source_carrier
 audio_handoff_source       = main_partitioned
@@ -104,7 +104,9 @@ low_probe_execution_source = source_carrier_uniform_only
 
 The learned 3D upscaler input is required. The fast continuation uses one source-uniform low/probe path followed by target-high: three continuation sampler lifetimes, two history boundaries, no duplicate shadow lifetime, and exact caller-visible prefix restoration.
 
-The four-tick audio width is the shipped default, not a hard invariant. Values `0..16` remain selectable because overlap behavior is conditioning- and mode-sensitive. Run 00611 validated the default `sampler_mask_exact_timestep / 4` tuple on a previously failing three-chunk continuation: the first decoded boundary changed from about +11.15 dB at 16 ticks to +0.21 dB at 4 ticks with the same preceding realization, while the decoder-context-safe carried-prefix interior remained effectively exact.
+When low/probe uses the exact target-prefix partition, high refinement now retains dense protected-prefix local queries on the native target grid. Generated local queries keep their configured Sol selection, and high keeps its normal VDN learned linear branch and target-audio positions. The source-uniform execution path retains its native high transformer. Both paths honor configured Sol startup evaluations at target refinement. This attention-continuity candidate still needs rendered frame and tone qualification; it does not add logical model calls or sampler lifetimes.
+
+`exact_mask` protects carried audio throughout sampling with the same native input, timestep and velocity masks. The stored overlap width is ignored in this mode. The historical `sampler_mask_exact_timestep` selector aliases `exact_mask` so existing workflows load with coherent audio ownership. `sampler_mask` retains a selectable ramp for comparisons; its width accepts any non-negative integer and is capped at the carried audio prefix; `model_timestep_only` is an intentionally mismatched timestep diagnostic. Rendered boundary quality still requires validation with the selected model and conditioning.
 
 The partitioned learned-transfer splice also applies a bounded one-token video DC continuity correction before target-high. It does not modify the authoritative exact prefix or later suffix tokens.
 
@@ -173,7 +175,7 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum `refine_state` version of flow-aligned guidance. |
 | **MiniMax H3 Progressive Handoff** | Generic source-sized progressive resolution handoff. |
 | **MiniMax H3 Progressive Handoff (Target Input)** | General target-input progressive path; exact protected prefixes use the target-grid fallback. |
-| **MiniMax H3 Partitioned Exact-Prefix Handoff** | Coordinated Continuum production path using source-uniform low/probe execution, learned transfer, exact prefix restoration and the validated four-tick exact-timestep audio overlap. |
+| **MiniMax H3 Partitioned Exact-Prefix Handoff** | Coordinated Continuum production path using source-uniform low/probe execution, learned transfer, exact prefix restoration and coherent native audio masks. |
 | **MiniMax H3 Continuum Decode Context** | Supplies right context to the native temporal VAE at exact Continuum joins. |
 
 ### Compatibility / research nodes
