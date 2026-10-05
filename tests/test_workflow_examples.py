@@ -134,6 +134,65 @@ def test_progressive_target_input_api_example_is_complete():
     }
 
 
+def test_partitioned_exact_prefix_api_example_matches_v039_defaults():
+    workflow = _load("partitioned-exact-prefix.api.json")
+    _assert_common_api_chain(workflow, "H3PartitionedExactPrefixDiagnosticHandoff")
+
+    patch_id, patch = next(
+        (node_id, node)
+        for node_id, node in workflow.items()
+        if node["class_type"] == "H3PartitionedExactPrefixDiagnosticHandoff"
+    )
+    provider_id, provider = next(
+        (node_id, node)
+        for node_id, node in workflow.items()
+        if node["class_type"] == "MinimaxH3LatentUpscaler3DProvider"
+    )
+    expected_inputs = {
+        "source_mode": "scale",
+        "source_scale": 0.7,
+        "source_width": 864,
+        "source_height": 640,
+        "handoff_coordinate": 0.35,
+        "handoff_selection": "fixed",
+        "guidance_mode": "direction+temporal",
+        "direction_weight": 0.25,
+        "acceleration_weight": 0.25,
+        "consistency_weight": 0.25,
+        "low_frequency_cutoff": 0.25,
+        "temporal_weight": 0.2,
+        "vdn_linear_diagnostic": "normal",
+        "audio_guided_overlap_ticks": 16,
+        "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
+        "prefix_transformer_context": "exact_target_partitioned",
+        "audio_position_domain": "source_carrier",
+        "audio_handoff_source": "main_partitioned",
+        "av_handoff_source": "main_partitioned",
+        "guidance_trajectory_source": "main_exact_partitioned",
+        "low_probe_execution_source": "main_then_shadow",
+        "frame_gauge_repair": True,
+        "frame_gauge_residual_mode": "off",
+        "provider_boundary_stabilization": "soft_support_v1",
+        "capture_boundary_witness": False,
+        "vdn_temporal_carrier_policy": "native_grid_then_map_v1",
+        "handoff_transfer_control": "learned_3d",
+        "spatial_stage_control": "same_grid_target_control",
+        "softmax_diagnostic": "normal",
+        "video_guided_overlap_tokens": 6,
+    }
+    for key, value in expected_inputs.items():
+        assert patch["inputs"][key] == value
+    assert "handoff_transfer" not in patch["inputs"]
+    assert patch["inputs"]["learned_upscaler"] == [provider_id, 0]
+    assert provider["inputs"] == {
+        "model_name": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+        "device": "cuda",
+        "precision": "bf16",
+        "offload_after_upscale": False,
+    }
+    assert patch_id != provider_id
+
+
 def test_progressive_source_input_api_example_is_complete():
     workflow = _load("progressive-source-input.api.json")
     _assert_common_api_chain(workflow, "H3ProgressiveHandoff")
@@ -168,6 +227,63 @@ def test_progressive_target_input_canvas_workflow_is_loadable_shape():
     learned_input = next(input_ for input_ in patch["inputs"] if input_["name"] == "learned_upscaler")
     learned_link = next(link for link in workflow["links"] if link[0] == learned_input["link"])
     assert learned_link[1:3] == [provider["id"], 0]
+    assert provider["widgets_values"] == [
+        "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+        "cuda",
+        "bf16",
+        False,
+    ]
+
+
+def test_partitioned_exact_prefix_canvas_workflow_matches_v039_defaults():
+    workflow = _load("partitioned-exact-prefix.workflow.json")
+    _assert_canvas_links_resolve(workflow, "H3PartitionedExactPrefixDiagnosticHandoff")
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    patch = next(node for node in nodes.values() if node["type"] == "H3PartitionedExactPrefixDiagnosticHandoff")
+    provider = next(node for node in nodes.values() if node["type"] == "MinimaxH3LatentUpscaler3DProvider")
+
+    assert [input_["name"] for input_ in patch["inputs"]] == [
+        "model",
+        "trajectory",
+        "learned_upscaler",
+        "metrics",
+    ]
+    assert patch["widgets_values"] == [
+        "scale",
+        0.7,
+        864,
+        640,
+        0.35,
+        "fixed",
+        "direction+temporal",
+        0.25,
+        0.25,
+        0.25,
+        0.25,
+        0.2,
+        "normal",
+        16,
+        "sampler_mask_exact_timestep",
+        "exact_target_partitioned",
+        "source_carrier",
+        "main_partitioned",
+        "main_partitioned",
+        "main_exact_partitioned",
+        "main_then_shadow",
+        True,
+        "off",
+        "soft_support_v1",
+        False,
+        "native_grid_then_map_v1",
+        "learned_3d",
+        "same_grid_target_control",
+        "normal",
+        6,
+    ]
+    learned_input = next(input_ for input_ in patch["inputs"] if input_["name"] == "learned_upscaler")
+    learned_link = next(link for link in workflow["links"] if link[0] == learned_input["link"])
+    assert learned_link[1:3] == [provider["id"], 0]
+    assert learned_link[4] == 2
     assert provider["widgets_values"] == [
         "minimax_h3_latent_upscaler_3d_bf16.safetensors",
         "cuda",
