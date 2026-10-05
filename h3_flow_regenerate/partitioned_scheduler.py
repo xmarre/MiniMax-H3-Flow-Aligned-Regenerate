@@ -96,6 +96,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -120,6 +121,7 @@ from .partitioned_diagnostics import (
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_suffix_dc_bridge,
     resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_stage import (
@@ -1683,6 +1685,7 @@ def _apply_partitioned_exact_overlap_bridge(
     *,
     sigma: float,
     weights: tuple[float, ...] = (1.0,),
+    dc_enabled: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
     """Preserve the provider's first-transition channel means after prefix restore.
 
@@ -1709,6 +1712,13 @@ def _apply_partitioned_exact_overlap_bridge(
         suffix_representation_bridge_production_retired=True,
         suffix_representation_bridge_hardware_verdict="rendered_continuity_unqualified",
     )
+    if not dc_enabled:
+        return (
+            target_video.clone(),
+            learned_clean.clone(),
+            representation_metrics,
+            disabled_suffix_dc_bridge_metrics(prefix_t=prefix_t),
+        )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         learned_clean,
         exact_prefix,
@@ -2955,6 +2965,9 @@ def run_partitioned_progressive(
             PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
         )
     )
+    suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
+    if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+        raise RuntimeError("progressive_target_band continuation is not available in this build")
     if (
         spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -4212,6 +4225,8 @@ def run_partitioned_progressive(
                 provider_boundary_stabilization_receipt["reason"] = "frame_gauge_selected"
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
             corrected_clean = frame_gauge_witnesses["corrected_clean"]
+            if not suffix_dc_bridge_enabled:
+                raise RuntimeError("the accepted frame-gauge arm requires the partitioned suffix DC bridge")
             dc_metrics = frame_gauge_transaction.get("dc_metrics")
             if not isinstance(dc_metrics, dict):
                 raise RuntimeError("accepted frame-gauge transaction lost the existing DC bridge receipt")
@@ -4269,6 +4284,7 @@ def run_partitioned_progressive(
                         exact_prefix,
                         sigma=sigma,
                         weights=PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
+                        dc_enabled=suffix_dc_bridge_enabled,
                     )
                 )
             else:
@@ -4279,7 +4295,7 @@ def run_partitioned_progressive(
                     learned_clean,
                     exact_prefix,
                     sigma=sigma,
-                    enabled=True,
+                    enabled=suffix_dc_bridge_enabled,
                 )
             if exact_overlap_fallback_requested:
                 if splice_clean_source == "inverse_recovered":
@@ -4419,7 +4435,8 @@ def run_partitioned_progressive(
                 if frame_gauge_transaction.get("result") == "shadow_only"
                 else None
             ),
-            dc_bridge_applied=True,
+            dc_bridge_applied=bool(dc_metrics.get("suffix_dc_bridge_enabled", False)),
+            suffix_dc_bridge_requested=suffix_dc_bridge_enabled,
             dc_policy="existing_one_token_spatial_mean_v1",
             dc_order=(
                 "after_spatial_registration_before_conditional_renoise"
@@ -4486,12 +4503,16 @@ def run_partitioned_progressive(
             ),
         )
 
-        exact_overlap_dc_weights = (
-            PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
-        )
-        exact_overlap_dc_support_policy = (
-            "bounded_linear_return_v2" if len(exact_overlap_dc_weights) > 1 else "first_suffix_only_v1"
-        )
+        if suffix_dc_bridge_enabled:
+            exact_overlap_dc_weights = (
+                PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
+            )
+            exact_overlap_dc_support_policy = (
+                "bounded_linear_return_v2" if len(exact_overlap_dc_weights) > 1 else "first_suffix_only_v1"
+            )
+        else:
+            exact_overlap_dc_weights = ()
+            exact_overlap_dc_support_policy = "disabled"
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
             policy=exact_overlap_policy,
@@ -5049,11 +5070,18 @@ def run_partitioned_progressive(
             frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
             frame_gauge_result=str(frame_gauge_transaction.get("result", "baseline")),
             frame_gauge_reason=str(frame_gauge_transaction.get("reason", "unknown")),
+            suffix_dc_bridge_requested=suffix_dc_bridge_enabled,
             suffix_dc_bridge_state_mapping=(
-                "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
+                "disabled"
+                if not suffix_dc_bridge_enabled
+                else "pre_renoise_clean_operand"
+                if frame_gauge_accepted
+                else "conditional_renoise_affine"
             ),
             suffix_dc_bridge_policy=(
-                "successor_safe_linear_v2"
+                "disabled"
+                if not suffix_dc_bridge_enabled
+                else "successor_safe_linear_v2"
                 if int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)) > 1
                 else "one_token_spatial_mean_v1"
             ),

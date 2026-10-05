@@ -111,10 +111,21 @@ PARTITIONED_HANDOFF_TRANSFER_OPTIONS = (
 PARTITIONED_SPATIAL_STAGE_CONTROL_KEY = "h3_flow_partitioned_spatial_stage_control_v1"
 PARTITIONED_SPATIAL_STAGE_PROGRESSIVE = "progressive_low_to_high"
 PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
+PARTITIONED_SPATIAL_STAGE_TARGET_BAND = "progressive_target_band"
 PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
 )
+
+# Number of generated H3 temporal latent tokens that stay on the target grid
+# directly after the protected prefix under progressive_target_band.
+PARTITIONED_TARGET_BAND_TOKENS_KEY = "h3_flow_partitioned_target_band_tokens_v1"
+PARTITIONED_TARGET_BAND_TOKENS_DEFAULT = 4
+
+# Absence is the historical contract: the one-token suffix DC bridge is active.
+# The leaf is published only when a node explicitly disables the bridge.
+PARTITIONED_SUFFIX_DC_BRIDGE_KEY = "h3_flow_partitioned_suffix_dc_bridge_v1"
 
 PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY = "h3_flow_partitioned_softmax_diagnostic_v1"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_API = 1
@@ -172,6 +183,29 @@ def normalize_spatial_stage_control(value: str) -> str:
             f"{PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS!r}, got {value!r}"
         )
     return value
+
+
+def validate_target_band_tokens(value: Any, *, source: str) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{source} must be a positive integer number of H3 temporal latent tokens, got {value!r}")
+    return value
+
+
+def resolve_partitioned_target_band_tokens(transformer_options: dict[str, Any]) -> int:
+    return validate_target_band_tokens(
+        transformer_options.get(PARTITIONED_TARGET_BAND_TOKENS_KEY, PARTITIONED_TARGET_BAND_TOKENS_DEFAULT),
+        source=PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    )
+
+
+def resolve_partitioned_suffix_dc_bridge(transformer_options: dict[str, Any]) -> bool:
+    """Return whether the partitioned one-token suffix DC bridge is enabled."""
+    if PARTITIONED_SUFFIX_DC_BRIDGE_KEY not in transformer_options:
+        return True
+    value = transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY]
+    if value is not False:
+        raise ValueError("the partitioned suffix DC bridge leaf may only carry the explicit value False")
+    return False
 
 
 def normalize_partitioned_softmax_diagnostic(value: str) -> str:
@@ -364,6 +398,8 @@ def apply_partitioned_diagnostic_controls(
     spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     video_guided_overlap_tokens: int = 0,
+    suffix_dc_bridge: bool = True,
+    target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -393,11 +429,29 @@ def apply_partitioned_diagnostic_controls(
         video_guided_overlap_tokens,
         source="video_guided_overlap_tokens",
     )
+    if type(suffix_dc_bridge) is not bool:
+        raise TypeError("suffix_dc_bridge must be a boolean")
+    band_tokens = validate_target_band_tokens(target_band_tokens, source="target_band_tokens")
     if (
         spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
     ):
         raise ValueError("same-grid spatial-stage control requires handoff_transfer_control='learned_3d'")
+    if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+        if handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
+            raise ValueError("progressive_target_band requires handoff_transfer_control='learned_3d'")
+        if temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+            raise ValueError("progressive_target_band requires vdn_temporal_carrier_policy='native_grid_then_map_v1'")
+        if prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+            raise ValueError("progressive_target_band requires prefix_transformer_context='exact_target_partitioned'")
+        if execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+            raise ValueError("progressive_target_band requires low_probe_execution_source='main_then_shadow'")
+        if (
+            handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+            or av_handoff != PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            or guidance_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+        ):
+            raise ValueError("progressive_target_band supports only the main partitioned handoff and guidance sources")
     model_options = getattr(model, "model_options", None)
     if not isinstance(model_options, dict):
         raise RuntimeError("partitioned diagnostics require mutable model_options")
@@ -449,6 +503,14 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, None)
     else:
         transformer_options[PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] = softmax_mode
+    if suffix_dc_bridge:
+        transformer_options.pop(PARTITIONED_SUFFIX_DC_BRIDGE_KEY, None)
+    else:
+        transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY] = False
+    if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+        transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
+    else:
+        transformer_options.pop(PARTITIONED_TARGET_BAND_TOKENS_KEY, None)
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -490,6 +552,10 @@ def apply_partitioned_diagnostic_controls(
             fields["spatial_stage_control"] = spatial_stage
         if softmax_mode != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
             fields["softmax_diagnostic"] = softmax_mode
+        if not suffix_dc_bridge:
+            fields["suffix_dc_bridge"] = False
+        if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+            fields["target_band_tokens"] = band_tokens
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -544,6 +610,10 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS",
     "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
+    "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",
+    "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
+    "PARTITIONED_TARGET_BAND_TOKENS_DEFAULT",
+    "PARTITIONED_TARGET_BAND_TOKENS_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -576,5 +646,8 @@ __all__ = [
     "normalize_vdn_temporal_carrier_policy",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
+    "resolve_partitioned_suffix_dc_bridge",
+    "resolve_partitioned_target_band_tokens",
     "resolve_partitioned_video_guided_overlap_tokens",
+    "validate_target_band_tokens",
 ]
