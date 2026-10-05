@@ -73,6 +73,8 @@ jobs:
           git -C .contracts/ComfyMask checkout 421a1c245c682c04d4325ba365f40c834c66f5b0
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
           git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/SpectrumHistory
+          git -C .contracts/SpectrumHistory checkout 5161f0457bc8c52535212d6783eee73f439e1537
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
           git -C .contracts/Continuum checkout bf25353d8bec44afea22c89717c4301ce13c2036
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-DiffAid-Patches.git .contracts/DiffAid
@@ -81,14 +83,16 @@ jobs:
           git -C .contracts/RefDelta checkout 034e4c4c14c56bf76813cee4765e7164b0c7e0db
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
-          git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler.git .contracts/Upscaler
-          git -C .contracts/Upscaler checkout 620165a311de9b28a36260219fb5cd370a304e3c
+          git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus.git .contracts/Upscaler
+          git -C .contracts/Upscaler checkout a843aff79ff410f75d133fb6cb22394d3aad27bf
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
-          git -C .contracts/SolPartitioned checkout 93b3e03f2b7b579aaf55fa0f87f55083b259e25c
+          git -C .contracts/SolPartitioned checkout f59bdd15c4ef1d1893052298a663da3850ac1a48
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout da3627f85d494bdf4213251deb3ba2a94b8a2f36
+          git -C .contracts/VDNPartitioned checkout a1ee145d041c5a88bde5506f79876528c032f11d
+          git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
+          git -C .contracts/ComfyRuntime checkout c75777af734ff2881589fa7662723689462e8b39
       - name: Validate native and sibling contracts
         run: |
           python tools/check_source_contracts.py \
@@ -110,11 +114,84 @@ jobs:
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
         run: |
-          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
-          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo
-          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py -q
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece
+          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py tests/test_boundary_window_evidence.py -q
       - name: Validate partitioned exact-prefix cross-repo contracts
         run: |
           python tools/check_partitioned_exact_prefix_contracts.py \
             --sol .contracts/SolPartitioned \
-            --vdn .contracts/VDNPartitioned
+            --vdn .contracts/VDNPartitioned --require-boundary-witness
+      - name: Validate partitioned completion receipts with Spectrum
+        env:
+          SPECTRUM_PATH: ${{ github.workspace }}/.contracts/SpectrumHistory
+          PYTHONPATH: ${{ github.workspace }}/.contracts/SolPartitioned
+        run: |
+          python -m pytest -q \
+            .contracts/SolPartitioned/tests/test_partitioned_forecast_history.py \
+            .contracts/SolPartitioned/tests/test_partitioned_history.py \
+            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py
+      - name: Validate upstream Core adapter and MiniMax contracts
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python - <<'PY'
+          import comfy.cli_args
+          import pytest
+
+          comfy.cli_args.args.cpu = True
+          raise SystemExit(pytest.main([
+              "-q",
+              ".contracts/ComfyRuntime/tests-unit/comfy_test/test_minimax_h3_model.py",
+              ".contracts/ComfyRuntime/tests-unit/comfy_quant/test_linear_input_act_hooks.py",
+          ]))
+          PY
+          python -m pytest -q tests/test_video_overlap_sampling.py
+      - name: Validate clean-transfer and residual coordinate ownership
+        env:
+          H3_UPSCALER_PATH: ${{ github.workspace }}/.contracts/Upscaler
+          COMFYUI_PATH: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q --import-mode=importlib \
+            tests/test_transfer_lattice.py \
+            tests/test_transfer_lattice_source_contract.py \
+            tests/test_flow_residual_lattice.py \
+            tests/test_partitioned_seam_diagnostics.py \
+            tests/test_residual_evidence_replay.py \
+            .contracts/Upscaler/tests/test_h3_patch_lattice.py
+      - name: Validate VDN post-forward workspace with Core bypass
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/VDNPartitioned/tests/test_post_forward_workspace.py \
+            .contracts/VDNPartitioned/tests/test_bypass_reinject.py \
+            .contracts/VDNPartitioned/tests/test_curve_apply.py \
+            .contracts/VDNPartitioned/tests/test_runtime_lowvram.py
+      - name: Validate partitioned K/V workspace and forward lifetime
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/VDNPartitioned/tests/test_partitioned_kv_workspace.py \
+            .contracts/VDNPartitioned/tests/test_partitioned_forward_lifetime.py \
+            .contracts/VDNPartitioned/tests/test_partitioned_grouped.py \
+            .contracts/VDNPartitioned/tests/test_partition_index_cache.py \
+            tests/test_partitioned_native_modulation.py
+      - name: Validate native dense dispatch and deferred factorization errors
+        env:
+          COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime
+          PYTHONPATH: ${{ github.workspace }}/.contracts/SolPartitioned:${{ github.workspace }}/.contracts/VDNPartitioned:${{ github.workspace }}/.contracts/ComfyRuntime
+        run: |
+          python -m pytest -q \
+            .contracts/SolPartitioned/tests/test_partitioned_dense_dispatch.py \
+            .contracts/SolPartitioned/tests/test_partitioned_weighted_dense.py \
+            .contracts/SolPartitioned/tests/test_native_reference_cost.py \
+            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py \
+            .contracts/VDNPartitioned/tests/test_deferred_cholesky.py \
+            .contracts/VDNPartitioned/tests/test_runtime_buffers.py \
+            tests/test_partitioned_native_modulation.py::test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol

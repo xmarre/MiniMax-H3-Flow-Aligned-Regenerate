@@ -61,6 +61,25 @@ def test_partitioned_contract_rejects_tampered_measure_or_geometry():
         )
 
 
+def test_partitioned_same_grid_control_roundtrips_with_zero_measure_bias():
+    plan = PartitionedExactPrefixPlan(
+        video_start=5,
+        temporal=4,
+        prefix_t=1,
+        source_grid_h=4,
+        source_grid_w=4,
+        target_grid_h=4,
+        target_grid_w=4,
+        same_grid_control=True,
+    )
+    contract = plan.to_contract()
+    assert plan.prefix_log_key_measure == 0.0
+    assert contract["heterogeneous_spatial_domains"] is False
+    restored = validate_partitioned_contract(contract, sequence_rows=69)
+    assert restored.same_grid_control is True
+    assert restored == plan
+
+
 def test_partitioned_lse_merge_matches_explicit_dense_attention():
     generator = torch.Generator(device="cpu").manual_seed(1234)
     q = torch.randn((1, 2, 3, 8), generator=generator, dtype=torch.float64)
