@@ -1491,7 +1491,8 @@ def _target_band_low_stage_inputs(
     Band frames take the target-grid sampler noise that same-grid control would
     use for those frames; tail frames take the reduced-grid noise that
     progressive_low_to_high would use. Padding has zero noise, zero latent and a
-    zero (protected) mask, so it stays exactly zero and is never generated.
+    zero (protected) mask. Stochastic samplers may write raw padding; inpainting
+    masks it before model calls and the reduced-grid handoff view discards it.
     """
     head = band.head_t
     target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)

@@ -40,6 +40,22 @@ GEOMETRY = PartitionedTargetBandGeometry(
 )
 
 
+@pytest.mark.parametrize("rows", [None, 6, 999])
+def test_source_carrier_rejects_an_undeclared_native_row_count(rows):
+    plan = PartitionedExactPrefixPlan(7, 5, 3, 2, 3, 3, 4)
+    contract = dict(plan.to_contract(), native_carrier_rows_per_frame=rows)
+    with pytest.raises(ValueError, match="requires native_carrier_grid"):
+        validate_partitioned_contract(contract, sequence_rows=plan.sequence_rows)
+
+
+@pytest.mark.parametrize("rows", [None, 12.0, "12", True])
+def test_target_carrier_requires_integer_native_rows(rows):
+    plan = PartitionedExactPrefixPlan(7, 5, 3, 2, 3, 3, 4, native_carrier_grid=PARTITIONED_NATIVE_CARRIER_TARGET)
+    contract = dict(plan.to_contract(), native_carrier_rows_per_frame=rows)
+    with pytest.raises(ValueError, match="native_carrier_rows_per_frame must be an integer"):
+        validate_partitioned_contract(contract, sequence_rows=plan.sequence_rows)
+
+
 def test_geometry_rows_match_the_partition_contract():
     g = GEOMETRY
     assert (g.head_t, g.prefix_t) == (4, 4)

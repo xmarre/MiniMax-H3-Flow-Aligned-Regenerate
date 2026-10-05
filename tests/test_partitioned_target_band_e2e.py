@@ -1,10 +1,10 @@
 """End-to-end continuation scheduling through the actual Flow scheduler and Core forward.
 
-A deterministic Euler sampler stands in for ComfyUI's KSampler and calls the
-real Flow partitioned transformer wrapper around a tiny real MiniMax-H3 Core
-model, with Sol's dense reference arithmetic on CPU. This exercises the low,
-probe and high sampler lifetimes, the learned-transfer plumbing and the exact
-prefix ownership of every continuation spatial-stage control.
+Sampler tests call the real Flow partitioned transformer wrapper around a tiny
+real MiniMax-H3 Core model, with Sol's dense reference arithmetic on CPU. Most
+use a deterministic Euler oracle; native sampler cases also exercise ComfyUI's
+noise scaling, inpaint wrapper and multistep/stochastic updates. The upscaler
+is a bicubic fixture, so these tests establish state ownership, not visual quality.
 """
 
 from __future__ import annotations
@@ -71,7 +71,14 @@ def _vdn_owner():
     return owner
 
 
-def _harness(monkeypatch, *, spatial_stage_control, extra_transformer_options=None, guidance_mode="off"):
+def _harness(
+    monkeypatch,
+    *,
+    spatial_stage_control,
+    extra_transformer_options=None,
+    guidance_mode="off",
+    native_sampler=None,
+):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     pytest.importorskip("sol_h3.runtime")
@@ -163,6 +170,7 @@ def _harness(monkeypatch, *, spatial_stage_control, extra_transformer_options=No
         ),
     )
     guider.model_patcher.model_options = guider.model_options
+    guider.model_patcher.get_model_object = lambda name: getattr(base_model, name)
     from h3_flow_regenerate.guidance import GuidanceConfig
 
     binding = FlowBinding(
@@ -224,6 +232,43 @@ def _harness(monkeypatch, *, spatial_stage_control, extra_transformer_options=No
         }
         calls.append(record)
 
+        if native_sampler is not None:
+            from comfy.model_sampling import CONST
+
+            base_model.model_sampling = CONST()
+            base_model.model_sampling.noise_scale = 1.7
+            base_model.model_sampling.sigma_max = torch.tensor(1.0)
+            base_model.scale_latent_inpaint = lambda *, x, sigma, noise, latent_image, denoise_mask: (
+                base_model.model_sampling.noise_scaling(sigma, noise, latent_image)
+            )
+
+            class Model:
+                inner_model = base_model
+                model_patcher = guider.model_patcher
+                cfg = 1.0
+
+                def __call__(self, x, sigma, **_kwargs):
+                    record.setdefault("entry_state", x.detach().clone())
+                    return model(x, float(sigma.reshape(-1)[0]), shapes, denoise_mask)
+
+            result = sampler.sample(
+                Model(),
+                sigmas,
+                {"seed": seed},
+                callback,
+                noise,
+                latent_image=latent_image,
+                denoise_mask=denoise_mask,
+                disable_pbar=True,
+            )
+            record["final_state"] = result * (1.0 - float(sigmas[-1]))
+            if record["stage"] == "high":
+                from h3_flow_regenerate.comfy_compat import _canonicalize_exact_masked_output
+
+                # Match the production _ProgressiveExactMaskExecutor boundary.
+                result, _ = _canonicalize_exact_masked_output(result, latent_image, denoise_mask)
+            return result
+
         def inpaint(x, sigma):
             protected = latent_image * (1.0 - sigma) + noise * sigma
             return x * denoise_mask + protected * (1.0 - denoise_mask)
@@ -267,6 +312,10 @@ def _harness(monkeypatch, *, spatial_stage_control, extra_transformer_options=No
         frame_gauge_repair=True,
     )
     sampler = SimpleNamespace(sampler_function=SimpleNamespace(__name__="sample_euler"), extra_options={})
+    if native_sampler is not None:
+        import comfy.samplers
+
+        sampler = comfy.samplers.ksampler(native_sampler)
     sigmas = torch.linspace(1.0, 0.0, 9)
     result = run_partitioned_progressive(
         executor,
@@ -430,3 +479,31 @@ def test_learned_continuations_bind_guidance_to_the_actual_handoff_pair(monkeypa
     assert references[0]["source_shape"] == (1, 24, TEMPORAL, *SOURCE_HW)
     guidance = _events(run.metrics, "guidance")
     assert guidance and all(event["handoff_reference_used"] for event in guidance)
+
+
+@pytest.mark.parametrize("sampler", ["euler", "res_multistep", "euler_ancestral"])
+def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler):
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={PARTITIONED_TARGET_BAND_TOKENS_KEY: 2, PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
+        native_sampler=sampler,
+    )
+    low, _probe, high = run.calls
+    low_end, _ = unpack_streams(low["final_state"], low["shapes"])
+    high_start, _ = unpack_streams(high["entry_state"], high["shapes"])
+    torch.testing.assert_close(
+        high_start[:, :, PROTECTED_T : PROTECTED_T + 2],
+        low_end[:, :, PROTECTED_T : PROTECTED_T + 2],
+        rtol=0,
+        atol=1e-6,
+    )
+    final, _ = unpack_streams(run.result, run.shapes)
+    original, _ = unpack_streams(run.latent_image, run.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    state = _events(run.metrics, "partitioned_target_band_low_state")[0]
+    assert state["clean_padding_max_abs"] == 0.0
+    if sampler == "euler_ancestral":
+        assert state["raw_padding_max_abs"] > 0.0
+    assert run.binding.active_capture is None
+    assert run.binding.active_guidance_run is None

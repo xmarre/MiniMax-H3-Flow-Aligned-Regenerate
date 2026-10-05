@@ -155,7 +155,8 @@ carried prefix at a lower low/probe cost.
   sampling.
 - Low/probe video rows are `(prefix + band) x target rows + tail x source rows`.
   Every actual low/probe evaluation also processes the text, reference and audio
-  rows, so wall time does not scale with video rows alone.
+  rows. The video input projection and final layer process the full target-sized
+  carrier, so the row reduction does not establish a wall-time or memory saving.
 - The low trajectory used by Flow guidance is recorded on the uniform reduced
   grid. High-stage guidance binds to the actual entry state: the identity band
   and the learned tail.

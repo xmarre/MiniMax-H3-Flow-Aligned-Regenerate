@@ -150,13 +150,18 @@ def _validate_same_grid_history_transport() -> None:
 
 def _validate_target_band_transport() -> None:
     """Prove a target-native-carrier band contract crosses Flow, VDN and Sol."""
-    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_NATIVE_CARRIER_TARGET, PartitionedExactPrefixPlan
+    from h3_flow_regenerate.partitioned_prefix import (
+        PARTITIONED_NATIVE_CARRIER_TARGET,
+        PartitionedExactPrefixPlan,
+        validate_partitioned_contract,
+    )
     from h3_flow_regenerate.partitioned_stage import PartitionedTargetBandGeometry
     from h3_flow_regenerate.partitioned_transformer import _vdn_external_contract
     from sol_h3.partitioned_history import (
         PARTITIONED_FLOW_IDENTITY,
         PARTITIONED_NATIVE_CARRIER_GRIDS as SOL_CARRIERS,
         VDN_EXTERNAL_SEQUENCE_KEY,
+        _native_carrier_rows_per_frame,
         _partitioned_flow_replacement_identity,
         _partitioned_history_layout_valid,
     )
@@ -210,6 +215,29 @@ def _validate_target_band_transport() -> None:
     )
     if not _partitioned_history_layout_valid(options, layout):
         raise SystemExit("Sol rejected the target-band partitioned layout")
+    for rows in (None, float(band.target_rows), str(band.target_rows), True):
+        malformed = dict(contract, native_carrier_rows_per_frame=rows)
+        for parser in (validate_partitioned_contract, validate_flow_partition_contract):
+            try:
+                parser(malformed, sequence_rows=flow.sequence_rows)
+            except ValueError:
+                pass
+            else:
+                raise SystemExit(f"{parser.__module__} accepted a non-integer target carrier row count")
+        malformed_external = dict(external, native_carrier_rows_per_frame=rows)
+        try:
+            validate_partitioned_external_execution(
+                {PARTITIONED_FLOW_IDENTITY: contract, VDN_EXTERNAL_SEQUENCE_KEY: malformed_external},
+                native_layout,
+                flow.sequence_rows,
+                torch.zeros(1, flow.sequence_rows, 2),
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise SystemExit("VDN accepted a non-integer external carrier row count")
+        if _native_carrier_rows_per_frame(malformed, band.source_rows, band.target_rows) is not None:
+            raise SystemExit("Sol accepted a non-integer target carrier row count")
     previous = object()
     values = {
         "layer": 0,

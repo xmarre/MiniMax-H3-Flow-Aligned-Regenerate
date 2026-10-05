@@ -153,7 +153,7 @@ separately from loading and first-chunk work.
 
 ### Target-band continuation (opt-in)
 
-`spatial_stage_control=progressive_target_band` is a reduced-cost alternative
+`spatial_stage_control=progressive_target_band` is an experimental alternative
 for exact-prefix continuations. The protected prefix and the first
 `target_band_tokens` generated H3 temporal latent tokens after it stay on the
 target grid through low/probe. Every later generated token runs on the
@@ -163,9 +163,13 @@ and residual transport of `progressive_low_to_high`.
 
 The low/probe sampler state stays on the uniform target grid. Each reduced-grid
 token stores its values in a source-sized window of its frame, and the rest of
-that frame is inert padding that is never generated or read. The transformer
-receives `[target-grid prefix | target-grid band | reduced-grid tail]`, so
-low/probe video work falls between the reduced-grid and target-grid controls.
+that frame is masked padding excluded from the transformer blocks. Stochastic
+samplers may add noise to raw padding; it is masked before model calls and
+discarded when forming the reduced-grid view. The transformer blocks receive
+`[target-grid prefix | target-grid band | reduced-grid tail]`. Their video row
+count falls between the reduced-grid and target-grid controls. The video input
+projection and final layer still process the target-sized carrier. Wall time
+and peak memory therefore require measurement.
 Spectrum forecasting, the native final layer and Flow guidance keep their usual
 contracts. Guidance binds to the actual high-stage entry state (identity band
 plus learned tail).

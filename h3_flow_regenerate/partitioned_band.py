@@ -4,9 +4,9 @@ Target-band continuation keeps the low/probe sampler state on the uniform
 target grid. Frames ``[0, head_t)`` (the protected prefix plus the band) hold
 ordinary target-grid values. Every later frame stores its reduced-grid state in
 the top-left ``source_h x source_w`` window of its target-sized frame; the rest
-of that frame is inert padding that the transformer never reads and whose
-velocity is always zero. Sampler arithmetic is elementwise, so each stored
-value follows the same update it would follow in a uniform-grid sampler.
+of that frame is masked padding excluded from transformer blocks. Elementwise
+sampler updates preserve the stored values' spatial ownership. Stochastic raw
+padding is masked before model calls and discarded from handoff views.
 """
 
 from __future__ import annotations

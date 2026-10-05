@@ -10,8 +10,8 @@ At the handoff the band continues by identity and the reduced-grid tokens use
 the learned 3D transfer and residual transport.
 
 - The low/probe sampler state is target-sized. Reduced-grid tokens are stored in
-  a source-sized window of their frame, and the remaining padding is protected,
-  zero and never presented to the transformer.
+  a source-sized window of their frame. Padding is masked and excluded from
+  transformer blocks; stochastic raw-state padding is discarded at the handoff.
 - The transformer receives `[target-grid prefix | target-grid band | reduced-grid
   tail]` and returns its rows to Core's native layout, so Spectrum forecasting
   and the native final layer see one consistent row set.
@@ -20,13 +20,16 @@ the learned 3D transfer and residual transport.
   their semantic digests are unchanged. The mode requires the paired VDN-H3-Plus
   and Sol-H3 changes that accept a target-grid native carrier; older companions
   fail before sampling.
+- Carrier row counts require a matching declaration and integer values in both
+  Flow and VDN contracts. Malformed optional metadata fails before attention.
 - The low trajectory is recorded on the uniform reduced grid. Learned-handoff
   guidance binds to the actual high-stage entry state.
 - The one-token DC bridge applies at the band/tail boundary, measured against the
   target-grid head. The paired-prefix frame gauge does not run because no transfer
   boundary is adjacent to the prefix.
 
-No rendered-quality qualification exists yet. The default remains
+Rendered quality, wall time and peak memory have not been qualified. Input
+projection and the final layer still process the target-sized carrier. The default remains
 `same_grid_target_control`.
 
 ## Suffix DC bridge selector
