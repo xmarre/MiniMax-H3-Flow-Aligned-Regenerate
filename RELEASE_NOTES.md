@@ -25,12 +25,15 @@ about half of its variance. Those runs, and unrecognized samplers, keep
 `source_residual_patch_refinement_v1` for the whole residual. The provenance
 receipt names the sampler and its `dense_drift_sampler_contract`.
 
-Run 01144 reproduced the frame shift with zero user hooks and dense v2 clean
-transfer active. An offline native tile replay finds the local displacement
-already in the first high prediction before Flow guidance. The new residual
-construction corrects an operator inconsistency; its effect on that rendered
-failure is unqualified until a matched hardware replay. See
-[01144 evidence and qualification](docs/validation/CONTINUATION_01144.md).
+Run 01150 executes the new residual path with deterministic Euler but still
+shifts. Its provider/pre-high clean operands match 01144 byte-for-byte; the
+changed sampler input retains a local displacement in the first high prediction
+before Flow guidance. The operator corrections are insufficient for rendered
+continuity acceptance. Zero user hooks does not exclude VDN's built-in adapters.
+The native Core oracle now compares the same-grid wrapper directly with
+unwrapped Core, including long prefixes and image references. See
+[01150 evidence and qualification](docs/validation/CONTINUATION_01150.md) and the
+[preceding residual rationale](docs/validation/CONTINUATION_01144.md).
 
 # Unreleased: continuous dense transfer
 

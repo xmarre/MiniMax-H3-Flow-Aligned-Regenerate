@@ -118,7 +118,12 @@ def test_native_modulation_validates_once_and_isolates_replacement_writes(monkey
     assert all(torch.equal(a, b) for a, b in zip(first, second, strict=True))
 
 
-def test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol(monkeypatch):
+@pytest.mark.parametrize("prefix_t,temporal", [(2, 17), (12, 47)])
+@pytest.mark.parametrize("with_reference", [False, True])
+@pytest.mark.parametrize("video_dtype", [torch.float32, torch.bfloat16])
+def test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol(
+    monkeypatch, prefix_t, temporal, with_reference, video_dtype
+):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     pytest.importorskip("sol_h3.runtime")
@@ -158,38 +163,48 @@ def test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol(monkeyp
         dm.adaln_t_table.copy_(torch.randn(dm.adaln_t_table.shape, generator=generator))
         dm.rope.inv_freq.fill_(0.2)
 
-    prefix = torch.randn(1, 24, 2, 4, 6, generator=generator)
+    prefix = torch.randn(1, 24, prefix_t, 4, 6, generator=generator)
     noise = torch.randn(prefix.shape, generator=generator)
-    plan = PartitionedStagePlan(prefix, 17, 4, 6, noise)
-    video = torch.randn(1, 24, 17, 4, 6, generator=generator)
-    video[:, :, :2] = VISUAL_COND_TIMESTEP * prefix + (1 - VISUAL_COND_TIMESTEP) * noise
-    video = video.to(torch.bfloat16)
+    plan = PartitionedStagePlan(prefix, temporal, 4, 6, noise)
+    video = torch.randn(1, 24, temporal, 4, 6, generator=generator)
+    video[:, :, :prefix_t] = VISUAL_COND_TIMESTEP * prefix + (1 - VISUAL_COND_TIMESTEP) * noise
+    video = video.to(video_dtype)
     audio = torch.randn(1, 32, 2, 5, generator=generator, dtype=torch.bfloat16)
-    mask = torch.ones(1, 1, 17, 4, 6)
-    mask[:, :, :2] = 0
+    mask = torch.ones(1, 1, temporal, 4, 6)
+    mask[:, :, :prefix_t] = 0
     context = torch.randn(1, 3, 8, generator=generator, dtype=torch.bfloat16)
     guider = SimpleNamespace(model_options={"transformer_options": {}})
     metrics = H3FlowMetrics()
+    payload = {}
+    if with_reference:
+        payload = {
+            "refs": [{"kind": "image", "latent_h": 4, "latent_w": 6}],
+            "cond_video_latents": [torch.randn(1, 24, 1, 4, 6, generator=generator)],
+        }
+    originals = [tensor.clone() for tensor in (video, audio, mask, prefix, noise)]
     # CPU arithmetic harness: Core blocks and Sol dense math are unchanged;
     # Sol's device-admission predicate is covered by its separate GPU contract.
     monkeypatch.setattr(partitioned_request, "_validate_thd", lambda *_args: None)
 
-    def forward():
+    def forward(*, native=False):
         state = Request(Config(backend="sol"))
         request = _REQUEST.set(state)
         execution = _FORWARD.set((dm, state, 0, set(), []))
         try:
             with torch.no_grad():
                 output = WrapperExecutor.new_class_executor(
-                    dm._forward, dm, [transform.partitioned_diffusion_wrapper]
+                    dm._forward, dm, [] if native else [transform.partitioned_diffusion_wrapper]
                 ).execute(
                     [video, audio],
                     torch.tensor([878.04878]),
                     context,
-                    transformer_options=guider.model_options["transformer_options"],
+                    # Core writes its layout/block index to its per-call options.
+                    # Keep those native writes separate from the stage owner.
+                    transformer_options={} if native else guider.model_options["transformer_options"],
+                    minimax_payload=payload,
                     denoise_mask=mask,
                 )
-            assert state.dense_calls == len(dm.blocks)
+            assert state.dense_calls == (0 if native else len(dm.blocks))
             return output
         finally:
             _FORWARD.reset(execution)
@@ -205,6 +220,12 @@ def test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol(monkeyp
         high = forward()
 
     assert all(torch.equal(a, b) for a, b in zip(probe, high, strict=True))
-    assert torch.count_nonzero(high[0][:, :, 2:]) > 0
-    assert torch.count_nonzero(high[0][:, :, :2]) == 0
+    # Comparing two partitioned stages alone can miss a shared discrepancy.
+    # Compare directly with unwrapped Core on the same conditioned input.
+    native = forward(native=True)
+    assert torch.equal(native[0][:, :, prefix_t:], high[0][:, :, prefix_t:])
+    assert torch.equal(native[1], high[1])
+    assert torch.count_nonzero(high[0][:, :, prefix_t:]) > 0
+    assert torch.count_nonzero(high[0][:, :, :prefix_t]) == 0
+    assert all(torch.equal(before, after) for before, after in zip(originals, (video, audio, mask, prefix, noise)))
     assert guider.model_options["transformer_options"] == {}
