@@ -97,8 +97,7 @@ def test_video_boundary_production_contract_fails_closed_to_dc_only():
     assert partitioned_scheduler.PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED is False
     assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS == (1.0,)
     assert (
-        partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT
-        == "dense_drift_handoff_plus_one_token_dc_v6"
+        partitioned_scheduler.PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT == "dense_drift_handoff_plus_one_token_dc_v6"
     )
     assert partitioned_scheduler.PARTITIONED_EXACT_OVERLAP_POLICY == "partitioned_exact_overlap_dc_only_v5"
 

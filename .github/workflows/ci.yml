@@ -148,7 +148,7 @@ jobs:
           ]))
           PY
           python -m pytest -q tests/test_video_overlap_sampling.py
-      - name: Validate learned-transfer and authoritative-prefix coordinate equality
+      - name: Validate clean-transfer and residual coordinate ownership
         env:
           H3_UPSCALER_PATH: ${{ github.workspace }}/.contracts/Upscaler
           COMFYUI_PATH: ${{ github.workspace }}/.contracts/ComfyRuntime
@@ -157,6 +157,9 @@ jobs:
           python -m pytest -q --import-mode=importlib \
             tests/test_transfer_lattice.py \
             tests/test_transfer_lattice_source_contract.py \
+            tests/test_flow_residual_lattice.py \
+            tests/test_partitioned_seam_diagnostics.py \
+            tests/test_residual_evidence_replay.py \
             .contracts/Upscaler/tests/test_h3_patch_lattice.py
       - name: Validate VDN post-forward workspace with Core bypass
         env:

@@ -1,5 +1,11 @@
 # Dense transfer and continuation evidence
 
+The later [01144 investigation](CONTINUATION_01144.md) reproduces displacement
+with dense v2 clean transfer active, localizes a large local change to the first
+high prediction, and adds a separate Gaussian/drift residual transport candidate.
+The operator findings below remain valid; they do not establish a universal
+continuity fix.
+
 ## Runtime evidence
 
 `metrics_01138_.json`, `metrics_01139_.json` and their shared runtime log report

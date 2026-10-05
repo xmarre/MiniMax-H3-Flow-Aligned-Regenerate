@@ -1,3 +1,28 @@
+# Unreleased: separate Gaussian refinement from structured flow drift
+
+Partitioned continuation with frame-gauge repair and the main AV handoff now
+decomposes the effective residual into the original scaled sampler noise and
+model-derived drift. Gaussian noise retains the existing variance-preserving
+patch refinement; drift uses the same continuous dense spatial map as clean
+transfer. Applying the noise operator to structured impulses can leave separated
+even/odd support, even when clean transfer already uses the corrected v2 map.
+
+Receipts report `source_residual_dense_drift_v2` and
+`dense_drift_handoff_plus_one_token_dc_v6`. Coarse projection and Gaussian
+variance claims apply only to the initial-noise component. The complete effective
+residual is not asserted to be Gaussian or to preserve the old coarse projection.
+Same-grid identity, exact-prefix restoration, the one-token DC bridge and audio
+ownership retain their contracts. No model/provider/VAE evaluation, sampler
+lifetime or history boundary is added. Independent-noise and historical v1
+helper paths remain available.
+
+Run 01144 reproduced the frame shift with zero user hooks and dense v2 clean
+transfer active. An offline native tile replay finds the local displacement
+already in the first high prediction before Flow guidance. The new residual
+construction corrects an operator inconsistency; its effect on that rendered
+failure is unqualified until a matched hardware replay. See
+[01144 evidence and qualification](docs/validation/CONTINUATION_01144.md).
+
 # Unreleased: continuous dense transfer
 
 Partitioned learned handoffs use a continuous spatial transform for the source

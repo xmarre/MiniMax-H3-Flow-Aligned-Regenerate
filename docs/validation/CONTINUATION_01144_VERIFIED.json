@@ -2050,6 +2050,14 @@
       "timestamp_ns": 1791156428213443929
     }
   ],
-  "native_replay_status": "pending",
-  "rendered_acceptance": false
+  "native_replay_status": "completed_one_native_tile_interior_only",
+  "rendered_acceptance": false,
+  "native_replay_scope": {
+    "full_frame_spatial_blend_reproduced": false,
+    "preceding_temporal_blend_reproduced": false,
+    "production_sampling_rerun": false,
+    "decoder_checkpoint_precision": "unquantized_fp16",
+    "decoder_arithmetic": "float32_cpu",
+    "production_decoder_precision": "int8_convrot"
+  }
 }
