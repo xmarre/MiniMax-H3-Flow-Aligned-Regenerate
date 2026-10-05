@@ -5,6 +5,7 @@ import json
 import pytest
 import torch
 
+import h3_flow_regenerate.partitioned_runtime_gate as gate
 from h3_flow_regenerate.boundary_content_diagnostics import measure_learned_transfer_residual_diagnostic
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
 from h3_flow_regenerate.high_stage_boundary import (
@@ -2422,6 +2423,24 @@ def test_runtime_gate_rejects_inconsistent_disabled_suffix_dc_bridge(location, f
     targets = {"transfer": transfer, "overlap": transfer["partitioned_exact_overlap_bridge"]}
     targets[location][field] = value
     with pytest.raises(RuntimeGateError, match=error):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        gate.PARTITIONED_EXACT_OVERLAP_POLICY,
+        gate.PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY,
+        gate.PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
+    ],
+)
+def test_runtime_gate_rejects_disabled_suffix_dc_bridge_on_non_dc_only_overlap(policy):
+    metrics = _install_disabled_dc_overlap_receipt("guidance")
+    transfer = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_transfer")
+    frame = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_frame_gauge")
+    transfer["partitioned_exact_overlap_bridge"]["policy"] = policy
+    frame["exact_overlap_fallback_policy"] = policy
+    with pytest.raises(RuntimeGateError, match="supported only on the baseline and DC-only"):
         validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
 
 

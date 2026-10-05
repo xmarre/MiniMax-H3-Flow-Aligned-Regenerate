@@ -2456,7 +2456,7 @@ def _validate_frame_gauge_transfer(
     _require(type(dc_requested) is bool, "partitioned suffix DC bridge request receipt is malformed")
     if not dc_requested:
         _require(
-            not accepted and not coupled_policy,
+            not accepted and (overlap is None or dc_policy),
             "a disabled suffix DC bridge is supported only on the baseline and DC-only exact-overlap arms",
         )
         _require(
