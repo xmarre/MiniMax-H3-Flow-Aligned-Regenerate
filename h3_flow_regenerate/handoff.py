@@ -8,7 +8,13 @@ from typing import Any
 
 import torch
 
-from .geometry import normalize_target_geometry, pack_streams, unpack_streams, validate_av
+from .geometry import (
+    normalize_target_geometry,
+    pack_streams,
+    resize_spatial_5d_h3_patch_lattice,
+    unpack_streams,
+    validate_av,
+)
 from .guidance import conditional_renoise_alignment, conditional_renoise_target
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
@@ -269,9 +275,11 @@ def deterministic_video_noise(
 
 H3_HANDOFF_NOISE_INDEPENDENT = "independent"
 H3_HANDOFF_NOISE_SOURCE_RESIDUAL = "source_residual_patch_refinement_v1"
+H3_HANDOFF_NOISE_DENSE_DRIFT = "source_residual_dense_drift_v2"
 H3_HANDOFF_NOISE_MODES = {
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    H3_HANDOFF_NOISE_DENSE_DRIFT,
 }
 
 
@@ -448,6 +456,68 @@ def refine_h3_patch_lattice_residual(
     return refined, report
 
 
+def refine_h3_flow_residual(
+    source_residual: torch.Tensor,
+    initial_source_noise: torch.Tensor,
+    *,
+    target_h: int,
+    target_w: int,
+    seed: int,
+    noise_scale: float = 1.0,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Transport Gaussian noise and model drift in their respective domains.
+
+    The effective flow residual is ``noise_scale * initial_noise + drift``.
+    Refine only the initial Gaussian through the variance-preserving patch
+    operator. Model drift is a spatial field: transport it on the continuous
+    dense lattice used for clean transfer. The coarse-projection guarantee
+    belongs to the Gaussian component, not to the complete effective residual.
+    """
+    if (
+        not isinstance(source_residual, torch.Tensor)
+        or source_residual.ndim != 5
+        or not source_residual.is_floating_point()
+        or not isinstance(initial_source_noise, torch.Tensor)
+        or initial_source_noise.shape != source_residual.shape
+        or not initial_source_noise.is_floating_point()
+    ):
+        raise ValueError("dense drift transfer requires matching floating BxCxTxHxW residual and initial noise")
+    noise_scale = float(noise_scale)
+    if not math.isfinite(noise_scale) or noise_scale <= 0.0:
+        raise ValueError("dense drift transfer requires a finite positive noise scale")
+    source = source_residual.float()
+    initial = initial_source_noise.to(device=source.device, dtype=torch.float32)
+    if not bool(torch.isfinite(source).all().item()):
+        raise ValueError("dense drift transfer requires finite source residuals")
+    gaussian, report = refine_h3_patch_lattice_residual(initial, target_h=target_h, target_w=target_w, seed=seed)
+    drift = source - initial * noise_scale
+    target_drift = resize_spatial_5d_h3_patch_lattice(drift, target_h, target_w)
+    target = gaussian * noise_scale + target_drift
+    if report["identity"]:
+        target = source_residual.clone()
+    if not bool(torch.isfinite(target).all().item()):
+        raise RuntimeError("dense drift transfer produced a non-finite target residual")
+    report["gaussian_projection_rms_error"] = report.pop("projection_rms_error")
+    report["gaussian_projection_max_abs_error"] = report.pop("projection_max_abs_error")
+    report.pop("gaussian_marginal_if_source_standard", None)
+    report.update(
+        policy=H3_HANDOFF_NOISE_DENSE_DRIFT,
+        gaussian_policy=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        coarse_projection_scope="initial_gaussian_component",
+        normalized_gaussian_component_standard_if_initial_standard=True,
+        gaussian_component_variance_if_initial_standard=noise_scale**2,
+        gaussian_noise_scale=noise_scale,
+        drift_lattice="h3_dense_patch_center_lattice_v2",
+        source_drift_rms=float(drift.square().mean().sqrt().item()),
+        target_drift_rms=float(target_drift.square().mean().sqrt().item()),
+        source_residual_rms=float(source.square().mean().sqrt().item()),
+        target_residual_rms=float(target.float().square().mean().sqrt().item()),
+        source_residual_mean=float(source.mean().item()),
+        target_residual_mean=float(target.float().mean().item()),
+    )
+    return target, report
+
+
 def build_handoff_state(
     *,
     source_packed_state: torch.Tensor,
@@ -462,6 +532,9 @@ def build_handoff_state(
     transfer_metrics: dict[str, Any] | None = None,
     clean_video_postprocess: Callable[[torch.Tensor], CleanVideoPostprocessResult] | None = None,
     noise_mode: str = H3_HANDOFF_NOISE_INDEPENDENT,
+    initial_source_noise: torch.Tensor | None = None,
+    model_noise_scale: float = 1.0,
+    run_same_grid_handoff: bool = False,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -472,12 +545,13 @@ def build_handoff_state(
     validate_av(source_video, source_audio)
     if x0_video.shape != source_video.shape:
         raise ValueError("source x0 video geometry does not match the handoff state")
-    if (target_h, target_w) == tuple(source_video.shape[-2:]):
+    same_geometry = (target_h, target_w) == tuple(source_video.shape[-2:])
+    if same_geometry and not run_same_grid_handoff:
         return source_packed_state.clone(), list(source_shapes)
     if noise_mode not in H3_HANDOFF_NOISE_MODES:
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
     noise_report: dict[str, Any]
-    if noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+    if noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
         # Preserve the effective flow residual in carried-state units. This is
         # deliberately not divided by model_sampling.noise_scale: the handoff
         # reconstruction below is x_t=(1-sigma)*x0+sigma*residual and therefore
@@ -485,12 +559,24 @@ def build_handoff_state(
         source_residual = (source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)) / float(
             sigma
         )
-        noise, noise_report = refine_h3_patch_lattice_residual(
-            source_residual,
-            target_h=target_h,
-            target_w=target_w,
-            seed=seed,
-        )
+        if noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT:
+            if initial_source_noise is None:
+                raise ValueError("dense drift handoff requires the original source-grid sampler noise")
+            noise, noise_report = refine_h3_flow_residual(
+                source_residual,
+                initial_source_noise,
+                target_h=target_h,
+                target_w=target_w,
+                seed=seed,
+                noise_scale=model_noise_scale,
+            )
+        else:
+            noise, noise_report = refine_h3_patch_lattice_residual(
+                source_residual,
+                target_h=target_h,
+                target_w=target_w,
+                seed=seed,
+            )
         noise = noise.to(source_video)
         reconstruction = (1.0 - float(sigma)) * x0_video.to(torch.float32) + float(sigma) * source_residual
         reconstruction_error = reconstruction - source_video.to(torch.float32)

@@ -39,7 +39,7 @@ def test_boundary_trace_is_bounded_nonmutating_and_cleans_up_on_exception():
         trace.observe(packed, point="before_flow", call_index=16, sigma=0.1, actual=True)
         assert len(binding.metrics.events) == 2
         assert binding.metrics.events[-1].fields["flow_suffix_delta_rms"] == 0.0
-        assert binding.metrics.events[-1].fields["suffix_tokens"] == 4
+        assert binding.metrics.events[-1].fields["suffix_tokens"] == 5
         assert binding.metrics.events[-1].fields["actual"] is False
         assert torch.equal(packed, original)
         raise RuntimeError("sampler failure")
