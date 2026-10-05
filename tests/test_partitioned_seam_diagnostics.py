@@ -7,6 +7,7 @@ import torch
 
 from h3_flow_regenerate.guidance import conditional_renoise_target
 from h3_flow_regenerate.handoff import (
+    H3_HANDOFF_NOISE_DENSE_DRIFT,
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     deterministic_video_noise,
@@ -24,7 +25,8 @@ from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_t
 from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
 
 
-def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residual():
+@pytest.mark.parametrize("noise_mode", [H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT])
+def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residual(noise_mode):
     torch.manual_seed(1201)
     target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
     actual = torch.randn_like(target)
@@ -32,7 +34,7 @@ def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residu
     resolved, source, recovery = _resolve_partitioned_transfer_clean(
         target,
         actual,
-        handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        handoff_noise_mode=noise_mode,
         sigma=0.4,
         seed=123,
     )
@@ -69,14 +71,15 @@ def test_same_grid_actual_clean_does_not_manufacture_suffix_dc_correction():
     assert metrics["suffix_dc_bridge_delta_abs_max"] == 0.0
 
 
-def test_partitioned_transfer_clean_refuses_gaussian_inverse_for_source_residual_without_capture():
+@pytest.mark.parametrize("noise_mode", [H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT])
+def test_partitioned_transfer_clean_refuses_gaussian_inverse_for_source_residual_without_capture(noise_mode):
     target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
 
     with pytest.raises(RuntimeError, match="refusing deterministic-noise inverse recovery"):
         _resolve_partitioned_transfer_clean(
             target,
             None,
-            handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+            handoff_noise_mode=noise_mode,
             sigma=0.4,
             seed=123,
         )

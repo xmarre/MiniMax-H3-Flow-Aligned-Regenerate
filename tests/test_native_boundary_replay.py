@@ -2,11 +2,40 @@ import hashlib
 import json
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 REPLAY = runpy.run_path(str(Path(__file__).parents[1] / "tools/decode_native_boundary_evidence.py"))
+
+
+def test_native_tile_selection_preserves_full_lattice_origin_and_unblended_interior():
+    calls = []
+
+    def split(size):
+        calls.append(size)
+        return [0, 176, 352, 544, 736], [256] * 5, [80, 80, 64, 64]
+
+    vae = SimpleNamespace(vae_ratio=16, split_tiles=split)
+    selected = REPLAY["native_tile_selection"](vae, (62, 62), (1, 2))
+    assert calls == [992, 992]
+    assert selected["tile_latent_origin_yx"] == [11, 22]
+    assert selected["tile_latent_hw"] == [16, 16]
+    assert selected["tile_pixel_origin_yx"] == [176, 352]
+    assert selected["interior_local_yx_bounds"] == [80, 176, 80, 192]
+    edge = REPLAY["native_tile_selection"](vae, (62, 62), (0, 4))
+    assert edge["interior_local_yx_bounds"] == [0, 176, 64, 256]
+    with pytest.raises(ValueError, match="outside"):
+        REPLAY["native_tile_selection"](vae, (62, 62), (-1, 2))
+    with pytest.raises(ValueError, match="outside"):
+        REPLAY["native_tile_selection"](vae, (62, 62), (1, 5))
+
+
+def test_native_tile_probe_refuses_a_region_entirely_covered_by_neighbor_blends():
+    vae = SimpleNamespace(vae_ratio=16, split_tiles=lambda _size: ([0, 16, 32], [256] * 3, [240, 240]))
+    with pytest.raises(ValueError, match="no interior"):
+        REPLAY["native_tile_selection"](vae, (20, 20), (1, 1))
 
 
 def write_operand(directory, manifest, name, value):

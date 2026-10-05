@@ -43,6 +43,7 @@ from .geometry import (
 )
 from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
+    H3_HANDOFF_NOISE_DENSE_DRIFT,
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     H3_LATENT_UPSCALER_API_VERSION,
@@ -196,7 +197,7 @@ PARTITIONED_EXACT_OVERLAP_POLICY = "partitioned_exact_overlap_dc_only_v5"
 # Keep the existing name for integrations that import the support contract.
 # Only the first generated token owns a channel-mean correction.
 PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS = (1.0,)
-PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "source_residual_handoff_plus_one_token_dc_v5"
+PARTITIONED_VIDEO_BOUNDARY_REPAIR_CONTRACT = "dense_drift_handoff_plus_one_token_dc_v6"
 PARTITIONED_AUDIO_BOUNDARY_REPAIR_CONTRACT = "released_sampler_overlap_exact_restore_v1"
 PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
@@ -1480,7 +1481,7 @@ def _resolve_partitioned_transfer_clean(
             raise RuntimeError("captured handoff clean tensor is not finite floating-point video")
         return actual_handoff_clean, "actual_clean_postprocess", "actual_clean_postprocess_no_inverse"
 
-    if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+    if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
         raise RuntimeError(
             "source-residual handoff lost the actual clean postprocess tensor; "
             "refusing deterministic-noise inverse recovery"
@@ -3956,11 +3957,11 @@ def run_partitioned_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         handoff_noise_mode = (
-            H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            H3_HANDOFF_NOISE_DENSE_DRIFT
             if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
-        if handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL:
+        if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT:
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
@@ -3986,7 +3987,7 @@ def run_partitioned_progressive(
             )
             binding.metrics.event(
                 "partitioned_handoff_residual_provenance",
-                policy=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+                policy=handoff_noise_mode,
                 source="same_sigma_source_state_minus_clean_probe",
                 generated_suffix_only=True,
                 prefix_t=int(stage_plan.prefix_t),
@@ -4034,6 +4035,8 @@ def run_partitioned_progressive(
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
+            initial_source_noise=source_video_noise if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None,
+            model_noise_scale=model_noise_scale if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0,
             run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
         if spatial_transfer_control is not None:
@@ -4501,7 +4504,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled
@@ -4538,7 +4541,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode == H3_HANDOFF_NOISE_SOURCE_RESIDUAL
+            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled

@@ -135,6 +135,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def native_tile_selection(vae, latent_hw: tuple[int, int], tile_yx: tuple[int, int]) -> dict:
+    """Locate an unchanged native tile and its spatially unblended interior."""
+    rows, heights, overlaps_y = vae.split_tiles(latent_hw[0] * vae.vae_ratio)
+    cols, widths, overlaps_x = vae.split_tiles(latent_hw[1] * vae.vae_ratio)
+    row, col = tile_yx
+    if not 0 <= row < len(rows) or not 0 <= col < len(cols):
+        raise ValueError("native tile index is outside the full decoder lattice")
+    top = overlaps_y[row - 1] if row else 0
+    bottom = heights[row] - (overlaps_y[row] if row < len(rows) - 1 else 0)
+    left = overlaps_x[col - 1] if col else 0
+    right = widths[col] - (overlaps_x[col] if col < len(cols) - 1 else 0)
+    if top >= bottom or left >= right:
+        raise ValueError("native tile has no interior free of neighboring spatial blend")
+    return {
+        "tile_index_yx": [row, col],
+        "tile_latent_origin_yx": [rows[row] // vae.vae_ratio, cols[col] // vae.vae_ratio],
+        "tile_latent_hw": [heights[row] // vae.vae_ratio, widths[col] // vae.vae_ratio],
+        "tile_pixel_origin_yx": [rows[row], cols[col]],
+        "interior_local_yx_bounds": [top, bottom, left, right],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
@@ -147,6 +169,13 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--stage-batch-size", type=int, default=1, help="maximum simultaneous stage canvases")
     parser.add_argument("--stages", default="", help="optional comma-separated clean stage names")
+    parser.add_argument(
+        "--native-tile",
+        type=int,
+        nargs=2,
+        metavar=("ROW", "COL"),
+        help="decode one unchanged native tile; report its unblended interior separately",
+    )
     args = parser.parse_args()
     if args.threads < 1:
         parser.error("threads must be positive")
@@ -235,6 +264,9 @@ def main() -> None:
         tone_path = args.continuum_checkout / "v3/video_tone.py"
         trajectory = import_source(trajectory_path, "native_continuum_trajectory")
         tone = import_source(tone_path, "native_continuum_tone")
+        selection = None
+        if args.native_tile is not None:
+            selection = native_tile_selection(vae, tuple(values["provider_native_clean"].shape[-2:]), args.native_tile)
         report = {
             "policy": "offline_native_boundary_stage_decode_v1",
             "manifest_sha256": hashlib.sha256((args.bundle / "manifest.json").read_bytes()).hexdigest(),
@@ -247,7 +279,7 @@ def main() -> None:
             "torch_version": str(torch.__version__),
             "stage_batch_size": args.stage_batch_size,
             "attention": "native_pytorch_sdpa",
-            "full_frame_spatial_blend_reproduced": True,
+            "full_frame_spatial_blend_reproduced": selection is None,
             "preceding_temporal_blend_reproduced": False,
             "first_retained_raw_decoder_frame": first,
             "first_boundary_pair_uses_raw_unblended_prefix": True,
@@ -255,6 +287,11 @@ def main() -> None:
             "rendered_acceptance": False,
             "stages": {},
         }
+        if selection is not None:
+            report.update(
+                spatial_scope="one native tile; interior has no contribution from neighboring spatial tiles",
+                spatial_selection=selection,
+            )
         names = list(stages)
         for start in range(0, len(names), args.stage_batch_size):
             batch_names = names[start : start + args.stage_batch_size]
@@ -263,7 +300,12 @@ def main() -> None:
             )
             z = z * vae.latents_std.view(1, -1, 1, 1, 1).to(z) + vae.latents_mean.view(1, -1, 1, 1, 1).to(z)
             with torch.inference_mode():
-                raw = vae._adaptive_decode(z)
+                if selection is None:
+                    raw = vae._adaptive_decode(z)
+                else:
+                    y, x = selection["tile_latent_origin_yx"]
+                    h, w = selection["tile_latent_hw"]
+                    raw = vae._decode_pixels(z[..., y : y + h, x : x + w])
                 pixels = vae._finalize_pixels(raw[:, :, first - 2 : first + 8]).cpu()
                 del raw, z
             for index, name in enumerate(batch_names):
@@ -275,6 +317,15 @@ def main() -> None:
                     "trajectory": motion,
                     "tone": tone._profile(tone._sample_rgb(frames[2:])),
                 }
+                if selection is not None:
+                    top, bottom, left, right = selection["interior_local_yx_bounds"]
+                    interior = frames[:, top:bottom, left:right]
+                    report["stages"][name]["native_spatial_interior"] = {
+                        "trajectory": trajectory.measure_decoded_boundary_trajectory(
+                            interior[:2], interior, trim_frames=2, boundary_global_frame=-1, forward_frames=8
+                        ),
+                        "tone": tone._profile(tone._sample_rgb(interior[2:])),
+                    }
                 # A view serializes its complete backing batch, including the
                 # other stages. Own only this stage's pixels in its artifact.
                 torch.save(pixels[index].clone(), args.output / f"{name}.pt")
