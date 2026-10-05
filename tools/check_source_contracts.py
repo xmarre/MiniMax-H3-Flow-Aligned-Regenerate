@@ -53,7 +53,18 @@ def main() -> None:
         "self.token_overlap = (-token_drop) % self.tokens_chunk_size",
         "self.frame_overlap = max(self.token_overlap * self.vae_ratio_t - self.frame_pre_padding, 0)",
         "t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap",
+        "h = self.x_embedder(x.flatten(2).transpose(1, 2))",
+        "img_ids = create_token_ids((latent_T, latent_H, latent_W)",
+        "out = optimized_attention(query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),",
+        "clip_dec_chunk = clip_dec_chunk[:, :, self.frame_pre_padding:, :, :]",
+        "dec_overlap, clip_dec_chunk, self.frame_overlap, dim=-3",
         "if i == num_chunks - 1 and dec_overlap is not None:",
+    )
+    require(
+        args.comfy / "comfy/sd.py",
+        "frames 17k+5 <-> latents 5k+2, 16x spatial",
+        "self.upscale_ratio = (lambda a: max(1, (a - 2) // 5 * 17 + 5), 16, 16)",
+        "self.upscale_index_formula = (4, 16, 16)",
     )
     require(
         args.continuum / "v3/assembly.py",
@@ -96,6 +107,9 @@ def main() -> None:
         "class MiniMaxH3(BaseModel):",
         "return self.model_sampling.audio_scale",
         'payload["audio_scale"] = self.audio_scale()',
+        "def scale_latent_inpaint(self, sigma, noise, latent_image, x=None, denoise_mask=None, **kwargs):",
+        "cleans[0] = aug * cleans[0] + (1.0 - aug) * noises[0]",
+        "token_grid_mask = utils.pack_latents(self._token_grid_masks(denoise_mask, shapes))[0]",
     )
     require(
         args.comfy / "comfy/model_sampling.py",
@@ -121,6 +135,13 @@ def main() -> None:
         "WrappersMP.PREDICT_NOISE",
         "#Returns denoised",
         "inverse_noise_scaling(sigmas[-1], samples)",
+        "class KSamplerX0Inpaint:",
+        "latent_mask = 1. - denoise_mask",
+        "out = out * denoise_mask + self.latent_image * latent_mask",
+        (
+            "scale_latent_inpaint(x=x, sigma=sigma, noise=self.noise, "
+            "latent_image=self.latent_image, denoise_mask=denoise_mask)"
+        ),
         "preprocess_conds_hooks(self.conds)",
         "filter_registered_hooks_on_conds(self.conds, self.model_options)",
         "self.conds = process_conds(",
