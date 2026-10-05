@@ -327,7 +327,7 @@ def test_head_dc_bridge_corrects_only_the_first_transferred_tail_token(enabled):
         ({"prefix_transformer_context": "source_carrier_uniform"}, "prefix_transformer_context"),
         ({"low_probe_execution_source": "source_carrier_uniform_only"}, "low_probe_execution_source"),
         ({"guidance_trajectory_source": "source_carrier_uniform_shadow"}, "main partitioned sources"),
-        ({"residual_mode": "measure"}, "frame_gauge_residual_mode"),
+        ({"residual_mode": "apply"}, "frame_gauge_residual_mode"),
         ("witness", "capture_boundary_witness"),
     ],
 )
@@ -346,6 +346,7 @@ def test_runtime_configuration_rejects_unimplemented_band_combinations(override,
         model_options={},
     )
     _validate_target_band_configuration(**fields)
+    _validate_target_band_configuration(**dict(fields, residual_mode="measure"))
     if override == "witness":
         override = {"model_options": {WITNESS_DIRECTORY_OPTION: "/tmp/witness"}}
     fields.update(override)

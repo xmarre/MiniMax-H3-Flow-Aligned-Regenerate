@@ -42,6 +42,14 @@ with the bridge enabled.
 
 ## Evidence and CI
 
+Target-band continuation accepts `frame_gauge_residual_mode=measure`. It exports
+the native decoder window and full stage video snapshots, including the source
+probe, provider output before the identity-band splice, high predictions before
+and after Flow, and final clean video. The manifest distinguishes the native
+carrier's padded storage from decodable target-grid tensors. Full snapshots use
+a 256 MiB CPU tensor budget. Measurement adds copies and file I/O, with no extra
+model/provider/VAE evaluations; its default remains off.
+
 The runtime evidence gate expects low/probe VDN boundary-query receipts at the
 band/tail edge for target-band runs. The cross-repo contract check covers the
 target-carrier contract through VDN and Sol. CI runs target-band tests through

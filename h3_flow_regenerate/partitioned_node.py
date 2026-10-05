@@ -366,9 +366,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": "off",
                 "tooltip": (
-                    "off preserves rigid v2 exactly. measure records bounded regional residual "
-                    "geometry after an accepted rigid v2 transaction without changing any tensor, "
-                    "guidance reference, DC bridge, sampler work, or final output."
+                    "measure exports existing low/high stage tensors without changing sampling. "
+                    "Target-band runs also export full video snapshots within a 256 MiB CPU budget. "
+                    "Accepted rigid transactions additionally record bounded regional residual geometry. "
+                    "CPU copies and file I/O add diagnostic overhead; off disables these exports."
                 ),
             },
         )

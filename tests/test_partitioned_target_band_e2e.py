@@ -78,6 +78,7 @@ def _harness(
     extra_transformer_options=None,
     guidance_mode="off",
     native_sampler=None,
+    residual_mode="off",
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -310,6 +311,7 @@ def _harness(
         learned_upscaler=upscaler,
         exact_prefix_mode="fallback",
         frame_gauge_repair=True,
+        frame_gauge_residual_mode=residual_mode,
     )
     sampler = SimpleNamespace(sampler_function=SimpleNamespace(__name__="sample_euler"), extra_options={})
     if native_sampler is not None:
@@ -347,6 +349,61 @@ def _harness(
 
 def _events(metrics, kind):
     return [event.fields for event in metrics.events if event.kind == kind]
+
+
+def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(monkeypatch):
+    import sys
+
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    exported = []
+
+    def export(tensors, **kwargs):
+        exported.append(({name: value.clone() for name, value in tensors.items()}, kwargs))
+        return {"status": "exported"}
+
+    monkeypatch.setattr(scheduler, "export_residual_geometry_evidence", export)
+    extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 4}
+    control = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=extra,
+        guidance_mode="direction",
+    )
+    measured = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=extra,
+        guidance_mode="direction",
+        residual_mode="measure",
+    )
+    assert torch.equal(measured.result, control.result)
+    assert [call["stage"] for call in measured.calls] == [call["stage"] for call in control.calls]
+    assert measured.metrics.counters["transformer_actual_nfe"] == control.metrics.counters["transformer_actual_nfe"]
+    assert len(exported) == 1
+    tensors, args = exported[0]
+    metadata = args["metadata"]
+    assert metadata["target_band_tokens"] == 4
+    assert metadata["target_band_transfer_start_t"] == 16
+    assert metadata["full_video_snapshots"] is True
+    assert metadata["provider_clean_provenance"] == "actual_learned_provider_before_target_band_splice"
+    provider = tensors["provider_native_clean_full"]
+    source = tensors["source_probe_clean_full"]
+    assert torch.equal(source, measured.upscaler.inputs[0])
+    expected_provider = resize_spatial_5d(source, *TARGET_HW, mode="bicubic").to(provider)
+    assert torch.equal(provider, expected_provider)
+    band_probe = tensors["low_probe_native_carrier_clean_full"]
+    before_high = tensors["pre_high_exact_restored_full"]
+    assert torch.equal(before_high[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
+    assert not torch.equal(provider[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
+    assert torch.equal(before_high[:, :, 17:], provider[:, :, 17:])
+    assert tensors["first_high_before_flow_full"].shape[2] == TEMPORAL
+    assert not torch.equal(tensors["first_high_before_flow_full"], tensors["first_high_after_flow_full"])
+    final, _ = unpack_streams(measured.result, measured.shapes)
+    assert torch.equal(tensors["final_post_high_internal_clean_full"], final)
+    assert measured.binding.high_boundary_trace is None
 
 
 @pytest.mark.parametrize(

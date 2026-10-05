@@ -1464,8 +1464,8 @@ def _validate_target_band_configuration(
         or guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     ):
         unsupported.append("audio, AV and guidance handoff sources must be the main partitioned sources")
-    if residual_mode != "off":
-        unsupported.append("frame_gauge_residual_mode must be 'off'")
+    if residual_mode not in {"off", "measure"}:
+        unsupported.append("frame_gauge_residual_mode must be 'off' or 'measure'")
     witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION) if isinstance(model_options, dict) else None
     if witness_requested(witness_directory):
         unsupported.append("capture_boundary_witness must be disabled")
@@ -4059,6 +4059,24 @@ def run_partitioned_progressive(
         band_raw_video = None
         band_clean_video = None
         if target_band is not None:
+            if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
+                try:
+                    boundary_window_evidence = BoundaryWindowEvidence(
+                        stage_plan.prefix, target_band.temporal, capture_full_video=True
+                    )
+                except ValueError as exc:
+                    binding.metrics.event(
+                        "partitioned_boundary_window_evidence",
+                        policy="native_boundary_decoder_window_evidence_v1",
+                        status="unsupported",
+                        reason=str(exc),
+                        output_mutated=False,
+                        diagnostic_only=True,
+                    )
+                else:
+                    native_probe_video, _ = unpack_streams(source_x0, target_shapes)
+                    boundary_window_evidence.capture("low_probe_native_carrier_clean", native_probe_video)
+                    del native_probe_video
             source_raw, source_x0, band_raw_video, band_clean_video, band_low_receipt = _target_band_source_views(
                 source_raw,
                 source_x0,
@@ -4243,6 +4261,8 @@ def run_partitioned_progressive(
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
 
         split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+        if target_band is not None and boundary_window_evidence is not None:
+            boundary_window_evidence.capture("source_probe_clean", clean_video)
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
         boundary_content_pre_high_receipt: dict[str, Any] | None = None
@@ -4306,6 +4326,8 @@ def run_partitioned_progressive(
                 nonlocal band_provider_native_clean
 
                 band_provider_native_clean = learned_clean.detach().clone()
+                if boundary_window_evidence is not None:
+                    boundary_window_evidence.capture("provider_native_clean", learned_clean)
                 spliced = learned_clean.clone()
                 spliced[:, :, stage_plan.prefix_t : target_band.head_t] = band_clean_video.to(spliced)
                 actual_handoff_clean = spliced.detach().clone()
@@ -4686,7 +4708,7 @@ def run_partitioned_progressive(
                 extra_h3_nfe=0,
                 extra_provider_calls=0,
             )
-        if residual_mode == "measure":
+        if residual_mode == "measure" and target_band is None:
             binding.metrics.event(
                 "partitioned_same_frame_prefix_affine",
                 **measure_paired_prefix_affine(learned_clean, exact_prefix, prefix_t=stage_plan.prefix_t),
@@ -4901,7 +4923,7 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
-        if residual_mode == "measure":
+        if residual_mode == "measure" and target_band is None:
             try:
                 boundary_window_evidence = BoundaryWindowEvidence(exact_prefix, int(target_video.shape[2]))
             except ValueError as exc:
@@ -4916,6 +4938,8 @@ def run_partitioned_progressive(
             else:
                 boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
                 boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
+        elif boundary_window_evidence is not None:
+            boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
 
         high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
         high_audio_reference_enabled = PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED
@@ -6302,7 +6326,25 @@ def run_partitioned_progressive(
                     "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
                     "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
                     "initial_mask_domain": "initial_high_sampler_and_model_video_denoise_mask",
-                    "provider_clean_provenance": splice_clean_source,
+                    "provider_clean_provenance": (
+                        "actual_learned_provider_before_target_band_splice"
+                        if target_band is not None
+                        else splice_clean_source
+                    ),
+                    **(
+                        {
+                            "target_band_tokens": int(target_band.band_t),
+                            "target_band_transfer_start_t": int(target_band.head_t),
+                            "full_video_snapshots": True,
+                            "full_video_temporal_start_t": 0,
+                            "cpu_byte_budget": int(boundary_window_evidence.max_bytes),
+                            "source_probe_clean_grid": [int(source_h), int(source_w)],
+                            "low_probe_native_carrier_layout": "target_head_and_top_left_reduced_tail_with_padding",
+                            "low_probe_native_carrier_decodable": False,
+                        }
+                        if target_band is not None
+                        else {}
+                    ),
                     "registration_result": str(frame_gauge_transaction.get("result")),
                     "registration_reason": str(frame_gauge_transaction.get("reason")),
                     "registration_acceptance_required": False,

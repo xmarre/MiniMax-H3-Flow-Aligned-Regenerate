@@ -180,9 +180,21 @@ head. The band must leave at least one generated token on the reduced grid.
 The mode requires `handoff_transfer_control=learned_3d`,
 `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
 `prefix_transformer_context=exact_target_partitioned`, the main handoff and
-guidance sources, residual measurement off and boundary-witness capture off.
+guidance sources and boundary-witness capture off.
 It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
 native partition carrier. Unsupported combinations fail before sampling.
+
+For stage localization, set `frame_gauge_residual_mode=measure`. Target-band
+runs export the native decoder window and full video snapshots of the low/probe
+carrier, the uniform source-grid provider input, the learned provider output
+before the band splice, the high-stage entry clean state, the first actual high
+prediction before/after Flow, and the final clean video. The manifest identifies
+the protected prefix, band/tail edge, tensor grids and stage domains. The native
+low/probe carrier contains reduced-grid storage windows and padding and must
+not be decoded as ordinary target-grid video. Full snapshots have a 256 MiB
+CPU tensor budget; exceeding it reports an error. This opt-in mode adds CPU
+copies and output-file I/O, with no additional model/provider/VAE evaluations.
+The paired-prefix frame gauge remains inactive in band mode.
 
 This mode has no rendered-quality qualification. Compare its join, the band's
 far edge, tone and audio against `same_grid_target_control` before using it for
