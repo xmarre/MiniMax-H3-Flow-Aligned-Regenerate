@@ -507,3 +507,36 @@ def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler
         assert state["raw_padding_max_abs"] > 0.0
     assert run.binding.active_capture is None
     assert run.binding.active_guidance_run is None
+
+
+@pytest.mark.parametrize(
+    "control",
+    [PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_SAME_GRID, PARTITIONED_SPATIAL_STAGE_TARGET_BAND],
+)
+def test_sol_history_recognizes_the_block_replacement_in_every_stage(monkeypatch, control):
+    """An unbound closure cell would make Sol's history identity opaque for that stage."""
+    from sol_h3 import interop
+    from sol_h3.partitioned_history import _partitioned_flow_replacement_identity
+
+    from h3_flow_regenerate import partitioned_transformer as transform
+
+    original = transform.partitioned_diffusion_wrapper
+    recognized = {}
+
+    def recording_wrapper(executor, *args, **kwargs):
+        class Recording:
+            class_obj = executor.class_obj
+
+            def __call__(self, *call_args, **call_kwargs):
+                options = call_kwargs.get("transformer_options", call_args[3] if len(call_args) > 3 else None)
+                patch = options["patches_replace"]["dit"][("double_block", 0)]
+                identity = _partitioned_flow_replacement_identity(interop, patch, 0)
+                recognized.setdefault(options.get("h3_flow_stage"), set()).add(identity is not None)
+                return executor(*call_args, **call_kwargs)
+
+        return original(Recording(), *args, **kwargs)
+
+    monkeypatch.setattr(transform, "partitioned_diffusion_wrapper", recording_wrapper)
+    extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 2} if control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND else None
+    _harness(monkeypatch, spatial_stage_control=control, extra_transformer_options=extra)
+    assert recognized == {"low": {True}, "probe": {True}, "high": {True}}

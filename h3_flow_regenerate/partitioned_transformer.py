@@ -487,6 +487,9 @@ def partitioned_diffusion_wrapper(
     payload["layout"] = layout
     video_start, video_end, _ = layout.segments[-1]
     carrier_prefix_rows = plan.prefix_t * (plan.target_rows if band is not None else plan.source_rows)
+    # Bound on every path: Sol reads every closure cell of the block replacement
+    # for history identity, and an unbound cell makes that identity opaque.
+    tail_rows = None
     if band is not None:
         if video_end - video_start != band.native_rows:
             raise RuntimeError("target-band native layout does not match the target-grid sampler state")
