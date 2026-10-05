@@ -137,6 +137,11 @@ class PartitionedStageRuntime:
     attention_provider_identity: tuple[object, ...] | None = None
     # Captured once at stage entry and republished explicitly to each VDN block call.
     vdn_linear_diagnostic: str = "normal"
+    softmax_diagnostic: str = "normal"
+    vdn_temporal_carrier_policy: str = "native_grid_then_map_v1"
+    vdn_temporal_carrier_short_conv_spec: str | None = None
+    vdn_temporal_carrier_contract: dict[str, object] | None = None
+    boundary_witness: object = None
     # Diagnostic-only structural A/B. The ordinary node always uses the exact
     # target-grid prefix inside the heterogeneous low/probe transformer.
     prefix_transformer_context: str = "exact_target_partitioned"
@@ -153,6 +158,7 @@ def build_partitioned_stage_plan(
     *,
     source_h: int,
     source_w: int,
+    allow_same_grid: bool = False,
 ) -> PartitionedStagePlan:
     """Build the exact-prefix stage plan before any split sampler lifetime starts."""
     if mask is None:
@@ -183,7 +189,9 @@ def build_partitioned_stage_plan(
     target_h, target_w = map(int, video.shape[-2:])
     if any(n < 2 or n % 2 for n in (source_h, source_w, target_h, target_w)):
         raise ValueError("partitioned exact-prefix spatial axes must be positive and H3 patch-safe")
-    if source_h > target_h or source_w > target_w or (source_h, source_w) == (target_h, target_w):
+    if source_h > target_h or source_w > target_w:
+        raise ValueError("partitioned exact-prefix source must not exceed the target spatial grid")
+    if (source_h, source_w) == (target_h, target_w) and not allow_same_grid:
         raise ValueError("partitioned exact-prefix source must strictly reduce the target spatial grid")
 
     return PartitionedStagePlan(
