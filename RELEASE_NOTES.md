@@ -16,6 +16,15 @@ ownership retain their contracts. No model/provider/VAE evaluation, sampler
 lifetime or history boundary is added. Independent-noise and historical v1
 helper paths remain available.
 
+The decomposition requires a low-stage sampler whose handoff state is a
+deterministic flow of its initial noise: `res_multistep`, Euler/Heun/DPM-2 with
+zero `s_churn`, and the other listed deterministic multistep solvers. Stochastic
+samplers such as ER-SDE, SA-Solver, SEEDS or ancestral samplers add fresh white
+noise that is indistinguishable from drift here; dense interpolation would remove
+about half of its variance. Those runs, and unrecognized samplers, keep
+`source_residual_patch_refinement_v1` for the whole residual. The provenance
+receipt names the sampler and its `dense_drift_sampler_contract`.
+
 Run 01144 reproduced the frame shift with zero user hooks and dense v2 clean
 transfer active. An offline native tile replay finds the local displacement
 already in the first high prediction before Flow guidance. The new residual

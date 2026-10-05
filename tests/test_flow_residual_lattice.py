@@ -10,6 +10,7 @@ from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.handoff import (
     H3_HANDOFF_NOISE_DENSE_DRIFT,
     H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     CleanVideoPostprocessResult,
     build_handoff_state,
     refine_h3_flow_residual,
@@ -217,20 +218,45 @@ def test_invalid_dense_residual_operand_fails_before_provider_evaluation(invalid
     assert provider.calls == []
 
 
+def sample_res_multistep():
+    pass
+
+
+def sample_euler():
+    pass
+
+
+def sample_er_sde():
+    pass
+
+
 @pytest.mark.parametrize(
-    "enabled,source,expected_mode",
+    "enabled,source,sampler_function,extra_options,expected_mode",
     [
-        (True, "main", H3_HANDOFF_NOISE_DENSE_DRIFT),
-        (False, "main", H3_HANDOFF_NOISE_INDEPENDENT),
-        (True, "shadow", H3_HANDOFF_NOISE_INDEPENDENT),
+        (True, "main", sample_res_multistep, {}, H3_HANDOFF_NOISE_DENSE_DRIFT),
+        (True, "main", sample_euler, {}, H3_HANDOFF_NOISE_DENSE_DRIFT),
+        (True, "main", sample_euler, {"s_churn": 0.5}, H3_HANDOFF_NOISE_SOURCE_RESIDUAL),
+        (True, "main", sample_er_sde, {}, H3_HANDOFF_NOISE_SOURCE_RESIDUAL),
+        (False, "main", sample_res_multistep, {}, H3_HANDOFF_NOISE_INDEPENDENT),
+        (True, "shadow", sample_res_multistep, {}, H3_HANDOFF_NOISE_INDEPENDENT),
     ],
 )
-def test_actual_scheduler_routing_passes_original_noise_and_model_scale(enabled, source, expected_mode):
+def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
+    enabled, source, sampler_function, extra_options, expected_mode
+):
     # Execute the production selection, provenance and handoff call directly.
     # This checks routing without pretending to rerun the full H3 sampler.
     from h3_flow_regenerate import partitioned_scheduler as scheduler
 
     tree = ast.parse(Path(scheduler.__file__).read_text())
+    contract = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_dense_drift_sampler_contract"
+    )
     assignment = next(
         node
         for node in ast.walk(tree)
@@ -269,6 +295,7 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(enabled,
     env.update(
         config=SimpleNamespace(frame_gauge_repair=enabled, seed_offset=7),
         av_handoff_source=scheduler.PARTITIONED_AV_HANDOFF_SOURCE_MAIN if source == "main" else "shadow",
+        sampler=SimpleNamespace(sampler_function=sampler_function, extra_options=extra_options),
         source_raw=source_raw,
         source_x0=source_x0,
         source_shapes=shapes,
@@ -286,13 +313,20 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(enabled,
         spatial_stage_control="learned",
         build_handoff_state=capture,
     )
-    program = ast.fix_missing_locations(ast.Module(body=[assignment, provenance, handoff], type_ignores=[]))
+    program = ast.fix_missing_locations(ast.Module(body=[contract, assignment, provenance, handoff], type_ignores=[]))
     exec(compile(program, scheduler.__file__, "exec"), env)
     assert len(calls) == 1
     assert calls[0]["noise_mode"] == expected_mode
     assert calls[0]["initial_source_noise"] is (noise if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None)
     assert calls[0]["model_noise_scale"] == (1.7 if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0)
     assert len(env["effective_upscaler"].calls) == 1
-    assert len(events) == (1 if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 0)
+    assert len(events) == (0 if expected_mode == H3_HANDOFF_NOISE_INDEPENDENT else 1)
     if events:
         assert events[0][1]["policy"] == expected_mode
+        assert events[0][1]["sampler"] == sampler_function.__name__
+        assert events[0][1]["dense_drift_sampler_contract"] == (
+            "deterministic_initial_noise_flow"
+            if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT
+            else "stochastic_or_unverified_sampler_gaussian_refinement"
+        )
+    assert env["transfer_metrics"]["handoff_noise"]["policy"] == expected_mode

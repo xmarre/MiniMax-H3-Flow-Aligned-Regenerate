@@ -71,8 +71,9 @@ structural correctness, not trained-checkpoint visual acceptance.
 ## Integration and runtime acceptance
 
 Core integration now uses upstream [ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783)
-at `2c1e08938a7aee39cc681dea0b050e039e363a5d`. Its fused-adapter repair remains
-independent. The standalone branch does not contain #16720's workspace
+at `417b41c0350cd071d359a02637ee0b4a48b3438a`. Its fused-adapter repair remains
+independent; it also keeps Linear subclasses that override `forward` off the
+fused input-activation paths. The standalone branch does not contain #16720's workspace
 optimization, so CI runs the adapter/MiniMax and sibling lifecycle contracts
 against the replacement head rather than requiring the absent workspace test.
 

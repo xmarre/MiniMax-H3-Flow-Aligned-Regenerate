@@ -157,6 +157,7 @@ from .runtime import (
     _resize_packed_latent_image,
     _resize_packed_mask,
     _validate_progressive_sampler_state,
+    sampler_name,
 )
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
@@ -184,6 +185,29 @@ from .vae_boundary_video import (
 PARTITIONED_PROGRESSIVE_KEY = "h3_flow_partitioned_progressive_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
 FRAME_GAUGE_GUIDANCE_SUPPORTED_SAMPLERS = frozenset({"sample_res_multistep"})
+# Dense drift transport assumes residual - noise_scale * initial_noise is model
+# drift. Stochastic samplers add fresh white noise to that difference; dense
+# interpolation would remove about half of its variance and correlate it.
+H3_DENSE_DRIFT_DETERMINISTIC_SAMPLERS = frozenset(
+    {
+        "sample_deis",
+        "sample_dpmpp_2m",
+        "sample_dpmpp_2m_cfg_pp",
+        "sample_euler_cfg_pp",
+        "sample_exp_heun_2_x0",
+        "sample_gradient_estimation",
+        "sample_gradient_estimation_cfg_pp",
+        "sample_ipndm",
+        "sample_ipndm_v",
+        "sample_lms",
+        "sample_res_multistep",
+        "sample_res_multistep_cfg_pp",
+        "sample_unipc",
+        "sample_unipc_bh2",
+    }
+)
+# Deterministic only while s_churn is zero.
+H3_DENSE_DRIFT_CHURN_SAMPLERS = frozenset({"sample_dpm_2", "sample_euler", "sample_heun", "sample_heunpp2"})
 FRAME_GAUGE_BOUNDARY_MIN_ERROR_CELLS = 0.125
 FRAME_GAUGE_BOUNDARY_MIN_IMPROVEMENT = 0.25
 FRAME_GAUGE_BOUNDARY_MIN_RESPONSE = 3.0
@@ -1458,6 +1482,20 @@ def _recover_partitioned_transfer_clean(
         diagnostic_noise,
         sigma=float(sigma),
     )
+
+
+def _dense_drift_sampler_contract(sampler: Any) -> tuple[bool, str]:
+    """Return whether the low-stage handoff state is a deterministic flow of its initial noise."""
+
+    name = sampler_name(sampler)
+    options = getattr(sampler, "extra_options", {}) or {}
+    if name in H3_DENSE_DRIFT_CHURN_SAMPLERS:
+        try:
+            churn = float(options.get("s_churn", 0.0))
+        except (TypeError, ValueError):
+            return False, name
+        return churn == 0.0, name
+    return name in H3_DENSE_DRIFT_DETERMINISTIC_SAMPLERS, name
 
 
 def _resolve_partitioned_transfer_clean(
@@ -3956,12 +3994,13 @@ def run_partitioned_progressive(
 
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
+        deterministic_handoff_sampler, handoff_sampler = _dense_drift_sampler_contract(sampler)
         handoff_noise_mode = (
-            H3_HANDOFF_NOISE_DENSE_DRIFT
+            (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
             if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
-        if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT:
+        if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
@@ -3997,6 +4036,12 @@ def run_partitioned_progressive(
                 residual_vs_initial_rms=float(residual_delta.square().mean().sqrt().item()),
                 residual_vs_initial_cosine=residual_cosine,
                 model_noise_scale=model_noise_scale,
+                sampler=handoff_sampler,
+                dense_drift_sampler_contract=(
+                    "deterministic_initial_noise_flow"
+                    if deterministic_handoff_sampler
+                    else "stochastic_or_unverified_sampler_gaussian_refinement"
+                ),
                 residual_domain="effective_flow_residual_carried_state_units",
                 extra_h3_nfe=0,
                 extra_sampler_lifetimes=0,

@@ -141,9 +141,15 @@ python tools/analyze_handoff_residual_evidence.py \
 
 ## Routing, validation and remaining acceptance
 
-The active candidate applies only with frame-gauge repair enabled and the main
-AV handoff source. The OFF/shadow paths retain independent noise; the v1 helper
-remains available for historical replay. No provider/model/VAE evaluation,
+The active candidate applies only with frame-gauge repair enabled, the main
+AV handoff source and a low-stage sampler that is a deterministic flow of its
+initial noise (`res_multistep`, zero-churn Euler/Heun/DPM-2 and the other listed
+deterministic solvers). Stochastic or unrecognized samplers add fresh white noise
+that `r - S*N` would misclassify as drift; dense interpolation removes about 54%
+of the variance of white input at these geometries. Those runs keep v1 for the
+whole residual, and the provenance receipt names the sampler and contract. The
+OFF/shadow paths retain independent noise; the v1 helper remains available for
+historical replay. No provider/model/VAE evaluation,
 sampler lifetime or history boundary is added. Audio, native high conditioning,
 exact-prefix restoration, the one-token DC bridge and learned guidance retain
 their ownership. No final latent/image warp is introduced.
@@ -160,7 +166,7 @@ values from seeded fine-component consistency.
 Flow #93 carries the candidate. Companion heads stay Upscaler Plus #16
 `a843aff79ff410f75d133fb6cb22394d3aad27bf`, VDN Plus #37
 `a1ee145d041c5a88bde5506f79876528c032f11d` and upstream Core #16783
-`2c1e08938a7aee39cc681dea0b050e039e363a5d`. CI checks coordinate ownership against
+`417b41c0350cd071d359a02637ee0b4a48b3438a`. CI checks coordinate ownership against
 the pinned upscaler/Core sources. The candidate remains unqualified for rendered
 continuity and GPU cost.
 
