@@ -26,7 +26,7 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — v0.3.9 production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 30-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, and the current overlap/provenance values);
+- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — v0.3.9 production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, the suffix DC bridge, the target-band width, and the current overlap/provenance values);
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
@@ -112,6 +112,8 @@ handoff_transfer_control         = learned_3d
 spatial_stage_control            = same_grid_target_control
 softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
+suffix_dc_bridge                 = true
+target_band_tokens               = 4
 ```
 
 Flow defaults exact-prefix continuation to `same_grid_target_control`: low/probe
@@ -148,6 +150,48 @@ or heterogeneous controls can change work and output; their results are not
 qualified by the target-grid profile's acceptance. Target-grid low/probe also
 has more spatial work than a reduced-grid stage. Measure continuation timing
 separately from loading and first-chunk work.
+
+### Target-band continuation (opt-in)
+
+`spatial_stage_control=progressive_target_band` is a reduced-cost alternative
+for exact-prefix continuations. The protected prefix and the first
+`target_band_tokens` generated H3 temporal latent tokens after it stay on the
+target grid through low/probe. Every later generated token runs on the
+configured reduced grid. At the handoff the band continues by identity, exactly
+as under same-grid control, and the remaining tokens use the learned 3D transfer
+and residual transport of `progressive_low_to_high`.
+
+The low/probe sampler state stays on the uniform target grid. Each reduced-grid
+token stores its values in a source-sized window of its frame, and the rest of
+that frame is inert padding that is never generated or read. The transformer
+receives `[target-grid prefix | target-grid band | reduced-grid tail]`, so
+low/probe video work falls between the reduced-grid and target-grid controls.
+Spectrum forecasting, the native final layer and Flow guidance keep their usual
+contracts. Guidance binds to the actual high-stage entry state (identity band
+plus learned tail).
+
+With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
+first reduced-grid token after the band and is measured against the target-grid
+head. The band must leave at least one generated token on the reduced grid.
+The mode requires `handoff_transfer_control=learned_3d`,
+`vdn_temporal_carrier_policy=native_grid_then_map_v1`,
+`prefix_transformer_context=exact_target_partitioned`, the main handoff and
+guidance sources, residual measurement off and boundary-witness capture off.
+It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
+native partition carrier. Unsupported combinations fail before sampling.
+
+This mode has no rendered-quality qualification. Compare its join, the band's
+far edge, tone and audio against `same_grid_target_control` before using it for
+production output. The video-row reduction is not a wall-time measurement.
+
+### Suffix DC bridge
+
+`suffix_dc_bridge` controls the one-token channel-mean bridge on learned-transfer
+continuations. When enabled (the default and historical behaviour), the first
+transferred generated token receives the per-channel spatial-mean offset that the
+learned transfer produced on its carried context. When disabled, that token stays
+exactly as transferred, and transfer receipts report the bridge as disabled.
+Same-grid continuation measures a zero offset either way.
 
 ## Coordinated H3 releases
 

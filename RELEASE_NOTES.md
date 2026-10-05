@@ -1,3 +1,49 @@
+# Unreleased: target-band continuation and suffix DC selector
+
+## Target-band continuation (opt-in)
+
+`spatial_stage_control=progressive_target_band` adds a continuation arm between
+the reduced-grid and target-grid controls. The protected prefix and the next
+`target_band_tokens` (default 4) generated temporal latent tokens stay on the
+target grid through low/probe. Later tokens run on the configured reduced grid.
+At the handoff the band continues by identity and the reduced-grid tokens use
+the learned 3D transfer and residual transport.
+
+- The low/probe sampler state is target-sized. Reduced-grid tokens are stored in
+  a source-sized window of their frame, and the remaining padding is protected,
+  zero and never presented to the transformer.
+- The transformer receives `[target-grid prefix | target-grid band | reduced-grid
+  tail]` and returns its rows to Core's native layout, so Spectrum forecasting
+  and the native final layer see one consistent row set.
+- The partition contract declares `native_carrier_grid="target"` and
+  `native_carrier_rows_per_frame` only in this mode. Historical contracts and
+  their semantic digests are unchanged. The mode requires the paired VDN-H3-Plus
+  and Sol-H3 changes that accept a target-grid native carrier; older companions
+  fail before sampling.
+- The low trajectory is recorded on the uniform reduced grid. Learned-handoff
+  guidance binds to the actual high-stage entry state.
+- The one-token DC bridge applies at the band/tail boundary, measured against the
+  target-grid head. The paired-prefix frame gauge does not run because no transfer
+  boundary is adjacent to the prefix.
+
+No rendered-quality qualification exists yet. The default remains
+`same_grid_target_control`.
+
+## Suffix DC bridge selector
+
+The partitioned node appends `suffix_dc_bridge` (default `true`). Disabling it
+leaves the first transferred generated token exactly as transferred on both
+production DC paths. Transfer and frame-gauge receipts record the request, and
+the runtime evidence gate validates the disabled arm. Existing workflows load
+with the bridge enabled.
+
+## Evidence and CI
+
+The runtime evidence gate expects low/probe VDN boundary-query receipts at the
+band/tail edge for target-band runs. The cross-repo contract check covers the
+target-carrier contract through VDN and Sol. CI runs target-band tests through
+the real Core forward and the actual scheduler on CPU.
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.9
 
 Default Continuum exact-prefix continuation to the accepted target-grid profile,

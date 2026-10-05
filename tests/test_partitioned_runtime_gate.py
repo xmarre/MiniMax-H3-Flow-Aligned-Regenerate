@@ -2423,3 +2423,36 @@ def test_runtime_gate_rejects_inconsistent_disabled_suffix_dc_bridge(location, f
     targets[location][field] = value
     with pytest.raises(RuntimeGateError, match=error):
         validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+def test_gate_expects_target_band_boundary_queries_at_the_band_tail_edge():
+    metrics = _high_attention_metrics()
+    events = metrics["events"]
+    events[0]["fields"]["target_band_tokens"] = 2
+    for event in events:
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] in {"low", "probe"}:
+            event["fields"].update(prefix_t=4, query_frames=[4, 5])
+    validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+    )
+
+    # A band run whose low-stage boundary stays at the protected prefix is rejected.
+    stale = _high_attention_metrics()
+    stale["events"][0]["fields"]["target_band_tokens"] = 2
+    with pytest.raises(RuntimeGateError, match="receipt drifted"):
+        validate_partitioned_runtime_evidence(
+            stale,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+
+    malformed = _high_attention_metrics()
+    malformed["events"][0]["fields"]["target_band_tokens"] = "2"
+    with pytest.raises(RuntimeGateError, match="target-band width is malformed"):
+        validate_partitioned_runtime_evidence(
+            malformed,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )

@@ -79,6 +79,8 @@ handoff_transfer_control         = learned_3d
 spatial_stage_control            = same_grid_target_control
 softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
+suffix_dc_bridge                 = true
+target_band_tokens               = 4
 ```
 
 Continuation low/probe and high share the target grid. Clean/residual transfer
@@ -138,6 +140,50 @@ provider connected. Increasing the low-stage spatial grid increases its work;
 compare continuation stage timings when assessing cost. Audio can also change
 because it is predicted jointly with the differently conditioned video.
 New nodes default to `same_grid_target_control`. Explicit saved controls remain active.
+
+### Target-band exact-prefix continuation
+
+`spatial_stage_control=progressive_target_band` keeps the protected prefix and
+the next `target_band_tokens` generated temporal latent tokens on the target grid
+during low/probe, and runs every later generated token on the configured
+reduced grid. At the handoff the band continues by identity and the reduced-grid
+tokens use the learned 3D transfer. The aim is the same-grid join next to the
+carried prefix at a lower low/probe cost.
+
+- `target_band_tokens` counts H3 temporal latent tokens. It must leave at least
+  one generated token on the reduced grid; otherwise the chunk fails before
+  sampling.
+- Low/probe video rows are `(prefix + band) x target rows + tail x source rows`.
+  Every actual low/probe evaluation also processes the text, reference and audio
+  rows, so wall time does not scale with video rows alone.
+- The low trajectory used by Flow guidance is recorded on the uniform reduced
+  grid. High-stage guidance binds to the actual entry state: the identity band
+  and the learned tail.
+- Required selectors: `handoff_transfer_control=learned_3d`,
+  `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
+  `prefix_transformer_context=exact_target_partitioned`,
+  `low_probe_execution_source=main_then_shadow`, the main audio/AV/guidance
+  sources, `frame_gauge_residual_mode=off` and `capture_boundary_witness=false`.
+- Required companions: VDN-H3-Plus and Sol-H3 releases that accept a target-grid
+  native partition carrier.
+
+The paired-prefix frame gauge does not run in this mode. The prefix is followed
+by the identity band, so no transfer boundary sits next to it. With
+`suffix_dc_bridge=true`, the one-token DC bridge moves to the band/tail boundary
+and is measured against the target-grid head.
+
+This mode is not qualified for rendered quality. Before relying on it, inspect
+the prefix join, the band's far edge, tone and audio against
+`same_grid_target_control` on the same seed.
+
+### Suffix DC bridge selector
+
+`suffix_dc_bridge=true` (default) keeps the historical one-token channel-mean
+bridge for learned-transfer continuations. `false` leaves the first transferred
+token exactly as the transfer produced it. Use it to test whether that bridge
+contributes to a boundary artifact. Transfer receipts record
+`suffix_dc_bridge_requested`, and the runtime evidence gate validates both
+settings.
 
 ## Progressive Handoff (Target Input)
 

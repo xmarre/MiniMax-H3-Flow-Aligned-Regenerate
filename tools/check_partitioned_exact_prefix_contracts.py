@@ -148,6 +148,100 @@ def _validate_same_grid_history_transport() -> None:
         raise SystemExit("Sol accepted a mismatched equal-grid VDN binding")
 
 
+def _validate_target_band_transport() -> None:
+    """Prove a target-native-carrier band contract crosses Flow, VDN and Sol."""
+    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_NATIVE_CARRIER_TARGET, PartitionedExactPrefixPlan
+    from h3_flow_regenerate.partitioned_stage import PartitionedTargetBandGeometry
+    from h3_flow_regenerate.partitioned_transformer import _vdn_external_contract
+    from sol_h3.partitioned_history import (
+        PARTITIONED_FLOW_IDENTITY,
+        PARTITIONED_NATIVE_CARRIER_GRIDS as SOL_CARRIERS,
+        VDN_EXTERNAL_SEQUENCE_KEY,
+        _partitioned_flow_replacement_identity,
+        _partitioned_history_layout_valid,
+    )
+    from vdn_h3.partitioned_runtime import validate_partitioned_external_execution
+    from vdn_h3.partitioned_sequence import (
+        PARTITIONED_NATIVE_CARRIER_GRIDS as VDN_CARRIERS,
+        make_vdn_partitioned_external_contract,
+        validate_flow_partition_contract,
+    )
+
+    if PARTITIONED_NATIVE_CARRIER_TARGET not in VDN_CARRIERS or PARTITIONED_NATIVE_CARRIER_TARGET not in SOL_CARRIERS:
+        raise SystemExit("paired VDN/Sol releases do not accept a target native partition carrier")
+    band = PartitionedTargetBandGeometry(
+        protected_t=2, band_t=2, temporal=7, source_h=4, source_w=6, target_h=8, target_w=12
+    )
+    flow = PartitionedExactPrefixPlan(
+        video_start=7,
+        temporal=band.temporal,
+        prefix_t=band.prefix_t,
+        source_grid_h=band.source_grid[0],
+        source_grid_w=band.source_grid[1],
+        target_grid_h=band.target_grid[0],
+        target_grid_w=band.target_grid[1],
+        native_carrier_grid=PARTITIONED_NATIVE_CARRIER_TARGET,
+    )
+    if flow.sequence_rows != flow.video_start + band.partitioned_rows:
+        raise SystemExit("Flow band contract rows differ from the band geometry")
+    contract = flow.to_contract()
+    vdn = validate_flow_partition_contract(contract, sequence_rows=flow.sequence_rows)
+    if vdn.native_rows_per_frame != band.target_rows:
+        raise SystemExit("VDN did not bind the target native carrier")
+    external = _vdn_external_contract(flow)
+    if external != make_vdn_partitioned_external_contract(vdn):
+        raise SystemExit("Flow and VDN external contracts differ for the target native carrier")
+    options = {PARTITIONED_FLOW_IDENTITY: contract, VDN_EXTERNAL_SEQUENCE_KEY: external}
+    native_rows = flow.video_start + band.native_rows
+    native_layout = SimpleNamespace(
+        seq_len=native_rows,
+        video_start=flow.video_start,
+        video_end=native_rows,
+        num_frames=band.temporal,
+        tokens_per_frame=band.target_rows,
+    )
+    validate_partitioned_external_execution(
+        options, native_layout, flow.sequence_rows, torch.zeros(1, flow.sequence_rows, 2)
+    )
+    layout = SimpleNamespace(
+        seq_len=flow.sequence_rows,
+        segments=[(0, flow.video_start, "nonvideo"), (flow.video_start, flow.sequence_rows, "video")],
+        signature=(PARTITIONED_FLOW_IDENTITY, "target-band-ci"),
+    )
+    if not _partitioned_history_layout_valid(options, layout):
+        raise SystemExit("Sol rejected the target-band partitioned layout")
+    previous = object()
+    values = {
+        "layer": 0,
+        "previous": previous,
+        "plan": band,
+        "layout": SimpleNamespace(
+            seq_len=native_rows,
+            segments=[(0, flow.video_start, "nonvideo"), (flow.video_start, native_rows, "video")],
+            signature=("native-target-carrier",),
+        ),
+        "partitioned_layout": layout,
+        "video_start": flow.video_start,
+        "video_end": native_rows,
+        "carrier_prefix_rows": band.prefix_t * band.target_rows,
+        "inner": SimpleNamespace(blocks=[object()]),
+        "partition_contract": contract,
+    }
+
+    def patch():
+        return None
+
+    patch.__module__ = "h3_flow_regenerate.partitioned_transformer"
+    patch.__qualname__ = "partitioned_diffusion_wrapper.<locals>.wrap.<locals>.call"
+    classifier = SimpleNamespace(_closure_values=lambda _patch: values)
+    identity = _partitioned_flow_replacement_identity(classifier, patch, 0)
+    if identity is None or identity[1] is not previous or identity[0][1] != flow.semantic_digest:
+        raise SystemExit("Sol rejected the target-band Flow closure or changed inherited ownership")
+    values["carrier_prefix_rows"] = band.prefix_t * band.source_rows
+    if _partitioned_flow_replacement_identity(classifier, patch, 0) is not None:
+        raise SystemExit("Sol accepted a target-band closure with a reduced-grid native carrier")
+
+
 def _namespace_package(name: str, package_dir: Path) -> None:
     """Load source-contract modules without executing custom-node __init__.py."""
     if not package_dir.is_dir():
@@ -652,11 +746,13 @@ def main() -> None:
 
     _validate_same_grid_history_transport()
     _validate_high_attention_transport()
+    _validate_target_band_transport()
     print(
         "partitioned exact-prefix contracts: OK ",
         f"abi={PARTITIONED_REQUEST_ABI} groups={len(grouped.groups)} sequence_rows={flow.sequence_rows}",
         "same_grid_history=True",
         "high_prefix_attention=True",
+        "target_band_native_carrier=True",
     )
 
 

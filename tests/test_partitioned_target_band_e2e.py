@@ -99,11 +99,11 @@ def _harness(monkeypatch, *, spatial_stage_control, extra_transformer_options=No
         "_checked_weighted_dense",
         lambda q, k, v, key_bias, *, scale, **_kw: partitioned_request._weighted_dense(q, k, v, key_bias, scale=scale),
     )
-    # Sol's band-closure capability is asserted separately; this harness checks
-    # Flow's scheduling even against companions pinned before that change.
-    from h3_flow_regenerate import partitioned_scheduler
+    if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+        from sol_h3 import partitioned_history
 
-    monkeypatch.setattr(partitioned_scheduler, "_validate_partitioned_sol_native_carrier", lambda _carrier: None)
+        if "target" not in getattr(partitioned_history, "PARTITIONED_NATIVE_CARRIER_GRIDS", ()):
+            pytest.skip("installed Sol-H3 predates target native carrier recognition")
 
     generator = torch.Generator().manual_seed(71)
     dm = MiniMaxH3Model(

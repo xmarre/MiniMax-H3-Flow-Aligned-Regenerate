@@ -4212,9 +4212,21 @@ def validate_partitioned_runtime_evidence(
             len(boundary_query_events) == partitioned_actual,
             "VDN boundary-query policy did not reach every actual partitioned model call",
         )
-        expected_prefix_t = plan_fields.get("prefix_temporal_length")
+        protected_prefix_t = plan_fields.get("prefix_temporal_length")
+        # Target-band continuation partitions low/probe at the band/tail edge;
+        # receipts predating the band record no band tokens.
+        target_band_tokens = plan_fields.get("target_band_tokens", 0)
+        _require(
+            type(target_band_tokens) is int and target_band_tokens >= 0,
+            "partitioned stage plan target-band width is malformed",
+        )
         for fields in boundary_query_events:
             query_frames = fields.get("query_frames")
+            expected_prefix_t = (
+                protected_prefix_t + target_band_tokens
+                if target_band_tokens and fields.get("stage") in {"low", "probe"}
+                else protected_prefix_t
+            )
             _require(
                 fields.get("policy") == expected_boundary_query_policy
                 and fields.get("prefix_t") == expected_prefix_t

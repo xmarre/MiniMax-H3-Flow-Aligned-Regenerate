@@ -88,9 +88,9 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned
-          git -C .contracts/SolPartitioned checkout fb368cf29c27610a5521636a87e34cb2ac110135
+          git -C .contracts/SolPartitioned checkout 11763f6ab6a346694adc0271376c8ff6c0b70168
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3-Plus.git .contracts/VDNPartitioned
-          git -C .contracts/VDNPartitioned checkout a6f7cd577b8d7a070b6bfc9feb2e2bcb1a779ccb
+          git -C .contracts/VDNPartitioned checkout a1eb82907f9fc7f47a1f2ba58b942bb09b4992d5
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI.git .contracts/ComfyRuntime
           git -C .contracts/ComfyRuntime checkout c75777af734ff2881589fa7662723689462e8b39
       - name: Validate native and sibling contracts
@@ -115,7 +115,7 @@ jobs:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
-          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece
+          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece torchsde
           python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py tests/test_boundary_window_evidence.py -q
       - name: Validate partitioned exact-prefix cross-repo contracts
         run: |
@@ -194,4 +194,7 @@ jobs:
             .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py \
             .contracts/VDNPartitioned/tests/test_deferred_cholesky.py \
             .contracts/VDNPartitioned/tests/test_runtime_buffers.py \
-            tests/test_partitioned_native_modulation.py::test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol
+            .contracts/VDNPartitioned/tests/test_partitioned_native_carrier.py \
+            tests/test_partitioned_native_modulation.py::test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol \
+            tests/test_partitioned_target_band_native.py \
+            tests/test_partitioned_target_band_e2e.py

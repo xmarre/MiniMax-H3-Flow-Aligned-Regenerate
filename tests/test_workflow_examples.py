@@ -179,6 +179,8 @@ def test_partitioned_exact_prefix_api_example_matches_v039_defaults():
         "spatial_stage_control": "same_grid_target_control",
         "softmax_diagnostic": "normal",
         "video_guided_overlap_tokens": 6,
+        "suffix_dc_bridge": True,
+        "target_band_tokens": 4,
     }
     for key, value in expected_inputs.items():
         assert patch["inputs"][key] == value
@@ -279,6 +281,8 @@ def test_partitioned_exact_prefix_canvas_workflow_matches_v039_defaults():
         "same_grid_target_control",
         "normal",
         6,
+        True,
+        4,
     ]
     learned_input = next(input_ for input_ in patch["inputs"] if input_["name"] == "learned_upscaler")
     learned_link = next(link for link in workflow["links"] if link[0] == learned_input["link"])
