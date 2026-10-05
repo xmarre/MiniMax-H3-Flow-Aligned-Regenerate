@@ -18,8 +18,14 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
     PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     PartitionedAudioModelTimestepContext,
+    build_vdn_temporal_carrier_contract,
     normalize_vdn_linear_diagnostic,
 )
 from .partitioned_prefix import (
@@ -229,7 +235,15 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     if previous_identity is not None and previous_identity != identity:
         metrics.increment("partitioned_attention_inherited_provider_transitions")
 
-    cached = cache.get(identity)
+    carrier_contract = runtime.vdn_temporal_carrier_contract
+    carrier_digest = None if carrier_contract is None else carrier_contract.get("numerical_digest")
+    numerical_identity = []
+    if carrier_digest is not None:
+        numerical_identity.append(("vdn_temporal_carrier_v1", carrier_digest))
+    if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        numerical_identity.append((PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, runtime.softmax_diagnostic))
+    cache_identity = identity if not numerical_identity else (tuple(numerical_identity), identity)
+    cached = cache.get(cache_identity)
     if cached is not None:
         if not callable(cached) or not getattr(cached, "_h3_flow_partitioned_attention_override", False):
             raise RuntimeError("partitioned exact-prefix attention provider cache entry is malformed")
@@ -243,7 +257,7 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     override = make_partitioned_attention_override(runtime, metrics)
     override._h3_flow_partitioned_previous = previous
     override._h3_flow_partitioned_provider_identity = identity
-    cache[identity] = override
+    cache[cache_identity] = override
     metrics.increment("partitioned_attention_provider_creations")
     return override
 
@@ -268,6 +282,26 @@ def _partitioned_transformer_options(
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
         raise RuntimeError("partitioned exact-prefix VDN linear diagnostic transport drifted")
     block_options[PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY] = linear_mode
+    softmax_mode = str(runtime.softmax_diagnostic)
+    if softmax_mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        block_options.pop(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, None)
+    else:
+        existing_softmax_mode = block_options.get(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY)
+        if existing_softmax_mode is not None and existing_softmax_mode != softmax_mode:
+            raise RuntimeError("partitioned exact-prefix softmax diagnostic transport drifted")
+        block_options[PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] = softmax_mode
+    carrier_contract = runtime.vdn_temporal_carrier_contract
+    if carrier_contract is None:
+        block_options.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    else:
+        existing_carrier = block_options.get(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY)
+        if existing_carrier is not None and existing_carrier != carrier_contract:
+            raise RuntimeError("partitioned exact-prefix VDN temporal-carrier policy transport drifted")
+        block_options[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] = carrier_contract
+    if runtime.boundary_witness is not None:
+        from .boundary_witness import WITNESS_KEY
+
+        block_options[WITNESS_KEY] = runtime.boundary_witness
     expected_vdn = _vdn_external_contract(
         validate_partitioned_contract(
             partition_contract,
@@ -283,7 +317,7 @@ def _partitioned_transformer_options(
 
 
 def _audio_model_timestep_kwargs(options, kwargs):
-    """Override only MiniMax-H3's inner audio timestep labels, never sampler ownership."""
+    """Verify exact native masks or override diagnostic inner timestep labels."""
 
     context = options.get(PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY)
     if context is None:
@@ -291,11 +325,34 @@ def _audio_model_timestep_kwargs(options, kwargs):
     if not isinstance(context, PartitionedAudioModelTimestepContext):
         raise RuntimeError("partitioned audio model-timestep context is malformed")
     runtime_audio_mask = kwargs.get("audio_denoise_mask")
+    context_audio_mask = context.audio_mask
+    if context.mask_kind == "exact_authoritative" and runtime_audio_mask is None:
+        # Core omits the condition when every audio row is fully generated.
+        if not torch.is_tensor(context_audio_mask) or not bool((context_audio_mask == 1).all().item()):
+            raise RuntimeError("exact protected audio requires the native runtime audio denoise mask")
+        context.record_verification()
+        return kwargs
     if not torch.is_tensor(runtime_audio_mask):
         raise RuntimeError("partitioned audio timestep override requires the native runtime audio denoise mask")
-    context_audio_mask = context.audio_mask
+    if (
+        context.mask_kind == "exact_authoritative"
+        and torch.is_tensor(context_audio_mask)
+        and context_audio_mask.ndim == runtime_audio_mask.ndim
+        and context_audio_mask.shape[0] == 1
+        and tuple(context_audio_mask.shape[1:]) == tuple(runtime_audio_mask.shape[1:])
+    ):
+        # Core can repeat the canonical condition when batching CFG branches.
+        context_audio_mask = context_audio_mask.expand_as(runtime_audio_mask)
     if not torch.is_tensor(context_audio_mask) or tuple(context_audio_mask.shape) != tuple(runtime_audio_mask.shape):
         raise RuntimeError("partitioned audio timestep override mask geometry drifted")
+    if context.mask_kind == "exact_authoritative":
+        expected = context_audio_mask.to(device=runtime_audio_mask.device, dtype=runtime_audio_mask.dtype)
+        if not torch.equal(runtime_audio_mask, expected):
+            raise RuntimeError(
+                "exact audio model labels require the same authoritative sampler input and velocity mask"
+            )
+        context.record_verification()
+        return kwargs
     local = dict(kwargs)
     local["audio_denoise_mask"] = context_audio_mask.to(
         device=runtime_audio_mask.device,
@@ -412,6 +469,15 @@ def partitioned_diffusion_wrapper(
     )
     if position_policy is not None:
         partitioned_layout.signature = (*partitioned_layout.signature, position_policy.signature)
+    if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
+        # Sol history-v1 includes the complete partitioned layout signature in
+        # numerical identity. Keep the geometry digest unchanged and add only
+        # this diagnostic leaf so sparse and same-domain dense samples cannot
+        # share history identity.
+        partitioned_layout.signature = (
+            *partitioned_layout.signature,
+            (PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, runtime.softmax_diagnostic),
+        )
     keep = layout.img_pos < video_start
     partitioned_layout.img_pos = torch.cat(
         (layout.img_pos[keep], torch.arange(video_start, partitioned_layout.seq_len))
@@ -427,12 +493,36 @@ def partitioned_diffusion_wrapper(
         source_grid_w=int(plan.source_grid[1]),
         target_grid_h=int(plan.target_grid[0]),
         target_grid_w=int(plan.target_grid[1]),
+        same_grid_control=plan.source_grid == plan.target_grid,
     )
     partition_contract = partition_plan.to_contract()
+    if runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION:
+        if not runtime.vdn_temporal_carrier_short_conv_spec:
+            raise RuntimeError("destination-grid temporal stencil is missing paired VDN checkpoint capability")
+        carrier_contract = build_vdn_temporal_carrier_contract(
+            policy=runtime.vdn_temporal_carrier_policy,
+            flow_semantic_digest=partition_contract["semantic_digest"],
+            diagnostic_mode=runtime.vdn_linear_diagnostic,
+            short_conv_spec=runtime.vdn_temporal_carrier_short_conv_spec,
+        )
+        if (
+            runtime.vdn_temporal_carrier_contract is not None
+            and runtime.vdn_temporal_carrier_contract != carrier_contract
+        ):
+            raise RuntimeError("partitioned exact-prefix temporal-carrier numerical identity changed within one stage")
+        runtime.vdn_temporal_carrier_contract = carrier_contract
+    elif runtime.vdn_temporal_carrier_policy == PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        runtime.vdn_temporal_carrier_contract = None
+    else:
+        raise RuntimeError(f"unsupported VDN temporal-carrier policy {runtime.vdn_temporal_carrier_policy!r}")
     if partition_plan.sequence_rows != int(partitioned_layout.seq_len):
         raise RuntimeError("partitioned exact-prefix plan does not match transformed sequence rows")
 
     local = dict(options)
+    if runtime.vdn_temporal_carrier_contract is None:
+        local.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    else:
+        local[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] = runtime.vdn_temporal_carrier_contract
     local["optimized_attention_override"] = _stage_partitioned_attention_override(
         runtime,
         local.get("optimized_attention_override"),
@@ -460,6 +550,7 @@ def partitioned_diffusion_wrapper(
                 metrics.increment("partitioned_transformer_calls")
                 metrics.event(
                     "partitioned_exact_prefix_transformer",
+                    stage=options.get("h3_flow_stage"),
                     native_sequence_rows=int(layout.seq_len),
                     partitioned_sequence_rows=int(partitioned_layout.seq_len),
                     video_start=int(video_start),
@@ -474,8 +565,15 @@ def partitioned_diffusion_wrapper(
                     prefix_visual_cond_timestep=aug,
                     prefix_target_grid_rope=True,
                     suffix_source_grid_rope=True,
-                    low_suffix_real_latent=True,
+                    low_suffix_real_latent=options.get("h3_flow_stage") != "high",
+                    native_target_suffix=options.get("h3_flow_stage") == "high",
                     vdn_external_sequence_api=VDN_PARTITIONED_SEQUENCE_API,
+                    vdn_temporal_carrier_policy=runtime.vdn_temporal_carrier_policy,
+                    vdn_temporal_carrier_numerical_digest=(
+                        runtime.vdn_temporal_carrier_contract["numerical_digest"]
+                        if runtime.vdn_temporal_carrier_contract is not None
+                        else None
+                    ),
                     sol_single_union=True,
                     deprecated_mixed_grid_contract_active=False,
                     audio_position_domain=str(runtime.audio_position_domain),
@@ -521,17 +619,28 @@ def partitioned_diffusion_wrapper(
                     inner.rope_freqs(positions, img.device),
                     img.dtype,
                 )
+            # Core builds this table once per forward. Validate its protected
+            # prefix once, rather than reading a CUDA scalar at every block.
+            if cached.get("mod_source") is not args["mod_segments"]:
+                cached["mod_segments"] = partitioned_mod_segments(
+                    args["mod_segments"],
+                    plan,
+                    video_start,
+                    video_end,
+                )
+                cached["mod_source"] = args["mod_segments"]
+                metrics.increment("partitioned_modulation_validations")
             forwarded = dict(args)
             forwarded.update(
                 img=img,
                 layout=partitioned_layout,
                 rope_freqs=cached["rope"],
-                mod_segments=partitioned_mod_segments(
-                    args["mod_segments"],
-                    plan,
-                    video_start,
-                    video_end,
-                ),
+                # Replacement patches receive their own video index tensor,
+                # matching the previous per-block expansion's write isolation.
+                mod_segments=[
+                    (start, stop, row.clone() if start == video_start else row)
+                    for start, stop, row in cached["mod_segments"]
+                ],
             )
             forwarded["transformer_options"] = _partitioned_transformer_options(
                 args["transformer_options"],

@@ -6,14 +6,109 @@ import pytest
 import torch
 
 from h3_flow_regenerate.guidance import conditional_renoise_target
-from h3_flow_regenerate.handoff import deterministic_video_noise
+from h3_flow_regenerate.handoff import (
+    H3_HANDOFF_NOISE_DENSE_DRIFT,
+    H3_HANDOFF_NOISE_INDEPENDENT,
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    deterministic_video_noise,
+)
 from h3_flow_regenerate.partitioned_scheduler import (
+    PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
     _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
     _measure_partitioned_transfer_splice,
     _partitioned_exact_overlap_fallback_eligibility,
+    _resolve_partitioned_transfer_clean,
 )
+from h3_flow_regenerate.representation_bridge import apply_suffix_representation_bridge
 from h3_flow_regenerate.seam_diagnostics import project_translation_trajectory_to_grid
+from h3_flow_regenerate.tone_bridge import apply_suffix_dc_bridge, map_clean_bridge_to_conditional_state
+
+
+@pytest.mark.parametrize("noise_mode", [H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT])
+def test_partitioned_transfer_clean_uses_captured_actual_clean_for_source_residual(noise_mode):
+    torch.manual_seed(1201)
+    target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    actual = torch.randn_like(target)
+
+    resolved, source, recovery = _resolve_partitioned_transfer_clean(
+        target,
+        actual,
+        handoff_noise_mode=noise_mode,
+        sigma=0.4,
+        seed=123,
+    )
+
+    assert resolved.data_ptr() == actual.data_ptr()
+    assert source == "actual_clean_postprocess"
+    assert recovery == "actual_clean_postprocess_no_inverse"
+
+
+def test_same_grid_actual_clean_does_not_manufacture_suffix_dc_correction():
+    torch.manual_seed(1203)
+    learned = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    exact = learned[:, :, :2].clone()
+    target = torch.randn_like(learned)
+
+    resolved, _, _ = _resolve_partitioned_transfer_clean(
+        target,
+        learned,
+        handoff_noise_mode=H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+        sigma=0.4,
+        seed=123,
+    )
+    mapped, corrected, metrics = _apply_partitioned_suffix_dc_bridge(
+        target,
+        resolved,
+        exact,
+        sigma=0.4,
+        enabled=True,
+    )
+
+    assert torch.equal(corrected, learned)
+    assert torch.equal(mapped, target)
+    assert metrics["suffix_dc_bridge_delta_rms"] == 0.0
+    assert metrics["suffix_dc_bridge_delta_abs_max"] == 0.0
+
+
+@pytest.mark.parametrize("noise_mode", [H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT])
+def test_partitioned_transfer_clean_refuses_gaussian_inverse_for_source_residual_without_capture(noise_mode):
+    target = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="refusing deterministic-noise inverse recovery"):
+        _resolve_partitioned_transfer_clean(
+            target,
+            None,
+            handoff_noise_mode=noise_mode,
+            sigma=0.4,
+            seed=123,
+        )
+
+
+def test_partitioned_transfer_clean_keeps_independent_noise_inverse_contract():
+    torch.manual_seed(1202)
+    learned = torch.randn(1, 24, 5, 8, 8, dtype=torch.float32)
+    sigma = 0.4
+    seed = 123
+    noise = deterministic_video_noise(
+        tuple(learned.shape),
+        seed=seed,
+        device=learned.device,
+        dtype=learned.dtype,
+    )
+    target = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+
+    resolved, source, recovery = _resolve_partitioned_transfer_clean(
+        target,
+        None,
+        handoff_noise_mode=H3_HANDOFF_NOISE_INDEPENDENT,
+        sigma=sigma,
+        seed=seed,
+    )
+
+    torch.testing.assert_close(resolved, learned, rtol=0.0, atol=2e-6)
+    assert source == "inverse_recovered"
+    assert recovery == "inverse_conditional_renoise"
 
 
 def test_partitioned_transfer_splice_measures_before_and_after_exact_prefix_restore():
@@ -127,6 +222,42 @@ def test_multiframe_trajectory_reports_prefix_motion_before_boundary():
     assert fields["pre_pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
     assert fields["pre_pairwise_median_dy"] == pytest.approx(1.0, abs=0.05)
     assert fields["pairwise_dy"] == pytest.approx([1.0, 1.0, 1.0], abs=0.05)
+    assert fields["boundary_vs_pre_available"] is True
+    assert fields["boundary_vs_pre_dx"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_dy"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_norm_cells"] == pytest.approx(0.0, abs=0.08)
+
+
+def test_multiframe_trajectory_reports_boundary_motion_change_from_prefix_baseline():
+    from h3_flow_regenerate.seam_diagnostics import measure_translation_trajectory
+
+    torch.manual_seed(457)
+    video = torch.randn(1, 8, 8, 32, 40, dtype=torch.float32)
+    for index in range(1, 4):
+        video[:, :, index] = video[:, :, index - 1]
+    video[:, :, 4] = torch.roll(
+        video[:, :, 3],
+        shifts=(2, -1),
+        dims=(-2, -1),
+    )
+    for index in range(5, 8):
+        video[:, :, index] = video[:, :, index - 1]
+
+    fields = measure_translation_trajectory(
+        video,
+        4,
+        forward_steps=3,
+        backward_steps=3,
+        roi_fraction=1.0,
+        max_shift=3,
+    )
+
+    assert fields["boundary_vs_pre_available"] is True
+    assert fields["pre_pairwise_median_dx"] == pytest.approx(0.0, abs=0.05)
+    assert fields["pre_pairwise_median_dy"] == pytest.approx(0.0, abs=0.05)
+    assert fields["boundary_vs_pre_dx"] == pytest.approx(-1.0, abs=0.05)
+    assert fields["boundary_vs_pre_dy"] == pytest.approx(2.0, abs=0.05)
+    assert fields["boundary_vs_pre_norm_cells"] == pytest.approx(math.sqrt(5.0), abs=0.08)
 
 
 def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_independently():
@@ -141,6 +272,8 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
         "anchor_dy": [1.0],
         "pre_pairwise_median_dx": -1.0,
         "pre_pairwise_median_dy": 0.5,
+        "boundary_vs_pre_dx": -2.0,
+        "boundary_vs_pre_dy": 3.5,
         "pairwise_net_dx": -3.0,
         "pairwise_net_dy": 4.0,
         "anchor_final_dx": -2.0,
@@ -162,6 +295,8 @@ def test_trajectory_grid_projection_preserves_source_receipt_and_scales_axes_ind
     assert projected["trajectory_target_equivalent_scale_y"] == pytest.approx(1.5)
     assert projected["target_equivalent_pairwise_dx"] == pytest.approx([-6.0])
     assert projected["target_equivalent_pairwise_dy"] == pytest.approx([6.0])
+    assert projected["target_equivalent_boundary_vs_pre_dx"] == pytest.approx(-4.0)
+    assert projected["target_equivalent_boundary_vs_pre_dy"] == pytest.approx(5.25)
     assert projected["target_equivalent_pairwise_net_dx"] == pytest.approx(-6.0)
     assert projected["target_equivalent_pairwise_net_dy"] == pytest.approx(6.0)
     assert projected["target_equivalent_anchor_final_dx"] == pytest.approx(-4.0)
@@ -233,7 +368,7 @@ def test_partitioned_suffix_dc_bridge_disabled_is_state_preserving():
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
 
 
-def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_and_scope():
+def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_means_and_scope():
     torch.manual_seed(77)
     learned = torch.randn(1, 24, 5, 8, 10, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
@@ -258,13 +393,19 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
         sigma=sigma,
     )
 
-    assert representation["suffix_representation_bridge_accepted"] is True
-    assert representation["suffix_representation_bridge_corrected_tokens"] == 1
+    assert representation["suffix_representation_bridge_accepted"] is False
+    assert representation["suffix_representation_bridge_corrected_tokens"] == 0
     assert dc["suffix_dc_bridge_corrected_tokens"] == 1
 
     native_transition = learned[:, :, 2].float() - learned[:, :, 1].float()
     restored_transition = corrected[:, :, 2].float() - exact[:, :, 1].float()
-    assert torch.allclose(restored_transition, native_transition, rtol=0.0, atol=2e-6)
+    torch.testing.assert_close(
+        restored_transition.mean(dim=(-2, -1)), native_transition.mean(dim=(-2, -1)), rtol=0.0, atol=2e-6
+    )
+    correction = corrected[:, :, 2] - learned[:, :, 2]
+    torch.testing.assert_close(
+        correction - correction.mean(dim=(-2, -1), keepdim=True), torch.zeros_like(correction), rtol=0.0, atol=2e-6
+    )
 
     assert torch.equal(corrected[:, :, :2], learned[:, :, :2])
     assert torch.equal(corrected[:, :, 3:], learned[:, :, 3:])
@@ -276,7 +417,7 @@ def test_partitioned_exact_overlap_bridge_preserves_provider_native_transition_a
     assert torch.allclose(mapped, expected, rtol=1e-6, atol=1e-6)
 
 
-def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual():
+def test_historical_representation_successor_support_bounds_relocated_residual():
     torch.manual_seed(78)
     learned = torch.randn(1, 24, 8, 8, 10, dtype=torch.float32)
     exact = learned[:, :, :2].clone()
@@ -288,18 +429,17 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
     state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
     weights = (1.0, 0.75, 0.5, 0.25)
 
-    mapped, corrected, representation, dc = _apply_partitioned_exact_overlap_bridge(
-        state,
-        learned,
-        exact,
-        sigma=sigma,
-        weights=weights,
+    structured, representation = apply_suffix_representation_bridge(learned, exact, weights=weights)
+    corrected, dc = apply_suffix_dc_bridge(structured, exact, weights=weights)
+    mapped = map_clean_bridge_to_conditional_state(
+        state, learned, corrected, sigma=sigma, prefix_t=2, corrected_tokens=len(weights)
     )
 
     delta = exact[:, :, 1].float() - learned[:, :, 1].float()
     native_boundary = learned[:, :, 2].float() - learned[:, :, 1].float()
     restored_boundary = corrected[:, :, 2].float() - exact[:, :, 1].float()
     torch.testing.assert_close(restored_boundary, native_boundary, rtol=0.0, atol=2e-6)
+
     expected_step = -0.25 * delta
     for offset in range(1, 4):
         corrected_step = corrected[:, :, 2 + offset].float() - corrected[:, :, 1 + offset].float()
@@ -314,6 +454,57 @@ def test_partitioned_exact_overlap_successor_support_bounds_relocated_residual()
     assert dc["suffix_dc_bridge_corrected_tokens"] == 4
     assert torch.equal(corrected[:, :, 6:], learned[:, :, 6:])
     assert torch.equal(mapped[:, :, 6:], state[:, :, 6:])
+
+
+@pytest.mark.parametrize("residual_kind", ["dc_only", "centered_only", "mixed"])
+@pytest.mark.parametrize("sigma", [0.0, 0.8])
+@pytest.mark.parametrize("suffix_t", [4, 6])
+def test_production_overlap_preserves_noise_and_limits_correction_to_first_token_means(residual_kind, sigma, suffix_t):
+    prefix_t = 2
+    weights = PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS
+    learned = torch.zeros(1, 24, prefix_t + suffix_t, 8, 10)
+    yy = (torch.arange(8) - 3.5).view(1, 1, 8, 1)
+    xx = (torch.arange(10) - 4.5).view(1, 1, 1, 10)
+    spatial = (yy + 2 * xx) / 32
+    dc = torch.arange(1, 25).view(1, 24, 1, 1) / 32
+    delta = dc if residual_kind == "dc_only" else spatial if residual_kind == "centered_only" else dc + spatial
+    exact = learned[:, :, :prefix_t].clone()
+    exact[:, :, -1] += delta
+    noise = deterministic_video_noise(tuple(learned.shape), seed=993, device=learned.device, dtype=learned.dtype)
+    state = conditional_renoise_target(learned, sigma=sigma, noise=noise)
+    learned_before, state_before, exact_before = learned.clone(), state.clone(), exact.clone()
+
+    mapped, corrected, _, dc_metrics = _apply_partitioned_exact_overlap_bridge(
+        state, learned, exact, sigma=sigma, weights=weights
+    )
+    expected = learned.clone()
+    mean_delta = (exact[:, :, -1] - learned[:, :, prefix_t - 1]).mean(dim=(-2, -1), keepdim=True)
+    expected[:, :, prefix_t] += mean_delta
+    torch.testing.assert_close(corrected, expected, rtol=0.0, atol=1e-6)
+    torch.testing.assert_close(
+        mapped, conditional_renoise_target(expected, sigma=sigma, noise=noise), rtol=0.0, atol=1e-6
+    )
+
+    restored = corrected.clone()
+    restored[:, :, :prefix_t] = exact
+    torch.testing.assert_close(
+        (restored[:, :, prefix_t] - restored[:, :, prefix_t - 1]).mean(dim=(-2, -1)),
+        (learned[:, :, prefix_t] - learned[:, :, prefix_t - 1]).mean(dim=(-2, -1)),
+        rtol=0.0,
+        atol=1e-6,
+    )
+    correction = corrected[:, :, prefix_t] - learned[:, :, prefix_t]
+    torch.testing.assert_close(correction, mean_delta.expand_as(correction), rtol=0.0, atol=1e-6)
+    assert dc_metrics["suffix_dc_bridge_corrected_tokens"] == 1
+    assert dc_metrics["suffix_dc_bridge_first_weight"] == 1.0
+    assert dc_metrics["suffix_dc_bridge_last_weight"] == 1.0
+    assert torch.equal(corrected[:, :, :prefix_t], learned_before[:, :, :prefix_t])
+    assert torch.equal(corrected[:, :, prefix_t + len(weights) :], learned_before[:, :, prefix_t + len(weights) :])
+    assert torch.equal(mapped[:, :, :prefix_t], state_before[:, :, :prefix_t])
+    assert torch.equal(mapped[:, :, prefix_t + len(weights) :], state_before[:, :, prefix_t + len(weights) :])
+    assert torch.equal(learned, learned_before)
+    assert torch.equal(state, state_before)
+    assert torch.equal(exact, exact_before)
 
 
 def _boundary_rejection_transaction(reason="boundary_upper45_insufficient_improvement"):
