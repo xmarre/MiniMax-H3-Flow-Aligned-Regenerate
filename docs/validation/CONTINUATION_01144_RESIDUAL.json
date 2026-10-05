@@ -1,0 +1,70 @@
+{
+  "policy": "offline_verified_residual_operator_comparison_v1",
+  "historical_noise_policy": "source_residual_patch_refinement_v1",
+  "recovered_source_residual_status": "inferred_from_saved_target_v1_coarse_projection",
+  "independent_source_residual_bytes_available": false,
+  "source_hw": [
+    44,
+    44
+  ],
+  "target_hw": [
+    62,
+    62
+  ],
+  "generated_token_range": [
+    12,
+    17
+  ],
+  "rng_temporal_length": 47,
+  "source_noise_dtype": "torch.float32",
+  "model_noise_scale": 1.0,
+  "historical_reconstruction_rms_error": 1.9540139817308955e-07,
+  "historical_reconstruction_max_abs_error": 1.9073486328125e-06,
+  "source_drift_rms": 0.023799916729331017,
+  "source_residual_vs_initial_cosine": 0.9997214674949646,
+  "candidate_minus_historical_residual_rms": 0.02111462689936161,
+  "candidate_minus_historical_state_rms": 0.01853967271745205,
+  "candidate_receipt_full_temporal_scope": {
+    "policy": "source_residual_dense_drift_v2",
+    "source_hw": [
+      44,
+      44
+    ],
+    "target_hw": [
+      62,
+      62
+    ],
+    "source_patch_grid": [
+      22,
+      22
+    ],
+    "target_patch_grid": [
+      31,
+      31
+    ],
+    "identity": false,
+    "group_size_min": 1,
+    "group_size_max": 4,
+    "source_residual_rms": 1.000783085823059,
+    "target_residual_rms": 1.0005234479904175,
+    "source_residual_mean": -0.00020198577840346843,
+    "target_residual_mean": -0.0003580233606044203,
+    "innovation_seed": 16182821750619634006,
+    "innovation_coarse_group_sum_zero": true,
+    "extra_h3_nfe": 0,
+    "gaussian_projection_rms_error": 2.5821184334365323e-07,
+    "gaussian_projection_max_abs_error": 2.2351741790771484e-06,
+    "gaussian_policy": "source_residual_patch_refinement_v1",
+    "coarse_projection_scope": "initial_gaussian_component",
+    "normalized_gaussian_component_standard_if_initial_standard": true,
+    "gaussian_component_variance_if_initial_standard": 1.0,
+    "gaussian_noise_scale": 1.0,
+    "drift_lattice": "h3_dense_patch_center_lattice_v2",
+    "source_drift_rms": 0.007762677036225796,
+    "target_drift_rms": 0.005947051104158163
+  },
+  "unexported_source_tokens_used_for_comparison": false,
+  "production_sampling_rerun": false,
+  "rendered_acceptance": false,
+  "manifest_sha256": "dabb13393c1433ebe91666a3506b92536c80a68d845db82ead52f1a480493d6d"
+}

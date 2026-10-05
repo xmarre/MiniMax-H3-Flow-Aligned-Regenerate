@@ -15,12 +15,10 @@ See [CREDITS.md](CREDITS.md) for research and implementation attribution.
 
 ## Install
 
-```bash
-cd ComfyUI/custom_nodes
-git clone https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate.git
-```
-
-Restart ComfyUI.
+Install this repository through ComfyUI Manager and restart ComfyUI.
+For development updates, use ComfyUI Patcher's PR overlays in the declared
+dependency order. After the coordinated versions are installed, the merged
+custom-node overlays can be removed. Retain any required unmerged Core overlay.
 
 The core package has no mandatory sibling-node dependency. The intended learned-transfer workflows use the companion [MiniMax H3 Latent Upscaler-Plus](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus).
 
@@ -74,39 +72,104 @@ The video mask remains byte-for-byte unchanged and the original exact video/audi
 
 ## Partitioned exact-prefix Continuum path
 
-Use **MiniMax H3 Partitioned Exact-Prefix Handoff** for the coordinated Continuum stack with the matching Sol-H3 and VDN-H3-Plus partitioned backends. The historical serialized node ID `H3PartitionedExactPrefixDiagnosticHandoff` is retained for workflow compatibility, but the user-facing node is no longer labeled diagnostic.
+Use **MiniMax H3 Partitioned Exact-Prefix Handoff** with the coordinated
+Sol-H3/VDN-H3-Plus/Continuum releases. The historical serialized node ID
+`H3PartitionedExactPrefixDiagnosticHandoff` remains unchanged.
 
-The production defaults are:
+New nodes use these defaults; existing explicit workflow values are retained:
 
 ```text
-source_mode                = scale
-source_scale               = 0.70
-source_width               = 864
-source_height              = 640
-handoff_coordinate         = 0.35
-handoff_selection          = fixed
-guidance_mode              = direction+temporal
-direction_weight           = 0.25
-acceleration_weight        = 0.25
-consistency_weight         = 0.25
-low_frequency_cutoff       = 0.25
-temporal_weight            = 0.20
-vdn_linear_diagnostic      = normal
-audio_guided_overlap_ticks = 4
-audio_guided_overlap_mode  = sampler_mask_exact_timestep
-prefix_transformer_context = exact_target_partitioned
-audio_position_domain      = source_carrier
-audio_handoff_source       = main_partitioned
-av_handoff_source          = main_partitioned
-guidance_trajectory_source = main_exact_partitioned
-low_probe_execution_source = source_carrier_uniform_only
+source_mode                      = scale
+source_scale                     = 0.70
+source_width                     = 864
+source_height                    = 640
+handoff_coordinate               = 0.35
+handoff_selection                = fixed
+guidance_mode                    = direction+temporal
+direction_weight                 = 0.25
+acceleration_weight              = 0.25
+consistency_weight               = 0.25
+low_frequency_cutoff             = 0.25
+temporal_weight                  = 0.20
+vdn_linear_diagnostic            = normal
+audio_guided_overlap_ticks       = 16
+audio_guided_overlap_mode        = sampler_mask_exact_timestep
+prefix_transformer_context       = exact_target_partitioned
+audio_position_domain            = source_carrier
+audio_handoff_source             = main_partitioned
+av_handoff_source                = main_partitioned
+guidance_trajectory_source       = main_exact_partitioned
+low_probe_execution_source       = main_then_shadow
+frame_gauge_repair               = true
+frame_gauge_residual_mode        = off
+provider_boundary_stabilization  = soft_support_v1
+capture_boundary_witness         = false
+vdn_temporal_carrier_policy      = native_grid_then_map_v1
+handoff_transfer_control         = learned_3d
+spatial_stage_control            = same_grid_target_control
+softmax_diagnostic               = normal
+video_guided_overlap_tokens      = 6
 ```
 
-The learned 3D upscaler input is required. The fast continuation uses one source-uniform low/probe path followed by target-high: three continuation sampler lifetimes, two history boundaries, no duplicate shadow lifetime, and exact caller-visible prefix restoration.
+Flow defaults exact-prefix continuation to `same_grid_target_control`: low/probe
+and high operate at the target video resolution, with identity clean/residual
+handoff and exact carried audio/video ownership. The first all-generated chunk
+retains progressive learned transfer. The learned-upscaler provider therefore
+remains connected. The selected profile has reported visual/audio acceptance;
+heterogeneous continuation remains an opt-in path with unresolved boundary
+quality. This does not establish acceptance for every model, scene or seed.
 
-The four-tick audio width is the shipped default, not a hard invariant. Values `0..16` remain selectable because overlap behavior is conditioning- and mode-sensitive. Run 00611 validated the default `sampler_mask_exact_timestep / 4` tuple on a previously failing three-chunk continuation: the first decoded boundary changed from about +11.15 dB at 16 ticks to +0.21 dB at 4 ticks with the same preceding realization, while the decoder-context-safe carried-prefix interior remained effectively exact.
+The stored audio width of 16 has zero effective overlap under
+`sampler_mask_exact_timestep`, which aliases coherent `exact_mask`.
+The stored video width of 6 is provenance-only and does not release protected
+video tokens. Both stored overlap widths accept any non-negative integer;
+comparison modes cap effective overlap at the available carried prefix. `main_then_shadow` executes a shadow only when a shadow source
+is selected; the default main sources do not add duplicate sampler lifetimes.
 
-The partitioned learned-transfer splice also applies a bounded one-token video DC continuity correction before target-high. It does not modify the authoritative exact prefix or later suffix tokens.
+`frame_gauge_repair=true` enables paired-prefix handoff checks; the same-grid
+path resolves to identity. `soft_support_v1` records a bounded post-high
+observation while its historical pre-high correction remains disabled. Neither
+selector authorizes a decoded output warp. Diagnostic tensor export requires
+`frame_gauge_residual_mode=measure`; it remains off by default.
+
+Audio is never spatially resized. It is jointly predicted with video, so changing
+the video grid can affect generated audio. On the default same-grid path,
+source-carrier and target audio spatial positions coincide. Native masks remain
+coherent throughout sampling and exact carried audio/video values are restored
+at output.
+
+The learned 3D upscaler input remains required for the first all-generated chunk.
+Keep `handoff_transfer_control=learned_3d` and
+`vdn_temporal_carrier_policy=native_grid_then_map_v1`. Selecting shadow sources
+or heterogeneous controls can change work and output; their results are not
+qualified by the target-grid profile's acceptance. Target-grid low/probe also
+has more spatial work than a reduced-grid stage. Measure continuation timing
+separately from loading and first-chunk work.
+
+## Coordinated H3 releases
+
+Update the coordinated components together. Every release links this same
+version set and identifies its implementation PRs.
+
+| Component | Release | Included PRs |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | [v0.3.9](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.9) | [#89](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/89), [#93](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/93) |
+| Sol-H3 | [v0.1.8](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.8) | [#37](https://github.com/xmarre/ComfyUI-Sol-H3/pull/37) |
+| VDN-H3-Plus | [v1.5.7](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.7) | [#33](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/33), [#34](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/34), [#35](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/35), [#36](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/36), [#37](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/37) |
+| H3 Continuum-Plus | [v3.4.5](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.5) | [#37](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/37), [#38](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/38) |
+| Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | [#16](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/pull/16) |
+
+[Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)
+is the unchanged companion. Separate Keyless, audio-training and rejected
+decoded-geometry experiments are outside this release set.
+
+The tested Core adapter repair is
+[ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783).
+It remains an upstream review item, with upstream workflow approval and merge
+controlled by Comfy-Org maintainers. For INT8 fused MLP runtime adapters,
+retain that ComfyUI Patcher PR overlay until the repair is available upstream.
+The independent Core #16720 optimization is not included in this release set.
+
 
 ## Mixed-Grid compatibility window
 
@@ -173,7 +236,7 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 | **MiniMax H3 Flow-Aligned Refine State** | Continuum `refine_state` version of flow-aligned guidance. |
 | **MiniMax H3 Progressive Handoff** | Generic source-sized progressive resolution handoff. |
 | **MiniMax H3 Progressive Handoff (Target Input)** | General target-input progressive path; exact protected prefixes use the target-grid fallback. |
-| **MiniMax H3 Partitioned Exact-Prefix Handoff** | Coordinated Continuum production path using source-uniform low/probe execution, learned transfer, exact prefix restoration and the validated four-tick exact-timestep audio overlap. |
+| **MiniMax H3 Partitioned Exact-Prefix Handoff** | Coordinated Continuum path with target-grid low/probe, identity continuation handoff, exact prefix ownership and coherent native audio masks. |
 | **MiniMax H3 Continuum Decode Context** | Supplies right context to the native temporal VAE at exact Continuum joins. |
 
 ### Compatibility / research nodes
@@ -222,7 +285,8 @@ The paths with the strongest real-media support include:
 
 - two-pass flow-aligned guidance with the learned upscale/refine workflow;
 - Progressive Handoff for unprotected calls;
-- Target Input's conservative exact-prefix target-grid fallback, with the four-tick guided-audio overlap carried by the production PR #33 line.
+- Partitioned exact-prefix continuation with the target-grid default profile;
+- Target Input's conservative exact-prefix target-grid fallback with its separate four-tick audio overlap.
 
 Historical Mixed-Grid validation remains evidence for that retired architecture rather than a current recommendation. The suffix DC bridge removed its brief tone/flash boundary, and its later framing work addressed unequal protected-prefix versus suffix attention sampling measure. The source-space affine/trajectory correction family remains retired because finite corrections only moved the discontinuity to the corrected-to-untouched transition.
 
