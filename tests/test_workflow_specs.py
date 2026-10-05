@@ -32,14 +32,16 @@ def test_resolution_shift_matrix_preserves_base_and_refine():
     assert matrix["runs"][1]["id"] == "E1-refine-resolution-aware"
 
 
-def test_progressive_overlay_defines_canonical_target_input_defaults_and_preserves_history():
+def test_progressive_overlay_defines_v039_partitioned_defaults_and_preserves_controls():
     overlay = _load("workflows/progressive-handoff.overlay.json")
     defaults = overlay["canonical_defaults"]
     provider = overlay["latent_upscaler_provider"]
+    control = overlay["generic_target_input_control"]
     historical = overlay["historical_learned_transfer_ab"]
 
-    assert overlay["schema_version"] == 5
-    assert overlay["placement"]["chain"][-2] == "H3ProgressiveTargetInputHandoff"
+    assert overlay["schema_version"] == 6
+    assert overlay["placement"]["chain"][-2] == "H3PartitionedExactPrefixDiagnosticHandoff"
+    assert overlay["placement"]["serialized_node_id"] == "H3PartitionedExactPrefixDiagnosticHandoff"
     assert defaults == {
         "source_mode": "scale",
         "source_scale": 0.7,
@@ -53,7 +55,24 @@ def test_progressive_overlay_defines_canonical_target_input_defaults_and_preserv
         "consistency_weight": 0.25,
         "low_frequency_cutoff": 0.25,
         "temporal_weight": 0.2,
-        "handoff_transfer": "learned_3d",
+        "vdn_linear_diagnostic": "normal",
+        "audio_guided_overlap_ticks": 16,
+        "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
+        "prefix_transformer_context": "exact_target_partitioned",
+        "audio_position_domain": "source_carrier",
+        "audio_handoff_source": "main_partitioned",
+        "av_handoff_source": "main_partitioned",
+        "guidance_trajectory_source": "main_exact_partitioned",
+        "low_probe_execution_source": "main_then_shadow",
+        "frame_gauge_repair": True,
+        "frame_gauge_residual_mode": "off",
+        "provider_boundary_stabilization": "soft_support_v1",
+        "capture_boundary_witness": False,
+        "vdn_temporal_carrier_policy": "native_grid_then_map_v1",
+        "handoff_transfer_control": "learned_3d",
+        "spatial_stage_control": "same_grid_target_control",
+        "softmax_diagnostic": "normal",
+        "video_guided_overlap_tokens": 6,
         "weight_semantics": (
             "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values "
             "only; apply_guidance does not use them unless the corresponding guidance mode is selected."
@@ -66,7 +85,22 @@ def test_progressive_overlay_defines_canonical_target_input_defaults_and_preserv
         "precision": "bf16",
         "offload_after_upscale": False,
     }
+    assert control["node"] == "H3ProgressiveTargetInputHandoff"
+    assert control["production_exact_prefix_recommended"] is False
+    assert control["defaults"]["handoff_transfer"] == "learned_3d"
+    assert control["exact_prefix_fallback"]["audio_guided_overlap_ticks"] == 4
+
+    exact = overlay["exact_prefix_contract"]
+    assert exact["mode"] == "same_grid_target_control"
+    assert exact["audio"]["stored_overlap_ticks"] == 16
+    assert exact["audio"]["effective_overlap_ticks"] == 0
+    assert exact["video"]["stored_overlap_tokens"] == 6
+    assert exact["video"]["effective_overlap_tokens"] == 0
+    assert exact["shadow"]["default_main_sources_add_shadow_lifetime"] is False
+    assert exact["heterogeneous_continuation"].startswith("opt-in")
+
     assert historical["control_widget"] == {"handoff_transfer": "bicubic"}
     assert historical["treatment_widget"] == {"handoff_transfer": "learned_3d"}
     assert historical["strict_d14_pair"]["only_intended_difference"] == "handoff_transfer"
     assert historical["strict_d14_pair"]["latent_transition"] == "46x46 -> 56x56"
+
