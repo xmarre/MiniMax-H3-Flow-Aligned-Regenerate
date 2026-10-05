@@ -159,7 +159,9 @@ for exact-prefix continuations. The protected prefix and the first
 target grid through low/probe. Every later generated token runs on the
 configured reduced grid. At the handoff the band continues by identity, exactly
 as under same-grid control, and the remaining tokens use the learned 3D transfer
-and residual transport of `progressive_low_to_high`.
+of `progressive_low_to_high`. Those tokens are re-noised with independent
+Gaussian noise for the high stage regardless of `frame_gauge_repair`; source
+residual transport is not used in this mode.
 
 The low/probe sampler state stays on the uniform target grid. Each reduced-grid
 token stores its values in a source-sized window of its frame, and the rest of

@@ -7,7 +7,9 @@ the reduced-grid and target-grid controls. The protected prefix and the next
 `target_band_tokens` (default 4) generated temporal latent tokens stay on the
 target grid through low/probe. Later tokens run on the configured reduced grid.
 At the handoff the band continues by identity and the reduced-grid tokens use
-the learned 3D transfer and residual transport.
+the learned 3D transfer. They are re-noised with independent Gaussian noise for
+the high stage regardless of `frame_gauge_repair`; source residual transport is
+not used in this mode.
 
 - The low/probe sampler state is target-sized. Reduced-grid tokens are stored in
   a source-sized window of their frame. Padding is masked and excluded from

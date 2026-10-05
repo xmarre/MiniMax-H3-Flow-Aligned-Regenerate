@@ -4371,9 +4371,15 @@ def run_partitioned_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         deterministic_handoff_sampler, handoff_sampler = _dense_drift_sampler_contract(sampler)
+        # Target-band continuation re-noises its learned tail with independent
+        # Gaussian noise, as the uniform progressive handoff does. Transporting the
+        # low-stage residual into the tail carries content-correlated structure
+        # into the high-stage entry noise, which the high stage sharpens.
         handoff_noise_mode = (
             (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
-            if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            if config.frame_gauge_repair
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and target_band is None
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
         if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:

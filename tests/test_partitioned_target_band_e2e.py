@@ -611,3 +611,19 @@ def test_sol_history_recognizes_the_block_replacement_in_every_stage(monkeypatch
     extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 2} if control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND else None
     _harness(monkeypatch, spatial_stage_control=control, extra_transformer_options=extra)
     assert recognized == {"low": {True}, "probe": {True}, "high": {True}}
+
+
+@pytest.mark.parametrize(
+    ("control", "policy"),
+    [
+        (PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, "source_residual_dense_drift_v2"),
+        (PARTITIONED_SPATIAL_STAGE_TARGET_BAND, "independent"),
+    ],
+)
+def test_target_band_tail_uses_independent_handoff_noise_with_frame_gauge_repair(monkeypatch, control, policy):
+    extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 2} if control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND else None
+    run = _harness(monkeypatch, spatial_stage_control=control, extra_transformer_options=extra)
+    noise = _events(run.metrics, "partitioned_handoff_noise")
+    assert [event["policy"] for event in noise] == [policy]
+    provenance = _events(run.metrics, "partitioned_handoff_residual_provenance")
+    assert len(provenance) == (0 if policy == "independent" else 1)

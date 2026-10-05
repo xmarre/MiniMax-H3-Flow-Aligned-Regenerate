@@ -150,6 +150,11 @@ reduced grid. At the handoff the band continues by identity and the reduced-grid
 tokens use the learned 3D transfer. The aim is the same-grid join next to the
 carried prefix at a lower low/probe cost.
 
+- The reduced-grid tokens enter the high stage with independent Gaussian noise
+  regardless of `frame_gauge_repair`. Source residual transport carries
+  content-correlated low-stage structure into the high-stage entry noise and is
+  not used in this mode.
+
 - `target_band_tokens` counts H3 temporal latent tokens. It must leave at least
   one generated token on the reduced grid; otherwise the chunk fails before
   sampling.
