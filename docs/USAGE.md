@@ -61,7 +61,7 @@ low_frequency_cutoff       = 0.25
 temporal_weight            = 0.20
 vdn_linear_diagnostic      = normal
 audio_guided_overlap_ticks = 4
-audio_guided_overlap_mode  = sampler_mask_exact_timestep
+audio_guided_overlap_mode  = exact_mask
 prefix_transformer_context = exact_target_partitioned
 audio_position_domain      = source_carrier
 audio_handoff_source       = main_partitioned
@@ -72,7 +72,7 @@ low_probe_execution_source = source_carrier_uniform_only
 
 The historical class/node ID is retained for serialized-workflow compatibility, but the displayed node name no longer includes `[Diagnostic]`.
 
-This profile runs a single source-uniform low/probe continuation path and then target-high. The four-tick sampler-owned audio ramp is approximately 100 ms at H3's 40 Hz audio-latent rate, while `sampler_mask_exact_timestep` keeps MiniMax-H3's inner timestep/modulation labels on the authoritative exact-prefix mask. The width remains user-selectable from 0 through 16; four ticks is the validated default rather than a hard preflight requirement.
+This profile runs a single source-uniform low/probe continuation path and then target-high. `exact_mask` keeps carried audio protected with matching native sampler input, timestep and velocity masks. It uses zero overlap regardless of the stored width. `sampler_mask_exact_timestep` is a compatibility alias for this behavior. The `0..16`-tick width applies to the advanced `sampler_mask` and `model_timestep_only` comparison modes. Boundary quality depends on the selected model and conditioning and requires rendered validation.
 
 The learned-transfer boundary applies the partitioned one-token DC continuity correction before restoring the authoritative target-grid prefix. The bridge changes only the first generated video suffix token; the exact prefix and later suffix tokens remain untouched by the bridge itself.
 
@@ -95,6 +95,24 @@ Guidance and progressive handoff match states by H3's shared flow coordinate rat
 ### Video vs audio
 
 H3 is a joint audio/video model. The progressive path changes only the **video spatial grid**. Audio is never spatially resized and remains on the native joint H3 path.
+
+### Target-grid exact-prefix continuation
+
+On **MiniMax H3 Partitioned Exact-Prefix Handoff**, select
+`spatial_stage_control=same_grid_target_control` to run continuation low/probe
+stages at the final target resolution. The carried prefix and generated suffix
+then share one spatial grid, and clean/residual handoff uses identity transfer.
+The configured handoff split and downstream high stage are retained. Keep
+`handoff_transfer_control=learned_3d` and
+`vdn_temporal_carrier_policy=native_grid_then_map_v1`; both are required by this
+selector.
+
+The selector applies to eligible exact-prefix continuations. An all-generated
+first chunk retains the ordinary progressive path, so keep the learned-upscaler
+provider connected. Increasing the low-stage spatial grid increases its work;
+compare continuation stage timings when assessing cost. Audio can also change
+because it is predicted jointly with the differently conditioned video.
+The default remains `progressive_low_to_high`.
 
 ## Progressive Handoff (Target Input)
 
@@ -133,7 +151,7 @@ progressive guidance           = no
 
 A `progressive_target_fallback` metrics event records this path. Audio-only zero masks do not independently trigger the video fallback, and fractional video masks remain intentional blends rather than exact protection.
 
-On a canonical exact-prefix continuation, only the last four carried **audio latent ticks** are guided during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact ramp values are:
+On a canonical exact-prefix continuation, the default overlap guides the last four carried **audio latent ticks** during sampler lifetime. H3 audio latent rate is 40 Hz, so the default window is about 100 ms. Core MiniMax-H3 uses a 1/256 mask grid; the exact default ramp values are:
 
 ```text
 0.203125
@@ -144,9 +162,114 @@ On a canonical exact-prefix continuation, only the last four carried **audio lat
 
 The video mask is byte-for-byte unchanged. The caller-owned original exact mask remains authoritative and every originally protected video/audio value is restored exactly at the sampler boundary.
 
-All-generated first chunks, fully protected audio, and exact prefixes too short to retain at least one fully protected audio tick are no-ops. Other non-canonical partially protected audio layouts fail closed rather than being guessed.
+All-generated first chunks and fully protected audio are no-ops. Other non-canonical partially protected audio layouts retain their existing rejection.
 
-`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Values 1-16 are accepted when deliberately testing a different width.
+`H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` explicitly disables the overlap for controlled bisection. Any non-negative integer is accepted. The applied width is the smaller of the requested ticks and the available carried audio prefix. The receipt separates `requested_ticks` and `applied_ticks` and records `width_limited_by_prefix` and `hard_prefix_ticks`.
+
+### Guided overlap controls
+
+Partitioned continuation applies a one-token channel-mean handoff correction.
+High-stage direction, acceleration and temporal comparisons use that same DC-only
+representation. The historical full-spatial guidance gauge remains implemented
+for regression coverage; production does not select it. Source trajectory tensors
+and source-grid temporal correspondence remain unchanged. This comparison logic
+is separate from sampler overlap width.
+
+The one-token DC handoff also rebases an unregistered direction reference when
+its measured offset is nonzero. This path compares only per-channel spatial
+means and applies the difference to the first generated token. It preserves
+the DC handoff's one-token support and leaves the reference's spatially varying
+component intact. A rejected structural registration does not authorize a full
+residual correction. Registered references, guidance off, downsample consistency
+and zero-offset DC handoffs retain their existing behavior.
+
+The production exact-overlap fallback follows the same DC-only rule. It adds
+only the per-channel spatial mean of the exact-vs-learned last-prefix residual to
+the first generated token. It never copies the spatially varying residual or
+tapers a correction through later tokens. The historical representation-bridge
+primitive remains available for source regression and diagnostic evidence.
+
+The `partitioned_exact_overlap_bridge` receipt reports
+`policy=partitioned_exact_overlap_dc_only_v5`, `structural_support_tokens=0`,
+`dc_support_tokens=1`, `dc_temporal_weights=[1.0]` and
+`later_suffix_extrapolated=false`. An eligible nonzero DC fallback reports
+`applied=true` and `suffix_support_tokens=1`; otherwise its fallback support is
+zero. This receipt describes the correction's scope, not rendered acceptance.
+The current DC-only path still exhibits the rendered frame-shift, shock and tone
+defect; it is not a qualified visual continuity fix.
+
+Production `guidance` receipts report `reference_gauge_used` and
+`reference_gauge_policy=exact_prefix_guidance_reference_dc_v1` for a nonzero DC
+handoff. The historical coupled oracle uses
+`exact_prefix_guidance_reference_coupled_v1`.
+
+When exact-prefix continuation uses the actual learned handoff and its matching
+main low/probe trajectory, direction and acceleration reuse the learned provider
+output as their transfer reference. Rebuilding it with bicubic interpolation
+would compare a different temporal transition even after prefix rebasing.
+
+The learned reference owns the exact source/target pair that the provider
+actually executed. The source side is the post-probe sampler result after
+authoritative source-grid prefix restoration; the target side is the learned
+provider output before exact target-grid prefix replacement. The trajectory
+capture still owns run identity, endpoint provenance and high-schedule
+qualification. It is not required to be bit-identical to the provider source:
+the one-call probe is captured at the PREDICT_NOISE boundary, then passes through
+the sampler's mathematically cancelling `(1-sigma)` output scaling and FLOW_AV
+inverse scaling before it reaches the provider. Floating-point round trips can
+therefore differ without representing a different trajectory.
+
+Temporal correspondence and innovations use the actual provider source tensor,
+while the temporary target operand removes the learned-transfer difference and
+the existing prefix representation residual before transport. This keeps source
+and target in the same executed handoff pair instead of mixing the provider
+target with a stale pre-sampler capture. The current high prediction continues
+to evolve under the existing weights, schedule and RMS bound.
+
+The source/target pair is retained only for the high lifetime and released on
+success or failure. For the 62x40x44 -> 62x58x64 FP32 continuation geometry this
+is about 31.1 MiB total retained video state. `handoff_reference_used` and
+`temporal_handoff_reference_used` identify executed comparisons, while
+`partitioned_handoff_guidance_reference` reports the captured-versus-provider
+source deltas. Registered, same-grid, bicubic and independent shadow controls
+retain their existing reference contracts. No additional H3, provider, sampler
+or VAE evaluation is added. This comparison correction requires rendered
+qualification; it is not a decoded boundary acceptance claim.
+
+The Continuum handoff node accepts any non-negative integer for `video_guided_overlap_tokens` and `audio_guided_overlap_ticks`; neither widget sets a fixed maximum. Existing defaults remain video `0` and audio `4`. Audio overlap retains its selected audio-mode semantics.
+
+For partitioned exact-prefix video, the old target-high prefix-release interpretation is retired after run 01093. A positive `video_guided_overlap_tokens` request is still accepted and reported, but it no longer writes a denoise ramp into caller-owned carried-prefix tokens and no longer installs the temporary Core `denoise_mask_function` / `APPLY_MODEL` closure. The target-high video sampler mask and H3 video context remain the authoritative exact prefix for every evaluation. The receipt reports `policy=partitioned_video_high_exact_context_v4`, `applied_tokens=0`, `retired_prefix_release=true`, and the original requested width.
+
+The retired `partitioned_video_high_sampler_overlap_exact_tail_v3` path repainted the last `N` protected prefix tokens early in target-high sampling, then decayed that release to zero for the final two evaluations and restored the exact prefix at output. Core correctly propagated the same changing mask through inpaint injection, H3 timestep labels and velocity conversion, but that coherence did not solve the ownership problem: the generated suffix could evolve against carried context that was later discarded. Increasing `N` increased the amount of temporary context. Run 01093 used six released prefix tokens and still reproduced the reported frame-shift/shock/tone defect; the first target-high H3 prediction recreated boundary displacement before Flow guidance materially changed it.
+
+This retirement is not a claim that target-high is now visually accepted. It removes a hardware-falsified source of discarded-context conditioning and converts the next run into an exact-context test. A future video-overlap design must operate without repainting caller-owned prefix context or merely moving the discontinuity to a later protected suffix token; the previously rejected one-token high guard is not restored. No extra H3 evaluation, provider call, sampler lifetime, history boundary or VAE invocation is added.
+
+### Boundary decoder-window evidence
+
+`frame_gauge_residual_mode=measure` also saves the native seven-token boundary
+decoder window, independently of registration acceptance. This captures failures
+on the coupled fallback and DC paths as well as accepted registration. The
+existing regional residual-fit gate remains unchanged; its `not_evaluated`
+result does not suppress this separate stage evidence.
+
+The bundle contains two authoritative prefix tokens; provider-native and
+pre-high clean windows; the first actual high prediction before and after Flow;
+that call's input after sampler inpaint; the initial video mask; and final
+internal clean output. Later actual calls and forecasts do not overwrite the
+first actual prediction. All snapshots own CPU storage. They are released on
+success or failure and add no model, sampler, provider or VAE evaluation.
+
+`partitioned_boundary_window_evidence` reports the relative output bundle path,
+manifest hash, first actual call/sigma and CPU-copy time. The manifest records
+tensor shapes, dtypes, byte hashes, decoder phase and domains. Model-predicted
+prefix bytes remain native: for an offline comparison of the returned suffix,
+replace the window's first two tokens with `authoritative_prefix`, then apply
+the model's latent-output conversion before VAE decoding. The first retained
+frame is local frame five; the next twelve frames precede the next native window
+blend. Unsupported prefix phases or missing real right context report
+`unsupported`; no context is invented. CPU copies and file I/O contribute
+diagnostic overhead. Mode `off` creates no window snapshots or files. Capturing
+these operands does not correct a rendered jump or qualify image quality.
 
 ### What happens at an unprotected handoff
 

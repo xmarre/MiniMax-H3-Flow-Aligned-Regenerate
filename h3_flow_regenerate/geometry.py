@@ -307,16 +307,16 @@ def resize_spatial_5d_h3_patch_lattice(
     target_h: int,
     target_w: int,
 ) -> torch.Tensor:
-    """Resize a latent while preserving MiniMax-H3's physical 2x2 patch lattice.
+    """Resize dense latent cells while aligning H3's physical patch centers.
 
     H3 assigns spatial RoPE coordinates to 2x2 latent patches using an
     area-normalized endpoint-excluded lattice. Generic image resize uses a
     half-pixel lattice, so a protected target-grid prefix can acquire a systematic
     spatial phase offset when it is projected into a lower source carrier.
 
-    Treat each 2x2 latent patch as one four-sample feature vector, resample those
-    vectors on H3's own physical patch coordinates with bilinear sampling, then reconstruct the latent.
-    This changes no temporal values and adds no model evaluation.
+    Extend each patch center into two uniformly spaced dense-cell centers. Splitting
+    even and odd latent cells into independent lanes duplicates narrow features
+    when the grid changes. This changes no temporal values or transformer tokens.
     """
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("H3 physical resize input must be a floating-point BxCxTxHxW tensor")
@@ -329,56 +329,32 @@ def resize_spatial_5d_h3_patch_lattice(
     if h == target_h and w == target_w:
         return tensor
 
-    source_grid_h = h // H3_PATCH_H
-    source_grid_w = w // H3_PATCH_W
-    target_grid_h = target_h // H3_PATCH_H
-    target_grid_w = target_w // H3_PATCH_W
-
+    axes = []
+    for axis in (0, 1):
+        sn, s0, ds = _h3_patch_axis_geometry(h, w, axis)
+        tn, t0, dt = _h3_patch_axis_geometry(target_h, target_w, axis)
+        # Dense cell centers are +/- one quarter patch step around each patch center.
+        source_start, target_start = s0 - ds / 2, t0 - dt / 2
+        target_index = torch.arange(tn, device=tensor.device, dtype=torch.float32)
+        source_index = (target_start + target_index * dt - source_start) / ds
+        axes.append(2 * source_index / (sn - 1) - 1)
+    yy, xx = torch.meshgrid(*axes, indexing="ij")
+    grid = torch.stack((xx, yy), -1)[None]
     work = tensor.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
-    patches = (
-        work.reshape(
-            b * t,
-            c,
-            source_grid_h,
-            H3_PATCH_H,
-            source_grid_w,
-            H3_PATCH_W,
+    out = tensor.new_empty((b * t, c, target_h, target_w))
+    chunk = max(1, (64 << 20) // (c * (h * w + target_h * target_w) * 4))
+    for first in range(0, b * t, chunk):
+        last = min(first + chunk, b * t)
+        mapped = F.grid_sample(
+            work[first:last].float(),
+            grid.expand(last - first, -1, -1, -1),
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
         )
-        .permute(0, 1, 3, 5, 2, 4)
-        .reshape(
-            b * t,
-            c * H3_PATCH_H * H3_PATCH_W,
-            source_grid_h,
-            source_grid_w,
-        )
-        .float()
-    )
-    grid = _h3_patch_resample_grid(
-        (source_grid_h, source_grid_w),
-        (target_grid_h, target_grid_w),
-        device=patches.device,
-    ).expand(b * t, -1, -1, -1)
-
-    mapped = F.grid_sample(
-        patches,
-        grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    )
-    out = (
-        mapped.reshape(
-            b * t,
-            c,
-            H3_PATCH_H,
-            H3_PATCH_W,
-            target_grid_h,
-            target_grid_w,
-        )
-        .permute(0, 1, 4, 2, 5, 3)
-        .reshape(b * t, c, target_h, target_w)
-    )
-    return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4).to(tensor)
+        out[first:last] = mapped.to(tensor.dtype)
+        del mapped
+    return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4)
 
 
 def resize_spatial_5d(tensor: torch.Tensor, target_h: int, target_w: int, *, mode: str = "bicubic") -> torch.Tensor:
