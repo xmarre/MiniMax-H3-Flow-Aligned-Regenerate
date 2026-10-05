@@ -26,24 +26,31 @@ def test_mixed_grid_id_is_preserved_but_not_remapped():
     assert "Deprecated compatibility path" in mixed.DESCRIPTION
 
 
-def test_canonical_overlay_uses_target_input_and_records_exact_prefix_fallback():
+def test_canonical_overlay_uses_partitioned_exact_prefix_and_retains_target_input_control():
     payload = json.loads((ROOT / "workflows" / "progressive-handoff.overlay.json").read_text(encoding="utf-8"))
 
     chain = payload["placement"]["chain"]
-    assert "H3ProgressiveTargetInputHandoff" in chain
+    assert "H3PartitionedExactPrefixDiagnosticHandoff" in chain
     assert "H3ProgressiveMixedGridHandoff" not in chain
 
     exact = payload["exact_prefix_contract"]
-    assert exact["mode"] == "conservative target-grid fallback"
-    assert exact["private_low_grid_sampler"] is False
-    assert exact["handoff_probe"] is False
-    assert exact["learned_upscaler_calls"] == 0
-    assert exact["geometry_boundary"] is False
-    assert exact["history_boundary"] is False
-    assert exact["video_mask_modified_during_sampling"] is False
-    assert exact["audio_guided_overlap"]["default_ticks"] == 4
-    assert exact["audio_guided_overlap"]["ramp"] == [0.203125, 0.40234375, 0.6015625, 0.80078125]
-    assert exact["audio_guided_overlap"]["final_exact_restore"] is True
+    assert exact["mode"] == "same_grid_target_control"
+    assert exact["low_probe_high_video_grid"] == "target"
+    assert exact["clean_and_residual_handoff"] == "identity"
+    assert exact["audio"]["stored_overlap_ticks"] == 16
+    assert exact["audio"]["effective_overlap_ticks"] == 0
+    assert exact["video"]["stored_overlap_tokens"] == 6
+    assert exact["video"]["effective_overlap_tokens"] == 0
+    assert exact["final_exact_restore"] is True
+
+    control = payload["generic_target_input_control"]
+    assert control["node"] == "H3ProgressiveTargetInputHandoff"
+    assert control["production_exact_prefix_recommended"] is False
+    fallback = control["exact_prefix_fallback"]
+    assert fallback["mode"] == "single_target_grid_sampler"
+    assert fallback["learned_upscaler_calls"] == 0
+    assert fallback["geometry_boundary"] is False
+    assert fallback["audio_guided_overlap_ticks"] == 4
 
 
 def test_overlay_marks_mixed_grid_as_compatibility_only_without_aliasing():

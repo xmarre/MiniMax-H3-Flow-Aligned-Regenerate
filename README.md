@@ -26,10 +26,13 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — standard target-input progressive workflow using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer through a connected 3D latent-upscaler provider;
+- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — v0.3.9 production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 30-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, and the current overlap/provenance values);
+- [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
-The target-input example configures the provider with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. Both examples use stock MiniMax H3 loading/conditioning/decoding, `res_multistep`, and no Turbo LoRA. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
+The partitioned and generic target-input examples both configure `MinimaxH3LatentUpscaler3DProvider` with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. These compact examples deliberately use stock one-chunk H3 conditioning/sampling so the Flow patch wiring is inspectable in isolation; the partitioned exact-prefix runtime activates when the same patched `MODEL` is consumed by Continuum Native Masked continuation with a protected prefix. That production path requires the coordinated Sol-H3 and VDN-H3-Plus releases listed below.
+
+All three examples use `res_multistep` and no Turbo LoRA. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
 
 ## Standard Target Input path
 

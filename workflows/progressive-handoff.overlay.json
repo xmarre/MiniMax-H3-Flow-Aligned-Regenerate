@@ -1,17 +1,20 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Canonical target-input progressive H3 topology and defaults. Mixed-Grid is retained only as a deprecated compatibility path; historical validation records remain preserved separately.",
+  "purpose": "Canonical v0.3.9 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
   "placement": {
     "chain": [
       "DiffAid",
       "Untwist",
       "Spectrum",
-      "H3ProgressiveTargetInputHandoff",
+      "H3PartitionedExactPrefixDiagnosticHandoff",
       "Continuum"
     ],
-    "trajectory_capture": "internal to H3ProgressiveTargetInputHandoff; no separate H3TrajectoryCapture node is required",
-    "learned_upscaler": "MinimaxH3LatentUpscaler3DProvider.learned_upscaler -> H3ProgressiveTargetInputHandoff.learned_upscaler"
+    "serialized_node_id": "H3PartitionedExactPrefixDiagnosticHandoff",
+    "display_name": "MiniMax H3 Partitioned Exact-Prefix Handoff",
+    "trajectory": "H3FlowTrajectory.H3_FLOW_TRAJECTORY -> H3PartitionedExactPrefixDiagnosticHandoff.trajectory",
+    "learned_upscaler": "MinimaxH3LatentUpscaler3DProvider.learned_upscaler -> H3PartitionedExactPrefixDiagnosticHandoff.learned_upscaler",
+    "note": "The partitioned node must patch the MODEL before the Continuum sampler. Matching Sol-H3 and VDN-H3-Plus releases are required at runtime."
   },
   "shared_handle": {
     "node": "H3FlowTrajectory",
@@ -32,7 +35,7 @@
   },
   "canonical_defaults": {
     "source_mode": "scale",
-    "source_scale": 0.70,
+    "source_scale": 0.7,
     "source_width": 864,
     "source_height": 640,
     "handoff_coordinate": 0.35,
@@ -42,16 +45,45 @@
     "acceleration_weight": 0.25,
     "consistency_weight": 0.25,
     "low_frequency_cutoff": 0.25,
-    "temporal_weight": 0.20,
-    "handoff_transfer": "learned_3d",
+    "temporal_weight": 0.2,
+    "vdn_linear_diagnostic": "normal",
+    "audio_guided_overlap_ticks": 16,
+    "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
+    "prefix_transformer_context": "exact_target_partitioned",
+    "audio_position_domain": "source_carrier",
+    "audio_handoff_source": "main_partitioned",
+    "av_handoff_source": "main_partitioned",
+    "guidance_trajectory_source": "main_exact_partitioned",
+    "low_probe_execution_source": "main_then_shadow",
+    "frame_gauge_repair": true,
+    "frame_gauge_residual_mode": "off",
+    "provider_boundary_stabilization": "soft_support_v1",
+    "capture_boundary_witness": false,
+    "vdn_temporal_carrier_policy": "native_grid_then_map_v1",
+    "handoff_transfer_control": "learned_3d",
+    "spatial_stage_control": "same_grid_target_control",
+    "softmax_diagnostic": "normal",
+    "video_guided_overlap_tokens": 6,
     "weight_semantics": "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values only; apply_guidance does not use them unless the corresponding guidance mode is selected."
   },
   "historical_direction_only_reference": {
     "evidence_scope": "Matched difficult-motion square smoke retained as historical evidence; it is not the current node/workflow default.",
-    "target_pixels_wh": [896, 896],
-    "target_latent_wh": [56, 56],
-    "source_pixels_wh": [736, 736],
-    "source_latent_wh": [46, 46],
+    "target_pixels_wh": [
+      896,
+      896
+    ],
+    "target_latent_wh": [
+      56,
+      56
+    ],
+    "source_pixels_wh": [
+      736,
+      736
+    ],
+    "source_latent_wh": [
+      46,
+      46
+    ],
     "sampler": "SA-Solver-PECE",
     "outer_steps": 14,
     "widgets": {
@@ -92,8 +124,12 @@
     "status": "completed",
     "provider_node": "MinimaxH3LatentUpscaler3DProvider",
     "wiring": "provider.learned_upscaler -> H3ProgressiveTargetInputHandoff.learned_upscaler",
-    "treatment_widget": {"handoff_transfer": "learned_3d"},
-    "control_widget": {"handoff_transfer": "bicubic"},
+    "treatment_widget": {
+      "handoff_transfer": "learned_3d"
+    },
+    "control_widget": {
+      "handoff_transfer": "bicubic"
+    },
     "strict_d14_pair": {
       "outer_steps": 14,
       "source_scale": 0.83,
@@ -153,26 +189,32 @@
     "first_target_call": "mandatory actual H3 evaluation"
   },
   "exact_prefix_contract": {
-    "trigger": "any exact-zero prepared video denoise-mask value",
-    "mode": "conservative target-grid fallback",
-    "sampler_invocations": 1,
-    "private_low_grid_sampler": false,
-    "handoff_probe": false,
-    "learned_upscaler_calls": 0,
-    "geometry_boundary": false,
-    "history_boundary": false,
-    "video_mask_modified_during_sampling": false,
-    "audio_guided_overlap": {
-      "default_ticks": 4,
-      "audio_latent_rate_hz": 40,
-      "approx_duration_ms": 100,
-      "mask_grid": "ceil_1_over_256",
-      "ramp": [0.203125, 0.40234375, 0.6015625, 0.80078125],
-      "scope": "tail of a canonical carried audio prefix during sampler lifetime only",
-      "final_exact_restore": true,
-      "disable_hook": "H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0"
+    "trigger": "supported exact protected video prefix supplied by Continuum Native Masked continuation",
+    "mode": "same_grid_target_control",
+    "low_probe_high_video_grid": "target",
+    "clean_and_residual_handoff": "identity",
+    "first_all_generated_chunk": "released progressive Target Input behavior with learned_3d transfer",
+    "learned_upscaler_required": true,
+    "history": "fresh stage/history ownership remains enforced by the partitioned scheduler",
+    "audio": {
+      "stored_overlap_ticks": 16,
+      "mode": "sampler_mask_exact_timestep",
+      "effective_overlap_ticks": 0,
+      "semantics": "sampler_mask_exact_timestep aliases coherent exact_mask; protected audio rows are not released"
     },
-    "caller_owned_output": "original exact video/audio mask semantics remain authoritative at the sampler return boundary"
+    "video": {
+      "stored_overlap_tokens": 6,
+      "effective_overlap_tokens": 0,
+      "semantics": "provenance-only width; protected video tokens remain exact"
+    },
+    "shadow": {
+      "selector": "main_then_shadow",
+      "default_main_sources_add_shadow_lifetime": false
+    },
+    "frame_gauge_repair": "paired-prefix checks enabled; same-grid path resolves to identity",
+    "provider_boundary_stabilization": "soft_support_v1 observation only; no decoded output warp",
+    "final_exact_restore": true,
+    "heterogeneous_continuation": "opt-in and not qualified by the accepted target-grid profile"
   },
   "deprecated_compatibility": {
     "node_id": "H3ProgressiveMixedGridHandoff",
@@ -195,5 +237,32 @@
     "audio": "no spatial transform",
     "exact_protection_precedence": true,
     "decoded_media_required_for_new_behavioral_claims": true
+  },
+  "generic_target_input_control": {
+    "node": "H3ProgressiveTargetInputHandoff",
+    "production_exact_prefix_recommended": false,
+    "purpose": "General target-input progressive control and conservative exact-prefix fallback; it is not the coordinated partitioned Continuum production path.",
+    "defaults": {
+      "source_mode": "scale",
+      "source_scale": 0.7,
+      "source_width": 864,
+      "source_height": 640,
+      "handoff_coordinate": 0.35,
+      "handoff_selection": "fixed",
+      "guidance_mode": "direction+temporal",
+      "direction_weight": 0.25,
+      "acceleration_weight": 0.25,
+      "consistency_weight": 0.25,
+      "low_frequency_cutoff": 0.25,
+      "temporal_weight": 0.2,
+      "handoff_transfer": "learned_3d"
+    },
+    "exact_prefix_fallback": {
+      "mode": "single_target_grid_sampler",
+      "learned_upscaler_calls": 0,
+      "geometry_boundary": false,
+      "audio_guided_overlap_ticks": 4,
+      "caller_owned_output": "original exact video/audio mask semantics remain authoritative at the sampler return boundary"
+    }
   }
 }
