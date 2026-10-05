@@ -515,8 +515,10 @@ def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler
 )
 def test_sol_history_recognizes_the_block_replacement_in_every_stage(monkeypatch, control):
     """An unbound closure cell would make Sol's history identity opaque for that stage."""
-    from sol_h3 import interop
-    from sol_h3.partitioned_history import _partitioned_flow_replacement_identity
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    interop = pytest.importorskip("sol_h3.interop")
+    history = pytest.importorskip("sol_h3.partitioned_history")
 
     from h3_flow_regenerate import partitioned_transformer as transform
 
@@ -530,7 +532,7 @@ def test_sol_history_recognizes_the_block_replacement_in_every_stage(monkeypatch
             def __call__(self, *call_args, **call_kwargs):
                 options = call_kwargs.get("transformer_options", call_args[3] if len(call_args) > 3 else None)
                 patch = options["patches_replace"]["dit"][("double_block", 0)]
-                identity = _partitioned_flow_replacement_identity(interop, patch, 0)
+                identity = history._partitioned_flow_replacement_identity(interop, patch, 0)
                 recognized.setdefault(options.get("h3_flow_stage"), set()).add(identity is not None)
                 return executor(*call_args, **call_kwargs)
 
