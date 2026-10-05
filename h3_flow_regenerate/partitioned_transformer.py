@@ -487,6 +487,9 @@ def partitioned_diffusion_wrapper(
     payload["layout"] = layout
     video_start, video_end, _ = layout.segments[-1]
     carrier_prefix_rows = plan.prefix_t * (plan.target_rows if band is not None else plan.source_rows)
+    # Sol inspects every captured cell to bind forecast history. Non-band
+    # closures must also publish this optional cell, including target-high.
+    tail_rows = None
     if band is not None:
         if video_end - video_start != band.native_rows:
             raise RuntimeError("target-band native layout does not match the target-grid sampler state")

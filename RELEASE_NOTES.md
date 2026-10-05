@@ -42,6 +42,12 @@ with the bridge enabled.
 
 ## Evidence and CI
 
+Initialize the optional target-band row mapping before building block wrappers.
+This keeps source-carrier and target-high closures inspectable by Sol's history
+classifier; an empty closure cell previously forced those calls to execute and
+prevented Spectrum forecasts. Attention arithmetic and sampler equations are
+unchanged.
+
 The runtime evidence gate expects low/probe VDN boundary-query receipts at the
 band/tail edge for target-band runs. The cross-repo contract check covers the
 target-carrier contract through VDN and Sol. CI runs target-band tests through
