@@ -4528,6 +4528,8 @@ def run_partitioned_progressive(
                 "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled",
             )
         )
+        if target_band is not None and (frame_gauge_accepted or exact_overlap_fallback_requested):
+            raise RuntimeError("progressive_target_band must not select a prefix-boundary frame-gauge splice")
         representation_metrics = disabled_suffix_representation_bridge_metrics(
             prefix_t=stage_plan.prefix_t,
             requested=False,
@@ -4641,6 +4643,7 @@ def run_partitioned_progressive(
                     sigma=sigma,
                     enabled=suffix_dc_bridge_enabled,
                 )
+                band_provider_native_clean = None
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
                     provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
