@@ -306,8 +306,9 @@ def test_band_forward_through_real_blocks_ignores_padding_and_prefix_carrier(mon
     assert not torch.equal(other[0][:, :, PROTECTED_T:head], baseline[0][:, :, PROTECTED_T:head])
 
 
+@pytest.mark.parametrize("softmax_mode", ["normal", "target_query_sink_measure"])
 @pytest.mark.parametrize("carrier", ["band", "source", "same_grid"])
-def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier):
+def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier, softmax_mode):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     interop = pytest.importorskip("sol_h3.interop")
@@ -330,7 +331,10 @@ def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier)
     audio = torch.randn(1, 32, 2, 9, generator=generator)
     context = torch.randn(1, 3, 8, generator=generator)
     runtime = PartitionedStageRuntime(
-        plan=owner, metrics=H3FlowMetrics(), target_band=geometry if carrier == "band" else None
+        plan=owner,
+        metrics=H3FlowMetrics(),
+        target_band=geometry if carrier == "band" else None,
+        softmax_diagnostic=softmax_mode,
     )
     captured = {}
 
@@ -361,3 +365,8 @@ def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier)
         native_rows = geometry.native_rows if carrier == "band" else TEMPORAL * plan.source_rows
         assert identity[2] - identity[4] == native_rows
         assert identity[3] - identity[4] == plan.partitioned_rows
+
+        signature = interop._closure_values(patch)["partitioned_layout"].signature
+        leaf = ("h3_flow_partitioned_softmax_diagnostic_v1", "target_query_sink_measure")
+        assert (leaf in signature) == (softmax_mode == "target_query_sink_measure")
+        assert repr(signature) in identity

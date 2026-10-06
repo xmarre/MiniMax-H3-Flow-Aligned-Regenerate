@@ -32,6 +32,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
@@ -237,7 +238,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "suppress_cross_grid_temporal_taps keeps the complement active but "
                     "zeros only temporal short-conv taps that cross the target/source grid boundary; "
                     "raw_token_measure keeps both VDN paths active but disables only the matched "
-                    "target-prefix density correction in softmax and learned-linear statistics."
+                    "target-prefix density correction in softmax and learned-linear measure policy."
                 ),
             },
         )
@@ -447,8 +448,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             },
         )
         # Append-only after the 00726/00727 spatial selector. This discriminator
-        # changes only suffix local-query Sol selection; grouped domains and
-        # target-prefix measure remain unchanged.
+        # isolates suffix dense dispatch or target-query non-video key measure.
         spec["required"]["softmax_diagnostic"] = (
             list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS),
             {
@@ -458,7 +458,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX} forces only those same gathered "
                     "suffix groups through Sol's weighted dense path while preserving the identical "
                     "Q/K/V domain, target-prefix bias, grouped ownership and VDN linear setting. "
-                    "Diagnostic only."
+                    f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK} extends the target-grid query "
+                    "key bias over text/reference/audio rows in low/probe. Reduced-grid and global "
+                    "queries, gathered keys, linear measure policy and high-stage policy are preserved. "
+                    "Requires paired VDN/Sol support. Diagnostic only."
                 ),
             },
         )

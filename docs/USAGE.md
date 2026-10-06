@@ -720,3 +720,27 @@ For exact runs and measured outcomes, use the dedicated evidence documents rathe
 - [MIXED_GRID_CONTINUUM.md](MIXED_GRID_CONTINUUM.md) — deprecated Mixed-Grid compatibility contract and historical implementation details;
 - [mixed-grid-seam-repair.md](mixed-grid-seam-repair.md) — historical Mixed-Grid seam investigation;
 - [../CREDITS.md](../CREDITS.md) — full research and implementation provenance.
+
+### Target-query non-video key measure
+
+The diagnostic node's `softmax_diagnostic=target_query_sink_measure` applies only
+in heterogeneous continuation low/probe. For target-grid queries, including
+target-grid row anchors, it extends `log(source_rows / target_rows)` from
+video-head keys over the text, reference-image and audio non-video rows.
+Reduced-grid video queries and global non-video queries retain their existing
+bias. Gathered keys, query-position maps, sparse/dense routing and VDN's learned
+linear measure policy are preserved. High-stage refinement uses its existing policy.
+
+Use `vdn_linear_diagnostic=normal` for an isolated comparison with
+`softmax_diagnostic=normal`. `raw_token_measure` cannot be combined with this
+mode because it removes the measure under test and changes linear measure policy.
+The mode requires matching VDN support and Sol sink-measure API 1; missing
+support is reported before continuation sampling. Completed biased target-query
+calls are recorded as `partitioned_vdn_target_sink_measure_*` counters. The
+selector participates in provider/history identity, so normal and experimental
+execution cannot reuse one numerical history.
+
+This changes attention weighting and may alter generated content. It does not
+establish that a visible boundary defect is caused by that weighting. It adds no
+model evaluations. Row anchors spanning both grids require two dense subcalls
+instead of one; their total query rows and full key domain are unchanged.

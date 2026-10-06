@@ -1926,3 +1926,49 @@ def test_dense_suffix_softmax_selector_is_default_absent_and_fail_closed_verifie
 
     with pytest.raises(ValueError, match="partitioned softmax diagnostic"):
         normalize_partitioned_softmax_diagnostic("invalid")
+
+
+def test_target_sink_selector_and_completed_work_verification():
+    mode = "target_query_sink_measure"
+    model = SimpleNamespace(model_options={"transformer_options": {}})
+    metrics = H3FlowMetrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic="normal",
+        audio_guided_overlap_ticks=4,
+        softmax_diagnostic=mode,
+    )
+    assert model.model_options["transformer_options"][PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] == mode
+    with pytest.raises(RuntimeError, match="no completed biased target-query work"):
+        _verify_partitioned_softmax_diagnostic(metrics, mode, calls_before=3, q_rows_before=7, kv_rows_before=9)
+    for suffix, value in [("calls", 4), ("q_rows", 10), ("kv_rows", 20)]:
+        metrics.increment("partitioned_vdn_target_sink_measure_" + suffix, value)
+    _verify_partitioned_softmax_diagnostic(metrics, mode, calls_before=3, q_rows_before=7, kv_rows_before=9)
+    receipt = metrics.events[-1].fields
+    assert receipt["target_query_calls"] == 1 and receipt["target_query_q_rows"] == 3
+    assert receipt["global_query_measure_unchanged"] and receipt["linear_measure_unchanged"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        apply_partitioned_diagnostic_controls(
+            model,
+            metrics,
+            vdn_linear_diagnostic="raw_token_measure",
+            audio_guided_overlap_ticks=4,
+            softmax_diagnostic=mode,
+        )
+
+
+def test_target_sink_requires_advertised_vdn_mode_before_sampling():
+    current = SimpleNamespace(
+        _vdn_forward=True,
+        _vdn_external_sequence_api=4,
+        _vdn_partitioned_boundary_query_api=1,
+        _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+    )
+    current._vdn_partitioned_softmax_diagnostic_api = 1
+    current._vdn_partitioned_softmax_diagnostic_modes = ("normal", "dense_suffix_same_domain")
+    patcher = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": current})
+    with pytest.raises(PartitionedPreflightUnsupported, match="does not advertise that mode"):
+        _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
+    current._vdn_partitioned_softmax_diagnostic_modes += ("target_query_sink_measure",)
+    _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")

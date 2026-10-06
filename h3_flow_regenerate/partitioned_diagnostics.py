@@ -131,9 +131,11 @@ PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY = "h3_flow_partitioned_softmax_diagnostic_v1"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_API = 1
 PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL = "normal"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX = "dense_suffix_same_domain"
+PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK = "target_query_sink_measure"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS = (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
 )
 
 VDN_PARTITIONED_LINEAR_DIAGNOSTIC_API = 1
@@ -425,6 +427,11 @@ def apply_partitioned_diagnostic_controls(
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
     softmax_mode = normalize_partitioned_softmax_diagnostic(softmax_diagnostic)
+    if (
+        softmax_mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK
+        and mode == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE
+    ):
+        raise ValueError("target-query sink measure cannot be combined with raw_token_measure")
     video_overlap_tokens = validate_video_guided_overlap_tokens(
         video_guided_overlap_tokens,
         source="video_guided_overlap_tokens",
@@ -606,6 +613,7 @@ __all__ = [
     "PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY",
     "PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL",
     "PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS",
+    "PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK",
     "PARTITIONED_SPATIAL_STAGE_CONTROL_KEY",
     "PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS",
     "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",

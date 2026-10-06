@@ -27,9 +27,12 @@ def _plan(source_hw=(4, 6)):
     )
 
 
+@pytest.mark.parametrize("softmax_mode", ["dense_suffix_same_domain", "target_query_sink_measure"])
 @pytest.mark.parametrize("source_hw", [(4, 6), (8, 12)])
 @pytest.mark.parametrize("failure", [False, True])
-def test_high_owns_target_grid_context_and_restores_low_controls(source_hw, failure, monkeypatch, tmp_path):
+def test_high_owns_target_grid_context_and_restores_low_controls(
+    source_hw, failure, monkeypatch, tmp_path, softmax_mode
+):
     monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
     plan = _plan(source_hw)
     prefix = plan.prefix.clone()
@@ -38,7 +41,7 @@ def test_high_owns_target_grid_context_and_restores_low_controls(source_hw, fail
     options = {
         "h3_refinement": previous_refinement,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY: "bypass_partitioned_linear",
-        PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "dense_suffix_same_domain",
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: softmax_mode,
         PARTITIONED_VDN_TEMPORAL_CARRIER_KEY: "destination_grid_stencil_v1",
         PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY: "exact_target_partitioned",
         PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: "source_carrier",

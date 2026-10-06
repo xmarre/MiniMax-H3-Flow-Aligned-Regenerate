@@ -100,6 +100,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_API,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
@@ -1095,7 +1096,7 @@ def _validate_partitioned_vdn_compat(
         if required_softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
             if int(getattr(owner, "_vdn_partitioned_softmax_diagnostic_api", 0)) != PARTITIONED_SOFTMAX_DIAGNOSTIC_API:
                 raise PartitionedPreflightUnsupported(
-                    "same-domain dense suffix diagnostic requires paired VDN softmax diagnostic "
+                    "partitioned softmax diagnostic requires paired VDN softmax diagnostic "
                     f"API v{PARTITIONED_SOFTMAX_DIAGNOSTIC_API}"
                 )
             supported_softmax = tuple(getattr(owner, "_vdn_partitioned_softmax_diagnostic_modes", ()))
@@ -1233,6 +1234,26 @@ def _verify_partitioned_softmax_diagnostic(
     if mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
         return
     counters = getattr(metrics, "counters", {})
+    if mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
+        calls = int(counters.get("partitioned_vdn_target_sink_measure_calls", 0)) - int(calls_before)
+        q_rows = int(counters.get("partitioned_vdn_target_sink_measure_q_rows", 0)) - int(q_rows_before)
+        kv_rows = int(counters.get("partitioned_vdn_target_sink_measure_kv_rows", 0)) - int(kv_rows_before)
+        if min(calls, q_rows, kv_rows) <= 0:
+            raise RuntimeError(
+                "target-query sink measure was requested but no completed biased target-query work was observed"
+            )
+        metrics.event(
+            "partitioned_softmax_diagnostic_verified",
+            mode=mode,
+            target_query_calls=calls,
+            target_query_q_rows=q_rows,
+            target_query_kv_rows=kv_rows,
+            reduced_query_measure_unchanged=True,
+            global_query_measure_unchanged=True,
+            linear_measure_unchanged=True,
+            same_gathered_domain=True,
+        )
+        return
     calls = int(counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0)) - int(calls_before)
     q_rows = int(counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0)) - int(q_rows_before)
     kv_rows = int(counters.get("partitioned_vdn_dense_suffix_same_domain_kv_rows", 0)) - int(kv_rows_before)
@@ -1430,6 +1451,19 @@ def _validate_partitioned_sol_compat(guider: Any) -> None:
         raise PartitionedPreflightUnsupported(
             "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: " + ", ".join(mismatches)
         )
+
+
+def _validate_partitioned_sol_sink_measure(mode: str) -> None:
+    if mode != PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
+        return
+    try:
+        from sol_h3 import partitioned_request as sol_request
+    except ImportError as exc:
+        raise PartitionedPreflightUnsupported(
+            "target-query sink measure requires paired Sol sink-measure API 1"
+        ) from exc
+    if getattr(sol_request, "PARTITIONED_SINK_MEASURE_API", 0) != 1:
+        raise PartitionedPreflightUnsupported("target-query sink measure requires paired Sol sink-measure API 1")
 
 
 # Spatial-stage controls whose continuation performs a real learned spatial transfer.
@@ -1748,6 +1782,12 @@ def _preflight(
     )
     _validate_partitioned_sol_compat(guider)
     _validate_partitioned_sol_native_carrier(native_carrier)
+    if required_softmax_diagnostic == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
+        _validate_partitioned_sol_sink_measure(required_softmax_diagnostic)
+        if required_vdn_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE:
+            raise PartitionedPreflightUnsupported("target-query sink measure cannot be combined with raw_token_measure")
+        if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID:
+            raise PartitionedPreflightUnsupported("target-query sink measure requires heterogeneous continuation grids")
 
     try:
         spatial_stage_control = normalize_spatial_stage_control(spatial_stage_control)
@@ -3255,11 +3295,11 @@ def run_partitioned_progressive(
     if softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
         if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
             raise PartitionedPreflightUnsupported(
-                "same-domain dense suffix diagnostic requires prefix_transformer_context='exact_target_partitioned'"
+                "partitioned softmax diagnostic requires prefix_transformer_context='exact_target_partitioned'"
             )
         if low_probe_execution_source == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY:
             raise PartitionedPreflightUnsupported(
-                "same-domain dense suffix diagnostic requires the exact-partitioned low/probe execution path"
+                "partitioned softmax diagnostic requires the exact-partitioned low/probe execution path"
             )
     provider_boundary_stabilization = normalize_provider_boundary_stabilization(
         initial_transformer.get(
@@ -3684,11 +3724,14 @@ def run_partitioned_progressive(
     raw_measure_prefix_frames_before = int(
         binding.metrics.counters.get("partitioned_vdn_raw_token_measure_prefix_frames", 0)
     )
-    dense_suffix_calls_before = int(binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_calls", 0))
-    dense_suffix_q_rows_before = int(binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_q_rows", 0))
-    dense_suffix_kv_rows_before = int(
-        binding.metrics.counters.get("partitioned_vdn_dense_suffix_same_domain_kv_rows", 0)
+    softmax_counter = (
+        "partitioned_vdn_target_sink_measure"
+        if softmax_diagnostic == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK
+        else "partitioned_vdn_dense_suffix_same_domain"
     )
+    dense_suffix_calls_before = int(binding.metrics.counters.get(softmax_counter + "_calls", 0))
+    dense_suffix_q_rows_before = int(binding.metrics.counters.get(softmax_counter + "_q_rows", 0))
+    dense_suffix_kv_rows_before = int(binding.metrics.counters.get(softmax_counter + "_kv_rows", 0))
     temporal_carrier_calls_before = int(
         binding.metrics.counters.get("partitioned_vdn_destination_grid_stencil_calls", 0)
     )

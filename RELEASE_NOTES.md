@@ -875,3 +875,15 @@ v0.2.0 added the optional `learned_3d` handoff provider for Progressive Target I
 # MiniMax H3 Flow-Aligned Regenerate v0.1.0
 
 Initial public release: H3 trajectory capture, flow-aligned second-pass guidance, progressive target-input handoff, Continuum refine-state guidance, runtime metrics and the initial experimental research controls.
+
+## Target-query non-video key measure
+
+Adds `target_query_sink_measure` to the diagnostic node's existing
+`softmax_diagnostic` selector. In heterogeneous low/probe it scales conditioning
+keys alongside target-grid video keys for target-grid queries. Reduced-grid and
+global queries, physical gathers, VDN linear measure policy and high refinement
+retain their existing policy. Target-grid row anchors follow the selected
+weighting; anchors on different grids are dispatched separately. The mode
+requires paired VDN/Sol capability and records completed execution. Numerical
+history includes the selector. Normal remains the default; rendered acceptance
+and GPU timing remain empirical. See `docs/USAGE.md` for scope and compatibility.
