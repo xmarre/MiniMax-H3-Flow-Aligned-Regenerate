@@ -1623,6 +1623,60 @@ def _apply_target_band_head_dc_bridge(
     return mapped_state, corrected_clean, dc_metrics
 
 
+def _emit_target_band_tail_boundary(
+    metrics,
+    video: torch.Tensor,
+    band: PartitionedTargetBandGeometry,
+    *,
+    stage: str,
+    source_hw: tuple[int, int] | None = None,
+    target_hw: tuple[int, int] | None = None,
+) -> None:
+    """Record motion and seam evidence at the band/tail boundary for one stage.
+
+    Diagnostic only. The seam values of the two neighbouring token pairs are
+    reported beside the band/tail pair so a discontinuity can be told apart
+    from ordinary frame-to-frame change.
+    """
+    boundary_t = int(band.head_t)
+    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+        trajectory = measure_translation_trajectory(
+            video,
+            boundary_t,
+            forward_steps=4,
+            backward_steps=3,
+            roi_fraction=roi_fraction,
+            max_shift=4,
+        )
+        projection = {}
+        if source_hw is not None and target_hw is not None:
+            projection = project_translation_trajectory_to_grid(trajectory, source_hw=source_hw, target_hw=target_hw)
+        metrics.event(
+            "partitioned_target_band_tail_trajectory",
+            stage=stage,
+            roi=roi_name,
+            boundary_t=boundary_t,
+            grid="source" if source_hw is not None else "target",
+            output_mutated=False,
+            **trajectory,
+            **projection,
+        )
+    seams = {}
+    for label, offset in (("before", -1), ("boundary", 0), ("after", 1)):
+        seam_t = boundary_t + offset
+        if 1 <= seam_t < int(video.shape[2]):
+            values = measure_video_boundary(video, seam_t)
+            seams.update({f"{label}_{name}": value for name, value in values.items() if name != "lowpass_kernel"})
+    metrics.event(
+        "partitioned_target_band_tail_seam",
+        stage=stage,
+        boundary_t=boundary_t,
+        grid="source" if source_hw is not None else "target",
+        output_mutated=False,
+        **seams,
+    )
+
+
 def _validate_partitioned_sol_native_carrier(required_native_carrier: str) -> None:
     """Require Sol history identity support for a non-source native carrier."""
     if required_native_carrier == PARTITIONED_NATIVE_CARRIER_SOURCE:
@@ -4145,6 +4199,15 @@ def run_partitioned_progressive(
                     target_hw=(target_h, target_w),
                 ),
             )
+        if target_band is not None:
+            _emit_target_band_tail_boundary(
+                binding.metrics,
+                clean_video,
+                target_band,
+                stage="source_low",
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+            )
         exact_prefix_source = physical_prefix_source.to(clean_video)
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
@@ -4317,6 +4380,7 @@ def run_partitioned_progressive(
 
         clean_video_postprocess = None
         band_provider_native_clean: torch.Tensor | None = None
+        band_provider_trajectory_clean: torch.Tensor | None = None
         if target_band is not None:
             # The band keeps its own target-grid prediction, so the protected
             # prefix is followed by identical-grid content exactly as in same-grid
@@ -4706,6 +4770,7 @@ def run_partitioned_progressive(
                     sigma=sigma,
                     enabled=suffix_dc_bridge_enabled,
                 )
+                band_provider_trajectory_clean = band_provider_native_clean
                 band_provider_native_clean = None
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
@@ -5429,6 +5494,16 @@ def run_partitioned_progressive(
                 roi=roi_name,
                 **restored_trajectory,
             )
+        if target_band is not None:
+            if band_provider_trajectory_clean is None:
+                raise RuntimeError("target-band handoff lost the learned provider's raw output for diagnostics")
+            # The raw provider output, before the band splice: in target-band mode the
+            # prefix-boundary "learned_native" receipt measures the spliced handoff clean.
+            _emit_target_band_tail_boundary(
+                binding.metrics, band_provider_trajectory_clean, target_band, stage="provider_native"
+            )
+            band_provider_trajectory_clean = None
+            _emit_target_band_tail_boundary(binding.metrics, restored_clean, target_band, stage="pre_high")
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
 
@@ -6250,6 +6325,8 @@ def run_partitioned_progressive(
                 high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
+        if target_band is not None:
+            _emit_target_band_tail_boundary(binding.metrics, final_video, target_band, stage="final_post_high")
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             final_trajectory = measure_translation_trajectory(
                 final_video,

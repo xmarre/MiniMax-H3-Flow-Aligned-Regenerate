@@ -546,6 +546,30 @@ def test_target_band_renoises_its_native_band_with_the_tail_noise(monkeypatch):
     assert overlap[0]["delta_rms"] > 0.0 and overlap[0]["native_rms"] > 0.0
     assert overlap[0]["output_mutated"] is False
 
+    stages = ["source_low", "provider_native", "pre_high", "final_post_high"]
+    trajectories = _events(run.metrics, "partitioned_target_band_tail_trajectory")
+    assert [(event["stage"], event["roi"]) for event in trajectories] == [
+        (stage, roi) for stage in stages for roi in ("upper45", "full")
+    ]
+    assert all(event["boundary_t"] == head and event["output_mutated"] is False for event in trajectories)
+    assert trajectories[0]["grid"] == "source" and all(event["grid"] == "target" for event in trajectories[2:])
+    seams = _events(run.metrics, "partitioned_target_band_tail_seam")
+    assert [event["stage"] for event in seams] == stages
+    for event in seams:
+        assert {"before_seam_rms", "boundary_seam_rms", "after_seam_rms"} <= set(event)
+    # The provider stage measures the raw transfer, not the spliced handoff clean.
+    from h3_flow_regenerate.seam_diagnostics import measure_video_boundary
+
+    raw_provider_seam = measure_video_boundary(provider, head)
+    assert seams[1]["boundary_seam_rms"] == pytest.approx(raw_provider_seam["seam_rms"], rel=1e-6)
+    # The prefix-boundary trajectory receipts consumed by the runtime gate are unchanged.
+    assert {event["stage"] for event in _events(run.metrics, "partitioned_multiframe_trajectory")} >= {
+        "source_low_native",
+        "learned_native",
+        "exact_restored_pre_high",
+        "final_post_high",
+    }
+
     low_state = _events(run.metrics, "partitioned_target_band_low_state")
     assert len(low_state) == 1
     assert low_state[0]["band_raw_state_carried"] is False

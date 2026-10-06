@@ -15,6 +15,13 @@ the tail started from a clean estimate plus fresh Gaussian noise.
   `frame_gauge_residual_mode=measure`, `partitioned_target_band_same_frame_affine`
   also reports the fitted same-frame displacement. Neither adds a model,
   provider or VAE evaluation, and neither changes the output.
+- `partitioned_target_band_tail_trajectory` and `partitioned_target_band_tail_seam`
+  measure motion and seam size at the band/tail boundary for the low-stage
+  reduced-grid view, the raw provider output, the pre-high clean operand and the
+  final video. Seams of the neighbouring token pairs are reported beside it. The
+  prefix-boundary `partitioned_multiframe_trajectory` receipts are unchanged; in
+  target-band mode their `learned_native` stage measures the spliced handoff
+  clean, not the raw provider output.
 - Receipts: `partitioned_target_band_low_state` reports `band_handoff_policy` and
   `band_raw_state_carried=false` instead of `band_state_identity_handoff`;
   `partitioned_transfer` reports `target_band_handoff_policy` and
