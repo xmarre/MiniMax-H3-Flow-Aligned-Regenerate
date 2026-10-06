@@ -52,6 +52,7 @@ def test_custom_node_root_registration_smoke():
     assert "H3ContinuumDecodeContext" in module.NODE_CLASS_MAPPINGS
     assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
+    assert "H3FlowLocalBoundaryAudit" in module.NODE_CLASS_MAPPINGS
 
 
 def test_progressive_nodes_expose_all_selectable_guidance_controls():

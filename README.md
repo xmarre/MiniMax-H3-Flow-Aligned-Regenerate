@@ -279,6 +279,31 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 
 ### Diagnostics
 
+**MiniMax H3 Local Boundary Audit** replays a saved target-band bundle across
+two adjacent native temporal decoder windows. Use a separate workflow containing
+the same video VAE loader/settings used for production and this audit node. Set
+`bundle_path` to the existing exported directory containing `manifest.json` and
+the full binary operands. Set `chunk_join_frame` to the assembled output's
+first new frame, or leave it at zero for frame labels relative to that join.
+No diffusion-model or sampler connection is needed.
+
+The audit decodes the provider, pre-high state, first high prediction before and
+after Flow, and final state sequentially using the connected native video VAE.
+It reproduces the temporal blend at the band/tail edge, compares matching pixel
+frames across stages, and reports translation, scale/shear gradients, RGB
+differences and luminance statistics. Full-frame and upper-region affine fits
+are diagnostic estimates; moving subjects, changed details and weak texture
+can confound them. They do not establish rendered acceptance.
+
+Only numerical JSON is saved in `output/h3_flow_regenerate/boundary_audits` and
+returned by the node. Images, prompts and binary operands are not included in
+the report. Original media and saved operands remain local and unmodified.
+The replay adds five VAE calls, needs complete full-video target-band snapshots,
+and rejects incomplete context or altered prefix/mask/band ownership. It uses
+the connected VAE, including native quantized variants, rather than loading a
+separate decoder checkpoint. It does not replay the earlier protected-prefix
+join or modify generation behavior.
+
 | Node | Purpose |
 |---|---|
 | **MiniMax H3 Runtime Metrics Probe** | Passive sampler/model-call instrumentation. |
