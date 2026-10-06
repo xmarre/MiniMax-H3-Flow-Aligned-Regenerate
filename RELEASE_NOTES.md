@@ -48,10 +48,9 @@ reads each position as the patch centre. The new
 `h3_rope_box_half_pixel_lattice_v1` reads it as the patch start and places
 latent cells at half-pixel centres of the box, which equals the upscaler's
 trained half-pixel map whenever aspect ratios match. Between different grids
-the two maps differ by one constant translation of the transferred content:
-about 0.67 target cells on each axis for 32x44 -> 54x72. A whole-tail
-translation of that size would show as a frame shift where target-grid content
-meets transferred content.
+the two maps differ by one constant offset in their source sampling
+coordinates. This operator relation does not establish the displacement of learned decoder output: border
+clamping and nonlinear decoder blocks can change that response.
 
 - The choice applies to the prefix source carrier, the target-band reduced-grid
   views, the learned transfer (through the provider's new
@@ -64,6 +63,9 @@ meets transferred content.
   placement is an empirical question that needs a matched rendered comparison.
 - Requires Latent Upscaler-Plus with `h3_transport_lattices`; Flow rejects the
   RoPE-box setting before sampling with an older provider.
+- Paired source tests require both advertised maps. End-to-end tests exercise
+  the selected transfer, independent handoff noise, guidance trajectory views
+  and byte-identical target-band low/probe execution.
 
 The review follow-up measures the raw provider boundary inside the clean hook,
 so it no longer retains a full provider video solely for later diagnostics.

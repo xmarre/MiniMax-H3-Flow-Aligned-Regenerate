@@ -518,8 +518,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "all use this map. h3_dense_patch_center_lattice_v2 reads each H3 patch position as the "
                     "patch center. h3_rope_box_half_pixel_lattice_v1 reads it as the patch start inside H3's "
                     "centered position box, which equals the upscaler's trained half-pixel map when aspect "
-                    "ratios match. The two differ by one constant sub-cell translation of the transferred "
-                    "content. The RoPE-box lattice requires an upscaler provider that advertises it. "
+                    "ratios match. The two differ by a constant offset in sampling coordinates; the "
+                    "resulting frame displacement depends on the learned decoder. The RoPE-box lattice "
+                    "requires an upscaler provider that advertises it. "
                     "Paired VDN temporal taps keep their existing map."
                 ),
             },

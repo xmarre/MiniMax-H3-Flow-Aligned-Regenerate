@@ -15,7 +15,12 @@ import pytest
 import torch
 
 from h3_flow_regenerate.contracts import H3FlowTrajectory
-from h3_flow_regenerate.geometry import pack_streams, resize_spatial_5d, unpack_streams
+from h3_flow_regenerate.geometry import (
+    pack_streams,
+    resize_spatial_5d,
+    resize_spatial_5d_h3_patch_lattice,
+    unpack_streams,
+)
 from h3_flow_regenerate.handoff import H3_LATENT_UPSCALER_API_VERSION, H3_LATENT_UPSCALER_KIND
 from h3_flow_regenerate.partitioned_band import (
     TARGET_BAND_HANDOFF_POLICY,
@@ -76,7 +81,8 @@ class _LatticeUpscaler(_Upscaler):
 
     def upscale_clean_video_h3_patch_lattice(self, video, *, target_h, target_w, spatial_lattice=H3_TRANSFER_LATTICE):
         self.lattices.append(spatial_lattice)
-        return self.upscale_clean_video(video, target_h=target_h, target_w=target_w)
+        self.inputs.append(video.detach().clone())
+        return resize_spatial_5d_h3_patch_lattice(video, target_h, target_w, lattice=spatial_lattice)
 
 
 def _vdn_owner():
@@ -732,7 +738,8 @@ def test_target_band_tail_uses_independent_handoff_noise_with_frame_gauge_repair
     assert len(provenance) == (0 if policy == "independent" else 1)
 
 
-def test_target_band_rope_box_lattice_reaches_every_cross_grid_map(monkeypatch):
+@pytest.mark.parametrize("guidance_mode", ["off", "direction"])
+def test_target_band_rope_box_lattice_reaches_every_cross_grid_map(monkeypatch, guidance_mode):
     band_t = 2
     head = PROTECTED_T + band_t
     options = {PARTITIONED_TARGET_BAND_TOKENS_KEY: band_t}
@@ -741,12 +748,14 @@ def test_target_band_rope_box_lattice_reaches_every_cross_grid_map(monkeypatch):
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         extra_transformer_options=dict(options),
         upscaler=_LatticeUpscaler(),
+        guidance_mode=guidance_mode,
     )
     box = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         extra_transformer_options={**options, PARTITIONED_TRANSFER_LATTICE_KEY: H3_ROPE_BOX_TRANSFER_LATTICE},
         upscaler=_LatticeUpscaler(),
+        guidance_mode=guidance_mode,
     )
     assert default.upscaler.lattices == [H3_TRANSFER_LATTICE]
     assert box.upscaler.lattices == [H3_ROPE_BOX_TRANSFER_LATTICE]
@@ -763,3 +772,47 @@ def test_target_band_rope_box_lattice_reaches_every_cross_grid_map(monkeypatch):
     default_input, box_input = default.upscaler.inputs[0], box.upscaler.inputs[0]
     torch.testing.assert_close(box_input[:, :, head:], default_input[:, :, head:], rtol=0, atol=0)
     assert not torch.equal(box_input[:, :, :head], default_input[:, :, :head])
+
+    for default_call, box_call in zip(default.calls[:2], box.calls[:2], strict=True):
+        assert default_call["stage"] == box_call["stage"]
+        assert default_call["shapes"] == box_call["shapes"]
+        for key in ("noise", "latent", "mask", "sigmas", "entry_state"):
+            assert torch.equal(default_call[key], box_call[key]), key
+    assert torch.equal(default.calls[0]["final_state"], box.calls[0]["final_state"])
+    default_samples = default.binding.trajectory.runs[0].samples
+    box_samples = box.binding.trajectory.runs[0].samples
+    assert len(default_samples) == len(box_samples) > 0
+    for a, b in zip(default_samples, box_samples, strict=True):
+        assert torch.equal(a.video_x0[:, :, head:], b.video_x0[:, :, head:])
+    assert any(
+        not torch.equal(a.video_x0[:, :, :head], b.video_x0[:, :, :head])
+        for a, b in zip(default_samples, box_samples, strict=True)
+    )
+    for run, lattice in ((default, H3_TRANSFER_LATTICE), (box, H3_ROPE_BOX_TRANSFER_LATTICE)):
+        high = run.calls[-1]
+        entry, _ = unpack_streams(high["entry_state"], high["shapes"])
+        clean = resize_spatial_5d_h3_patch_lattice(run.upscaler.inputs[0], *TARGET_HW, lattice=lattice)
+        sigma = float(high["sigmas"][0])
+        expected = (1.0 - sigma) * clean + sigma * _independent_handoff_noise(tuple(entry.shape))
+        # The first tail token may receive the existing DC bridge. Later tail
+        # tokens must use the selected clean map and the shared independent noise.
+        torch.testing.assert_close(entry[:, :, head + 1 :], expected[:, :, head + 1 :], rtol=0, atol=1e-5)
+
+
+def test_rope_box_with_legacy_provider_fails_before_low_stage_sampling(monkeypatch):
+    import sys
+
+    def unexpected_model_call(*args, **kwargs):
+        pytest.fail("unsupported lattice reached low/probe/high model execution")
+
+    monkeypatch.setattr(sys.modules[__name__], "flow_predict_wrapper", unexpected_model_call)
+    with pytest.raises(RuntimeError, match="h3_transport_lattices"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            extra_transformer_options={
+                PARTITIONED_TARGET_BAND_TOKENS_KEY: 2,
+                PARTITIONED_TRANSFER_LATTICE_KEY: H3_ROPE_BOX_TRANSFER_LATTICE,
+            },
+            upscaler=_Upscaler(),
+        )
