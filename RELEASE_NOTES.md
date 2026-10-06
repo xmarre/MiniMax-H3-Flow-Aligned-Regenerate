@@ -1,4 +1,8 @@
-# Unreleased: target-band continuation and suffix DC selector
+# MiniMax H3 Flow-Aligned Regenerate v0.3.10
+
+Add an opt-in target-band continuation arm and a suffix DC bridge selector to
+partitioned exact-prefix continuation. The production default remains
+`same_grid_target_control`; existing workflows load unchanged.
 
 ## Target-band continuation (opt-in)
 
@@ -30,9 +34,11 @@ not used in this mode.
   target-grid head. The paired-prefix frame gauge does not run because no transfer
   boundary is adjacent to the prefix.
 
-Rendered quality, wall time and peak memory have not been qualified. Input
-projection and the final layer still process the target-sized carrier. The default remains
-`same_grid_target_control`.
+Transporting the low-stage residual into the learned tail produced visibly
+over-sharpened tails in testing; independent tail noise removed it. The band/tail
+boundary has not been qualified on continuous shots. Low/probe cost falls with
+the reduced-grid size, while input projection and the final layer still process
+the target-sized carrier. The default remains `same_grid_target_control`.
 
 ## Suffix DC bridge selector
 
@@ -56,6 +62,8 @@ The runtime evidence gate expects low/probe VDN boundary-query receipts at the
 band/tail edge for target-band runs. The cross-repo contract check covers the
 target-carrier contract through VDN and Sol. CI runs target-band tests through
 the real Core forward and the actual scheduler on CPU.
+
+---
 
 # MiniMax H3 Flow-Aligned Regenerate v0.3.9
 

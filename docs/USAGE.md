@@ -169,7 +169,8 @@ carried prefix at a lower low/probe cost.
   `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
   `prefix_transformer_context=exact_target_partitioned`,
   `low_probe_execution_source=main_then_shadow`, the main audio/AV/guidance
-  sources, `frame_gauge_residual_mode=off` and `capture_boundary_witness=false`.
+  sources, `frame_gauge_residual_mode=off` (or `measure` for stage evidence) and
+  `capture_boundary_witness=false`.
 - Required companions: VDN-H3-Plus and Sol-H3 releases that accept a target-grid
   native partition carrier.
 

@@ -134,7 +134,7 @@ def test_progressive_target_input_api_example_is_complete():
     }
 
 
-def test_partitioned_exact_prefix_api_example_matches_v039_defaults():
+def test_partitioned_exact_prefix_api_example_matches_current_defaults():
     workflow = _load("partitioned-exact-prefix.api.json")
     _assert_common_api_chain(workflow, "H3PartitionedExactPrefixDiagnosticHandoff")
 
@@ -237,7 +237,7 @@ def test_progressive_target_input_canvas_workflow_is_loadable_shape():
     ]
 
 
-def test_partitioned_exact_prefix_canvas_workflow_matches_v039_defaults():
+def test_partitioned_exact_prefix_canvas_workflow_matches_current_defaults():
     workflow = _load("partitioned-exact-prefix.workflow.json")
     _assert_canvas_links_resolve(workflow, "H3PartitionedExactPrefixDiagnosticHandoff")
     nodes = {node["id"]: node for node in workflow["nodes"]}

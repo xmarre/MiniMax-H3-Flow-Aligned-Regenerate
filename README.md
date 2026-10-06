@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For general target-input workflows, **MiniMax H3 Progressive Handoff (Target Input)** remains available. For the coordinated Sol-H3/VDN-H3-Plus Continuum exact-prefix stack, the validated production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**.
+For Continuum exact-prefix continuation with Sol-H3 and VDN-H3-Plus, the production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -26,52 +26,13 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — v0.3.9 production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, the suffix DC bridge, the target-band width, and the current overlap/provenance values);
+- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, the suffix DC bridge, the target-band width, and the current overlap/provenance values);
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
-The partitioned and generic target-input examples both configure `MinimaxH3LatentUpscaler3DProvider` with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. These compact examples deliberately use stock one-chunk H3 conditioning/sampling so the Flow patch wiring is inspectable in isolation; the partitioned exact-prefix runtime activates when the same patched `MODEL` is consumed by Continuum Native Masked continuation with a protected prefix. That production path requires the coordinated Sol-H3 and VDN-H3-Plus releases listed below.
+The partitioned and generic target-input examples both configure `MinimaxH3LatentUpscaler3DProvider` with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. These compact examples deliberately use stock one-chunk H3 conditioning/sampling so the Flow patch wiring is inspectable in isolation; the partitioned exact-prefix runtime activates when the same patched `MODEL` is consumed by Continuum Native Masked continuation with a protected prefix. That production path requires the coordinated Sol-H3 and VDN-H3-Plus releases listed under [Coordinated H3 release set](#coordinated-h3-release-set).
 
 All three examples use `res_multistep` and no Turbo LoRA. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
-
-## Standard Target Input path
-
-Use **MiniMax H3 Progressive Handoff (Target Input)** when the surrounding workflow is already defined at the final target geometry.
-
-The canonical defaults are:
-
-```text
-source_mode          = scale
-source_scale         = 0.70
-source_width         = 864
-source_height        = 640
-handoff_coordinate   = 0.35
-handoff_selection    = fixed
-guidance_mode        = direction+temporal
-direction_weight     = 0.25
-acceleration_weight  = 0.25
-consistency_weight   = 0.25
-low_frequency_cutoff = 0.25
-temporal_weight      = 0.20
-handoff_transfer     = learned_3d
-```
-
-`acceleration_weight` and `consistency_weight` are staged values with these defaults: the current guidance implementation does not use them while `guidance_mode=direction+temporal`. Acceleration is active only in `direction+acceleration`; consistency is active only in `downsample_consistency`.
-
-For unprotected or fractional-mask calls, Target Input runs the normal progressive path: private low-grid sampling, one exact handoff probe, predicted-clean video transfer to the target grid, preserved joint-H3 audio, fresh sampler/Spectrum history, and an actual first target-grid H3 evaluation.
-
-For exact protected video prefixes, the exact Native Masked contract takes precedence. Target Input forwards the original target-grid noise/latent/mask/schedule through one ordinary target-grid sampler lifetime. It creates no private low-grid sampler, exact handoff probe, learned-upscaler call, geometry boundary, or progressive history boundary.
-
-On canonical exact-prefix continuation, the sampler-time audio mask additionally uses the validated four-tick 1/256-aligned overlap ramp:
-
-```text
-0.203125
-0.40234375
-0.6015625
-0.80078125
-```
-
-The video mask remains byte-for-byte unchanged and the original exact video/audio mask remains authoritative at output. `H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` is the explicit disable/bisect hook.
 
 ## Partitioned exact-prefix Continuum path
 
@@ -198,9 +159,11 @@ CPU tensor budget; exceeding it reports an error. This opt-in mode adds CPU
 copies and output-file I/O, with no additional model/provider/VAE evaluations.
 The paired-prefix frame gauge remains inactive in band mode.
 
-This mode has no rendered-quality qualification. Compare its join, the band's
-far edge, tone and audio against `same_grid_target_control` before using it for
-production output. The video-row reduction is not a wall-time measurement.
+The boundary quality of this mode has not been qualified. Compare its join, the
+band's far edge, tone and audio against `same_grid_target_control` before using
+it for production output. The low/probe saving depends on the reduced-grid size:
+a larger `source_scale` (or larger explicit source size) leaves less to save, and
+the video-row reduction is not a wall-time measurement.
 
 ### Suffix DC bridge
 
@@ -211,40 +174,7 @@ learned transfer produced on its carried context. When disabled, that token stay
 exactly as transferred, and transfer receipts report the bridge as disabled.
 Same-grid continuation measures a zero offset either way.
 
-## Coordinated H3 releases
-
-Update the coordinated components together. Every release links this same
-version set and identifies its implementation PRs.
-
-| Component | Release | Included PRs |
-| --- | --- | --- |
-| Flow-Aligned Regenerate | [v0.3.9](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.9) | [#89](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/89), [#93](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/93) |
-| Sol-H3 | [v0.1.8](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.8) | [#37](https://github.com/xmarre/ComfyUI-Sol-H3/pull/37) |
-| VDN-H3-Plus | [v1.5.7](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.7) | [#33](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/33), [#34](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/34), [#35](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/35), [#36](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/36), [#37](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/37) |
-| H3 Continuum-Plus | [v3.4.5](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.5) | [#37](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/37), [#38](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/38) |
-| Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | [#16](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/pull/16) |
-
-[Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)
-is the unchanged companion. Separate Keyless, audio-training and rejected
-decoded-geometry experiments are outside this release set.
-
-The tested Core adapter repair is
-[ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783).
-It remains an upstream review item, with upstream workflow approval and merge
-controlled by Comfy-Org maintainers. For INT8 fused MLP runtime adapters,
-retain that ComfyUI Patcher PR overlay until the repair is available upstream.
-The independent Core #16720 optimization is not included in this release set.
-
-
-## Mixed-Grid compatibility window
-
-**MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]** remains registered for one compatibility release so existing serialized workflows continue to load with their original semantics.
-
-The old `H3ProgressiveMixedGridHandoff` node ID is intentionally not remapped to Target Input. Mixed-Grid is no longer the recommended production path, is no longer part of the production Patcher topology, and is not a release/promotion or compatibility-render gate.
-
-Its historical low-grid suffix, learned-transfer, VDN API-2, attention-measure, suffix-bridge and seam-repair contracts remain documented in [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) and [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md). Runtime compatibility machinery is retained for the deprecation window and can be removed separately afterward.
-
-### Continuum Decode Context
+## Continuum Decode Context
 
 **MiniMax H3 Continuum Decode Context** can be placed immediately before the normal Video VAE Decode. It supplies real future latent context to the native H3 temporal decoder at exact chunk joins while leaving accepted sampling latents, continuation state, masks, audio and the assembly plan unchanged.
 
@@ -252,13 +182,44 @@ This solves a separate decoder-window boundary problem. It is independent of Tar
 
 See [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md).
 
-## Target-Sparse Continuum status
+## Standard Target Input path
 
-**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** remains available as a research/control path, but it is **not recommended for production quality**.
+Use **MiniMax H3 Progressive Handoff (Target Input)** when the surrounding workflow is already defined at the final target geometry.
 
-It keeps the sampler latent on the target grid and sparsifies only the early H3 hidden-token stream over generated video rows. Because it does not perform the learned latent upscale used by ordinary progressive transfer, real decoded-media testing showed cascading quality errors: skin imperfections, odd clothing changes and spurious background additions could appear and propagate through later continuation.
+The canonical defaults are:
 
-Target-Sparse remains useful for architectural experiments and controlled comparisons, not as a production continuation path.
+```text
+source_mode          = scale
+source_scale         = 0.70
+source_width         = 864
+source_height        = 640
+handoff_coordinate   = 0.35
+handoff_selection    = fixed
+guidance_mode        = direction+temporal
+direction_weight     = 0.25
+acceleration_weight  = 0.25
+consistency_weight   = 0.25
+low_frequency_cutoff = 0.25
+temporal_weight      = 0.20
+handoff_transfer     = learned_3d
+```
+
+`acceleration_weight` and `consistency_weight` are staged values with these defaults: the current guidance implementation does not use them while `guidance_mode=direction+temporal`. Acceleration is active only in `direction+acceleration`; consistency is active only in `downsample_consistency`.
+
+For unprotected or fractional-mask calls, Target Input runs the normal progressive path: private low-grid sampling, one exact handoff probe, predicted-clean video transfer to the target grid, preserved joint-H3 audio, fresh sampler/Spectrum history, and an actual first target-grid H3 evaluation.
+
+For exact protected video prefixes, the exact Native Masked contract takes precedence. Target Input forwards the original target-grid noise/latent/mask/schedule through one ordinary target-grid sampler lifetime. It creates no private low-grid sampler, exact handoff probe, learned-upscaler call, geometry boundary, or progressive history boundary.
+
+On canonical exact-prefix continuation, the sampler-time audio mask additionally uses the validated four-tick 1/256-aligned overlap ramp:
+
+```text
+0.203125
+0.40234375
+0.6015625
+0.80078125
+```
+
+The video mask remains byte-for-byte unchanged and the original exact video/audio mask remains authoritative at output. `H3_FLOW_AUDIO_GUIDED_OVERLAP_TICKS=0` is the explicit disable/bisect hook.
 
 ## Flow-aligned two-pass guidance
 
@@ -358,6 +319,49 @@ Historical Mixed-Grid validation remains evidence for that retired architecture 
 Target-Sparse is deliberately not promoted because its no-latent-upscale design produced cascading decoded-media defects in testing.
 
 Quality and speed still depend on prompt, references, geometry, sampler, Spectrum policy, model residency and hardware. Use decoded media rather than structural metrics alone for new workflow variants.
+
+## Legacy and research continuation paths
+
+These paths remain registered for existing workflows and controlled experiments. Neither is a production recommendation.
+
+### Mixed-Grid compatibility window
+
+**MiniMax H3 Progressive Mixed-Grid Continuum [Deprecated]** remains registered for one compatibility release so existing serialized workflows continue to load with their original semantics.
+
+The old `H3ProgressiveMixedGridHandoff` node ID is intentionally not remapped to Target Input. Mixed-Grid is no longer the recommended production path, is no longer part of the production Patcher topology, and is not a release/promotion or compatibility-render gate.
+
+Its historical low-grid suffix, learned-transfer, VDN API-2, attention-measure, suffix-bridge and seam-repair contracts remain documented in [docs/MIXED_GRID_CONTINUUM.md](docs/MIXED_GRID_CONTINUUM.md) and [docs/mixed-grid-seam-repair.md](docs/mixed-grid-seam-repair.md). Runtime compatibility machinery is retained for the deprecation window and can be removed separately afterward.
+
+### Target-Sparse Continuum status
+
+**MiniMax H3 Progressive Target-Sparse Continuum [Experimental]** remains available as a research/control path, but it is **not recommended for production quality**.
+
+It keeps the sampler latent on the target grid and sparsifies only the early H3 hidden-token stream over generated video rows. Because it does not perform the learned latent upscale used by ordinary progressive transfer, real decoded-media testing showed cascading quality errors: skin imperfections, odd clothing changes and spurious background additions could appear and propagate through later continuation.
+
+Target-Sparse remains useful for architectural experiments and controlled comparisons, not as a production continuation path.
+
+## Coordinated H3 release set
+
+Flow-Aligned Regenerate is released together with the other H3 components.
+Per-version details are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+| Component | Release | Included PRs |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | [v0.3.10](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.10) | [#96](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/96) |
+| Sol-H3 | [v0.1.9](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.9) | [#39](https://github.com/xmarre/ComfyUI-Sol-H3/pull/39) |
+| VDN-H3-Plus | [v1.5.8](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.8) | [#38](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/38) |
+| H3 Continuum-Plus | [v3.4.6](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.6) | [#39](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/39), [#40](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/40) |
+| Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | unchanged |
+
+[Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)
+is the unchanged companion. Separate Keyless, audio-training and rejected
+decoded-geometry experiments are outside this release set.
+
+The tested Core adapter repair is
+[ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783).
+For INT8 fused MLP runtime adapters, retain that ComfyUI Patcher PR overlay until
+the repair is available upstream. The independent Core #16720 optimization is
+not included in this release set.
 
 ## Documentation
 

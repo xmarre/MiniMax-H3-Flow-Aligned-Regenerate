@@ -1,7 +1,7 @@
 {
   "schema_version": 6,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Canonical v0.3.9 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
+  "purpose": "Canonical v0.3.10 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
   "placement": {
     "chain": [
       "DiffAid",
@@ -64,6 +64,8 @@
     "spatial_stage_control": "same_grid_target_control",
     "softmax_diagnostic": "normal",
     "video_guided_overlap_tokens": 6,
+    "suffix_dc_bridge": true,
+    "target_band_tokens": 4,
     "weight_semantics": "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values only; apply_guidance does not use them unless the corresponding guidance mode is selected."
   },
   "historical_direction_only_reference": {

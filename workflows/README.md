@@ -8,7 +8,7 @@ This directory contains executable examples and non-executable wiring overlays. 
 
 The examples intentionally cover the production partitioned node and the two simpler progressive controls:
 
-- `examples/partitioned-exact-prefix.workflow.json` serializes the v0.3.9 **MiniMax H3 Partitioned Exact-Prefix Handoff** defaults exactly. It wires **MiniMax H3 Latent Upscaler Provider (3D)** and stores `same_grid_target_control`, `main_then_shadow`, `frame_gauge_repair=true`, exact-mask audio semantics, and the current 16/6 stored audio/video overlap widths.
+- `examples/partitioned-exact-prefix.workflow.json` serializes the current **MiniMax H3 Partitioned Exact-Prefix Handoff** defaults exactly. It wires **MiniMax H3 Latent Upscaler Provider (3D)** and stores `same_grid_target_control`, `main_then_shadow`, `frame_gauge_repair=true`, exact-mask audio semantics, the current 16/6 stored audio/video overlap widths, `suffix_dc_bridge=true` and `target_band_tokens=4`.
 - `examples/progressive-target-input.workflow.json` remains the general Target Input control. It uses `source_scale=0.70`, fixed `handoff_coordinate=0.35`, `direction+temporal`, and `learned_3d` transfer.
 - `examples/progressive-source-input.workflow.json` remains the dependency-minimal source-input control. Generation starts from an `864x480` source-grid latent and hands off to a `1.20x` target scale in the same sampler run.
 
@@ -22,7 +22,7 @@ The filenames in the H3 loader nodes match the public Comfy-Org MiniMax H3 model
 
 For the coordinated Continuum stack, use `H3PartitionedExactPrefixDiagnosticHandoff` (displayed as **MiniMax H3 Partitioned Exact-Prefix Handoff**). The historical serialized ID is intentional. The compact example in this repository demonstrates the patch/provider/default serialization; when that patched `MODEL` is consumed by Continuum Native Masked continuation, a supported protected prefix selects the partitioned runtime.
 
-The v0.3.9 production profile uses `same_grid_target_control`: low/probe/high video work is target-grid, the clean/residual handoff is identity, exact carried audio/video ownership is restored at output, and the first all-generated chunk still uses progressive `learned_3d` transfer. `audio_guided_overlap_ticks=16` is stored with `sampler_mask_exact_timestep`, which aliases coherent exact-mask behavior and therefore applies zero effective audio release. `video_guided_overlap_tokens=6` is provenance-only and applies zero protected-video release.
+The production profile uses `same_grid_target_control`: low/probe/high video work is target-grid, the clean/residual handoff is identity, exact carried audio/video ownership is restored at output, and the first all-generated chunk still uses progressive `learned_3d` transfer. `audio_guided_overlap_ticks=16` is stored with `sampler_mask_exact_timestep`, which aliases coherent exact-mask behavior and therefore applies zero effective audio release. `video_guided_overlap_tokens=6` is provenance-only and applies zero protected-video release.
 
 The generic `H3ProgressiveTargetInputHandoff` example remains valid as a control. Its exact-prefix behavior is the conservative one-target-grid sampler fallback, including the historical four-tick sampler-time audio overlap. It is not the coordinated partitioned Continuum production path.
 
@@ -46,4 +46,4 @@ Use the suffixes as the contract:
 - `*.api.json` = executable API prompt graph;
 - `*.overlay.json` = topology/specification document only.
 
-`progressive-handoff.overlay.json` now describes the v0.3.9 **Partitioned Exact-Prefix** Continuum topology and complete production defaults. The generic **Target Input** path is retained explicitly as a control, including its conservative exact-prefix fallback, while historical progressive validation records remain separate. The overlay also records the one-release deprecation contract for `H3ProgressiveMixedGridHandoff`: the old node ID remains loadable with its original semantics, is not remapped to Target Input, and is not a production release gate.
+`progressive-handoff.overlay.json` describes the **Partitioned Exact-Prefix** Continuum topology and complete production defaults. The generic **Target Input** path is retained explicitly as a control, including its conservative exact-prefix fallback, while historical progressive validation records remain separate. The overlay also records the one-release deprecation contract for `H3ProgressiveMixedGridHandoff`: the old node ID remains loadable with its original semantics, is not remapped to Target Input, and is not a production release gate.
