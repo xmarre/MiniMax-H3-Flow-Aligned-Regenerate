@@ -137,17 +137,19 @@ def test_replay_covers_late_band_edge_and_restores_only_prefix_without_writing_f
     directory, _manifest, video = bundle
     before = {p.name: p.read_bytes() for p in directory.iterdir()}
     plan, stages, identity = audit.load_replay_operands(directory, 175)
-    assert (plan["token_start"], plan["token_stop"]) == (10, 22)
-    assert plan["decoded_origin_frame"] == 170
-    assert plan["shared_tokens"] == [15, 17]
-    assert plan["temporal_blend_local_frames"] == [17, 22]
-    assert plan["measured_local_frames"] == [7, 26]
-    assert {177, 188} <= set(range(plan["decoded_origin_frame"] + 7, plan["decoded_origin_frame"] + 26))
+    assert (plan["token_start"], plan["token_stop"]) == (5, 22)
+    assert plan["decoded_frames"] == 56
+    assert plan["decoded_origin_frame"] == 153
+    assert plan["shared_tokens"] == [[10, 12], [15, 17]]
+    assert plan["temporal_blend_local_frames"] == [[17, 22], [34, 39]]
+    assert plan["measured_local_frames"] == [18, 43]
+    labels = set(range(plan["decoded_origin_frame"] + 18, plan["decoded_origin_frame"] + 43))
+    assert {171, 175, 188, 195} <= labels and 196 not in labels
     for value in stages.values():
-        assert torch.equal(value[:, :, :2], video[:, :, 10:12])
+        assert torch.equal(value[:, :, :7], video[:, :, 5:12])
         assert value.untyped_storage().nbytes() == value.numel() * 4
-    assert torch.equal(stages["provider"][:, :, 2:6], video[:, :, 12:16] + 0.1)
-    assert torch.equal(stages["pre_high"][:, :, 2:6], video[:, :, 12:16])
+    assert torch.equal(stages["provider"][:, :, 7:11], video[:, :, 12:16] + 0.1)
+    assert torch.equal(stages["pre_high"][:, :, 7:11], video[:, :, 12:16])
     assert len(identity["operand_sha256"]) == 8
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
@@ -206,7 +208,8 @@ class FakeVAE:
 
     def decode(self, value):
         self.inputs.append(value.clone())
-        return torch.zeros(1, 39, value.shape[-2] * 16, value.shape[-1] * 16, 3)
+        frames = (value.shape[2] - 2) // 5 * 17 + 5
+        return torch.zeros(1, frames, value.shape[-2] * 16, value.shape[-1] * 16, 3)
 
 
 def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(bundle, monkeypatch):
@@ -229,13 +232,13 @@ def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(b
     for actual, internal in zip(vae.inputs, converted, strict=True):
         assert torch.equal(actual, internal * 0.5)
     assert torch.equal(torch.random.get_rng_state(), rng)
-    assert report["stages"]["final"]["frame_labels"] == list(range(177, 196))
+    assert report["stages"]["final"]["frame_labels"] == list(range(171, 196))
     assert len(report["comparisons"]) == 4
     for stage in report["stages"].values():
-        assert stage["adjacent_rgb_difference_rms"] == [0.0] * 19
-        assert stage["adjacent_luma_mean_change"] == [0.0] * 19
-        assert stage["adjacent_frame_geometry"]["frames"] == list(range(177, 196))
-        assert stage["adjacent_frame_geometry_upper45"]["frames"] == list(range(177, 196))
+        assert stage["adjacent_rgb_difference_rms"] == [0.0] * 25
+        assert stage["adjacent_luma_mean_change"] == [0.0] * 25
+        assert stage["adjacent_frame_geometry"]["frames"] == list(range(171, 196))
+        assert stage["adjacent_frame_geometry_upper45"]["frames"] == list(range(171, 196))
     assert report["final_adjacent_frame_geometry"] is report["stages"]["final"]["adjacent_frame_geometry"]
     encoded = json.dumps(report, allow_nan=False)
     assert str(directory) not in encoded
@@ -250,12 +253,12 @@ def test_temporal_increment_locates_new_stage_discontinuity_without_confusing_st
         def decode(self, value):
             pixels = super().decode(value)
             stage = len(self.inputs) - 1
-            times = torch.arange(39, dtype=pixels.dtype)[None, :, None, None, None]
+            times = torch.arange(pixels.shape[1], dtype=pixels.dtype)[None, :, None, None, None]
             pixels += 0.1 + times * 0.001  # Same smooth motion in every stage.
             if stage >= 1:
                 pixels += 0.02  # Stable provider-to-pre-high bias, no temporal edge.
             if stage >= 2:
-                pixels[:, 18:] += 0.1  # First high creates a step at assembled frame 188.
+                pixels[:, 35:] += 0.1  # First high creates a step at assembled frame 188.
             return pixels
 
     vae = TemporalVAE()
@@ -265,13 +268,13 @@ def test_temporal_increment_locates_new_stage_discontinuity_without_confusing_st
     assert torch.equal(torch.random.get_rng_state(), rng)
     index = report["stages"]["pre_high"]["frame_labels"].index(188)
     for stage in ("provider", "pre_high"):
-        assert report["stages"][stage]["adjacent_rgb_difference_rms"] == pytest.approx([0.001] * 19, abs=1e-7)
+        assert report["stages"][stage]["adjacent_rgb_difference_rms"] == pytest.approx([0.001] * 25, abs=1e-7)
     for stage in ("first_high_before_flow", "first_high_after_flow", "final"):
-        expected = [0.001] * 19
+        expected = [0.001] * 25
         expected[index] = 0.101
         assert report["stages"][stage]["adjacent_rgb_difference_rms"] == pytest.approx(expected, abs=1e-7)
     for pair, measurement in report["comparisons"].items():
-        expected = [0.0] * 19
+        expected = [0.0] * 25
         if pair == "pre_high_to_first_high_before_flow":
             expected[index] = 0.1
         assert measurement["temporal_increment_change_rms"] == pytest.approx(expected, abs=1e-7)
@@ -389,5 +392,6 @@ def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(
     production = vae.decode_temporal(video)
     replay = vae.decode_temporal(stages["final"])
     start, stop = plan["measured_local_frames"]
-    assert torch.equal(replay[:, :, start:stop], production[:, :, 34 + start : 34 + stop])
-    assert not torch.equal(replay[:, :, :5], production[:, :, 34:39])
+    offset = 17 * (plan["token_start"] // 5)
+    assert torch.equal(replay[:, :, start:stop], production[:, :, offset + start : offset + stop])
+    assert not torch.equal(replay[:, :, :5], production[:, :, offset : offset + 5])

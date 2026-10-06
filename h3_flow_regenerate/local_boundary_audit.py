@@ -52,22 +52,30 @@ def replay_plan(metadata, join_frame):
     trim = 17 * ((prefix - 2) // 5) + 5
     if window.get("decoded_trim_frames") != trim:
         raise ValueError("saved prefix trim differs from native H3 timing")
-    start = max(0, (head // 5 - 1) * 5)
-    stop = start + 12  # Two seven-token windows, five-token stride.
+    # Start one native decoder window before the prefix window so the temporal
+    # blend into the prefix/band edge is reproduced, and end one window after the
+    # band/tail window so that blend is reproduced too.
+    start = max(0, (prefix // 5 - 1) * 5)
+    stop = max(start + 12, (head // 5 - 1) * 5 + 12)  # Seven-token windows, five-token stride.
     if stop > temporal:
         raise ValueError("saved timeline lacks the complete following decoder window")
+    decoded_frames = sum(1 if token % 5 == 0 else 4 for token in range(start, stop))
+    origin = join_frame - trim + 17 * (start // 5)
+    blends = [[17 * (k - start) // 5, 17 * (k - start) // 5 + 5] for k in range(start + 5, stop - 2, 5)]
+    # Frames before the first blend may differ from production; measure from four
+    # frames before the prefix join (or the first fully reproduced frame).
+    first = max(6, join_frame - 4 - origin) if join_frame else 6
     return {
         "prefix_t": prefix,
         "head_t": head,
         "temporal": temporal,
         "token_start": start,
         "token_stop": stop,
-        "decoded_origin_frame": join_frame - trim + 17 * (start // 5),
-        "shared_tokens": [start + 5, start + 7],
-        "temporal_blend_local_frames": [17, 22],
-        # Local frames 6.. come from the first window alone, so the replay also
-        # covers the generated frames just after the protected prefix.
-        "measured_local_frames": [7, 26],
+        "decoded_frames": decoded_frames,
+        "decoded_origin_frame": origin,
+        "shared_tokens": [[k, k + 2] for k in range(start + 5, stop - 2, 5)],
+        "temporal_blend_local_frames": blends,
+        "measured_local_frames": [first, 17 * ((head // 5 - 1) * 5 - start) // 5 + 26],
         "omitted_preceding_blend_local_frames": [0, 5] if start else [],
         "join_frame": join_frame,
     }
@@ -283,12 +291,12 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out):
     }
     pixels = {}
     for name, latent in stages.items():
-        LOG.info("H3 local boundary audit: decoding %s through two native temporal windows", name)
+        LOG.info("H3 local boundary audit: decoding %s through the native temporal windows", name)
         with torch.inference_mode():
             decoded = vae.decode(process_out(latent.clone()))
-        expected_shape = (1, 39, latent.shape[-2] * 16, latent.shape[-1] * 16, 3)
+        expected_shape = (1, plan["decoded_frames"], latent.shape[-2] * 16, latent.shape[-1] * 16, 3)
         if tuple(decoded.shape) != expected_shape or not bool(torch.isfinite(decoded).all()):
-            raise ValueError("connected VAE returned unexpected native two-window pixels")
+            raise ValueError("connected VAE returned unexpected native window pixels")
         if not bool(((decoded >= 0) & (decoded <= 1)).all()):
             raise ValueError("connected VAE must return finalized RGB pixels in [0,1]")
         pixels[name] = decoded[0, begin - 1 : end].detach().float().cpu().clone()
