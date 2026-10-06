@@ -61,9 +61,7 @@ from .high_stage_boundary import (
 )
 from .partitioned_band import (
     TARGET_BAND_HANDOFF_POLICY,
-    blend_target_band_clean,
     pack_target_band_video,
-    target_band_crossfade_weights,
     target_band_padding_max_abs,
     target_band_source_view,
     target_band_target_preview,
@@ -4320,12 +4318,12 @@ def run_partitioned_progressive(
         clean_video_postprocess = None
         band_provider_native_clean: torch.Tensor | None = None
         if target_band is not None:
-            # The first band token keeps its own target-grid prediction, so the
-            # protected prefix is followed by identical-grid content exactly as in
-            # same-grid control. The prefix-boundary frame gauge therefore has no
-            # transfer boundary to register.
+            # The band keeps its own target-grid prediction, so the protected
+            # prefix is followed by identical-grid content exactly as in same-grid
+            # control. The prefix-boundary frame gauge therefore has no transfer
+            # boundary to register; the remaining transfer boundary is the
+            # band/tail edge.
             frame_gauge_transaction.update(reason="target_band_identity_boundary")
-            band_crossfade_weights = target_band_crossfade_weights(int(target_band.band_t))
 
             def clean_video_postprocess(learned_clean):
                 nonlocal actual_handoff_clean
@@ -4334,16 +4332,13 @@ def run_partitioned_progressive(
                 band_provider_native_clean = learned_clean.detach().clone()
                 if boundary_window_evidence is not None:
                     boundary_window_evidence.capture("provider_native_clean", learned_clean)
-                # The band holds two clean representations of the same frames.
-                # Crossfading from the target-grid prediction to the learned
-                # transfer spreads their disagreement over the band instead of
-                # switching representation between two adjacent tokens.
+                # Diagnostic only: the provider's rendering of the band comes from a
+                # reduced-grid projection of a target-grid latent, not from a native
+                # reduced-grid latent, so it is compared with the band but never mixed in.
                 transferred_band = learned_clean[:, :, stage_plan.prefix_t : target_band.head_t]
                 overlap = measure_target_band_overlap(band_clean_video.to(transferred_band), transferred_band)
                 spliced = learned_clean.clone()
-                spliced[:, :, stage_plan.prefix_t : target_band.head_t] = blend_target_band_clean(
-                    band_clean_video, transferred_band, band_crossfade_weights
-                )
+                spliced[:, :, stage_plan.prefix_t : target_band.head_t] = band_clean_video.to(spliced)
                 actual_handoff_clean = spliced.detach().clone()
                 binding.metrics.event(
                     "partitioned_target_band_overlap",
@@ -4351,7 +4346,6 @@ def run_partitioned_progressive(
                     target_band_tokens=int(target_band.band_t),
                     protected_prefix_t=int(stage_plan.prefix_t),
                     head_t=int(target_band.head_t),
-                    crossfade_transfer_weights=list(band_crossfade_weights),
                     domain="model_internal_clean",
                     output_mutated=False,
                     extra_h3_nfe=0,
@@ -4374,11 +4368,10 @@ def run_partitioned_progressive(
                     clean_video=spliced,
                     protected_prefix_t=int(stage_plan.prefix_t),
                     metadata={
-                        "result": "target_band_clean_crossfade",
+                        "result": "target_band_native_splice",
                         "policy": TARGET_BAND_HANDOFF_POLICY,
                         "target_band_tokens": int(target_band.band_t),
-                        "crossfade_frames": [int(stage_plan.prefix_t), int(target_band.head_t)],
-                        "crossfade_transfer_weights": list(band_crossfade_weights),
+                        "native_frames": [int(stage_plan.prefix_t), int(target_band.head_t)],
                     },
                 )
 
@@ -5475,8 +5468,8 @@ def run_partitioned_progressive(
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         band_handoff_receipt = None
         if target_band is not None:
-            # The band enters the high stage as a re-noised clean operand with the
-            # same independent noise as the tail, exactly like every generated
+            # The band enters the high stage as its clean prediction re-noised with
+            # the same independent noise as the tail, exactly like every generated
             # token of same-grid control. Its raw low-stage state is not resumed:
             # that state carries content-correlated low-stage residual, which the
             # high stage sharpens, next to a re-noised tail.
@@ -5484,7 +5477,6 @@ def run_partitioned_progressive(
                 "target_band_tokens": int(target_band.band_t),
                 "target_band_handoff_policy": TARGET_BAND_HANDOFF_POLICY,
                 "target_band_raw_state_carried": False,
-                "target_band_crossfade_transfer_weights": list(target_band_crossfade_weights(int(target_band.band_t))),
                 "target_band_transfer_start_t": int(target_band.head_t),
             }
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -5669,8 +5661,8 @@ def run_partitioned_progressive(
             and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             and splice_clean_source in {"actual_clean_postprocess", "actual_provider"}
         ):
-            # Under target-band control the high stage starts from the crossfaded
-            # band and the learned tail (with its head-boundary DC correction), so
+            # Under target-band control the high stage starts from the band's own
+            # prediction and the learned tail (with its head-boundary DC correction), so
             # guidance binds to that actual clean operand rather than to the
             # provider's own rendering of the band.
             handoff_guidance_reference = _prepare_handoff_guidance_reference(

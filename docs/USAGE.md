@@ -149,24 +149,20 @@ during low/probe, and runs every later generated token on the configured
 reduced grid. The reduced-grid tokens use the learned 3D transfer. The aim is the
 same-grid join next to the carried prefix at a lower low/probe cost.
 
-- The band is an overlap region: its frames have both their own target-grid clean
-  prediction and the learned transfer of their reduced-grid projection. The
-  high-stage clean operand crossfades between them, with transfer weight `j/n`
-  for band token `j` of `n`. The token next to the prefix keeps its target-grid
-  prediction; the first tail token (pure transfer) continues the same ramp, so
-  any disagreement between the two representations is spread over the band
-  instead of switching between two adjacent tokens.
+- The band keeps its own target-grid clean prediction at the handoff.
 - Every generated token, band included, enters the high stage as its clean
   operand re-noised with one independent Gaussian noise field, regardless of
   `frame_gauge_repair`. The band's raw low-stage state is not resumed: it carries
   content-correlated low-stage residual next to a re-noised tail. Source residual
   transport is not used in this mode for the same reason.
-- `partitioned_target_band_overlap` reports, per band frame, how the transfer
-  differs from the target-grid prediction (total and high-pass energy ratios,
-  raw, low-pass and channel-mean deltas). It adds no model or provider call.
-  With `frame_gauge_residual_mode=measure`,
-  `partitioned_target_band_same_frame_affine` also fits the same-frame
-  displacement between the two representations.
+- `partitioned_target_band_overlap` compares the band's prediction with the
+  learned provider's rendering of the same frames (total and high-pass energy
+  ratios; raw, low-pass and channel-mean deltas, per frame). The provider renders
+  the band from a reduced-grid projection of a target-grid latent, which is not a
+  native reduced-grid latent, so this rendering is diagnostic only and never
+  enters the high stage. It adds no model or provider call. With
+  `frame_gauge_residual_mode=measure`, `partitioned_target_band_same_frame_affine`
+  also fits the same-frame displacement between the two.
 
 - `target_band_tokens` counts H3 temporal latent tokens. It must leave at least
   one generated token on the reduced grid; otherwise the chunk fails before
@@ -176,8 +172,8 @@ same-grid join next to the carried prefix at a lower low/probe cost.
   rows. The video input projection and final layer process the full target-sized
   carrier, so the row reduction does not establish a wall-time or memory saving.
 - The low trajectory used by Flow guidance is recorded on the uniform reduced
-  grid. High-stage guidance binds to the actual clean operand: the crossfaded
-  band and the learned tail.
+  grid. High-stage guidance binds to the actual clean operand: the band's own
+  prediction and the learned tail.
 - Required selectors: `handoff_transfer_control=learned_3d`,
   `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
   `prefix_transformer_context=exact_target_partitioned`,

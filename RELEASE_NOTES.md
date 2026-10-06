@@ -4,36 +4,31 @@ Target-band continuation (`spatial_stage_control=progressive_target_band`) no
 longer resumes the band's raw low-stage sampler state next to a re-noised tail.
 That combination put two kinds of high-stage entry state side by side: the band
 carried its integrated low-stage residual, which the high stage sharpens, while
-the tail started from a clean estimate plus fresh Gaussian noise. The clean
-representation also switched from the band's target-grid prediction to the
-learned transfer between two adjacent tokens.
+the tail started from a clean estimate plus fresh Gaussian noise.
 
-- The band is now treated as an overlap region. Its high-stage clean operand
-  crossfades from the band's own target-grid prediction to the learned transfer
-  of the same frames, with transfer weight `j/n` for band token `j` of `n`. The
-  token next to the protected prefix keeps its target-grid prediction, and the
-  first tail token continues the same ramp.
-- Every generated token, band included, is re-noised with one independent
-  Gaussian noise field. Next to the prefix this matches same-grid control with
-  `frame_gauge_repair=false`.
-- `partitioned_target_band_overlap` reports how the transfer differs from the
-  band's target-grid prediction on each band frame: total and high-pass energy
-  ratios plus raw, low-pass and channel-mean deltas. With
+- The band keeps its own target-grid clean prediction, and every generated
+  token, band included, is re-noised with one independent Gaussian noise field.
+  Next to the prefix this matches same-grid control with `frame_gauge_repair=false`.
+- `partitioned_target_band_overlap` compares the band's prediction with the
+  learned provider's rendering of the same frames: total and high-pass energy
+  ratios plus raw, low-pass and channel-mean deltas, per frame. With
   `frame_gauge_residual_mode=measure`, `partitioned_target_band_same_frame_affine`
   also reports the fitted same-frame displacement. Neither adds a model,
-  provider or VAE evaluation.
+  provider or VAE evaluation, and neither changes the output.
 - Receipts: `partitioned_target_band_low_state` reports `band_handoff_policy` and
   `band_raw_state_carried=false` instead of `band_state_identity_handoff`;
-  `partitioned_transfer` reports `target_band_handoff_policy`,
-  `target_band_raw_state_carried` and `target_band_crossfade_transfer_weights`
-  instead of `target_band_identity_state`.
+  `partitioned_transfer` reports `target_band_handoff_policy` and
+  `target_band_raw_state_carried` instead of `target_band_identity_state`.
 
-The one-token suffix DC bridge, when enabled, is still measured against the head
-the high stage receives, which now includes the crossfaded band. Low/probe
-execution, the attention contract and same-grid or progressive continuation are
-unchanged. Tests verify the handoff state through ComfyUI's Euler,
-res_multistep and euler_ancestral samplers on a small CPU model with a bicubic
-provider; rendered quality on the trained model still requires a matched run.
+The provider renders the band from a reduced-grid projection of a target-grid
+latent, not from a native reduced-grid latent. On two different scenes that
+round trip moved channel means by about 0.23 to 0.27 latent RMS on the exact
+prefix and band frames, so its rendering of the band is not blended into the
+high-stage operand. Low/probe execution, the attention contract, the suffix DC
+bridge and same-grid or progressive continuation are unchanged. Tests verify the
+handoff state through ComfyUI's Euler, res_multistep and euler_ancestral samplers
+on a small CPU model with a bicubic provider; rendered quality on the trained
+model still requires a matched run.
 
 ---
 

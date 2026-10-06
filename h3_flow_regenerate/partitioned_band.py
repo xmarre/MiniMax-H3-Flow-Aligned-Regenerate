@@ -8,11 +8,8 @@ of that frame is masked padding excluded from transformer blocks. Elementwise
 sampler updates preserve the stored values' spatial ownership. Stochastic raw
 padding is masked before model calls and discarded from handoff views.
 
-At the handoff the band is the overlap region in which the generated video has
-two clean representations of the same frames: the band's own target-grid
-prediction and the learned transfer of its reduced-grid projection. The
-high-stage clean operand crossfades from the former to the latter across the
-band, and every generated token is re-noised with the same independent noise.
+At the handoff the band keeps its own target-grid clean prediction, and every
+generated token, band included, is re-noised with the same independent noise.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ import torch
 from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_stage import PartitionedTargetBandGeometry
 
-TARGET_BAND_HANDOFF_POLICY = "target_band_clean_crossfade_shared_renoise_v1"
+TARGET_BAND_HANDOFF_POLICY = "target_band_native_clean_shared_renoise_v1"
 
 
 def _validate_video(video: torch.Tensor, geometry: PartitionedTargetBandGeometry, name: str) -> None:
@@ -90,46 +87,9 @@ def target_band_target_preview(video: torch.Tensor, geometry: PartitionedTargetB
     return torch.cat((video[:, :, : geometry.head_t], tail.to(video)), dim=2)
 
 
-def target_band_crossfade_weights(band_t: int) -> tuple[float, ...]:
-    """Learned-transfer weight of each band token in the high-stage clean operand.
-
-    Token ``j`` of an ``n``-token band receives ``j / n``: the token next to the
-    protected prefix keeps its own target-grid prediction, and the weight rises
-    in equal steps so that the first tail token (weight one) continues the ramp.
-    """
-    if type(band_t) is not int or band_t < 1:
-        raise ValueError("target-band crossfade requires a positive integer band length")
-    return tuple(index / band_t for index in range(band_t))
-
-
-def blend_target_band_clean(
-    native_band: torch.Tensor,
-    transferred_band: torch.Tensor,
-    weights: tuple[float, ...],
-) -> torch.Tensor:
-    """Crossfade two clean representations of the same band frames.
-
-    ``native_band`` is the band's target-grid prediction and ``transferred_band``
-    the learned transfer of the same frames; both are BxCxTxHxW with ``T`` equal
-    to ``len(weights)``. The result has ``transferred_band``'s dtype and device.
-    """
-    if native_band.ndim != 5 or native_band.shape != transferred_band.shape:
-        raise ValueError("target-band crossfade requires matching BxCxTxHxW band tensors")
-    if int(native_band.shape[2]) != len(weights):
-        raise ValueError("target-band crossfade weights do not match the band length")
-    if any(not 0.0 <= float(weight) < 1.0 for weight in weights):
-        raise ValueError("target-band crossfade weights must lie in [0, 1)")
-    native = native_band.to(device=transferred_band.device, dtype=torch.float32)
-    transferred = transferred_band.to(torch.float32)
-    weight = torch.tensor(weights, dtype=torch.float32, device=transferred_band.device).view(1, 1, -1, 1, 1)
-    return (native + weight * (transferred - native)).to(transferred_band.dtype)
-
-
 __all__ = [
     "TARGET_BAND_HANDOFF_POLICY",
-    "blend_target_band_clean",
     "pack_target_band_video",
-    "target_band_crossfade_weights",
     "target_band_padding_max_abs",
     "target_band_source_view",
     "target_band_tail",
