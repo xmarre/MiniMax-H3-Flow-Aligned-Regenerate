@@ -65,7 +65,9 @@ def replay_plan(metadata, join_frame):
         "decoded_origin_frame": join_frame - trim + 17 * (start // 5),
         "shared_tokens": [start + 5, start + 7],
         "temporal_blend_local_frames": [17, 22],
-        "measured_local_frames": [14, 26],
+        # Local frames 6.. come from the first window alone, so the replay also
+        # covers the generated frames just after the protected prefix.
+        "measured_local_frames": [7, 26],
         "omitted_preceding_blend_local_frames": [0, 5] if start else [],
         "join_frame": join_frame,
     }
