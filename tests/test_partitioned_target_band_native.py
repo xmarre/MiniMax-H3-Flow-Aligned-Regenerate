@@ -199,6 +199,51 @@ def test_band_rope_rows_equal_the_progressive_partition_with_the_same_head():
     assert band.shape[0] - band_layout.segments[-1][0] == geometry.partitioned_rows
 
 
+def test_high_dense_head_does_not_extend_protected_timesteps_or_zero_band_outputs():
+    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_PREFIX_KEY
+
+    generator = torch.Generator().manual_seed(25)
+    dm = _core(layers=2, generator=generator)
+    geometry, owner, *_rest = _band_inputs(generator)
+    high_owner = PartitionedStagePlan(owner.prefix, TEMPORAL, *TARGET_HW, owner.prefix_noise)
+    video = torch.randn(1, 24, TEMPORAL, *TARGET_HW, generator=generator)
+    mask = torch.ones_like(video)
+    mask[:, :, :PROTECTED_T] = 0
+    calls = []
+
+    def block(img, _t_emb, segments, _rope, transformer_options, attention=None):
+        contract = transformer_options[PARTITIONED_PREFIX_KEY]
+        assert contract["prefix_t"] == PROTECTED_T
+        assert contract["heterogeneous_spatial_domains"] is False
+        assert transformer_options[PARTITIONED_STAGE_KEY].attention_head_t == geometry.head_t
+        start, stop = contract["video_start"], contract["sequence_rows"]
+        rows = next(row for a, b, row in segments if (a, b) == (start, stop))
+        protected = PROTECTED_T * geometry.target_rows
+        assert bool((rows[:protected] == rows[0]).all())
+        assert bool((rows[protected:] == rows[protected]).all())
+        assert rows[protected] != rows[0]
+        calls.append(contract)
+        return img.clone()
+
+    for layer in dm.blocks:
+        layer.forward = block
+    runtime = PartitionedStageRuntime(plan=high_owner, metrics=H3FlowMetrics(), attention_head_t=geometry.head_t)
+    result = _execute(
+        dm,
+        [transform.partitioned_diffusion_wrapper],
+        video,
+        torch.randn(1, 32, 2, 9, generator=generator),
+        torch.randn(1, 3, 8, generator=generator),
+        750.0,
+        {PARTITIONED_STAGE_KEY: runtime},
+        mask,
+    )
+    assert len(calls) == 2
+    assert torch.count_nonzero(result[0][:, :, :PROTECTED_T]) == 0
+    assert torch.count_nonzero(result[0][:, :, PROTECTED_T : geometry.head_t]) > 0
+    assert torch.count_nonzero(result[0][:, :, geometry.head_t :]) > 0
+
+
 def test_band_forward_through_real_blocks_ignores_padding_and_prefix_carrier(monkeypatch):
     """Real Core blocks with Sol dense attention over [prefix | band | tail].
 

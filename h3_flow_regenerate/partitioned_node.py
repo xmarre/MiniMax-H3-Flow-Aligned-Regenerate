@@ -439,8 +439,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
                     "progressive_low_to_high selects the configured reduced continuation grid. "
                     "progressive_target_band keeps the first target_band_tokens generated tokens after the "
-                    "protected prefix on the target grid with identity handoff, and runs the remaining "
-                    "continuation tokens on the reduced grid with learned transfer."
+                    "protected prefix on the target grid with identity clean transfer, and runs the remaining "
+                    "continuation tokens on the reduced grid with learned transfer. The entire generated "
+                    "suffix is re-noised together for high; only the original prefix remains pinned."
                 ),
             },
         )

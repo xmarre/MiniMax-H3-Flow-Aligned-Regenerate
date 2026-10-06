@@ -118,11 +118,13 @@ separately from loading and first-chunk work.
 for exact-prefix continuations. The protected prefix and the first
 `target_band_tokens` generated H3 temporal latent tokens after it stay on the
 target grid through low/probe. Every later generated token runs on the
-configured reduced grid. At the handoff the band continues by identity, exactly
-as under same-grid control, and the remaining tokens use the learned 3D transfer
-of `progressive_low_to_high`. Those tokens are re-noised with independent
-Gaussian noise for the high stage regardless of `frame_gauge_repair`; source
-residual transport is not used in this mode.
+configured reduced grid. At handoff the band's **clean prediction** transfers
+by identity, and the tail uses the learned 3D transfer. The whole generated
+suffix is conditionally re-noised with one independent Gaussian innovation
+regardless of `frame_gauge_repair`. It does not mix an integrated low-stage raw
+band with a freshly re-noised tail. Source residual transport is not used.
+High retains the low-stage dense-query head through the band and its first tail
+group. Only the original protected prefix is pinned; band tokens remain mutable.
 
 The low/probe sampler state stays on the uniform target grid. Each reduced-grid
 token stores its values in a source-sized window of its frame, and the rest of
@@ -134,8 +136,8 @@ count falls between the reduced-grid and target-grid controls. The video input
 projection and final layer still process the target-sized carrier. Wall time
 and peak memory therefore require measurement.
 Spectrum forecasting, the native final layer and Flow guidance keep their usual
-contracts. Guidance binds to the actual high-stage entry state (identity band
-plus learned tail).
+contracts. Guidance binds to the actual clean handoff pair (native clean band
+plus learned clean tail).
 
 With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
 first reduced-grid token after the band and is measured against the target-grid
@@ -146,6 +148,9 @@ The mode requires `handoff_transfer_control=learned_3d`,
 guidance sources and boundary-witness capture off.
 It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
 native partition carrier. Unsupported combinations fail before sampling.
+Use the paired VDN update for the retained high-stage dense-query head and
+mixed-grid readout optimization. Its boundary receipt reports `attention_head_t`;
+the runtime evidence checker detects an older receiver that ignores the head.
 
 For stage localization, set `frame_gauge_residual_mode=measure`. Target-band
 runs export the native decoder window and full video snapshots of the low/probe

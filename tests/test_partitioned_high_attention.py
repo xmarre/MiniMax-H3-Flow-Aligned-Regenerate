@@ -101,3 +101,17 @@ def test_high_cannot_replace_an_existing_partition_owner():
         pass
     assert options == original
     assert options[PARTITIONED_STAGE_KEY] is existing
+
+
+def test_high_retains_dense_band_extent_without_extending_protected_prefix():
+    plan = _plan()
+    options = {}
+    guider = SimpleNamespace(model_options={"transformer_options": options})
+    metrics = H3FlowMetrics()
+    with _partitioned_high_stage_contract(guider, plan, metrics, attention_head_t=4):
+        owner = options[PARTITIONED_STAGE_KEY]
+        assert owner.attention_head_t == 4
+        assert owner.plan.prefix_t == 2
+        assert owner.plan.prefix is plan.prefix
+        assert owner.plan.prefix_noise is plan.prefix_noise
+    assert options == {}

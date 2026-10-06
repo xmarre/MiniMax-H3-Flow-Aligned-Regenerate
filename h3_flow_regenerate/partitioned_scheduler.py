@@ -866,7 +866,7 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None)
 
 
 @contextlib.contextmanager
-def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True):
+def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True, attention_head_t=None):
     """Keep exact-prefix query policy across the target-grid refinement boundary."""
     transformer = guider.model_options["transformer_options"]
     with _high_stage_contract(guider, source="h3_flow_partitioned_refinement"):
@@ -875,6 +875,7 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
             policy=PARTITIONED_HIGH_ATTENTION_POLICY,
             exact_prefix_attention=bool(exact_prefix_attention),
             prefix_t=int(plan.prefix_t),
+            attention_head_t=int(plan.prefix_t if attention_head_t is None else attention_head_t),
             temporal=int(plan.temporal),
             target_hw=plan.target_hw,
             protected_prefix_local_queries="dense" if exact_prefix_attention else "native",
@@ -912,6 +913,7 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
         transformer.update(controls)
         try:
             with _partitioned_stage_contract(guider, high_plan, metrics):
+                transformer[PARTITIONED_STAGE_KEY].attention_head_t = attention_head_t
                 yield
         finally:
             for key in controls:
@@ -1549,7 +1551,7 @@ def _target_band_source_views(
     *,
     target_shapes: list[tuple[int, ...]],
     source_shapes: list[tuple[int, ...]],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
     """Split low/probe results into identity band tensors and reduced-grid views.
 
     The returned packed views are uniform reduced-grid tensors, so every
@@ -1561,7 +1563,6 @@ def _target_band_source_views(
     clean_padding = target_band_padding_max_abs(clean_video, band)
     if clean_padding != 0.0:
         raise RuntimeError("target-band probe prediction wrote outside its reduced-grid storage windows")
-    band_raw = raw_video[:, :, band.protected_t : band.head_t].detach().clone()
     band_clean = clean_video[:, :, band.protected_t : band.head_t].detach().clone()
     source_raw, raw_shapes = pack_streams((target_band_source_view(raw_video, band), raw_audio))
     source_clean, clean_shapes = pack_streams((target_band_source_view(clean_video, band), clean_audio))
@@ -1579,10 +1580,11 @@ def _target_band_source_views(
         "tail_video_rows": int(band.suffix_rows),
         "clean_padding_max_abs": clean_padding,
         "raw_padding_max_abs": target_band_padding_max_abs(raw_video, band),
-        "band_state_identity_handoff": True,
+        "band_state_identity_handoff": False,
+        "band_clean_identity_handoff": True,
         "tail_transfer": "learned_3d",
     }
-    return source_raw, source_clean, band_raw, band_clean, receipt
+    return source_raw, source_clean, band_clean, receipt
 
 
 def _apply_target_band_head_dc_bridge(
@@ -4056,7 +4058,6 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
-        band_raw_video = None
         band_clean_video = None
         if target_band is not None:
             if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
@@ -4077,7 +4078,7 @@ def run_partitioned_progressive(
                     native_probe_video, _ = unpack_streams(source_x0, target_shapes)
                     boundary_window_evidence.capture("low_probe_native_carrier_clean", native_probe_video)
                     del native_probe_video
-            source_raw, source_x0, band_raw_video, band_clean_video, band_low_receipt = _target_band_source_views(
+            source_raw, source_x0, band_clean_video, band_low_receipt = _target_band_source_views(
                 source_raw,
                 source_x0,
                 target_band,
@@ -5434,17 +5435,19 @@ def run_partitioned_progressive(
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         band_handoff_receipt = None
         if target_band is not None:
-            # Identity handoff: the high sampler resumes the band exactly where the
-            # low/probe sampler left it.
-            target_video[:, :, stage_plan.prefix_t : target_band.head_t] = band_raw_video.to(target_video)
+            # The clean band was spliced before conditional re-noising. Keep that
+            # result: overwriting it with the integrated low raw state mixes two
+            # noise histories at the band/tail edge. Only the exact prefix is pinned.
             band_handoff_receipt = {
                 "target_band_tokens": int(target_band.band_t),
-                "target_band_identity_state": bool(
+                "target_band_identity_state": False,
+                "target_band_identity_clean": bool(
                     torch.equal(
-                        target_video[:, :, stage_plan.prefix_t : target_band.head_t],
-                        band_raw_video.to(target_video),
+                        corrected_clean[:, :, stage_plan.prefix_t : target_band.head_t],
+                        band_clean_video.to(corrected_clean),
                     )
                 ),
+                "target_band_noise_policy": "independent_all_generated",
                 "target_band_transfer_start_t": int(target_band.head_t),
             }
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -5717,6 +5720,7 @@ def run_partitioned_progressive(
                 stage_plan,
                 binding.metrics,
                 exact_prefix_attention=prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+                attention_head_t=target_band.head_t if target_band is not None else None,
             ),
             high_boundary_contract(
                 binding,

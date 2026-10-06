@@ -4222,6 +4222,14 @@ def validate_partitioned_runtime_evidence(
         )
         for fields in boundary_query_events:
             query_frames = fields.get("query_frames")
+            if (
+                fields.get("stage") == "high"
+                and high_attention.get("attention_head_t", protected_prefix_t) > protected_prefix_t
+            ):
+                _require(
+                    fields.get("attention_head_t") == high_attention["attention_head_t"],
+                    "VDN high did not retain the target-band dense-query head",
+                )
             expected_prefix_t = (
                 protected_prefix_t + target_band_tokens
                 if target_band_tokens and fields.get("stage") in {"low", "probe"}

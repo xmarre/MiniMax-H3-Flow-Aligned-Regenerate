@@ -2457,6 +2457,25 @@ def test_gate_expects_target_band_boundary_queries_at_the_band_tail_edge():
         expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
     )
 
+    # New high plans require the paired VDN receiver to acknowledge the free
+    # dense head. Its physical prefix and the recorded boundary group stay at 2.
+    high_plan = next(event["fields"] for event in events if event["kind"] == "partitioned_high_attention_plan")
+    high_plan["attention_head_t"] = 4
+    with pytest.raises(RuntimeGateError, match="retain the target-band dense-query head"):
+        validate_partitioned_runtime_evidence(
+            metrics, _log(), expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+        )
+    high_receipt = next(
+        event["fields"]
+        for event in events
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] == "high"
+    )
+    high_receipt["attention_head_t"] = 4
+    validate_partitioned_runtime_evidence(
+        metrics, _log(), expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+    )
+    assert high_receipt["prefix_t"] == high_plan["prefix_t"] == 2
+
     # A band run whose low-stage boundary stays at the protected prefix is rejected.
     stale = _high_attention_metrics()
     stale["events"][0]["fields"]["target_band_tokens"] = 2

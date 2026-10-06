@@ -526,6 +526,17 @@ def partitioned_diffusion_wrapper(
     partitioned_layout.img_update = torch.cat(
         (layout.img_update[keep], torch.ones(plan.partitioned_rows, dtype=torch.bool))
     )
+    attention_head_t = runtime.attention_head_t
+    if attention_head_t is not None and (
+        type(attention_head_t) is not int
+        or not owner.prefix_t <= attention_head_t < owner.temporal
+        or band is not None
+        or owner.source_grid != owner.target_grid
+    ):
+        raise RuntimeError("an extended attention head requires a uniform target-grid high stage")
+    if attention_head_t is not None:
+        # Sol history binds execution policy as well as physical row geometry.
+        partitioned_layout.signature = (*partitioned_layout.signature, ("dense_query_head_t", attention_head_t))
     partition_plan = PartitionedExactPrefixPlan(
         video_start=int(video_start),
         temporal=int(plan.temporal),

@@ -253,14 +253,13 @@ def test_source_views_keep_identity_band_tensors_and_reject_padding_writes():
     raw[:, :, -1, -1, -1] = 0.25  # stochastic samplers may leave noise in protected padding
     clean = pack_target_band_video(head * 0.5, torch.randn(1, 24, 3, 4, 6), g)
     audio = torch.randn(*target_shapes[1])
-    source_raw, source_clean, band_raw, band_clean, receipt = _target_band_source_views(
+    source_raw, source_clean, band_clean, receipt = _target_band_source_views(
         _packed(raw, audio)[0],
         _packed(clean, audio)[0],
         g,
         target_shapes=target_shapes,
         source_shapes=source_shapes,
     )
-    assert torch.equal(band_raw, raw[:, :, 2:4])
     assert torch.equal(band_clean, clean[:, :, 2:4])
     raw_view, raw_audio = unpack_streams(source_raw, source_shapes)
     assert torch.equal(raw_audio, audio)

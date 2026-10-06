@@ -263,6 +263,8 @@ def _harness(
                 disable_pbar=True,
             )
             record["final_state"] = result * (1.0 - float(sigmas[-1]))
+            if sampler_name(sampler) == PROBE_MARKER:
+                record["prediction"] = result.clone()
             if record["stage"] == "high":
                 from h3_flow_regenerate.comfy_compat import _canonicalize_exact_masked_output
 
@@ -280,6 +282,7 @@ def _harness(
             denoised = model(inpaint(x, sigma), sigma, shapes, denoise_mask)
             denoised = denoised * denoise_mask + latent_image * (1.0 - denoise_mask)
             record["entry_state"] = x.clone()
+            record["prediction"] = denoised.clone()
             return denoised
         sigma0 = float(sigmas[0])
         x = noise * sigma0 + latent_image * (1.0 - sigma0)
@@ -438,12 +441,17 @@ def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, c
     assert transfers[0]["authoritative_target_prefix_restored"] is True
 
 
-def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monkeypatch):
+def test_target_band_renoises_native_band_and_learned_tail_together(monkeypatch):
+    from h3_flow_regenerate.handoff import deterministic_video_noise
+
     band_t = 2
     run = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
-        extra_transformer_options={PARTITIONED_TARGET_BAND_TOKENS_KEY: band_t},
+        extra_transformer_options={
+            PARTITIONED_TARGET_BAND_TOKENS_KEY: band_t,
+            PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
+        },
     )
     geometry = PartitionedTargetBandGeometry(PROTECTED_T, band_t, TEMPORAL, *SOURCE_HW, *TARGET_HW)
     head = geometry.head_t
@@ -461,10 +469,23 @@ def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monke
         assert torch.count_nonzero(mask_video[:, :, :PROTECTED_T]) == 0
     assert high["shapes"][0] == (1, 24, TEMPORAL, *TARGET_HW)
 
-    # Identity handoff: high resumes the band exactly where low/probe left it.
+    # Native clean band and learned clean tail share one independent innovation.
+    # Neither region imports its integrated low-stage residual into high.
     low_final, _ = unpack_streams(low["final_state"], low["shapes"])
     high_entry, _ = unpack_streams(high["entry_state"], high["shapes"])
-    torch.testing.assert_close(high_entry[:, :, PROTECTED_T:head], low_final[:, :, PROTECTED_T:head], rtol=0, atol=1e-6)
+    probe_clean, _ = unpack_streams(probe["prediction"], probe["shapes"])
+    clean = resize_spatial_5d(run.upscaler.inputs[0], *TARGET_HW, mode="bicubic").to(high_entry)
+    clean[:, :, PROTECTED_T:head] = probe_clean[:, :, PROTECTED_T:head]
+    innovation = _events(run.metrics, "partitioned_handoff_noise")[0]
+    epsilon = deterministic_video_noise(
+        tuple(high_entry.shape), seed=innovation["innovation_seed"], device=high_entry.device, dtype=high_entry.dtype
+    )
+    sigma = float(high["sigmas"][0])
+    expected = (1.0 - sigma) * clean + sigma * epsilon
+    torch.testing.assert_close(high_entry[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], rtol=0, atol=1e-6)
+    assert not torch.allclose(high_entry[:, :, PROTECTED_T:head], low_final[:, :, PROTECTED_T:head])
+    high_mask, _ = unpack_streams(high["mask"], high["shapes"])
+    assert bool((high_mask[:, :, PROTECTED_T:] == 1).all())
 
     # The learned provider received a uniform reduced-grid view whose tail is the
     # stored reduced-grid probe prediction.
@@ -475,12 +496,17 @@ def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monke
     transfer = _events(run.metrics, "partitioned_transfer")[0]
     assert transfer["learned_transfer_performed"] is True
     assert transfer["actual_learned_checkpoint_provider_invoked"] is True
-    assert transfer["target_band_identity_state"] is True
+    assert transfer["target_band_identity_state"] is False
+    assert transfer["target_band_identity_clean"] is True
+    assert transfer["target_band_noise_policy"] == "independent_all_generated"
     assert transfer["target_band_tokens"] == band_t
     assert transfer["target_band_transfer_start_t"] == head
     assert transfer["suffix_dc_bridge_prefix_t"] == head
     assert transfer["suffix_dc_bridge_boundary"] == "target_band_head"
     assert transfer["frame_gauge_reason"] == "target_band_identity_boundary"
+    high_attention = _events(run.metrics, "partitioned_high_attention_plan")[0]
+    assert high_attention["prefix_t"] == PROTECTED_T
+    assert high_attention["attention_head_t"] == head
 
     # Guidance consumes the low trajectory on the uniform reduced grid, as in
     # progressive_low_to_high; the target-band state is recorded through its view.
@@ -551,21 +577,30 @@ def test_learned_continuations_bind_guidance_to_the_actual_handoff_pair(monkeypa
 
 
 @pytest.mark.parametrize("sampler", ["euler", "res_multistep", "euler_ancestral"])
-def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler):
+def test_target_band_conditional_renoise_through_native_comfy_samplers(monkeypatch, sampler):
+    from h3_flow_regenerate.handoff import deterministic_video_noise
+
     run = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         extra_transformer_options={PARTITIONED_TARGET_BAND_TOKENS_KEY: 2, PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
         native_sampler=sampler,
     )
-    low, _probe, high = run.calls
+    low, probe, high = run.calls
     low_end, _ = unpack_streams(low["final_state"], low["shapes"])
     high_start, _ = unpack_streams(high["entry_state"], high["shapes"])
-    torch.testing.assert_close(
-        high_start[:, :, PROTECTED_T : PROTECTED_T + 2],
-        low_end[:, :, PROTECTED_T : PROTECTED_T + 2],
-        rtol=0,
-        atol=1e-6,
+    probe_clean, _ = unpack_streams(probe["prediction"], probe["shapes"])
+    seed = _events(run.metrics, "partitioned_handoff_noise")[0]["innovation_seed"]
+    epsilon = deterministic_video_noise(
+        tuple(high_start.shape), seed=seed, device=high_start.device, dtype=high_start.dtype
+    )
+    sigma = float(high["sigmas"][0])
+    expected = (1.0 - sigma) * probe_clean[:, :, PROTECTED_T : PROTECTED_T + 2] + sigma * epsilon[
+        :, :, PROTECTED_T : PROTECTED_T + 2
+    ]
+    torch.testing.assert_close(high_start[:, :, PROTECTED_T : PROTECTED_T + 2], expected, rtol=0, atol=1e-6)
+    assert not torch.allclose(
+        high_start[:, :, PROTECTED_T : PROTECTED_T + 2], low_end[:, :, PROTECTED_T : PROTECTED_T + 2]
     )
     final, _ = unpack_streams(run.result, run.shapes)
     original, _ = unpack_streams(run.latent_image, run.shapes)
