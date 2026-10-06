@@ -1972,3 +1972,62 @@ def test_target_sink_requires_advertised_vdn_mode_before_sampling():
         _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
     current._vdn_partitioned_softmax_diagnostic_modes += ("target_query_sink_measure",)
     _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_target_sink_outer_cannot_silently_fallback_and_clears_ownership(monkeypatch, selected):
+    monkeypatch.setenv(AUDIO_GUIDED_OVERLAP_ENV, "0")
+    video, audio = torch.randn(1, 24, 5, 8, 12), torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :2] = 0
+    mask = pack_streams((video_mask, torch.ones_like(audio)))[0]
+    binding = FlowBinding(metrics=H3FlowMetrics())
+    options = {PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "target_query_sink_measure"} if selected else {}
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: ProgressiveTargetInputConfig(
+                source_latent_h=4,
+                source_latent_w=6,
+                frame_gauge_repair=True,
+            ),
+            "transformer_options": options,
+        }
+    )
+
+    def unsupported(*args, **kwargs):
+        assert binding.frame_gauge_invocation_active
+        raise PartitionedPreflightUnsupported("old attention receiver")
+
+    fallbacks = []
+
+    def fallback(*args, **kwargs):
+        fallbacks.append(True)
+        return packed.clone()
+
+    monkeypatch.setattr("h3_flow_regenerate.partitioned_outer.run_partitioned_progressive", unsupported)
+    monkeypatch.setattr("h3_flow_regenerate.partitioned_outer.flow_outer_wrapper_with_exact_mask", fallback)
+
+    def invoke():
+        return partitioned_outer_wrapper(
+            SimpleNamespace(class_obj=guider),
+            torch.randn_like(packed),
+            packed,
+            SimpleNamespace(),
+            torch.tensor([1.0, 0.0]),
+            mask,
+            None,
+            True,
+            7,
+            latent_shapes=list(shapes),
+        )
+
+    if selected:
+        with pytest.raises(RuntimeError, match=r"refusing target-grid fallback.*old attention receiver"):
+            invoke()
+        assert not fallbacks
+    else:
+        assert torch.equal(invoke(), packed) and fallbacks == [True]
+    assert not binding.frame_gauge_invocation_active
+    assert binding.active_guidance_run is None and binding.registered_guidance_reference is None
