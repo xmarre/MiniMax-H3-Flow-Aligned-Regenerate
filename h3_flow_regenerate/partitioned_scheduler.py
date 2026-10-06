@@ -60,7 +60,10 @@ from .high_stage_boundary import (
     high_boundary_contract,
 )
 from .partitioned_band import (
+    TARGET_BAND_HANDOFF_POLICY,
+    blend_target_band_clean,
     pack_target_band_video,
+    target_band_crossfade_weights,
     target_band_padding_max_abs,
     target_band_source_view,
     target_band_target_preview,
@@ -172,6 +175,7 @@ from .runtime import (
 )
 from .seam_diagnostics import (
     measure_exact_prefix_splice,
+    measure_target_band_overlap,
     measure_translation_trajectory,
     measure_video_boundary,
     project_translation_trajectory_to_grid,
@@ -1549,19 +1553,20 @@ def _target_band_source_views(
     *,
     target_shapes: list[tuple[int, ...]],
     source_shapes: list[tuple[int, ...]],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
-    """Split low/probe results into identity band tensors and reduced-grid views.
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Split low/probe results into the band's clean prediction and reduced-grid views.
 
     The returned packed views are uniform reduced-grid tensors, so every
     downstream handoff consumer (learned transfer, residual transport,
-    diagnostics) sees the same geometry as progressive_low_to_high.
+    diagnostics) sees the same geometry as progressive_low_to_high. The band's
+    raw sampler state is not carried: the high stage re-noises the band from its
+    clean operand like every other generated token.
     """
     raw_video, raw_audio = unpack_streams(raw, target_shapes)
     clean_video, clean_audio = unpack_streams(clean, target_shapes)
     clean_padding = target_band_padding_max_abs(clean_video, band)
     if clean_padding != 0.0:
         raise RuntimeError("target-band probe prediction wrote outside its reduced-grid storage windows")
-    band_raw = raw_video[:, :, band.protected_t : band.head_t].detach().clone()
     band_clean = clean_video[:, :, band.protected_t : band.head_t].detach().clone()
     source_raw, raw_shapes = pack_streams((target_band_source_view(raw_video, band), raw_audio))
     source_clean, clean_shapes = pack_streams((target_band_source_view(clean_video, band), clean_audio))
@@ -1579,10 +1584,11 @@ def _target_band_source_views(
         "tail_video_rows": int(band.suffix_rows),
         "clean_padding_max_abs": clean_padding,
         "raw_padding_max_abs": target_band_padding_max_abs(raw_video, band),
-        "band_state_identity_handoff": True,
+        "band_handoff_policy": TARGET_BAND_HANDOFF_POLICY,
+        "band_raw_state_carried": False,
         "tail_transfer": "learned_3d",
     }
-    return source_raw, source_clean, band_raw, band_clean, receipt
+    return source_raw, source_clean, band_clean, receipt
 
 
 def _apply_target_band_head_dc_bridge(
@@ -4056,7 +4062,6 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
-        band_raw_video = None
         band_clean_video = None
         if target_band is not None:
             if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
@@ -4077,7 +4082,7 @@ def run_partitioned_progressive(
                     native_probe_video, _ = unpack_streams(source_x0, target_shapes)
                     boundary_window_evidence.capture("low_probe_native_carrier_clean", native_probe_video)
                     del native_probe_video
-            source_raw, source_x0, band_raw_video, band_clean_video, band_low_receipt = _target_band_source_views(
+            source_raw, source_x0, band_clean_video, band_low_receipt = _target_band_source_views(
                 source_raw,
                 source_x0,
                 target_band,
@@ -4315,11 +4320,12 @@ def run_partitioned_progressive(
         clean_video_postprocess = None
         band_provider_native_clean: torch.Tensor | None = None
         if target_band is not None:
-            # The band is not spatially transferred, so the protected prefix is
-            # followed by identical-grid state exactly as in same-grid control.
-            # The prefix-boundary frame gauge therefore has no transfer boundary
-            # to register; the remaining transfer boundary is the band/tail edge.
+            # The first band token keeps its own target-grid prediction, so the
+            # protected prefix is followed by identical-grid content exactly as in
+            # same-grid control. The prefix-boundary frame gauge therefore has no
+            # transfer boundary to register.
             frame_gauge_transaction.update(reason="target_band_identity_boundary")
+            band_crossfade_weights = target_band_crossfade_weights(int(target_band.band_t))
 
             def clean_video_postprocess(learned_clean):
                 nonlocal actual_handoff_clean
@@ -4328,16 +4334,51 @@ def run_partitioned_progressive(
                 band_provider_native_clean = learned_clean.detach().clone()
                 if boundary_window_evidence is not None:
                     boundary_window_evidence.capture("provider_native_clean", learned_clean)
+                # The band holds two clean representations of the same frames.
+                # Crossfading from the target-grid prediction to the learned
+                # transfer spreads their disagreement over the band instead of
+                # switching representation between two adjacent tokens.
+                transferred_band = learned_clean[:, :, stage_plan.prefix_t : target_band.head_t]
+                overlap = measure_target_band_overlap(band_clean_video.to(transferred_band), transferred_band)
                 spliced = learned_clean.clone()
-                spliced[:, :, stage_plan.prefix_t : target_band.head_t] = band_clean_video.to(spliced)
+                spliced[:, :, stage_plan.prefix_t : target_band.head_t] = blend_target_band_clean(
+                    band_clean_video, transferred_band, band_crossfade_weights
+                )
                 actual_handoff_clean = spliced.detach().clone()
+                binding.metrics.event(
+                    "partitioned_target_band_overlap",
+                    policy=TARGET_BAND_HANDOFF_POLICY,
+                    target_band_tokens=int(target_band.band_t),
+                    protected_prefix_t=int(stage_plan.prefix_t),
+                    head_t=int(target_band.head_t),
+                    crossfade_transfer_weights=list(band_crossfade_weights),
+                    domain="model_internal_clean",
+                    output_mutated=False,
+                    extra_h3_nfe=0,
+                    extra_provider_calls=0,
+                    **overlap,
+                )
+                if residual_mode == "measure":
+                    native_head = learned_clean[:, :, : target_band.head_t].clone()
+                    native_head[:, :, stage_plan.prefix_t :] = band_clean_video.to(native_head)
+                    binding.metrics.event(
+                        "partitioned_target_band_same_frame_affine",
+                        **measure_paired_prefix_affine(
+                            learned_clean[:, :, : target_band.head_t],
+                            native_head,
+                            prefix_t=int(target_band.head_t),
+                            frames=int(target_band.band_t),
+                        ),
+                    )
                 return CleanVideoPostprocessResult(
                     clean_video=spliced,
                     protected_prefix_t=int(stage_plan.prefix_t),
                     metadata={
-                        "result": "target_band_identity_splice",
+                        "result": "target_band_clean_crossfade",
+                        "policy": TARGET_BAND_HANDOFF_POLICY,
                         "target_band_tokens": int(target_band.band_t),
-                        "identity_frames": [int(stage_plan.prefix_t), int(target_band.head_t)],
+                        "crossfade_frames": [int(stage_plan.prefix_t), int(target_band.head_t)],
+                        "crossfade_transfer_weights": list(band_crossfade_weights),
                     },
                 )
 
@@ -5434,17 +5475,16 @@ def run_partitioned_progressive(
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
         band_handoff_receipt = None
         if target_band is not None:
-            # Identity handoff: the high sampler resumes the band exactly where the
-            # low/probe sampler left it.
-            target_video[:, :, stage_plan.prefix_t : target_band.head_t] = band_raw_video.to(target_video)
+            # The band enters the high stage as a re-noised clean operand with the
+            # same independent noise as the tail, exactly like every generated
+            # token of same-grid control. Its raw low-stage state is not resumed:
+            # that state carries content-correlated low-stage residual, which the
+            # high stage sharpens, next to a re-noised tail.
             band_handoff_receipt = {
                 "target_band_tokens": int(target_band.band_t),
-                "target_band_identity_state": bool(
-                    torch.equal(
-                        target_video[:, :, stage_plan.prefix_t : target_band.head_t],
-                        band_raw_video.to(target_video),
-                    )
-                ),
+                "target_band_handoff_policy": TARGET_BAND_HANDOFF_POLICY,
+                "target_band_raw_state_carried": False,
+                "target_band_crossfade_transfer_weights": list(target_band_crossfade_weights(int(target_band.band_t))),
                 "target_band_transfer_start_t": int(target_band.head_t),
             }
         target_raw = pack_streams((target_video, target_audio))[0]
@@ -5629,10 +5669,10 @@ def run_partitioned_progressive(
             and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             and splice_clean_source in {"actual_clean_postprocess", "actual_provider"}
         ):
-            # Under target-band control the high stage starts from the identity
+            # Under target-band control the high stage starts from the crossfaded
             # band and the learned tail (with its head-boundary DC correction), so
             # guidance binds to that actual clean operand rather than to the
-            # provider's discarded rendering of the band.
+            # provider's own rendering of the band.
             handoff_guidance_reference = _prepare_handoff_guidance_reference(
                 run=guidance_run,
                 provider_input=clean_video,

@@ -118,11 +118,16 @@ separately from loading and first-chunk work.
 for exact-prefix continuations. The protected prefix and the first
 `target_band_tokens` generated H3 temporal latent tokens after it stay on the
 target grid through low/probe. Every later generated token runs on the
-configured reduced grid. At the handoff the band continues by identity, exactly
-as under same-grid control, and the remaining tokens use the learned 3D transfer
-of `progressive_low_to_high`. Those tokens are re-noised with independent
-Gaussian noise for the high stage regardless of `frame_gauge_repair`; source
-residual transport is not used in this mode.
+configured reduced grid. At the handoff the band is the overlap region where
+the generated video has two clean representations of the same frames: the band's
+own target-grid prediction and the learned 3D transfer of `progressive_low_to_high`.
+The high-stage clean operand crossfades from the former to the latter across the
+band. For `n` band tokens, token `j` takes transfer weight `j/n`, so the token next
+to the prefix keeps its target-grid prediction and the first tail token (pure
+transfer) continues the ramp. Every generated token, band included, is then
+re-noised with the same independent Gaussian noise regardless of
+`frame_gauge_repair`. The band's raw low-stage sampler state is not resumed, and
+source residual transport is not used in this mode.
 
 The low/probe sampler state stays on the uniform target grid. Each reduced-grid
 token stores its values in a source-sized window of its frame, and the rest of
@@ -134,8 +139,8 @@ count falls between the reduced-grid and target-grid controls. The video input
 projection and final layer still process the target-sized carrier. Wall time
 and peak memory therefore require measurement.
 Spectrum forecasting, the native final layer and Flow guidance keep their usual
-contracts. Guidance binds to the actual high-stage entry state (identity band
-plus learned tail).
+contracts. Guidance binds to the actual high-stage clean operand (crossfaded
+band plus learned tail).
 
 With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
 first reduced-grid token after the band and is measured against the target-grid

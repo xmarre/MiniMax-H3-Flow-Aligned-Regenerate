@@ -9,7 +9,10 @@ import torch
 
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_band import (
+    TARGET_BAND_HANDOFF_POLICY,
+    blend_target_band_clean,
     pack_target_band_video,
+    target_band_crossfade_weights,
     target_band_padding_max_abs,
     target_band_source_view,
     target_band_tail,
@@ -244,7 +247,7 @@ def test_low_stage_inputs_place_band_noise_tail_noise_and_protected_padding():
         )
 
 
-def test_source_views_keep_identity_band_tensors_and_reject_padding_writes():
+def test_source_views_keep_the_band_clean_prediction_and_reject_padding_writes():
     g = GEOMETRY
     target_shapes = [(1, 24, g.temporal, g.target_h, g.target_w), (1, 32, 2, 9)]
     source_shapes = [(1, 24, g.temporal, g.source_h, g.source_w), (1, 32, 2, 9)]
@@ -253,15 +256,16 @@ def test_source_views_keep_identity_band_tensors_and_reject_padding_writes():
     raw[:, :, -1, -1, -1] = 0.25  # stochastic samplers may leave noise in protected padding
     clean = pack_target_band_video(head * 0.5, torch.randn(1, 24, 3, 4, 6), g)
     audio = torch.randn(*target_shapes[1])
-    source_raw, source_clean, band_raw, band_clean, receipt = _target_band_source_views(
+    source_raw, source_clean, band_clean, receipt = _target_band_source_views(
         _packed(raw, audio)[0],
         _packed(clean, audio)[0],
         g,
         target_shapes=target_shapes,
         source_shapes=source_shapes,
     )
-    assert torch.equal(band_raw, raw[:, :, 2:4])
     assert torch.equal(band_clean, clean[:, :, 2:4])
+    assert receipt["band_handoff_policy"] == TARGET_BAND_HANDOFF_POLICY
+    assert receipt["band_raw_state_carried"] is False
     raw_view, raw_audio = unpack_streams(source_raw, source_shapes)
     assert torch.equal(raw_audio, audio)
     assert torch.equal(raw_view[:, :, g.head_t :], target_band_tail(raw, g))
@@ -373,3 +377,54 @@ def test_band_geometry_must_match_its_protected_prefix_owner():
             torch.zeros(1, 3, 8),
             transformer_options={PARTITIONED_STAGE_KEY: runtime},
         )
+
+
+@pytest.mark.parametrize(("band_t", "expected"), [(1, (0.0,)), (2, (0.0, 0.5)), (4, (0.0, 0.25, 0.5, 0.75))])
+def test_crossfade_weights_ramp_from_the_native_band_to_the_transferred_tail(band_t, expected):
+    assert target_band_crossfade_weights(band_t) == expected
+
+
+@pytest.mark.parametrize("band_t", [0, -1, 2.0])
+def test_crossfade_weights_require_a_positive_integer_band(band_t):
+    with pytest.raises(ValueError, match="positive integer band length"):
+        target_band_crossfade_weights(band_t)
+
+
+def test_crossfade_keeps_the_first_band_token_native_and_moves_linearly_to_the_transfer():
+    torch.manual_seed(3)
+    native = torch.randn(1, 24, 4, 8, 12)
+    transferred = torch.randn(1, 24, 4, 8, 12)
+    weights = target_band_crossfade_weights(4)
+    blended = blend_target_band_clean(native, transferred, weights)
+    assert blended.dtype == transferred.dtype
+    assert torch.equal(blended[:, :, 0], native[:, :, 0])
+    for index, weight in enumerate(weights):
+        expected = (1.0 - weight) * native[:, :, index] + weight * transferred[:, :, index]
+        torch.testing.assert_close(blended[:, :, index], expected, rtol=0, atol=1e-6)
+
+
+def test_crossfade_steps_evenly_into_the_first_transferred_tail_token():
+    # Static content with a fixed native/transfer disagreement: the band and the
+    # first tail token (pure transfer) form one ramp of equal steps.
+    native_frame = torch.randn(1, 24, 1, 8, 12)
+    transferred_frame = native_frame + torch.randn(1, 24, 1, 8, 12)
+    band_t = 4
+    blended = blend_target_band_clean(
+        native_frame.expand(-1, -1, band_t, -1, -1),
+        transferred_frame.expand(-1, -1, band_t, -1, -1).contiguous(),
+        target_band_crossfade_weights(band_t),
+    )
+    sequence = torch.cat((blended, transferred_frame), dim=2)
+    step = (transferred_frame - native_frame)[:, :, 0] / band_t
+    for index in range(band_t):
+        torch.testing.assert_close(sequence[:, :, index + 1] - sequence[:, :, index], step, rtol=0, atol=1e-5)
+
+
+def test_crossfade_rejects_mismatched_geometry_and_weights():
+    native = torch.zeros(1, 24, 2, 8, 12)
+    with pytest.raises(ValueError, match="matching"):
+        blend_target_band_clean(native, torch.zeros(1, 24, 2, 8, 10), (0.0, 0.5))
+    with pytest.raises(ValueError, match="band length"):
+        blend_target_band_clean(native, native.clone(), (0.0,))
+    with pytest.raises(ValueError, match=r"\[0, 1\)"):
+        blend_target_band_clean(native, native.clone(), (0.0, 1.0))

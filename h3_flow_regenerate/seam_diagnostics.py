@@ -525,3 +525,56 @@ def measure_video_boundary(
         "seam_lowpass_rms": values["lowpass_rms"],
         "seam_spatial_mean_rms": values["spatial_mean_rms"],
     }
+
+
+def measure_target_band_overlap(
+    native_band: torch.Tensor,
+    transferred_band: torch.Tensor,
+    *,
+    requested_lowpass_kernel: int = _DEFAULT_LOWPASS_KERNEL,
+) -> dict[str, float | int | list[float]]:
+    """Compare the two clean representations of the target-band frames.
+
+    ``native_band`` is the band's own target-grid prediction and
+    ``transferred_band`` the learned transfer of the same frames. Energy ratios
+    above one mean the transfer carries more total or high-frequency energy than
+    the native prediction; the delta fields measure their disagreement.
+    """
+    if native_band.ndim != 5 or native_band.shape != transferred_band.shape or native_band.shape[2] < 1:
+        raise ValueError("target-band overlap diagnostics require matching non-empty BxCxTxHxW bands")
+    lowpass_kernel = _effective_lowpass_kernel(native_band, requested_lowpass_kernel)
+    with torch.no_grad():
+        native = native_band.float()
+        transferred = transferred_band.to(native).float()
+        native_high = native - _spatial_lowpass(native, lowpass_kernel)
+        transferred_high = transferred - _spatial_lowpass(transferred, lowpass_kernel)
+        delta = _delta_metrics(transferred, native, lowpass_kernel=lowpass_kernel)
+        native_rms = _finite_rms(native)
+        native_lowpass_rms = _finite_rms(_spatial_lowpass(native, lowpass_kernel))
+        frames = range(int(native.shape[2]))
+        per_frame = [
+            _delta_metrics(
+                transferred[:, :, index : index + 1], native[:, :, index : index + 1], lowpass_kernel=lowpass_kernel
+            )
+            for index in frames
+        ]
+        native_high_rms = _finite_rms(native_high)
+        transferred_high_rms = _finite_rms(transferred_high)
+        transferred_rms = _finite_rms(transferred)
+    return {
+        "lowpass_kernel": lowpass_kernel,
+        "native_rms": native_rms,
+        "transferred_rms": transferred_rms,
+        "transferred_over_native_rms_ratio": _safe_ratio(transferred_rms, native_rms),
+        "native_highpass_rms": native_high_rms,
+        "transferred_highpass_rms": transferred_high_rms,
+        "transferred_over_native_highpass_ratio": _safe_ratio(transferred_high_rms, native_high_rms),
+        "delta_rms": delta["rms"],
+        "delta_lowpass_rms": delta["lowpass_rms"],
+        "delta_spatial_mean_rms": delta["spatial_mean_rms"],
+        "delta_over_native_rms_ratio": _safe_ratio(delta["rms"], native_rms),
+        "delta_lowpass_over_native_lowpass_ratio": _safe_ratio(delta["lowpass_rms"], native_lowpass_rms),
+        "delta_rms_per_frame": [values["rms"] for values in per_frame],
+        "delta_lowpass_rms_per_frame": [values["lowpass_rms"] for values in per_frame],
+        "delta_spatial_mean_rms_per_frame": [values["spatial_mean_rms"] for values in per_frame],
+    }

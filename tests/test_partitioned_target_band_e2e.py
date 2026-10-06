@@ -17,7 +17,13 @@ import torch
 from h3_flow_regenerate.contracts import H3FlowTrajectory
 from h3_flow_regenerate.geometry import pack_streams, resize_spatial_5d, unpack_streams
 from h3_flow_regenerate.handoff import H3_LATENT_UPSCALER_API_VERSION, H3_LATENT_UPSCALER_KIND
-from h3_flow_regenerate.partitioned_band import target_band_padding_max_abs, target_band_tail
+from h3_flow_regenerate.partitioned_band import (
+    TARGET_BAND_HANDOFF_POLICY,
+    blend_target_band_clean,
+    target_band_crossfade_weights,
+    target_band_padding_max_abs,
+    target_band_tail,
+)
 from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
@@ -402,8 +408,17 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     assert torch.equal(provider, expected_provider)
     band_probe = tensors["low_probe_native_carrier_clean_full"]
     before_high = tensors["pre_high_exact_restored_full"]
-    assert torch.equal(before_high[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
+    # The band crossfades from its own target-grid prediction to the transfer.
+    assert torch.equal(before_high[:, :, PROTECTED_T], band_probe[:, :, PROTECTED_T])
+    expected_band = blend_target_band_clean(
+        band_probe[:, :, PROTECTED_T:16], provider[:, :, PROTECTED_T:16], target_band_crossfade_weights(4)
+    )
+    torch.testing.assert_close(before_high[:, :, PROTECTED_T:16], expected_band.to(before_high), rtol=0, atol=1e-6)
     assert not torch.equal(provider[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
+    affine = _events(measured.metrics, "partitioned_target_band_same_frame_affine")
+    assert len(affine) == 1 and [frame["frame"] for frame in affine[0]["frames"]] == [12, 13, 14, 15]
+    assert affine[0]["output_mutated"] is False
+    assert not _events(control.metrics, "partitioned_target_band_same_frame_affine")
     assert torch.equal(before_high[:, :, 17:], provider[:, :, 17:])
     assert tensors["first_high_before_flow_full"].shape[2] == TEMPORAL
     assert not torch.equal(tensors["first_high_before_flow_full"], tensors["first_high_after_flow_full"])
@@ -438,8 +453,41 @@ def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, c
     assert transfers[0]["authoritative_target_prefix_restored"] is True
 
 
-def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monkeypatch):
+def _record_band_crossfades(monkeypatch):
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+
+    records = []
+
+    def recording(native_band, transferred_band, weights):
+        result = blend_target_band_clean(native_band, transferred_band, weights)
+        records.append(
+            {
+                "native": native_band.detach().clone(),
+                "transferred": transferred_band.detach().clone(),
+                "weights": tuple(weights),
+                "blended": result.detach().clone(),
+            }
+        )
+        return result
+
+    monkeypatch.setattr(scheduler, "blend_target_band_clean", recording)
+    return records
+
+
+def _independent_handoff_noise(shape):
+    from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig, deterministic_video_noise
+
+    return deterministic_video_noise(
+        shape,
+        seed=5 + ProgressiveTargetInputConfig(source_scale=0.5).seed_offset,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+
+def test_target_band_renoises_a_crossfaded_band_with_the_tail_noise(monkeypatch):
     band_t = 2
+    crossfades = _record_band_crossfades(monkeypatch)
     run = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
@@ -461,10 +509,23 @@ def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monke
         assert torch.count_nonzero(mask_video[:, :, :PROTECTED_T]) == 0
     assert high["shapes"][0] == (1, 24, TEMPORAL, *TARGET_HW)
 
-    # Identity handoff: high resumes the band exactly where low/probe left it.
+    # The band enters the high stage as its crossfaded clean operand re-noised
+    # with the same independent noise as the tail; its raw low state is dropped.
     low_final, _ = unpack_streams(low["final_state"], low["shapes"])
     high_entry, _ = unpack_streams(high["entry_state"], high["shapes"])
-    torch.testing.assert_close(high_entry[:, :, PROTECTED_T:head], low_final[:, :, PROTECTED_T:head], rtol=0, atol=1e-6)
+    assert len(crossfades) == 1
+    crossfade = crossfades[0]
+    assert crossfade["weights"] == (0.0, 0.5)
+    assert torch.equal(crossfade["blended"][:, :, 0], crossfade["native"][:, :, 0])
+    sigma = float(high["sigmas"][0])
+    noise = _independent_handoff_noise(tuple(high_entry.shape))
+    expected_band = (1.0 - sigma) * crossfade["blended"] + sigma * noise[:, :, PROTECTED_T:head]
+    torch.testing.assert_close(high_entry[:, :, PROTECTED_T:head], expected_band, rtol=0, atol=1e-5)
+    assert not torch.allclose(high_entry[:, :, PROTECTED_T:head], low_final[:, :, PROTECTED_T:head], atol=1e-3)
+    # The tail beyond the DC-bridged first token is the transfer re-noised with the same noise field.
+    provider = resize_spatial_5d(run.upscaler.inputs[0], *TARGET_HW, mode="bicubic")
+    expected_tail = (1.0 - sigma) * provider[:, :, head + 1 :] + sigma * noise[:, :, head + 1 :]
+    torch.testing.assert_close(high_entry[:, :, head + 1 :], expected_tail, rtol=0, atol=1e-5)
 
     # The learned provider received a uniform reduced-grid view whose tail is the
     # stored reduced-grid probe prediction.
@@ -475,7 +536,10 @@ def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monke
     transfer = _events(run.metrics, "partitioned_transfer")[0]
     assert transfer["learned_transfer_performed"] is True
     assert transfer["actual_learned_checkpoint_provider_invoked"] is True
-    assert transfer["target_band_identity_state"] is True
+    assert transfer["target_band_handoff_policy"] == TARGET_BAND_HANDOFF_POLICY
+    assert transfer["target_band_raw_state_carried"] is False
+    assert transfer["target_band_crossfade_transfer_weights"] == [0.0, 0.5]
+    assert transfer["clean_video_postprocess"]["result"] == "target_band_clean_crossfade"
     assert transfer["target_band_tokens"] == band_t
     assert transfer["target_band_transfer_start_t"] == head
     assert transfer["suffix_dc_bridge_prefix_t"] == head
@@ -490,8 +554,17 @@ def test_target_band_runs_band_and_tail_with_identity_and_learned_handoffs(monke
     assert runs[0].samples
     assert all(sample.video_x0.shape == (1, 24, TEMPORAL, *SOURCE_HW) for sample in runs[0].samples)
 
+    overlap = _events(run.metrics, "partitioned_target_band_overlap")
+    assert len(overlap) == 1
+    assert overlap[0]["policy"] == TARGET_BAND_HANDOFF_POLICY
+    assert overlap[0]["crossfade_transfer_weights"] == [0.0, 0.5]
+    assert len(overlap[0]["delta_rms_per_frame"]) == band_t
+    assert overlap[0]["delta_rms"] > 0.0 and overlap[0]["native_rms"] > 0.0
+    assert overlap[0]["output_mutated"] is False
+
     low_state = _events(run.metrics, "partitioned_target_band_low_state")
     assert len(low_state) == 1
+    assert low_state[0]["band_raw_state_carried"] is False
     assert low_state[0]["clean_padding_max_abs"] == 0.0
     assert low_state[0]["low_probe_video_rows"] == geometry.partitioned_rows
     plan = _events(run.metrics, "partitioned_stage_plan")[0]
@@ -551,7 +624,8 @@ def test_learned_continuations_bind_guidance_to_the_actual_handoff_pair(monkeypa
 
 
 @pytest.mark.parametrize("sampler", ["euler", "res_multistep", "euler_ancestral"])
-def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler):
+def test_target_band_handoff_through_native_comfy_samplers(monkeypatch, sampler):
+    crossfades = _record_band_crossfades(monkeypatch)
     run = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
@@ -561,12 +635,15 @@ def test_target_band_identity_through_native_comfy_samplers(monkeypatch, sampler
     low, _probe, high = run.calls
     low_end, _ = unpack_streams(low["final_state"], low["shapes"])
     high_start, _ = unpack_streams(high["entry_state"], high["shapes"])
-    torch.testing.assert_close(
-        high_start[:, :, PROTECTED_T : PROTECTED_T + 2],
-        low_end[:, :, PROTECTED_T : PROTECTED_T + 2],
-        rtol=0,
-        atol=1e-6,
-    )
+    # Every generated token, band included, enters as a re-noised clean operand.
+    assert len(crossfades) == 1
+    sigma = float(high["sigmas"][0])
+    band = slice(PROTECTED_T, PROTECTED_T + 2)
+    renoised = (1.0 - sigma) * crossfades[0]["blended"] + sigma * _independent_handoff_noise(tuple(high_start.shape))[
+        :, :, band
+    ]
+    torch.testing.assert_close(high_start[:, :, band], renoised.to(high_start), rtol=0, atol=1e-5)
+    assert not torch.allclose(high_start[:, :, band], low_end[:, :, band], atol=1e-3)
     final, _ = unpack_streams(run.result, run.shapes)
     original, _ = unpack_streams(run.latent_image, run.shapes)
     assert torch.equal(final[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
