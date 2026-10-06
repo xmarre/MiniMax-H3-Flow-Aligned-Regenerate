@@ -143,8 +143,7 @@ def test_replay_covers_late_band_edge_and_restores_only_prefix_without_writing_f
     assert plan["shared_tokens"] == [[10, 12], [15, 17]]
     assert plan["temporal_blend_local_frames"] == [[17, 22], [34, 39]]
     assert plan["measured_local_frames"] == [18, 43]
-    labels = set(range(plan["decoded_origin_frame"] + 18, plan["decoded_origin_frame"] + 43))
-    assert {171, 175, 188, 195} <= labels and 196 not in labels
+    assert {171, 175, 188, 195} <= set(range(plan["decoded_origin_frame"] + 18, plan["decoded_origin_frame"] + 43))
     for value in stages.values():
         assert torch.equal(value[:, :, :7], video[:, :, 5:12])
         assert value.untyped_storage().nbytes() == value.numel() * 4
@@ -199,6 +198,24 @@ def test_partial_tail_cannot_be_replayed_as_a_complete_decoder_overlap(bundle):
         audit.replay_plan(manifest["metadata"], 0)
 
 
+@pytest.mark.parametrize("band", [1, 4, 9])
+@pytest.mark.parametrize("prefix", [2, 12, 22])
+def test_join_frame_changes_only_labels_and_never_selects_different_samples(bundle, band, prefix):
+    _directory, manifest, _video = bundle
+    metadata = dict(manifest["metadata"])
+    metadata["window"] = {"prefix_t": prefix, "temporal": 62, "decoded_trim_frames": 17 * ((prefix - 2) // 5) + 5}
+    metadata.update(target_band_tokens=band, target_band_transfer_start_t=prefix + band)
+    absolute = audit.replay_plan(metadata, 175)
+    relative = audit.replay_plan(metadata, 0)
+    assert absolute["measured_local_frames"] == relative["measured_local_frames"]
+    assert absolute["decoded_origin_frame"] - relative["decoded_origin_frame"] == 175
+    assert {k: v for k, v in absolute.items() if k not in ("decoded_origin_frame", "join_frame")} == {
+        k: v for k, v in relative.items() if k not in ("decoded_origin_frame", "join_frame")
+    }
+    begin, end = absolute["measured_local_frames"]
+    assert 0 < begin < end <= absolute["decoded_frames"]
+
+
 class FakeVAE:
     def __init__(self):
         self.first_stage_model = SimpleNamespace(
@@ -210,6 +227,113 @@ class FakeVAE:
         self.inputs.append(value.clone())
         frames = (value.shape[2] - 2) // 5 * 17 + 5
         return torch.zeros(1, frames, value.shape[-2] * 16, value.shape[-1] * 16, 3)
+
+
+@pytest.fixture
+def source_bundle(bundle):
+    directory, manifest, _video = bundle
+    # Real H3 projection requires even spatial axes. Enlarge the compact fixture
+    # before adding a uniform reduced view of its target-grid head and stored tail.
+    values = {}
+    for name, entry in list(manifest["tensor_bytes"].items()):
+        value = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+        value = value.reshape(entry["shape"]).repeat_interleave(2, -2).repeat_interleave(2, -1)
+        values[name] = value
+        write_operand(directory, manifest, name, value)
+    native = values["low_probe_native_carrier_clean_full"]
+    head = native[:, :, :16].clone()
+    head[:, :, :12] = values["authoritative_prefix_full"]
+    projected = audit.resize_spatial_5d_h3_patch_lattice(head, 2, 4)
+    source = torch.cat((projected, native[:, :, 16:, :2, :4]), dim=2)
+    manifest["metadata"]["source_probe_clean_grid"] = [2, 4]
+    write_operand(directory, manifest, "source_probe_clean_full", source)
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return directory, manifest, source
+
+
+def test_extended_replay_validates_saved_source_view_and_preserves_native_tail_bytes(source_bundle):
+    directory, _manifest, source = source_bundle
+    before = {p.name: p.read_bytes() for p in directory.iterdir()}
+    _plan, stages, identity = audit.load_replay_operands(directory, 175, include_source=True)
+    assert tuple(stages["source_grid"].shape) == (1, 24, 17, 2, 4)
+    assert torch.equal(stages["source_grid"], source[:, :, 5:22])
+    assert len(identity["operand_sha256"]) == 9
+    assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
+
+
+@pytest.mark.parametrize("failure", ["head", "tail", "grid", "shape", "hash"])
+def test_extended_replay_rejects_wrong_or_corrupt_source_view(source_bundle, failure):
+    directory, manifest, source = source_bundle
+    if failure in ("head", "tail"):
+        bad = source.clone()
+        bad[:, :, 12 if failure == "head" else 16] += 0.01
+        write_operand(directory, manifest, "source_probe_clean_full", bad)
+    elif failure == "grid":
+        manifest["metadata"]["source_probe_clean_grid"] = [2, 3]
+    elif failure == "shape":
+        write_operand(directory, manifest, "source_probe_clean_full", source[:, :, :, :, :2])
+    else:
+        manifest["tensor_bytes"]["source_probe_clean_full"]["sha256"] = "0" * 64
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        audit.load_replay_operands(directory, 175, include_source=True)
+
+
+def test_extended_audit_uses_same_time_window_context_and_keeps_reduced_grid_units(source_bundle, monkeypatch):
+    directory, _manifest, _source = source_bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    vae = FakeVAE()
+    rng = torch.random.get_rng_state().clone()
+    report = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="transfer_and_decoder_context")
+    assert report["extra_vae_calls"] == len(vae.inputs) == 18
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    assert len(report["stages"]) == 6 and len(report["comparisons"]) == 4
+    assert report["stages"]["source_grid"]["decoded_pixel_hw"] == [32, 64]
+    assert report["stages"]["pre_high"]["decoded_pixel_hw"] == [64, 96]
+    assert report["stages"]["source_grid"]["native_reduced_grid_generation_for_head"] is False
+    for stage_index, stage in enumerate(report["stages"].values()):
+        full, left, right = vae.inputs[stage_index * 3 : stage_index * 3 + 3]
+        assert torch.equal(left, full[:, :, 5:12])
+        assert torch.equal(right, full[:, :, 10:17])
+        context = stage["window_context"]
+        assert context["frame_labels"] == list(range(187, 192))
+        assert context["rgb_difference_rms"] == [0.0] * 5
+        assert context["production_blends_before_pixel_clamp"] is True
+        assert context["standalone_pixels_used_to_reassemble_output"] is False
+    encoded = json.dumps(report, allow_nan=False)
+    assert str(directory) not in encoded and "tensor(" not in encoded
+
+
+def test_window_context_pairs_identical_frame_times_instead_of_adjacent_motion(monkeypatch):
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    inputs = torch.arange(12).view(1, 1, 12, 1, 1).expand(1, 24, 12, 2, 4).float().clone()
+
+    class ContextVAE(FakeVAE):
+        def decode(self, value):
+            pixels = super().decode(value)
+            # Seven-token contexts start five tokens / seventeen pixel times apart.
+            origin = float(value[0, 0, 0, 0, 0]) * 17 / 5
+            times = torch.arange(22, dtype=pixels.dtype) + origin
+            pixels += (0.1 + times * 0.001)[None, :, None, None, None]
+            if origin:
+                pixels += 0.02  # Same-time context disagreement, separate from motion.
+            return pixels
+
+    pixels_before = inputs.clone()
+    report = audit.measure_window_context(
+        ContextVAE(), inputs, lambda v: v, {"decoded_origin_frame": 170, "head_t": 16, "token_start": 10}
+    )
+    assert report["rgb_difference_rms"] == pytest.approx([0.02] * 5, abs=1e-7)
+    assert report["luma_mean_change"] == pytest.approx([0.02] * 5, abs=1e-7)
+    assert torch.equal(inputs, pixels_before)
+
+
+def test_unknown_audit_scope_fails_before_decoding(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="unsupported local boundary audit scope"):
+        audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="unknown")
+    assert vae.inputs == []
 
 
 def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(bundle, monkeypatch):
@@ -346,7 +470,7 @@ def test_untextured_regions_are_not_reported_as_zero_geometric_shift():
     ]
 
 
-def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(bundle):
+def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(bundle, monkeypatch):
     root = os.environ.get("COMFYUI_ROOT")
     if root is None:
         pytest.skip("native temporal source oracle requires COMFYUI_ROOT")
@@ -395,3 +519,38 @@ def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(
     offset = 17 * (plan["token_start"] // 5)
     assert torch.equal(replay[:, :, start:stop], production[:, :, offset + start : offset + stop])
     assert not torch.equal(replay[:, :, :5], production[:, :, offset : offset + 5])
+    crop = stages["final"][:, :, 5:17]
+    band_replay = vae.decode_temporal(crop)
+    left = vae.decode_temporal(crop[:, :, :7])
+    right = vae.decode_temporal(crop[:, :, 5:12])
+    assert torch.equal(band_replay[:, :, 7:17], left[:, :, 7:17])
+    assert torch.equal(band_replay[:, :, 22:39], right[:, :, 5:22])
+    context_bias = (crop[:, :, 5:12].mean() - crop[:, :, :7].mean()) / 10
+    assert torch.allclose(right[:, :, :5] - left[:, :, 17:22], context_bias.expand_as(right[:, :, :5]), atol=1e-7)
+
+    class NativeAdapter:
+        def decode(self, value):
+            pixels = vae.decode_temporal(value)
+            pixels = pixels.repeat_interleave(16, -2).repeat_interleave(16, -1)
+            return pixels.permute(0, 2, 3, 4, 1)
+
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    context = audit.measure_window_context(NativeAdapter(), stages["final"], lambda v: v, plan)
+    assert context["frame_labels"] == list(range(187, 192))
+    assert context["rgb_difference_rms"] == pytest.approx([abs(float(context_bias))] * 5, abs=1e-7)
+
+    # Native blending is applied to raw decoder values before pixel clamping.
+    # Mixing finalized standalone windows would change the production result.
+    def saturated_window(value):
+        level = 1.5 if float(value[0, 0, 0, 0, 0]) else -0.5
+        return torch.full((1, 3, 28, *value.shape[-2:]), level)
+
+    vae._adaptive_decode = saturated_window
+    vae._finalize_pixels = lambda value: value.clamp(0, 1)
+    inputs = torch.arange(12).view(1, 1, 12, 1, 1).expand(1, 24, 12, 2, 3).float()
+    native_blend = vae.decode_temporal(inputs)
+    standalone_left = vae.decode_temporal(inputs[:, :, :7])
+    standalone_right = vae.decode_temporal(inputs[:, :, 5:12])
+    finalized_blend = vae.blend(standalone_left[:, :, 17:22], standalone_right[:, :, :5], 5, dim=2)
+    assert bool((native_blend[:, :, 18] == 0).all())
+    assert bool((finalized_blend[:, :, 1] == 0.2).all())

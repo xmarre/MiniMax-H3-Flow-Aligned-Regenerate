@@ -1,5 +1,16 @@
 # Unreleased: consistent target-band handoff
 
+- Local Boundary Audit adds opt-in `transfer_and_decoder_context` scope. It
+  validates and decodes the saved uniform reduced-grid handoff view, and compares
+  the same five frame times from standalone decoder windows near the band/tail edge at every
+  stage. It retains production temporal blending, reports native pixel units and
+  saves numerical JSON only. Extended mode uses eighteen VAE calls; the default
+  stage-continuity mode remains at five calls. No sampling or provider inference
+  is added. These measurements do not classify visible defects automatically.
+- The replay preserves the preceding-window crop needed to reproduce the
+  prefix/band blend. Selecting relative frame labels now leaves the measured
+  sample range unchanged. Pre-join frames are marked as discarded chunk context.
+
 - Local Boundary Audit measures adjacent-frame geometry and RGB/luminance
   changes for every saved stage, and compares temporal pixel increments across
   stages. This fills the gap between same-frame stage differences and temporal

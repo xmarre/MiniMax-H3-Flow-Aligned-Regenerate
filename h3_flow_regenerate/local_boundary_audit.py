@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
+from .geometry import resize_spatial_5d_h3_patch_lattice
 from .transfer_lattice import measure_paired_prefix_affine
 
 LOG = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ STAGES = {
     "first_high_after_flow": "first_high_after_flow_full",
     "final": "final_post_high_internal_clean_full",
 }
+SCOPES = ("stage_continuity", "transfer_and_decoder_context")
 
 
 def replay_plan(metadata, join_frame):
@@ -52,19 +54,16 @@ def replay_plan(metadata, join_frame):
     trim = 17 * ((prefix - 2) // 5) + 5
     if window.get("decoded_trim_frames") != trim:
         raise ValueError("saved prefix trim differs from native H3 timing")
-    # Start one native decoder window before the prefix window so the temporal
-    # blend into the prefix/band edge is reproduced, and end one window after the
-    # band/tail window so that blend is reproduced too.
+    # Include the preceding prefix window and both contexts near the band/tail
+    # edge. All starts retain the native five-token phase.
     start = max(0, (prefix // 5 - 1) * 5)
-    stop = max(start + 12, (head // 5 - 1) * 5 + 12)  # Seven-token windows, five-token stride.
+    band_window_start = max(0, (head // 5 - 1) * 5)
+    stop = max(start + 12, band_window_start + 12)
     if stop > temporal:
         raise ValueError("saved timeline lacks the complete following decoder window")
-    decoded_frames = sum(1 if token % 5 == 0 else 4 for token in range(start, stop))
+    decoded_frames = (stop - start - 2) // 5 * 17 + 5
     origin = join_frame - trim + 17 * (start // 5)
-    blends = [[17 * (k - start) // 5, 17 * (k - start) // 5 + 5] for k in range(start + 5, stop - 2, 5)]
-    # Frames before the first blend may differ from production; measure from four
-    # frames before the prefix join (or the first fully reproduced frame).
-    first = max(6, join_frame - 4 - origin) if join_frame else 6
+    first = max(6 if start else 1, join_frame - 4 - origin)
     return {
         "prefix_t": prefix,
         "head_t": head,
@@ -74,8 +73,10 @@ def replay_plan(metadata, join_frame):
         "decoded_frames": decoded_frames,
         "decoded_origin_frame": origin,
         "shared_tokens": [[k, k + 2] for k in range(start + 5, stop - 2, 5)],
-        "temporal_blend_local_frames": blends,
-        "measured_local_frames": [first, 17 * ((head // 5 - 1) * 5 - start) // 5 + 26],
+        "temporal_blend_local_frames": [
+            [17 * (k - start) // 5, 17 * (k - start) // 5 + 5] for k in range(start + 5, stop - 2, 5)
+        ],
+        "measured_local_frames": [first, 17 * (band_window_start - start) // 5 + 26],
         "omitted_preceding_blend_local_frames": [0, 5] if start else [],
         "join_frame": join_frame,
     }
@@ -115,7 +116,7 @@ def normalize_bundle_path(bundle_path, *, platform, wsl_distro):
     return path
 
 
-def load_replay_operands(bundle_path, join_frame):
+def load_replay_operands(bundle_path, join_frame, *, include_source=False):
     path = normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME"))
     directory = Path(path).expanduser().resolve()
     if directory.name == "manifest.json":
@@ -214,6 +215,34 @@ def load_replay_operands(bundle_path, join_frame):
         stages["pre_high"][:, :, lo - plan["token_start"] : hi - plan["token_start"]].contiguous().view(torch.int32),
     ):
         raise ValueError("pre-high band differs from the native low/probe prediction")
+    if include_source:
+        source_grid = metadata.get("source_probe_clean_grid")
+        if (
+            not isinstance(source_grid, list)
+            or len(source_grid) != 2
+            or any(type(n) is not int or n <= 0 or n % 2 for n in source_grid)
+            or any(a > b for a, b in zip(source_grid, prefix.shape[-2:], strict=True))
+            or tuple(source_grid) == tuple(prefix.shape[-2:])
+        ):
+            raise ValueError("extended audit requires the saved uniform reduced-grid handoff view")
+        source = read("source_probe_clean_full")
+        if tuple(source.shape) != (*shape[:3], *source_grid):
+            raise ValueError("saved reduced-grid handoff geometry differs from its metadata")
+        h, w = source_grid
+        head = plan["head_t"]
+        if not torch.equal(
+            source[:, :, head:].contiguous().view(torch.int32),
+            native[:, :, head:, :h, :w].contiguous().view(torch.int32),
+        ):
+            raise ValueError("reduced-grid handoff tail differs from native low/probe storage")
+        native_head = native[:, :, :head].clone()
+        native_head[:, :, : plan["prefix_t"]] = prefix
+        expected_head = resize_spatial_5d_h3_patch_lattice(native_head, h, w)
+        # Saved projection ran on the production device. CPU reconstruction can
+        # differ by float32 interpolation roundoff, so this check is numerical.
+        if not torch.allclose(source[:, :, :head], expected_head, atol=1e-4, rtol=1e-5):
+            raise ValueError("reduced-grid handoff head differs from the projected native head")
+        stages = {"source_grid": source[:, :, crop].clone(), **stages}
     return plan, stages, {"manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(), "operand_sha256": hashes}
 
 
@@ -263,19 +292,68 @@ def geometry_comparison(reference, candidate, frame_labels):
     }
 
 
-def audit_local_boundary(vae, bundle_path, join_frame, process_out):
+def _decode_owned_pixels(vae, latent, process_out, expected_frames):
+    with torch.inference_mode():
+        decoded = vae.decode(process_out(latent.clone()))
+    expected_shape = (1, expected_frames, latent.shape[-2] * 16, latent.shape[-1] * 16, 3)
+    if tuple(decoded.shape) != expected_shape or not bool(torch.isfinite(decoded).all()):
+        raise ValueError("connected VAE returned unexpected native temporal-window pixels")
+    if not bool(((decoded >= 0) & (decoded <= 1)).all()):
+        raise ValueError("connected VAE must return finalized RGB pixels in [0,1]")
+    return decoded
+
+
+def measure_window_context(vae, latent, process_out, plan):
+    """Compare identical pixel times from two standalone seven-token contexts.
+
+    These are finalized/clamped standalone pixels. Native production blending
+    happens before clamping, so these outputs must not reassemble the video.
+    """
+    overlap = []
+    window_start = max(0, (plan["head_t"] // 5 - 1) * 5)
+    first_offset = window_start - plan["token_start"]
+    for offset, begin in ((first_offset, 17), (first_offset + 5, 0)):
+        decoded = _decode_owned_pixels(vae, latent[:, :, offset : offset + 7], process_out, 22)
+        overlap.append(decoded[0, begin : begin + 5].detach().float().cpu().clone())
+        del decoded
+    left, right = overlap
+    origin = plan["decoded_origin_frame"] + first_offset // 5 * 17
+    labels = list(range(origin + 17, origin + 22))
+    delta = right - left
+    luma = delta @ torch.tensor([0.2126, 0.7152, 0.0722])
+    upper_h = round(left.shape[1] * 0.45)
+    return {
+        "frame_labels": labels,
+        "token_contexts": [[window_start, window_start + 7], [window_start + 5, window_start + 12]],
+        "domain": "finalized_standalone_window_rgb",
+        "comparison": "right_window_vs_left_window_at_identical_pixel_times",
+        "production_blends_before_pixel_clamp": True,
+        "standalone_pixels_used_to_reassemble_output": False,
+        "rgb_difference_rms": delta.square().mean((1, 2, 3)).sqrt().tolist(),
+        "luma_mean_change": luma.mean((1, 2)).tolist(),
+        "geometry": geometry_comparison(left, right, labels),
+        "geometry_upper45": geometry_comparison(left[:, :upper_h], right[:, :upper_h], labels),
+    }
+
+
+def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity"):
+    if scope not in SCOPES:
+        raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
+    extended = scope == "transfer_and_decoder_context"
     native = getattr(vae, "first_stage_model", None)
     expected = {"tokens_chunk_size": 5, "token_overlap": 2, "frame_pre_padding": 3, "clip_length": 17}
     if native is None or any(getattr(native, key, None) != value for key, value in expected.items()):
         raise ValueError("connect the native MiniMax H3 video VAE used for production decoding")
-    plan, stages, identity = load_replay_operands(bundle_path, join_frame)
+    plan, stages, identity = load_replay_operands(bundle_path, join_frame, include_source=extended)
     begin, end = plan["measured_local_frames"]
     labels = list(range(plan["decoded_origin_frame"] + begin, plan["decoded_origin_frame"] + end))
     report = {
         "policy": "local_target_band_two_window_audit_v1",
+        "scope": scope,
         "fps": 24,
         **identity,
         "plan": plan,
+        "frames_before_join_are_discarded_chunk_context": True,
         "temporal_blend_reproduced_for_measured_frames": True,
         "connected_production_vae_used": True,
         "decoded_pixels_saved": False,
@@ -292,13 +370,7 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out):
     pixels = {}
     for name, latent in stages.items():
         LOG.info("H3 local boundary audit: decoding %s through the native temporal windows", name)
-        with torch.inference_mode():
-            decoded = vae.decode(process_out(latent.clone()))
-        expected_shape = (1, plan["decoded_frames"], latent.shape[-2] * 16, latent.shape[-1] * 16, 3)
-        if tuple(decoded.shape) != expected_shape or not bool(torch.isfinite(decoded).all()):
-            raise ValueError("connected VAE returned unexpected native window pixels")
-        if not bool(((decoded >= 0) & (decoded <= 1)).all()):
-            raise ValueError("connected VAE must return finalized RGB pixels in [0,1]")
+        decoded = _decode_owned_pixels(vae, latent, process_out, plan["decoded_frames"])
         pixels[name] = decoded[0, begin - 1 : end].detach().float().cpu().clone()
         report["extra_vae_calls"] += 1
         del decoded
@@ -306,11 +378,20 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out):
         luma = frames @ torch.tensor([0.2126, 0.7152, 0.0722])
         report["stages"][name] = {
             "frame_labels": labels,
+            "decoded_pixel_hw": list(frames.shape[1:3]),
+            "geometry_units": "pixels_on_this_stage_native_decoder_grid",
             "luma_mean": luma[1:].mean((1, 2)).tolist(),
             "luma_std": luma[1:].std((1, 2), correction=0).tolist(),
             "adjacent_rgb_difference_rms": (frames[1:] - frames[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
             "adjacent_luma_mean_change": (luma[1:] - luma[:-1]).mean((1, 2)).tolist(),
         }
+        if name == "source_grid":
+            report["stages"][name]["state_role"] = "uniform_reduced_view_with_projected_target_grid_head"
+            report["stages"][name]["native_reduced_grid_generation_for_head"] = False
+        if extended:
+            LOG.info("H3 local boundary audit: comparing decoder contexts of %s", name)
+            report["stages"][name]["window_context"] = measure_window_context(vae, latent, process_out, plan)
+            report["extra_vae_calls"] += 2
     pairs = [
         ("provider", "pre_high"),
         ("pre_high", "first_high_before_flow"),
@@ -362,7 +443,19 @@ class H3FlowLocalBoundaryAudit:
                     },
                 ),
                 "chunk_join_frame": ("INT", {"default": 0, "min": 0, "max": 10000000}),
-            }
+            },
+            "optional": {
+                "audit_scope": (
+                    list(SCOPES),
+                    {
+                        "default": "stage_continuity",
+                        "tooltip": (
+                            "Stage continuity uses five VAE calls. Transfer and decoder context uses eighteen: "
+                            "adds the saved reduced-grid view and same-time comparisons of both decoder windows."
+                        ),
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -371,7 +464,7 @@ class H3FlowLocalBoundaryAudit:
     CATEGORY = "MiniMax H3/diagnostics"
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "Replay saved target-band operands across two native VAE windows. "
+        "Replay saved target-band operands across native VAE windows spanning both joins. "
         "Use the production video VAE and the boundary bundle directory. "
         "Linux paths and verified local WSL UNC paths are accepted. "
         "Set the assembled chunk-join frame, or zero for relative frame labels. "
@@ -382,11 +475,13 @@ class H3FlowLocalBoundaryAudit:
     def IS_CHANGED(cls, **_kwargs):
         return float("nan")
 
-    def audit(self, video_vae, bundle_path, chunk_join_frame):
+    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity"):
         import folder_paths
         from comfy.latent_formats import MiniMaxH3Video
 
-        report = audit_local_boundary(video_vae, bundle_path, chunk_join_frame, MiniMaxH3Video().process_out)
+        report = audit_local_boundary(
+            video_vae, bundle_path, chunk_join_frame, MiniMaxH3Video().process_out, scope=audit_scope
+        )
         text = json.dumps(report, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
         directory.mkdir(parents=True, exist_ok=True)

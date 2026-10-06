@@ -280,8 +280,9 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 ### Diagnostics
 
 **MiniMax H3 Local Boundary Audit** replays a saved target-band bundle across
-two adjacent native temporal decoder windows. Use a separate workflow containing
-the same video VAE loader/settings used for production and this audit node. Set
+native temporal decoder windows spanning the prefix and band/tail joins. Use a
+separate workflow containing the same video VAE loader/settings used for
+production and this audit node. Set
 `bundle_path` to the existing exported directory containing `manifest.json` and
 the full binary operands. Set `chunk_join_frame` to the assembled output's
 first new frame, or leave it at zero for frame labels relative to that join.
@@ -306,14 +307,38 @@ between adjacent frames. These measurements do not classify motion or cuts as
 defects. The extra comparisons use already decoded pixels and add CPU fitting
 work without additional VAE calls.
 
+Set `audit_scope=transfer_and_decoder_context` for the extended replay. It adds
+the saved uniform reduced-grid handoff view and compares identical pixel times
+from two independently decoded seven-token contexts near the band/tail edge for
+each stage. The reduced view contains a projected target-grid head and a native
+reduced-grid tail; it
+does not represent uniform reduced-grid generation of the head. Its geometry
+uses its own decoded pixel units, reported alongside the canvas dimensions.
+The loader verifies its hash, exact tail ownership and the head projection
+within float32 interpolation tolerance (`atol=1e-4`, `rtol=1e-5`).
+
+Each window-context comparison uses the five overlapping pixel times. It can
+show how the decoder's temporal context changes a frame without comparing two
+different scene times. Standalone pixels are finalized and clamped separately;
+production blends before clamping. The audit keeps the original native blended
+replay and never assembles a replacement from standalone pixels. Extended mode
+uses eighteen VAE calls, additional CPU fitting and one additional saved operand;
+the default `stage_continuity` mode uses five calls. Both modes save numerical
+JSON only and perform no diffusion generation or provider inference. Geometry
+estimates and context disagreement still require comparison with visually
+accepted output; they are not automatic defect classifications.
+
 Only numerical JSON is saved in `output/h3_flow_regenerate/boundary_audits` and
 returned by the node. Images, prompts and binary operands are not included in
 the report. Original media and saved operands remain local and unmodified.
-The replay adds five VAE calls, needs complete full-video target-band snapshots,
-and rejects incomplete context or altered prefix/mask/band ownership. It uses
+The replay needs complete full-video target-band snapshots and rejects
+incomplete context or altered prefix/mask/band ownership. It uses
 the connected VAE, including native quantized variants, rather than loading a
-separate decoder checkpoint. It does not replay the earlier protected-prefix
-join or modify generation behavior.
+separate decoder checkpoint and does not modify generation behavior. It does not
+compare against the prior chunk's retained pixels. Frames labeled before the
+join are decoded chunk context discarded by assembly. Setting the
+join frame to zero changes only labels. Crop length grows with band length;
+VAE call count alone does not determine replay time.
 
 | Node | Purpose |
 |---|---|
