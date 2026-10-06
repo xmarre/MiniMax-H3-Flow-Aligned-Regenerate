@@ -10,6 +10,8 @@ import hashlib
 import json
 import logging
 import math
+import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -69,13 +71,57 @@ def replay_plan(metadata, join_frame):
     }
 
 
+def normalize_bundle_path(bundle_path, *, platform, wsl_distro):
+    """Translate only a verified local WSL share; preserve native path spelling."""
+    path = os.fspath(bundle_path).strip()
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in ('"', "'"):
+        path = path[1:-1]
+    if not path:
+        raise ValueError("select the boundary bundle directory or its manifest.json")
+    if platform != "posix":
+        return path
+    if path.startswith(("\\\\", "//")):
+        parts = path.replace("\\", "/")[2:].split("/")
+        if parts[0].casefold() in ("wsl.localhost", "wsl$"):
+            if len(parts) < 3 or not parts[1]:
+                raise ValueError("incomplete WSL path; use the Linux bundle path, starting with /")
+            if not wsl_distro:
+                raise ValueError(
+                    "cannot verify this WSL share: WSL_DISTRO_NAME is unavailable; "
+                    "use the Linux bundle path, starting with /"
+                )
+            if parts[1].casefold() != wsl_distro.casefold():
+                raise ValueError(
+                    f"WSL path names distribution {parts[1]!r}, but ComfyUI runs in {wsl_distro!r}; "
+                    "use a bundle accessible to this distribution"
+                )
+            return "/" + "/".join(parts[2:])
+        # A double-leading slash is also a valid POSIX spelling. Reject actual
+        # backslash UNC paths, but leave unrelated POSIX // paths unchanged.
+        if path.startswith("\\\\"):
+            raise ValueError("Windows network paths are not local Linux paths; use the Linux bundle path")
+    if re.match(r"^[A-Za-z]:", path):
+        raise ValueError("Windows drive paths are not Linux paths; use the mounted Linux path, such as /mnt/c/...")
+    return path
+
+
 def load_replay_operands(bundle_path, join_frame):
-    directory = Path(bundle_path).expanduser().resolve()
-    if directory.is_file():
-        if directory.name != "manifest.json":
-            raise ValueError("select the boundary bundle directory or its manifest.json")
+    path = normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME"))
+    directory = Path(path).expanduser().resolve()
+    if directory.name == "manifest.json":
         directory = directory.parent
-    raw_manifest = (directory / "manifest.json").read_bytes()
+    elif directory.is_file():
+        raise ValueError("select the boundary bundle directory or its manifest.json")
+    manifest_path = directory / "manifest.json"
+    try:
+        raw_manifest = manifest_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Boundary bundle manifest not found: {manifest_path}. "
+            "Select an existing exported bundle directory containing manifest.json "
+            "and its .bin operands, or select manifest.json itself. "
+            "On Linux, use /home/... or a WSL share for the running distribution."
+        ) from exc
     manifest = json.loads(raw_manifest)
     metadata = manifest.get("metadata", {})
     if (
@@ -280,7 +326,16 @@ class H3FlowLocalBoundaryAudit:
         return {
             "required": {
                 "video_vae": ("VAE",),
-                "bundle_path": ("STRING", {"default": ""}),
+                "bundle_path": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Bundle directory or manifest.json. Use a Linux path in WSL, "
+                            "or a WSL UNC path for the running distribution."
+                        ),
+                    },
+                ),
                 "chunk_join_frame": ("INT", {"default": 0, "min": 0, "max": 10000000}),
             }
         }
@@ -293,6 +348,7 @@ class H3FlowLocalBoundaryAudit:
     DESCRIPTION = (
         "Replay saved target-band operands across two native VAE windows. "
         "Use the production video VAE and the boundary bundle directory. "
+        "Linux paths and verified local WSL UNC paths are accepted. "
         "Set the assembled chunk-join frame, or zero for relative frame labels. "
         "Saves numerical JSON only; images and latent tensors remain local."
     )

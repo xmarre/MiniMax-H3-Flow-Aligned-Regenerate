@@ -13,6 +13,74 @@ import torch.nn.functional as F
 from h3_flow_regenerate import local_boundary_audit as audit
 
 
+@pytest.mark.parametrize("host", ["wsl.localhost", "wsl$"])
+@pytest.mark.parametrize("manifest_input", [False, True])
+@pytest.mark.parametrize("quoted", [False, True])
+def test_wsl_explorer_paths_load_real_bundle(bundle, monkeypatch, host, manifest_input, quoted):
+    directory, _manifest, _video = bundle
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
+    path = directory / "manifest.json" if manifest_input else directory
+    unc = "\\\\" + host + "\\Ubuntu-22.04" + str(path).replace("/", "\\")
+    if quoted:
+        unc = f'  "{unc}"  '
+    expected = audit.load_replay_operands(path, 175)
+    actual = audit.load_replay_operands(unc, 175)
+    assert actual[0] == expected[0]
+    assert actual[2] == expected[2]
+    for stage in actual[1]:
+        assert torch.equal(actual[1][stage], expected[1][stage])
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/tmp/bundle", "relative/bundle", r"/tmp/literal\name", "//tmp/bundle", "~/bundle"],
+)
+def test_linux_path_spelling_is_preserved(path):
+    assert audit.normalize_bundle_path(path, platform="posix", wsl_distro=None) == path
+
+
+@pytest.mark.parametrize("path", [r"\\wsl.localhost\Ubuntu-22.04\home\toor", r"C:\bundle"])
+def test_windows_runtime_keeps_native_windows_paths(path):
+    assert audit.normalize_bundle_path(path, platform="nt", wsl_distro=None) == path
+
+
+def test_forward_slash_wsl_share_and_distribution_case():
+    assert (
+        audit.normalize_bundle_path(
+            "//WSL.LOCALHOST/ubuntu-22.04/home/toor/bundle", platform="posix", wsl_distro="Ubuntu-22.04"
+        )
+        == "/home/toor/bundle"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "distro", "message"),
+    [
+        (r"\\wsl.localhost\Debian\home\toor", "Ubuntu-22.04", "distribution 'Debian'"),
+        (r"\\wsl$\Ubuntu-22.04\home\toor", None, "WSL_DISTRO_NAME"),
+        (r"\\wsl.localhost\Ubuntu-22.04", "Ubuntu-22.04", "incomplete WSL path"),
+        (r"\\server\share\bundle", "Ubuntu-22.04", "network paths"),
+        (r"C:\bundle", "Ubuntu-22.04", "drive paths"),
+        ("C:/bundle", "Ubuntu-22.04", "drive paths"),
+        ("C:bundle", "Ubuntu-22.04", "drive paths"),
+        ("   ", None, "select the boundary bundle"),
+        ('""', None, "select the boundary bundle"),
+    ],
+)
+def test_inaccessible_path_formats_fail_with_actionable_error(path, distro, message):
+    with pytest.raises(ValueError, match=message):
+        audit.normalize_bundle_path(path, platform="posix", wsl_distro=distro)
+
+
+@pytest.mark.parametrize("manifest_input", [False, True])
+def test_missing_manifest_reports_expected_file_without_doubled_filename(tmp_path, manifest_input):
+    path = tmp_path / "manifest.json" if manifest_input else tmp_path
+    with pytest.raises(FileNotFoundError, match="Select an existing exported bundle") as error:
+        audit.load_replay_operands(path, 175)
+    assert str(tmp_path / "manifest.json") in str(error.value)
+    assert "manifest.json/manifest.json" not in str(error.value)
+
+
 def write_operand(directory, manifest, name, value):
     raw = value.contiguous().numpy().tobytes()
     path = directory / f"{name}.bin"

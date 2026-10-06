@@ -286,6 +286,11 @@ the same video VAE loader/settings used for production and this audit node. Set
 the full binary operands. Set `chunk_join_frame` to the assembled output's
 first new frame, or leave it at zero for frame labels relative to that join.
 No diffusion-model or sampler connection is needed.
+The path may also select `manifest.json` itself. In WSL, use a Linux path such
+as `/home/...`, or an Explorer path beginning `\\wsl.localhost\<distribution>\`
+or `\\wsl$\<distribution>\`. Explorer paths are translated only when the named
+distribution matches `WSL_DISTRO_NAME`; otherwise use the Linux path. Surrounding
+quotes from **Copy as path** are accepted.
 
 The audit decodes the provider, pre-high state, first high prediction before and
 after Flow, and final state sequentially using the connected native video VAE.

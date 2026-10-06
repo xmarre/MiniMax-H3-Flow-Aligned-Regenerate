@@ -1,5 +1,10 @@
 # Unreleased: consistent target-band handoff
 
+- Local Boundary Audit accepts quoted paths and translates Explorer's
+  `\\wsl.localhost\...` and `\\wsl$\...` paths to Linux when the distribution
+  matches the running WSL environment. Invalid cross-platform paths and missing
+  manifests now report how to select an accessible bundle.
+
 Target-band continuation (`spatial_stage_control=progressive_target_band`) no
 longer resumes the band's raw low-stage sampler state next to a re-noised tail.
 That combination put two kinds of high-stage entry state side by side: the band
