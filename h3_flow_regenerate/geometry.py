@@ -242,6 +242,25 @@ def validate_av(video: Any, audio: Any, *, require_patch_safe: bool = True) -> t
     return video, audio
 
 
+# Dense-cell placements on H3's spatial RoPE lattice. H3 gives patch k of an axis
+# the coordinate 16*(1-n/sqrt(A)) + 2*k*32/sqrt(A): the interval start of an
+# endpoint=False tiling of the centered box 16*(1-/+n/sqrt(A)).
+# - patch-center reads that coordinate as the patch center;
+# - RoPE-box reads it as the patch start and puts dense cells at half-pixel
+#   centers of the box (the trained half-pixel map when aspect ratios match).
+# Between grids with different steps they differ by one constant translation.
+H3_DENSE_PATCH_CENTER_LATTICE = "h3_dense_patch_center_lattice_v2"
+H3_ROPE_BOX_HALF_PIXEL_LATTICE = "h3_rope_box_half_pixel_lattice_v1"
+H3_DENSE_TRANSPORT_LATTICES = (H3_DENSE_PATCH_CENTER_LATTICE, H3_ROPE_BOX_HALF_PIXEL_LATTICE)
+
+
+def normalize_h3_dense_transport_lattice(value: str) -> str:
+    value = str(value)
+    if value not in H3_DENSE_TRANSPORT_LATTICES:
+        raise ValueError(f"H3 transport lattice must be one of {H3_DENSE_TRANSPORT_LATTICES!r}, got {value!r}")
+    return value
+
+
 def _h3_patch_axis_geometry(grid_h: int, grid_w: int, axis: int) -> tuple[int, float, float]:
     """Return MiniMax-H3's area-normalized spatial RoPE lattice for one patch axis."""
     if axis not in (0, 1):
@@ -306,6 +325,8 @@ def resize_spatial_5d_h3_patch_lattice(
     tensor: torch.Tensor,
     target_h: int,
     target_w: int,
+    *,
+    lattice: str = H3_DENSE_PATCH_CENTER_LATTICE,
 ) -> torch.Tensor:
     """Resize dense latent cells while aligning H3's physical patch centers.
 
@@ -317,7 +338,10 @@ def resize_spatial_5d_h3_patch_lattice(
     Extend each patch center into two uniformly spaced dense-cell centers. Splitting
     even and odd latent cells into independent lanes duplicates narrow features
     when the grid changes. This changes no temporal values or transformer tokens.
+    ``lattice`` selects how a patch coordinate is read (see
+    ``H3_DENSE_TRANSPORT_LATTICES``); both placements use the same spacing.
     """
+    lattice = normalize_h3_dense_transport_lattice(lattice)
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("H3 physical resize input must be a floating-point BxCxTxHxW tensor")
     target_h, target_w = int(target_h), int(target_w)
@@ -333,8 +357,12 @@ def resize_spatial_5d_h3_patch_lattice(
     for axis in (0, 1):
         sn, s0, ds = _h3_patch_axis_geometry(h, w, axis)
         tn, t0, dt = _h3_patch_axis_geometry(target_h, target_w, axis)
-        # Dense cell centers are +/- one quarter patch step around each patch center.
-        source_start, target_start = s0 - ds / 2, t0 - dt / 2
+        if lattice == H3_ROPE_BOX_HALF_PIXEL_LATTICE:
+            # Dense cell centers sit half a cell after each box-aligned cell start.
+            source_start, target_start = s0 + ds / 2, t0 + dt / 2
+        else:
+            # Dense cell centers are +/- one quarter patch step around each patch center.
+            source_start, target_start = s0 - ds / 2, t0 - dt / 2
         target_index = torch.arange(tn, device=tensor.device, dtype=torch.float32)
         source_index = (target_start + target_index * dt - source_start) / ds
         axes.append(2 * source_index / (sn - 1) - 1)

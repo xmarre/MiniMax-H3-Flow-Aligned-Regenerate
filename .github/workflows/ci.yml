@@ -84,7 +84,7 @@ jobs:
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Untwisting-RoPE.git .contracts/Untwist
           git -C .contracts/Untwist checkout 299d4c56a3f057a97b3140d2136189bcd1e7d6bb
           git clone --filter=blob:none https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus.git .contracts/Upscaler
-          git -C .contracts/Upscaler checkout 298c86c72765627f77c819221129dc642bd8b7cb
+          git -C .contracts/Upscaler checkout 0e2b5e25de864333167f20c3e3915f07bf4bde79
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-VDN-H3.git .contracts/VDN
           git -C .contracts/VDN checkout 1fc9d0d979683e3410587fac17358d3dd583e551
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Sol-H3.git .contracts/SolPartitioned

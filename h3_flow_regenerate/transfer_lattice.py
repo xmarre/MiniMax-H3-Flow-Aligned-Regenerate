@@ -8,13 +8,23 @@ import time
 import torch
 import torch.nn.functional as F
 
-H3_TRANSFER_LATTICE = "h3_dense_patch_center_lattice_v2"
+from .geometry import (
+    H3_DENSE_PATCH_CENTER_LATTICE,
+    H3_DENSE_TRANSPORT_LATTICES,
+    H3_ROPE_BOX_HALF_PIXEL_LATTICE,
+    normalize_h3_dense_transport_lattice,
+)
+
+H3_TRANSFER_LATTICE = H3_DENSE_PATCH_CENTER_LATTICE
+H3_ROPE_BOX_TRANSFER_LATTICE = H3_ROPE_BOX_HALF_PIXEL_LATTICE
+H3_TRANSFER_LATTICE_OPTIONS = H3_DENSE_TRANSPORT_LATTICES
 
 
 class H3PatchLatticeTransferProvider:
     """Select the provider's encoder-to-decoder transport for a physical carrier."""
 
-    def __init__(self, provider):
+    def __init__(self, provider, *, lattice: str = H3_TRANSFER_LATTICE):
+        lattice = normalize_h3_dense_transport_lattice(lattice)
         if getattr(provider, "h3_patch_lattice_api", None) != 2 or not callable(
             getattr(provider, "upscale_clean_video_h3_patch_lattice", None)
         ):
@@ -22,7 +32,13 @@ class H3PatchLatticeTransferProvider:
                 "Partitioned H3 continuation requires the upscaler provider with h3_patch_lattice_api=2. "
                 "Update MiniMax H3 Latent Upscaler-Plus to the matching dense-transfer candidate."
             )
+        if lattice != H3_TRANSFER_LATTICE and lattice not in tuple(getattr(provider, "h3_transport_lattices", ())):
+            raise RuntimeError(
+                f"transfer_lattice={lattice!r} requires an upscaler provider that advertises it in "
+                "h3_transport_lattices. Update MiniMax H3 Latent Upscaler-Plus."
+            )
         self.provider = provider
+        self.lattice = lattice
         self.calls = 0
 
     def __getattr__(self, name):
@@ -30,7 +46,12 @@ class H3PatchLatticeTransferProvider:
 
     def upscale_clean_video(self, video, *, target_h, target_w):
         self.calls += 1
-        return self.provider.upscale_clean_video_h3_patch_lattice(video, target_h=target_h, target_w=target_w)
+        if self.lattice == H3_TRANSFER_LATTICE:
+            # Keep the historical call shape so older providers stay compatible.
+            return self.provider.upscale_clean_video_h3_patch_lattice(video, target_h=target_h, target_w=target_w)
+        return self.provider.upscale_clean_video_h3_patch_lattice(
+            video, target_h=target_h, target_w=target_w, spatial_lattice=self.lattice
+        )
 
 
 def measure_paired_prefix_affine(learned, exact, *, prefix_t, frames=4):

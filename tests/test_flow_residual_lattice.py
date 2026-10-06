@@ -312,12 +312,14 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
         transfer_metrics={},
         clean_video_postprocess=None,
         spatial_stage_control="learned",
+        transfer_lattice=scheduler.H3_TRANSFER_LATTICE,
         build_handoff_state=capture,
     )
     program = ast.fix_missing_locations(ast.Module(body=[contract, assignment, provenance, handoff], type_ignores=[]))
     exec(compile(program, scheduler.__file__, "exec"), env)
     assert len(calls) == 1
     assert calls[0]["noise_mode"] == expected_mode
+    assert calls[0]["drift_lattice"] == scheduler.H3_TRANSFER_LATTICE
     assert calls[0]["initial_source_noise"] is (noise if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None)
     assert calls[0]["model_noise_scale"] == (1.7 if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0)
     assert len(env["effective_upscaler"].calls) == 1

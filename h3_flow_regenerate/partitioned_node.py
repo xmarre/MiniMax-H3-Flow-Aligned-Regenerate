@@ -49,6 +49,7 @@ from .partitioned_transformer import (
     partitioned_diffusion_wrapper,
 )
 from .runtime import OUTER_WRAPPER_KEY
+from .transfer_lattice import H3_TRANSFER_LATTICE, H3_TRANSFER_LATTICE_OPTIONS
 
 
 class H3PartitionedExactPrefixHandoff:
@@ -507,6 +508,22 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["transfer_lattice"] = (
+            list(H3_TRANSFER_LATTICE_OPTIONS),
+            {
+                "default": H3_TRANSFER_LATTICE,
+                "tooltip": (
+                    "How reduced-grid and target-grid latent cells are aligned when continuation moves content "
+                    "between grids: the source-carrier projection, the learned transfer and reduced-grid views "
+                    "all use this map. h3_dense_patch_center_lattice_v2 reads each H3 patch position as the "
+                    "patch center. h3_rope_box_half_pixel_lattice_v1 reads it as the patch start inside H3's "
+                    "centered position box, which equals the upscaler's trained half-pixel map when aspect "
+                    "ratios match. The two differ by one constant sub-cell translation of the transferred "
+                    "content. The RoPE-box lattice requires an upscaler provider that advertises it. "
+                    "Paired VDN temporal taps keep their existing map."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -554,6 +571,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         video_guided_overlap_tokens=6,
         suffix_dc_bridge=True,
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+        transfer_lattice=H3_TRANSFER_LATTICE,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -615,6 +633,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             video_guided_overlap_tokens=video_guided_overlap_tokens,
             suffix_dc_bridge=suffix_dc_bridge,
             target_band_tokens=target_band_tokens,
+            transfer_lattice=transfer_lattice,
         )
 
 

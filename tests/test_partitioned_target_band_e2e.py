@@ -29,6 +29,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    PARTITIONED_TRANSFER_LATTICE_KEY,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_SOL_REQUIRED_METADATA,
@@ -39,6 +40,7 @@ from h3_flow_regenerate.partitioned_scheduler import (
 )
 from h3_flow_regenerate.partitioned_stage import PartitionedTargetBandGeometry
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, PROBE_MARKER, FlowBinding, flow_predict_wrapper, sampler_name
+from h3_flow_regenerate.transfer_lattice import H3_ROPE_BOX_TRANSFER_LATTICE, H3_TRANSFER_LATTICE
 
 PROTECTED_T, TEMPORAL = 8, 14
 TARGET_HW, SOURCE_HW = (40, 48), (20, 24)
@@ -65,6 +67,18 @@ class _Upscaler:
     upscale_clean_video_h3_patch_lattice = upscale_clean_video
 
 
+class _LatticeUpscaler(_Upscaler):
+    h3_transport_lattices = (H3_TRANSFER_LATTICE, H3_ROPE_BOX_TRANSFER_LATTICE)
+
+    def __init__(self):
+        super().__init__()
+        self.lattices = []
+
+    def upscale_clean_video_h3_patch_lattice(self, video, *, target_h, target_w, spatial_lattice=H3_TRANSFER_LATTICE):
+        self.lattices.append(spatial_lattice)
+        return self.upscale_clean_video(video, target_h=target_h, target_w=target_w)
+
+
 def _vdn_owner():
     owner = SimpleNamespace()
     owner._vdn_forward = True
@@ -83,6 +97,7 @@ def _harness(
     guidance_mode="off",
     native_sampler=None,
     residual_mode="off",
+    upscaler=None,
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -304,7 +319,7 @@ def _harness(
             return torch.where(denoise_mask == 0, latent_image, x)
         return x / (1.0 - last)
 
-    upscaler = _Upscaler()
+    upscaler = _Upscaler() if upscaler is None else upscaler
     from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
 
     config = ProgressiveTargetInputConfig(
@@ -715,3 +730,36 @@ def test_target_band_tail_uses_independent_handoff_noise_with_frame_gauge_repair
     assert [event["policy"] for event in noise] == [policy]
     provenance = _events(run.metrics, "partitioned_handoff_residual_provenance")
     assert len(provenance) == (0 if policy == "independent" else 1)
+
+
+def test_target_band_rope_box_lattice_reaches_every_cross_grid_map(monkeypatch):
+    band_t = 2
+    head = PROTECTED_T + band_t
+    options = {PARTITIONED_TARGET_BAND_TOKENS_KEY: band_t}
+    default = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=dict(options),
+        upscaler=_LatticeUpscaler(),
+    )
+    box = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={**options, PARTITIONED_TRANSFER_LATTICE_KEY: H3_ROPE_BOX_TRANSFER_LATTICE},
+        upscaler=_LatticeUpscaler(),
+    )
+    assert default.upscaler.lattices == [H3_TRANSFER_LATTICE]
+    assert box.upscaler.lattices == [H3_ROPE_BOX_TRANSFER_LATTICE]
+    for run, lattice in ((default, H3_TRANSFER_LATTICE), (box, H3_ROPE_BOX_TRANSFER_LATTICE)):
+        (transfer,) = _events(run.metrics, "partitioned_transfer_lattice")
+        assert transfer["policy"] == lattice
+        assert transfer["prefix_projection_policy"] == lattice
+        assert transfer["vdn_temporal_tap_lattice"] == H3_TRANSFER_LATTICE
+        (resample,) = _events(run.metrics, "partitioned_prefix_source_resample")
+        assert resample["policy"] == lattice
+
+    # Only the projected target-grid head of the provider input changes; the
+    # reduced-grid tail and the low/probe model inputs are lattice-independent.
+    default_input, box_input = default.upscaler.inputs[0], box.upscaler.inputs[0]
+    torch.testing.assert_close(box_input[:, :, head:], default_input[:, :, head:], rtol=0, atol=0)
+    assert not torch.equal(box_input[:, :, :head], default_input[:, :, :head])

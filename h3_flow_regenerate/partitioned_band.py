@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import torch
 
-from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
+from .geometry import H3_DENSE_PATCH_CENTER_LATTICE, resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_stage import PartitionedTargetBandGeometry
 
 TARGET_BAND_HANDOFF_POLICY = "target_band_native_clean_shared_renoise_v1"
@@ -68,15 +68,22 @@ def target_band_padding_max_abs(video: torch.Tensor, geometry: PartitionedTarget
     return float(torch.stack(values).amax().item())
 
 
-def target_band_source_view(video: torch.Tensor, geometry: PartitionedTargetBandGeometry) -> torch.Tensor:
+def target_band_source_view(
+    video: torch.Tensor,
+    geometry: PartitionedTargetBandGeometry,
+    *,
+    lattice: str = H3_DENSE_PATCH_CENTER_LATTICE,
+) -> torch.Tensor:
     """Express a target-band tensor on the uniform reduced grid.
 
     Head frames are projected with H3's physical patch-lattice resample, the same
-    operator used for the protected prefix's reduced-grid carrier; tail frames are
-    their stored values.
+    operator and lattice used for the protected prefix's reduced-grid carrier and
+    the learned transfer; tail frames are their stored values.
     """
     _validate_video(video, geometry, "target-band video")
-    head = resize_spatial_5d_h3_patch_lattice(video[:, :, : geometry.head_t], geometry.source_h, geometry.source_w)
+    head = resize_spatial_5d_h3_patch_lattice(
+        video[:, :, : geometry.head_t], geometry.source_h, geometry.source_w, lattice=lattice
+    )
     return torch.cat((head.to(video), target_band_tail(video, geometry)), dim=2)
 
 

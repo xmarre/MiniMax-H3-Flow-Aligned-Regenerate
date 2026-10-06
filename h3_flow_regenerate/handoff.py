@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 from .geometry import (
+    H3_DENSE_PATCH_CENTER_LATTICE,
     normalize_target_geometry,
     pack_streams,
     resize_spatial_5d_h3_patch_lattice,
@@ -464,6 +465,7 @@ def refine_h3_flow_residual(
     target_w: int,
     seed: int,
     noise_scale: float = 1.0,
+    lattice: str = H3_DENSE_PATCH_CENTER_LATTICE,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Transport Gaussian noise and model drift in their respective domains.
 
@@ -491,7 +493,7 @@ def refine_h3_flow_residual(
         raise ValueError("dense drift transfer requires finite source residuals")
     gaussian, report = refine_h3_patch_lattice_residual(initial, target_h=target_h, target_w=target_w, seed=seed)
     drift = source - initial * noise_scale
-    target_drift = resize_spatial_5d_h3_patch_lattice(drift, target_h, target_w)
+    target_drift = resize_spatial_5d_h3_patch_lattice(drift, target_h, target_w, lattice=lattice)
     target = gaussian * noise_scale + target_drift
     if report["identity"]:
         target = source_residual.clone()
@@ -507,7 +509,7 @@ def refine_h3_flow_residual(
         normalized_gaussian_component_standard_if_initial_standard=True,
         gaussian_component_variance_if_initial_standard=noise_scale**2,
         gaussian_noise_scale=noise_scale,
-        drift_lattice="h3_dense_patch_center_lattice_v2",
+        drift_lattice=lattice,
         source_drift_rms=float(drift.square().mean().sqrt().item()),
         target_drift_rms=float(target_drift.square().mean().sqrt().item()),
         source_residual_rms=float(source.square().mean().sqrt().item()),
@@ -535,6 +537,7 @@ def build_handoff_state(
     initial_source_noise: torch.Tensor | None = None,
     model_noise_scale: float = 1.0,
     run_same_grid_handoff: bool = False,
+    drift_lattice: str = H3_DENSE_PATCH_CENTER_LATTICE,
 ) -> tuple[torch.Tensor, list[tuple[int, ...]]]:
     if len(source_shapes) != 2:
         raise ValueError("progressive H3 handoff requires exactly video and audio streams")
@@ -569,6 +572,7 @@ def build_handoff_state(
                 target_w=target_w,
                 seed=seed,
                 noise_scale=model_noise_scale,
+                lattice=drift_lattice,
             )
         else:
             noise, noise_report = refine_h3_patch_lattice_residual(

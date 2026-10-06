@@ -75,6 +75,7 @@ softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
 suffix_dc_bridge                 = true
 target_band_tokens               = 4
+transfer_lattice                 = h3_dense_patch_center_lattice_v2
 ```
 
 Flow defaults exact-prefix continuation to `same_grid_target_control`: low/probe

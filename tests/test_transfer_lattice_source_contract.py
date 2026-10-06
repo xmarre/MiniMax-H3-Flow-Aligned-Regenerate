@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from h3_flow_regenerate.geometry import resize_spatial_5d_h3_patch_lattice
-from h3_flow_regenerate.transfer_lattice import H3_TRANSFER_LATTICE
+from h3_flow_regenerate.transfer_lattice import H3_ROPE_BOX_TRANSFER_LATTICE, H3_TRANSFER_LATTICE
 
 
 @pytest.mark.parametrize(
@@ -34,3 +34,10 @@ def test_upscaler_and_authoritative_prefix_use_identical_coordinate_transport(so
     expected = resize_spatial_5d_h3_patch_lattice(value, *target)
     actual = module.resize_h3_patch_lattice(value, *target)
     torch.testing.assert_close(actual, expected, rtol=0, atol=1e-6)
+    # Older pinned upscalers predate the RoPE-box lattice; when present it must match too.
+    box = getattr(module, "H3_ROPE_BOX_LATTICE", None)
+    if box is not None:
+        assert box == H3_ROPE_BOX_TRANSFER_LATTICE
+        expected = resize_spatial_5d_h3_patch_lattice(value, *target, lattice=box)
+        actual = module.resize_h3_patch_lattice(value, *target, lattice=box)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=1e-6)

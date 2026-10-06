@@ -20,11 +20,13 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    PARTITIONED_TRANSFER_LATTICE_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
     apply_partitioned_diagnostic_controls,
     resolve_partitioned_suffix_dc_bridge,
     resolve_partitioned_target_band_tokens,
+    resolve_partitioned_transfer_lattice,
 )
 from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixDiagnosticHandoff,
@@ -33,6 +35,11 @@ from h3_flow_regenerate.partitioned_node import (
 from h3_flow_regenerate.partitioned_scheduler import (
     _apply_partitioned_exact_overlap_bridge,
     _apply_partitioned_suffix_dc_bridge,
+)
+from h3_flow_regenerate.transfer_lattice import (
+    H3_ROPE_BOX_TRANSFER_LATTICE,
+    H3_TRANSFER_LATTICE,
+    H3_TRANSFER_LATTICE_OPTIONS,
 )
 
 
@@ -58,9 +65,12 @@ def test_new_controls_are_appended_after_every_historical_widget():
     production = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]
     assert "suffix_dc_bridge" not in ordinary
     assert "target_band_tokens" not in ordinary
+    assert "transfer_lattice" not in ordinary
 
     keys = list(production)
-    assert keys[-3:] == ["video_guided_overlap_tokens", "suffix_dc_bridge", "target_band_tokens"]
+    assert keys[-4:] == ["video_guided_overlap_tokens", "suffix_dc_bridge", "target_band_tokens", "transfer_lattice"]
+    assert production["transfer_lattice"][0] == list(H3_TRANSFER_LATTICE_OPTIONS)
+    assert production["transfer_lattice"][1]["default"] == H3_TRANSFER_LATTICE
     assert production["suffix_dc_bridge"][0] == "BOOLEAN"
     assert production["suffix_dc_bridge"][1]["default"] is True
     assert production["target_band_tokens"][0] == "INT"
@@ -159,3 +169,20 @@ def test_disabled_suffix_dc_bridge_leaves_state_and_clean_untouched(bridge):
     assert metrics["suffix_dc_bridge_corrected_tokens"] == 0
     assert metrics["suffix_dc_bridge_delta_rms"] == 0.0
     assert metrics["suffix_dc_bridge_prefix_t"] == 2
+
+
+def test_transfer_lattice_leaf_is_absent_by_default_and_explicit_only_for_rope_box():
+    transformer, fields = _apply()
+    assert PARTITIONED_TRANSFER_LATTICE_KEY not in transformer
+    assert "transfer_lattice" not in fields
+    assert resolve_partitioned_transfer_lattice(transformer) == H3_TRANSFER_LATTICE
+
+    transformer, fields = _apply(transfer_lattice=H3_ROPE_BOX_TRANSFER_LATTICE)
+    assert transformer[PARTITIONED_TRANSFER_LATTICE_KEY] == H3_ROPE_BOX_TRANSFER_LATTICE
+    assert fields["transfer_lattice"] == H3_ROPE_BOX_TRANSFER_LATTICE
+    assert resolve_partitioned_transfer_lattice(transformer) == H3_ROPE_BOX_TRANSFER_LATTICE
+
+    transformer, _fields = _apply(transfer_lattice=H3_TRANSFER_LATTICE)
+    assert PARTITIONED_TRANSFER_LATTICE_KEY not in transformer
+    with pytest.raises(ValueError, match="transport lattice"):
+        _apply(transfer_lattice="half_pixel_latent_v1")

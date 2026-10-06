@@ -130,6 +130,7 @@ from .partitioned_diagnostics import (
     resolve_partitioned_audio_guided_overlap_ticks,
     resolve_partitioned_suffix_dc_bridge,
     resolve_partitioned_target_band_tokens,
+    resolve_partitioned_transfer_lattice,
     resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_prefix import PARTITIONED_NATIVE_CARRIER_SOURCE, PARTITIONED_NATIVE_CARRIER_TARGET
@@ -1551,6 +1552,7 @@ def _target_band_source_views(
     *,
     target_shapes: list[tuple[int, ...]],
     source_shapes: list[tuple[int, ...]],
+    lattice: str = H3_TRANSFER_LATTICE,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
     """Split low/probe results into the band's clean prediction and reduced-grid views.
 
@@ -1566,8 +1568,10 @@ def _target_band_source_views(
     if clean_padding != 0.0:
         raise RuntimeError("target-band probe prediction wrote outside its reduced-grid storage windows")
     band_clean = clean_video[:, :, band.protected_t : band.head_t].detach().clone()
-    source_raw, raw_shapes = pack_streams((target_band_source_view(raw_video, band), raw_audio))
-    source_clean, clean_shapes = pack_streams((target_band_source_view(clean_video, band), clean_audio))
+    source_raw, raw_shapes = pack_streams((target_band_source_view(raw_video, band, lattice=lattice), raw_audio))
+    source_clean, clean_shapes = pack_streams(
+        (target_band_source_view(clean_video, band, lattice=lattice), clean_audio)
+    )
     if raw_shapes != source_shapes or clean_shapes != source_shapes:
         raise RuntimeError("target-band reduced-grid view does not match the source geometry")
     receipt = {
@@ -3276,6 +3280,7 @@ def run_partitioned_progressive(
         )
     )
     suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
+    transfer_lattice = resolve_partitioned_transfer_lattice(initial_transformer)
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
     target_band_tokens = resolve_partitioned_target_band_tokens(initial_transformer) if band_mode else 0
     if (
@@ -3522,7 +3527,7 @@ def run_partitioned_progressive(
         spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
     ):
-        transfer_lattice_provider = H3PatchLatticeTransferProvider(config.learned_upscaler)
+        transfer_lattice_provider = H3PatchLatticeTransferProvider(config.learned_upscaler, lattice=transfer_lattice)
     target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
     source_video_noise = deterministic_video_noise(
         (*target_video_noise.shape[:-2], source_h, source_w),
@@ -3537,6 +3542,7 @@ def run_partitioned_progressive(
         stage_plan.prefix.to(low_video),
         source_h,
         source_w,
+        lattice=transfer_lattice,
     )
     if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
         raise RuntimeError("H3 physical prefix resample changed temporal ownership")
@@ -3549,7 +3555,7 @@ def run_partitioned_progressive(
     low_latent_image = pack_streams((low_video, low_audio))[0]
     binding.metrics.event(
         "partitioned_prefix_source_resample",
-        policy=H3_TRANSFER_LATTICE,
+        policy=transfer_lattice,
         prefix_source="authoritative_exact_target_prefix",
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
@@ -3743,7 +3749,7 @@ def run_partitioned_progressive(
             low_sigmas,
             source_shapes,
             sampler_shapes=target_shapes,
-            video_view=lambda video: target_band_source_view(video, target_band),
+            video_view=lambda video: target_band_source_view(video, target_band, lattice=transfer_lattice),
         )
     try:
         _reset_guider_conds(guider, template=conditioning_template)
@@ -4143,6 +4149,7 @@ def run_partitioned_progressive(
                 target_band,
                 target_shapes=target_shapes,
                 source_shapes=source_shapes,
+                lattice=transfer_lattice,
             )
             binding.metrics.event("partitioned_target_band_low_state", **band_low_receipt)
 
@@ -4577,6 +4584,7 @@ def run_partitioned_progressive(
             initial_source_noise=source_video_noise if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None,
             model_noise_scale=model_noise_scale if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0,
             run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+            drift_lattice=transfer_lattice,
         )
         if spatial_transfer_control is not None:
             if spatial_transfer_control.calls != 1:
@@ -4813,8 +4821,9 @@ def run_partitioned_progressive(
         if isinstance(effective_upscaler, H3PatchLatticeTransferProvider):
             binding.metrics.event(
                 "partitioned_transfer_lattice",
-                policy=H3_TRANSFER_LATTICE,
-                prefix_projection_policy=H3_TRANSFER_LATTICE,
+                policy=effective_upscaler.lattice,
+                prefix_projection_policy=transfer_lattice,
+                vdn_temporal_tap_lattice=H3_TRANSFER_LATTICE,
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
                 resample_position="encoder_to_decoder",

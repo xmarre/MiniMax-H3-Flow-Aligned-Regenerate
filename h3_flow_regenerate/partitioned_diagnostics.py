@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
     configured_audio_guided_overlap_ticks,
     validate_audio_guided_overlap_ticks,
 )
+from .geometry import H3_DENSE_PATCH_CENTER_LATTICE, normalize_h3_dense_transport_lattice
 from .video_guided_overlap import validate_video_guided_overlap_tokens
 
 PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY = "h3_flow_partitioned_vdn_linear_diagnostic_v1"
@@ -123,6 +124,11 @@ PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
 PARTITIONED_TARGET_BAND_TOKENS_KEY = "h3_flow_partitioned_target_band_tokens_v1"
 PARTITIONED_TARGET_BAND_TOKENS_DEFAULT = 4
 
+# Cross-grid dense-cell lattice shared by the source carrier projection, the
+# learned transfer and reduced-grid views. Absence is the historical
+# patch-center contract; the leaf is published only for the RoPE-box lattice.
+PARTITIONED_TRANSFER_LATTICE_KEY = "h3_flow_partitioned_transfer_lattice_v1"
+
 # Absence is the historical contract: the one-token suffix DC bridge is active.
 # The leaf is published only when a node explicitly disables the bridge.
 PARTITIONED_SUFFIX_DC_BRIDGE_KEY = "h3_flow_partitioned_suffix_dc_bridge_v1"
@@ -189,6 +195,12 @@ def validate_target_band_tokens(value: Any, *, source: str) -> int:
     if type(value) is not int or value < 1:
         raise ValueError(f"{source} must be a positive integer number of H3 temporal latent tokens, got {value!r}")
     return value
+
+
+def resolve_partitioned_transfer_lattice(transformer_options: dict[str, Any]) -> str:
+    return normalize_h3_dense_transport_lattice(
+        transformer_options.get(PARTITIONED_TRANSFER_LATTICE_KEY, H3_DENSE_PATCH_CENTER_LATTICE)
+    )
 
 
 def resolve_partitioned_target_band_tokens(transformer_options: dict[str, Any]) -> int:
@@ -400,6 +412,7 @@ def apply_partitioned_diagnostic_controls(
     video_guided_overlap_tokens: int = 0,
     suffix_dc_bridge: bool = True,
     target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+    transfer_lattice: str = H3_DENSE_PATCH_CENTER_LATTICE,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -432,6 +445,7 @@ def apply_partitioned_diagnostic_controls(
     if type(suffix_dc_bridge) is not bool:
         raise TypeError("suffix_dc_bridge must be a boolean")
     band_tokens = validate_target_band_tokens(target_band_tokens, source="target_band_tokens")
+    lattice = normalize_h3_dense_transport_lattice(transfer_lattice)
     if (
         spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -511,6 +525,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
     else:
         transformer_options.pop(PARTITIONED_TARGET_BAND_TOKENS_KEY, None)
+    if lattice == H3_DENSE_PATCH_CENTER_LATTICE:
+        transformer_options.pop(PARTITIONED_TRANSFER_LATTICE_KEY, None)
+    else:
+        transformer_options[PARTITIONED_TRANSFER_LATTICE_KEY] = lattice
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -556,6 +574,8 @@ def apply_partitioned_diagnostic_controls(
             fields["suffix_dc_bridge"] = False
         if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
             fields["target_band_tokens"] = band_tokens
+        if lattice != H3_DENSE_PATCH_CENTER_LATTICE:
+            fields["transfer_lattice"] = lattice
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -614,6 +634,7 @@ __all__ = [
     "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
     "PARTITIONED_TARGET_BAND_TOKENS_DEFAULT",
     "PARTITIONED_TARGET_BAND_TOKENS_KEY",
+    "PARTITIONED_TRANSFER_LATTICE_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -648,6 +669,7 @@ __all__ = [
     "resolve_partitioned_audio_guided_overlap_ticks",
     "resolve_partitioned_suffix_dc_bridge",
     "resolve_partitioned_target_band_tokens",
+    "resolve_partitioned_transfer_lattice",
     "resolve_partitioned_video_guided_overlap_tokens",
     "validate_target_band_tokens",
 ]
