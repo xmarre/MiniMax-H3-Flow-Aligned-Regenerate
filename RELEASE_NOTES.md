@@ -10,6 +10,9 @@
 - The replay preserves the preceding-window crop needed to reproduce the
   prefix/band blend. Selecting relative frame labels now leaves the measured
   sample range unchanged. Pre-join frames are marked as discarded chunk context.
+- Audit reports use `local_target_band_native_window_audit_v2` to identify the
+  wider crop and multiple shared-token/blend intervals. Existing v1 reports are
+  unchanged; saved input bundles keep their original evidence schema.
 
 - Local Boundary Audit measures adjacent-frame geometry and RGB/luminance
   changes for every saved stage, and compares temporal pixel increments across

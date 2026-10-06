@@ -348,6 +348,7 @@ def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(b
 
     rng = torch.random.get_rng_state().clone()
     report = audit.audit_local_boundary(vae, directory, 175, process_out)
+    assert report["policy"] == "local_target_band_native_window_audit_v2"
     assert report["extra_vae_calls"] == 5
     assert report["temporal_blend_reproduced_for_measured_frames"] is True
     assert report["decoded_pixels_saved"] is False

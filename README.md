@@ -339,6 +339,9 @@ compare against the prior chunk's retained pixels. Frames labeled before the
 join are decoded chunk context discarded by assembly. Setting the
 join frame to zero changes only labels. Crop length grows with band length;
 VAE call count alone does not determine replay time.
+Reports use `local_target_band_native_window_audit_v2`: the plan can contain
+multiple shared-token pairs and blend intervals. Older v1 reports describe the
+earlier two-window crop and remain historical evidence for their measured range.
 
 | Node | Purpose |
 |---|---|

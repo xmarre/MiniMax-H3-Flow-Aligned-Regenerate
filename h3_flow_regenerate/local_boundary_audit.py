@@ -348,7 +348,7 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
     begin, end = plan["measured_local_frames"]
     labels = list(range(plan["decoded_origin_frame"] + begin, plan["decoded_origin_frame"] + end))
     report = {
-        "policy": "local_target_band_two_window_audit_v1",
+        "policy": "local_target_band_native_window_audit_v2",
         "scope": scope,
         "fps": 24,
         **identity,
