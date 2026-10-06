@@ -348,7 +348,9 @@
         "learned_3d",
         "same_grid_target_control",
         "normal",
-        6
+        6,
+        true,
+        4
       ],
       "title": "MiniMax H3 Partitioned Exact-Prefix Handoff"
     },

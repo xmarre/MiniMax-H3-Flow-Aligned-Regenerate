@@ -5,6 +5,7 @@ import json
 import pytest
 import torch
 
+import h3_flow_regenerate.partitioned_runtime_gate as gate
 from h3_flow_regenerate.boundary_content_diagnostics import measure_learned_transfer_residual_diagnostic
 from h3_flow_regenerate.frame_gauge import FRAME_GAUGE_POLICY_VERSION
 from h3_flow_regenerate.high_stage_boundary import (
@@ -2359,4 +2360,118 @@ def test_runtime_gate_rejects_exact_overlap_fallback_that_extrapolates_later_suf
             metrics,
             _log(),
             expected_frame_gauge_mode="on-rejected",
+        )
+
+
+def _install_disabled_dc_overlap_receipt(arm):
+    metrics = _install_dc_overlap_receipt(arm)
+    transfer = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_transfer")
+    frame = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_frame_gauge")
+    learned = torch.zeros(1, 24, 7, 8, 10)
+    exact = learned[:, :, :2].clone()
+    exact[:, :, -1] += 0.25
+    state, clean, representation, dc = _apply_partitioned_exact_overlap_bridge(
+        learned, learned, exact, sigma=0.8, dc_enabled=False
+    )
+    assert torch.equal(state, learned) and torch.equal(clean, learned)
+    transfer.update(
+        **dc,
+        suffix_dc_bridge_requested=False,
+        suffix_dc_bridge_policy="disabled",
+        suffix_dc_bridge_state_mapping="disabled",
+    )
+    overlap = transfer["partitioned_exact_overlap_bridge"]
+    overlap.update(
+        **representation,
+        applied=False,
+        state_mapping="disabled_or_noop",
+        suffix_support_tokens=0,
+        dc_support_policy="disabled",
+        dc_support_tokens=0,
+        dc_temporal_weights=[],
+    )
+    frame["exact_overlap_fallback_applied"] = False
+    return metrics
+
+
+@pytest.mark.parametrize("arm", ["shadow", "veto", "guidance", "inactive"])
+def test_runtime_gate_accepts_disabled_suffix_dc_bridge_receipts(arm):
+    expected = "off" if arm == "inactive" else "on-rejected" if arm in {"veto", "guidance"} else "on-shadow_only"
+    report = validate_partitioned_runtime_evidence(
+        _install_disabled_dc_overlap_receipt(arm), _log(), expected_frame_gauge_mode=expected
+    )
+    assert report.frame_gauge_verified
+
+
+@pytest.mark.parametrize(
+    ("location", "field", "value", "error"),
+    [
+        ("transfer", "suffix_dc_bridge_enabled", True, "reported an applied channel offset"),
+        ("transfer", "suffix_dc_bridge_delta_rms", 0.2, "reported an applied channel offset"),
+        ("transfer", "suffix_dc_bridge_policy", "one_token_spatial_mean_v1", "DC policy does not match"),
+        ("transfer", "suffix_dc_bridge_corrected_tokens", 1, "DC support does not match"),
+        ("transfer", "suffix_dc_bridge_state_mapping", "conditional_renoise_affine", "changed DC routing"),
+        ("transfer", "suffix_dc_bridge_requested", "no", "request receipt is malformed"),
+        ("overlap", "dc_support_tokens", 1, "reported exact-overlap channel-mean support"),
+        ("overlap", "dc_temporal_weights", [1.0], "reported exact-overlap channel-mean support"),
+        ("overlap", "dc_support_policy", "first_suffix_only_v1", "reported exact-overlap channel-mean support"),
+    ],
+)
+def test_runtime_gate_rejects_inconsistent_disabled_suffix_dc_bridge(location, field, value, error):
+    metrics = _install_disabled_dc_overlap_receipt("guidance")
+    transfer = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_transfer")
+    targets = {"transfer": transfer, "overlap": transfer["partitioned_exact_overlap_bridge"]}
+    targets[location][field] = value
+    with pytest.raises(RuntimeGateError, match=error):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        gate.PARTITIONED_EXACT_OVERLAP_POLICY,
+        gate.PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY,
+        gate.PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY,
+    ],
+)
+def test_runtime_gate_rejects_disabled_suffix_dc_bridge_on_non_dc_only_overlap(policy):
+    metrics = _install_disabled_dc_overlap_receipt("guidance")
+    transfer = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_transfer")
+    frame = next(e["fields"] for e in metrics["events"] if e["kind"] == "partitioned_frame_gauge")
+    transfer["partitioned_exact_overlap_bridge"]["policy"] = policy
+    frame["exact_overlap_fallback_policy"] = policy
+    with pytest.raises(RuntimeGateError, match="supported only on the baseline and DC-only"):
+        validate_partitioned_runtime_evidence(metrics, _log(), expected_frame_gauge_mode="on-rejected")
+
+
+def test_gate_expects_target_band_boundary_queries_at_the_band_tail_edge():
+    metrics = _high_attention_metrics()
+    events = metrics["events"]
+    events[0]["fields"]["target_band_tokens"] = 2
+    for event in events:
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] in {"low", "probe"}:
+            event["fields"].update(prefix_t=4, query_frames=[4, 5])
+    validate_partitioned_runtime_evidence(
+        metrics,
+        _log(),
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+    )
+
+    # A band run whose low-stage boundary stays at the protected prefix is rejected.
+    stale = _high_attention_metrics()
+    stale["events"][0]["fields"]["target_band_tokens"] = 2
+    with pytest.raises(RuntimeGateError, match="receipt drifted"):
+        validate_partitioned_runtime_evidence(
+            stale,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+
+    malformed = _high_attention_metrics()
+    malformed["events"][0]["fields"]["target_band_tokens"] = "2"
+    with pytest.raises(RuntimeGateError, match="target-band width is malformed"):
+        validate_partitioned_runtime_evidence(
+            malformed,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
         )

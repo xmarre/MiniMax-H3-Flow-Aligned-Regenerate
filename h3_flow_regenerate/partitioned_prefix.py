@@ -19,6 +19,10 @@ import torch
 PARTITIONED_PREFIX_KEY = "h3_flow_partitioned_exact_prefix_v1"
 PARTITIONED_PREFIX_API = 1
 PARTITIONED_PREFIX_TOPOLOGY = "target_prefix_source_suffix"
+# Native (pre-partition) carrier grids. The source carrier is historical and is
+# implied when the contract omits ``native_carrier_grid``.
+PARTITIONED_NATIVE_CARRIER_SOURCE = "source"
+PARTITIONED_NATIVE_CARRIER_TARGET = "target"
 
 
 def _positive_int(value: int, name: str) -> int:
@@ -51,6 +55,7 @@ class PartitionedExactPrefixPlan:
     target_grid_h: int
     target_grid_w: int
     same_grid_control: bool = False
+    native_carrier_grid: str = PARTITIONED_NATIVE_CARRIER_SOURCE
 
     def __post_init__(self) -> None:
         _positive_int(self.video_start, "video_start")
@@ -70,6 +75,16 @@ class PartitionedExactPrefixPlan:
                 raise ValueError("same-grid control requires equal source and target grids")
         elif self.source_rows >= self.target_rows:
             raise ValueError("partitioned exact-prefix plan requires a strictly smaller source grid")
+        if self.native_carrier_grid not in (PARTITIONED_NATIVE_CARRIER_SOURCE, PARTITIONED_NATIVE_CARRIER_TARGET):
+            raise ValueError(f"unsupported partitioned native carrier grid {self.native_carrier_grid!r}")
+        if self.native_carrier_grid == PARTITIONED_NATIVE_CARRIER_TARGET and self.same_grid_control:
+            raise ValueError("a target native carrier requires heterogeneous spatial domains")
+
+    @property
+    def native_rows_per_frame(self) -> int:
+        if self.native_carrier_grid == PARTITIONED_NATIVE_CARRIER_TARGET:
+            return self.target_rows
+        return self.source_rows
 
     @property
     def source_rows(self) -> int:
@@ -130,6 +145,11 @@ class PartitionedExactPrefixPlan:
             "generated_suffix_queries_preserved": True,
             "heterogeneous_spatial_domains": not self.same_grid_control,
         }
+        if self.native_carrier_grid != PARTITIONED_NATIVE_CARRIER_SOURCE:
+            # Published only for the target carrier so historical contracts and
+            # their semantic digests stay byte-identical.
+            payload["native_carrier_grid"] = self.native_carrier_grid
+            payload["native_carrier_rows_per_frame"] = self.native_rows_per_frame
         if include_digest:
             payload["semantic_digest"] = _digest(payload)
         return payload
@@ -159,9 +179,20 @@ def validate_partitioned_contract(
         contract["source_grid_h"] == contract["target_grid_h"]
         and contract["source_grid_w"] == contract["target_grid_w"]
     )
+    if "native_carrier_grid" in contract:
+        carrier = contract["native_carrier_grid"]
+        if carrier != PARTITIONED_NATIVE_CARRIER_TARGET:
+            raise ValueError("partitioned exact-prefix publishes native_carrier_grid only for the target carrier")
+        if type(contract.get("native_carrier_rows_per_frame")) is not int:
+            raise ValueError("partitioned exact-prefix native_carrier_rows_per_frame must be an integer")
+    else:
+        if "native_carrier_rows_per_frame" in contract:
+            raise ValueError("partitioned exact-prefix native_carrier_rows_per_frame requires native_carrier_grid")
+        carrier = PARTITIONED_NATIVE_CARRIER_SOURCE
     plan = PartitionedExactPrefixPlan(
         **{name: contract[name] for name in names},
         same_grid_control=same_grid_control,
+        native_carrier_grid=carrier,
     )
     canonical = plan.to_contract()
     for name in (
@@ -176,9 +207,11 @@ def validate_partitioned_contract(
         "exact_prefix_queries_preserved",
         "generated_suffix_queries_preserved",
         "heterogeneous_spatial_domains",
+        "native_carrier_grid",
+        "native_carrier_rows_per_frame",
         "semantic_digest",
     ):
-        if contract.get(name) != canonical[name]:
+        if contract.get(name) != canonical.get(name):
             raise ValueError(f"partitioned exact-prefix contract field {name!r} is inconsistent")
     if sequence_rows is not None and plan.sequence_rows != int(sequence_rows):
         raise ValueError("partitioned exact-prefix contract does not match the current sequence")
@@ -296,6 +329,8 @@ def dense_partition_oracle(
 
 
 __all__ = [
+    "PARTITIONED_NATIVE_CARRIER_SOURCE",
+    "PARTITIONED_NATIVE_CARRIER_TARGET",
     "PARTITIONED_PREFIX_API",
     "PARTITIONED_PREFIX_KEY",
     "PARTITIONED_PREFIX_TOPOLOGY",

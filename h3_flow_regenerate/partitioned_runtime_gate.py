@@ -2451,11 +2451,32 @@ def _validate_frame_gauge_transfer(
         and overlap.get("policy")
         in {PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_POLICY, PARTITIONED_EXACT_OVERLAP_COUPLED_POLICY}
     )
+    # Receipts predating the selector omit the field; the bridge was then always requested.
+    dc_requested = transfer.get("suffix_dc_bridge_requested", True)
+    _require(type(dc_requested) is bool, "partitioned suffix DC bridge request receipt is malformed")
+    if not dc_requested:
+        _require(
+            not accepted and (overlap is None or dc_policy),
+            "a disabled suffix DC bridge is supported only on the baseline and DC-only exact-overlap arms",
+        )
+        _require(
+            transfer.get("suffix_dc_bridge_enabled") is False
+            and _finite_number(transfer.get("suffix_dc_bridge_delta_rms")) == 0.0,
+            "disabled suffix DC bridge reported an applied channel offset",
+        )
     expected_dc_policy = (
-        "successor_safe_linear_v2" if successor_safe_overlap or coupled_requested else "one_token_spatial_mean_v1"
+        "disabled"
+        if not dc_requested
+        else "successor_safe_linear_v2"
+        if successor_safe_overlap or coupled_requested
+        else "one_token_spatial_mean_v1"
     )
     expected_dc_tokens = (
-        len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS) if successor_safe_overlap or coupled_requested else 1
+        0
+        if not dc_requested
+        else len(PARTITIONED_EXACT_OVERLAP_SUCCESSOR_SAFE_WEIGHTS)
+        if successor_safe_overlap or coupled_requested
+        else 1
     )
     _require(
         transfer.get("suffix_dc_bridge_policy") == expected_dc_policy,
@@ -2466,7 +2487,9 @@ def _validate_frame_gauge_transfer(
         "frame-gauge transfer DC support does not match the selected exact-overlap arm",
     )
     overlap_requested = isinstance(overlap, dict) and overlap.get("requested") is True
-    expected_mapping = "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
+    expected_mapping = (
+        "disabled" if not dc_requested else "pre_renoise_clean_operand" if accepted else "conditional_renoise_affine"
+    )
     expected_clean_source = (
         "actual_provider"
         if accepted
@@ -2508,15 +2531,24 @@ def _validate_frame_gauge_transfer(
                 delta_rms >= 0.0 and applied is (requested and delta_rms > 0.0),
                 "DC-only exact-overlap application differs from its measured offset",
             )
-            _require(
-                transfer.get("suffix_dc_bridge_enabled") is True
-                and _close_number(transfer.get("suffix_dc_bridge_first_weight"), 1.0, atol=1e-12)
-                and _close_number(transfer.get("suffix_dc_bridge_last_weight"), 1.0, atol=1e-12)
-                and overlap.get("dc_support_policy") == "first_suffix_only_v1"
-                and overlap.get("dc_support_tokens") == 1
-                and overlap.get("dc_temporal_weights") == [1.0],
-                "DC-only exact-overlap channel-mean support drifted",
-            )
+            if dc_requested:
+                _require(
+                    transfer.get("suffix_dc_bridge_enabled") is True
+                    and _close_number(transfer.get("suffix_dc_bridge_first_weight"), 1.0, atol=1e-12)
+                    and _close_number(transfer.get("suffix_dc_bridge_last_weight"), 1.0, atol=1e-12)
+                    and overlap.get("dc_support_policy") == "first_suffix_only_v1"
+                    and overlap.get("dc_support_tokens") == 1
+                    and overlap.get("dc_temporal_weights") == [1.0],
+                    "DC-only exact-overlap channel-mean support drifted",
+                )
+            else:
+                _require(
+                    overlap.get("dc_support_policy") == "disabled"
+                    and overlap.get("dc_support_tokens") == 0
+                    and overlap.get("dc_temporal_weights") == []
+                    and applied is False,
+                    "disabled suffix DC bridge reported exact-overlap channel-mean support",
+                )
             _require(
                 overlap.get("structural_bridge_retired") is True
                 and overlap.get("structural_support_tokens") == 0
@@ -4180,9 +4212,21 @@ def validate_partitioned_runtime_evidence(
             len(boundary_query_events) == partitioned_actual,
             "VDN boundary-query policy did not reach every actual partitioned model call",
         )
-        expected_prefix_t = plan_fields.get("prefix_temporal_length")
+        protected_prefix_t = plan_fields.get("prefix_temporal_length")
+        # Target-band continuation partitions low/probe at the band/tail edge;
+        # receipts predating the band record no band tokens.
+        target_band_tokens = plan_fields.get("target_band_tokens", 0)
+        _require(
+            type(target_band_tokens) is int and target_band_tokens >= 0,
+            "partitioned stage plan target-band width is malformed",
+        )
         for fields in boundary_query_events:
             query_frames = fields.get("query_frames")
+            expected_prefix_t = (
+                protected_prefix_t + target_band_tokens
+                if target_band_tokens and fields.get("stage") in {"low", "probe"}
+                else protected_prefix_t
+            )
             _require(
                 fields.get("policy") == expected_boundary_query_policy
                 and fields.get("prefix_t") == expected_prefix_t

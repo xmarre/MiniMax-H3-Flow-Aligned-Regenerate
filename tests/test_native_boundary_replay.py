@@ -129,6 +129,34 @@ def test_replay_rejects_byte_corruption_before_decoder_import(bundle):
 
 
 @pytest.mark.parametrize(
+    "override",
+    [
+        {"target_band_tokens": 0},
+        {"target_band_transfer_start_t": 16.0},
+        {"target_band_transfer_start_t": 22},
+        {"full_video_snapshots": False},
+        {"low_probe_native_carrier_decodable": True},
+    ],
+)
+def test_replay_rejects_malformed_target_band_ownership(bundle, override):
+    directory, manifest = bundle
+    manifest["metadata"].update(
+        {
+            "provider_clean_provenance": "actual_learned_provider_before_target_band_splice",
+            "target_band_tokens": 4,
+            "target_band_transfer_start_t": 16,
+            "full_video_snapshots": True,
+            "full_video_temporal_start_t": 0,
+            "low_probe_native_carrier_decodable": False,
+            **override,
+        }
+    )
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="target-band evidence contract"):
+        REPLAY["load_bundle"](directory)
+
+
+@pytest.mark.parametrize(
     "mutation,reason",
     [
         ("nonfinite", "non-finite"),

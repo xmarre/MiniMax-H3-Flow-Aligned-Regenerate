@@ -303,6 +303,7 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
         sigma=0.75,
         base_model=SimpleNamespace(model_sampling=SimpleNamespace(noise_scale=1.7)),
         stage_plan=SimpleNamespace(prefix_t=1),
+        target_band=None,
         binding=SimpleNamespace(metrics=SimpleNamespace(event=lambda *a, **kw: events.append((a, kw)))),
         effective_upscaler=DenseProvider(),
         target_h=8,

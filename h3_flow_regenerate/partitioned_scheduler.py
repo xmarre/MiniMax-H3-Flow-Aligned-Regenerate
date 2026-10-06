@@ -59,6 +59,12 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .partitioned_band import (
+    pack_target_band_video,
+    target_band_padding_max_abs,
+    target_band_source_view,
+    target_band_target_preview,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -96,6 +102,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -120,12 +127,16 @@ from .partitioned_diagnostics import (
     normalize_vdn_temporal_carrier_policy,
     resolve_partitioned_audio_guided_overlap_mode,
     resolve_partitioned_audio_guided_overlap_ticks,
+    resolve_partitioned_suffix_dc_bridge,
+    resolve_partitioned_target_band_tokens,
     resolve_partitioned_video_guided_overlap_tokens,
 )
+from .partitioned_prefix import PARTITIONED_NATIVE_CARRIER_SOURCE, PARTITIONED_NATIVE_CARRIER_TARGET
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     PartitionedStagePlan,
     PartitionedStageRuntime,
+    PartitionedTargetBandGeometry,
     build_partitioned_stage_plan,
     tensor_sha256,
 )
@@ -763,7 +774,7 @@ def _select_source_uniform_shadow_clean_video(
 
 
 @contextlib.contextmanager
-def _partitioned_stage_contract(guider: Any, plan, metrics):
+def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
         raise RuntimeError("partitioned exact-prefix requires mutable model options")
@@ -827,6 +838,7 @@ def _partitioned_stage_contract(guider: Any, plan, metrics):
         ),
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
+        target_band=target_band,
     )
     try:
         yield
@@ -1016,6 +1028,7 @@ def _validate_partitioned_vdn_compat(
     required_linear_diagnostic: str = PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     required_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+    required_native_carrier: str = PARTITIONED_NATIVE_CARRIER_SOURCE,
 ) -> str | None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
@@ -1049,6 +1062,13 @@ def _validate_partitioned_vdn_compat(
         if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
             raise PartitionedPreflightUnsupported(
                 f"VDN partitioned external-sequence API {VDN_PARTITIONED_SEQUENCE_API} is unavailable"
+            )
+        if required_native_carrier != PARTITIONED_NATIVE_CARRIER_SOURCE and required_native_carrier not in tuple(
+            getattr(owner, "_vdn_partitioned_native_carrier_grids", ())
+        ):
+            raise PartitionedPreflightUnsupported(
+                "progressive_target_band requires a VDN-H3-Plus release that accepts a "
+                f"{required_native_carrier!r} native partition carrier"
             )
         if (
             required_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -1406,6 +1426,214 @@ def _validate_partitioned_sol_compat(guider: Any) -> None:
         )
 
 
+# Spatial-stage controls whose continuation performs a real learned spatial transfer.
+_LEARNED_TRANSFER_SPATIAL_STAGES = frozenset(
+    {PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_TARGET_BAND}
+)
+
+
+def _validate_target_band_configuration(
+    *,
+    handoff_transfer_control: str,
+    vdn_temporal_carrier_policy: str,
+    prefix_transformer_context: str,
+    low_probe_execution_source: str,
+    audio_handoff_source: str,
+    av_handoff_source: str,
+    guidance_trajectory_source: str,
+    residual_mode: str,
+    model_options: Any,
+) -> None:
+    """Reject selector combinations that progressive_target_band does not implement."""
+    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
+
+    unsupported = []
+    if handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
+        unsupported.append("handoff_transfer_control must be 'learned_3d'")
+    if vdn_temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        unsupported.append(f"vdn_temporal_carrier_policy must be {PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE!r}")
+    if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
+        unsupported.append(f"prefix_transformer_context must be {PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT!r}")
+    if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
+        unsupported.append(
+            f"low_probe_execution_source must be {PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW!r}"
+        )
+    if (
+        audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+        or av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+        or guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    ):
+        unsupported.append("audio, AV and guidance handoff sources must be the main partitioned sources")
+    if residual_mode not in {"off", "measure"}:
+        unsupported.append("frame_gauge_residual_mode must be 'off' or 'measure'")
+    witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION) if isinstance(model_options, dict) else None
+    if witness_requested(witness_directory):
+        unsupported.append("capture_boundary_witness must be disabled")
+    if unsupported:
+        raise PartitionedPreflightUnsupported("progressive_target_band requires: " + "; ".join(unsupported))
+
+
+def _target_band_low_stage_inputs(
+    band: PartitionedTargetBandGeometry,
+    *,
+    noise: torch.Tensor,
+    source_video_noise: torch.Tensor,
+    latent_image: torch.Tensor,
+    source_latent_image: torch.Tensor,
+    denoise_mask: torch.Tensor,
+    source_mask: torch.Tensor,
+    target_shapes: list[tuple[int, ...]],
+    source_shapes: list[tuple[int, ...]],
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build the low/probe sampler noise, latent and mask in the target-band layout.
+
+    Band frames take the target-grid sampler noise that same-grid control would
+    use for those frames; tail frames take the reduced-grid noise that
+    progressive_low_to_high would use. Padding has zero noise, zero latent and a
+    zero (protected) mask. Stochastic samplers may write raw padding; inpainting
+    masks it before model calls and the reduced-grid handoff view discards it.
+    """
+    head = band.head_t
+    target_video_noise, target_audio_noise = unpack_streams(noise, target_shapes)
+    band_noise = deterministic_video_noise(
+        tuple(target_video_noise.shape),
+        seed=int(seed),
+        device=target_video_noise.device,
+        dtype=target_video_noise.dtype,
+    )
+    low_noise = pack_streams(
+        (
+            pack_target_band_video(band_noise[:, :, :head], source_video_noise[:, :, head:], band),
+            target_audio_noise,
+        )
+    )[0]
+
+    target_latent_video, target_latent_audio = unpack_streams(latent_image, target_shapes)
+    source_latent_video, _ = unpack_streams(source_latent_image, source_shapes)
+    low_latent_image = pack_streams(
+        (
+            pack_target_band_video(target_latent_video[:, :, :head], source_latent_video[:, :, head:], band),
+            target_latent_audio,
+        )
+    )[0]
+
+    target_mask_video, target_mask_audio = unpack_streams(denoise_mask, target_shapes)
+    source_mask_video, _ = unpack_streams(source_mask, source_shapes)
+    if not bool((target_mask_video[:, :, band.protected_t : head] == 1).all().item()) or not bool(
+        (source_mask_video[:, :, head:] == 1).all().item()
+    ):
+        raise PartitionedPreflightUnsupported("progressive_target_band requires fully generated band and tail tokens")
+    low_mask = pack_streams(
+        (
+            pack_target_band_video(target_mask_video[:, :, :head], source_mask_video[:, :, head:], band),
+            target_mask_audio,
+        )
+    )[0]
+    return low_noise, low_latent_image, low_mask
+
+
+def _target_band_preview_packed(
+    packed: torch.Tensor,
+    band: PartitionedTargetBandGeometry,
+    target_shapes: list[tuple[int, ...]],
+) -> torch.Tensor:
+    video, audio = unpack_streams(packed, target_shapes)
+    return pack_streams((target_band_target_preview(video, band), audio))[0]
+
+
+def _target_band_source_views(
+    raw: torch.Tensor,
+    clean: torch.Tensor,
+    band: PartitionedTargetBandGeometry,
+    *,
+    target_shapes: list[tuple[int, ...]],
+    source_shapes: list[tuple[int, ...]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Split low/probe results into identity band tensors and reduced-grid views.
+
+    The returned packed views are uniform reduced-grid tensors, so every
+    downstream handoff consumer (learned transfer, residual transport,
+    diagnostics) sees the same geometry as progressive_low_to_high.
+    """
+    raw_video, raw_audio = unpack_streams(raw, target_shapes)
+    clean_video, clean_audio = unpack_streams(clean, target_shapes)
+    clean_padding = target_band_padding_max_abs(clean_video, band)
+    if clean_padding != 0.0:
+        raise RuntimeError("target-band probe prediction wrote outside its reduced-grid storage windows")
+    band_raw = raw_video[:, :, band.protected_t : band.head_t].detach().clone()
+    band_clean = clean_video[:, :, band.protected_t : band.head_t].detach().clone()
+    source_raw, raw_shapes = pack_streams((target_band_source_view(raw_video, band), raw_audio))
+    source_clean, clean_shapes = pack_streams((target_band_source_view(clean_video, band), clean_audio))
+    if raw_shapes != source_shapes or clean_shapes != source_shapes:
+        raise RuntimeError("target-band reduced-grid view does not match the source geometry")
+    receipt = {
+        "target_band_tokens": int(band.band_t),
+        "protected_prefix_t": int(band.protected_t),
+        "head_t": int(band.head_t),
+        "temporal": int(band.temporal),
+        "source_hw": (int(band.source_h), int(band.source_w)),
+        "target_hw": (int(band.target_h), int(band.target_w)),
+        "low_probe_video_rows": int(band.partitioned_rows),
+        "band_video_rows": int(band.band_t * band.target_rows),
+        "tail_video_rows": int(band.suffix_rows),
+        "clean_padding_max_abs": clean_padding,
+        "raw_padding_max_abs": target_band_padding_max_abs(raw_video, band),
+        "band_state_identity_handoff": True,
+        "tail_transfer": "learned_3d",
+    }
+    return source_raw, source_clean, band_raw, band_clean, receipt
+
+
+def _apply_target_band_head_dc_bridge(
+    target_video: torch.Tensor,
+    spliced_clean: torch.Tensor,
+    provider_native_clean: torch.Tensor | None,
+    exact_prefix: torch.Tensor,
+    band: PartitionedTargetBandGeometry,
+    *,
+    sigma: float,
+    enabled: bool,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Apply the suffix DC bridge at the band/tail transfer boundary.
+
+    The context is the target-grid head the high stage actually receives: the
+    authoritative prefix followed by the band's own clean prediction. The offset
+    is measured against the learned provider's own rendering of that head, so it
+    is exactly the transfer's channel-mean error on the context and is applied
+    only to the first transferred tail token.
+    """
+    if provider_native_clean is None or tuple(provider_native_clean.shape) != tuple(spliced_clean.shape):
+        raise RuntimeError("target-band handoff lost the learned provider's native clean output")
+    head_context = spliced_clean[:, :, : band.head_t].clone()
+    head_context[:, :, : band.protected_t] = exact_prefix.to(head_context)
+    mapped_state, corrected_native, dc_metrics = _apply_partitioned_suffix_dc_bridge(
+        target_video,
+        provider_native_clean,
+        head_context,
+        sigma=sigma,
+        enabled=enabled,
+    )
+    corrected_clean = spliced_clean + (corrected_native - provider_native_clean.to(corrected_native)).to(spliced_clean)
+    dc_metrics = dict(dc_metrics, suffix_dc_bridge_boundary="target_band_head")
+    return mapped_state, corrected_clean, dc_metrics
+
+
+def _validate_partitioned_sol_native_carrier(required_native_carrier: str) -> None:
+    """Require Sol history identity support for a non-source native carrier."""
+    if required_native_carrier == PARTITIONED_NATIVE_CARRIER_SOURCE:
+        return
+    try:
+        from sol_h3.partitioned_history import PARTITIONED_NATIVE_CARRIER_GRIDS
+    except ImportError:
+        PARTITIONED_NATIVE_CARRIER_GRIDS = ()
+    if required_native_carrier not in tuple(PARTITIONED_NATIVE_CARRIER_GRIDS):
+        raise PartitionedPreflightUnsupported(
+            "progressive_target_band requires a Sol-H3 release whose partitioned history recognizes a "
+            f"{required_native_carrier!r} native partition carrier"
+        )
+
+
 def _preflight(
     guider: Any,
     config: ProgressiveTargetInputConfig,
@@ -1418,7 +1646,13 @@ def _preflight(
     required_vdn_temporal_carrier_policy: str = PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
     required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     spatial_stage_control: str = PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+    target_band_tokens: int = 0,
 ):
+    """Validate a partitioned continuation before any sampler lifetime.
+
+    Returns ``(source_h, source_w, stage_plan, target_band)``; ``target_band`` is
+    ``None`` outside progressive_target_band.
+    """
     if len(latent_shapes) != 2:
         raise PartitionedPreflightUnsupported("partitioned exact-prefix requires native packed H3 AV latents")
     if config.transfer_mode != "learned_3d":
@@ -1436,13 +1670,20 @@ def _preflight(
     # These two owners are structural prerequisites for the heterogeneous
     # attention path. Validate them before any sampler lifetime is committed so
     # unsupported saved workflows use the released exact target-grid fallback.
+    native_carrier = (
+        PARTITIONED_NATIVE_CARRIER_TARGET
+        if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+        else PARTITIONED_NATIVE_CARRIER_SOURCE
+    )
     _validate_partitioned_vdn_compat(
         guider.model_patcher,
         required_linear_diagnostic=required_vdn_linear_diagnostic,
         required_temporal_carrier_policy=required_vdn_temporal_carrier_policy,
         required_softmax_diagnostic=required_softmax_diagnostic,
+        required_native_carrier=native_carrier,
     )
     _validate_partitioned_sol_compat(guider)
+    _validate_partitioned_sol_native_carrier(native_carrier)
 
     try:
         spatial_stage_control = normalize_spatial_stage_control(spatial_stage_control)
@@ -1460,9 +1701,20 @@ def _preflight(
             source_w=source_w,
             allow_same_grid=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
+        target_band = None
+        if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
+            target_band = PartitionedTargetBandGeometry(
+                protected_t=int(stage_plan.prefix_t),
+                band_t=int(target_band_tokens),
+                temporal=int(stage_plan.temporal),
+                source_h=int(source_h),
+                source_w=int(source_w),
+                target_h=target_h,
+                target_w=target_w,
+            )
     except (TypeError, ValueError, RuntimeError) as exc:
         raise PartitionedPreflightUnsupported(str(exc)) from exc
-    return source_h, source_w, stage_plan
+    return source_h, source_w, stage_plan, target_band
 
 
 def _recover_partitioned_transfer_clean(
@@ -1683,6 +1935,7 @@ def _apply_partitioned_exact_overlap_bridge(
     *,
     sigma: float,
     weights: tuple[float, ...] = (1.0,),
+    dc_enabled: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], dict[str, float | int | bool]]:
     """Preserve the provider's first-transition channel means after prefix restore.
 
@@ -1709,6 +1962,13 @@ def _apply_partitioned_exact_overlap_bridge(
         suffix_representation_bridge_production_retired=True,
         suffix_representation_bridge_hardware_verdict="rendered_continuity_unqualified",
     )
+    if not dc_enabled:
+        return (
+            target_video.clone(),
+            learned_clean.clone(),
+            representation_metrics,
+            disabled_suffix_dc_bridge_metrics(prefix_t=prefix_t),
+        )
     corrected_clean, dc_metrics = apply_suffix_dc_bridge(
         learned_clean,
         exact_prefix,
@@ -2955,6 +3215,9 @@ def run_partitioned_progressive(
             PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
         )
     )
+    suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
+    band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+    target_band_tokens = resolve_partitioned_target_band_tokens(initial_transformer) if band_mode else 0
     if (
         spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -2968,6 +3231,18 @@ def run_partitioned_progressive(
     ):
         raise PartitionedPreflightUnsupported(
             "same-grid spatial-stage control requires vdn_temporal_carrier_policy='native_grid_then_map_v1'"
+        )
+    if band_mode:
+        _validate_target_band_configuration(
+            handoff_transfer_control=handoff_transfer_control,
+            vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
+            prefix_transformer_context=prefix_transformer_context,
+            low_probe_execution_source=low_probe_execution_source,
+            audio_handoff_source=audio_handoff_source,
+            av_handoff_source=av_handoff_source,
+            guidance_trajectory_source=guidance_trajectory_source,
+            residual_mode=normalize_residual_geometry_mode(config.frame_gauge_residual_mode),
+            model_options=initial_model_options,
         )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
@@ -3120,7 +3395,7 @@ def run_partitioned_progressive(
         raise PartitionedPreflightUnsupported(
             "partitioned exact-prefix structural mask geometry drifted from runtime sampler mask"
         )
-    source_h, source_w, stage_plan = _preflight(
+    source_h, source_w, stage_plan, target_band = _preflight(
         guider,
         config,
         noise,
@@ -3131,6 +3406,7 @@ def run_partitioned_progressive(
         required_vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
         required_softmax_diagnostic=softmax_diagnostic,
         spatial_stage_control=spatial_stage_control,
+        target_band_tokens=target_band_tokens,
     )
 
     # All unsupported conditions above are checked before any sampler lifetime.
@@ -3229,6 +3505,23 @@ def run_partitioned_progressive(
     del prefix_resample_delta
     del low_video, low_audio
     low_mask = _resize_packed_mask(denoise_mask, target_shapes, source_shapes)
+    # Shapes of the low/probe sampler state. The target-band layout keeps that
+    # state on the target grid; every later handoff consumer uses source views.
+    low_shapes = source_shapes
+    if target_band is not None:
+        low_shapes = list(target_shapes)
+        low_noise, low_latent_image, low_mask = _target_band_low_stage_inputs(
+            target_band,
+            noise=noise,
+            source_video_noise=source_video_noise,
+            latent_image=latent_image,
+            source_latent_image=low_latent_image,
+            denoise_mask=denoise_mask,
+            source_mask=low_mask,
+            target_shapes=target_shapes,
+            source_shapes=source_shapes,
+            seed=int(seed or 0) + config.source_noise_offset,
+        )
 
     diagnostic_target_mask, diagnostic_low_mask = _resolve_audio_diagnostic_masks(
         denoise_mask,
@@ -3259,8 +3552,12 @@ def run_partitioned_progressive(
         same_grid_control_active=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         handoff_split_preserved_from_configured_source=True,
         prefix_video_rows=stage_plan.prefix_rows,
-        suffix_video_rows=stage_plan.suffix_rows,
-        partitioned_video_rows=stage_plan.partitioned_rows,
+        suffix_video_rows=(target_band or stage_plan).suffix_rows,
+        partitioned_video_rows=(target_band or stage_plan).partitioned_rows,
+        target_band_tokens=int(target_band.band_t) if target_band is not None else 0,
+        target_band_video_rows=(target_band.band_t * target_band.target_rows) if target_band is not None else 0,
+        low_probe_sampler_shape=tuple(low_shapes[0]),
+        native_carrier_grid="target" if target_band is not None else "source",
         prefix_exact_latent_resized_for_transformer=(
             prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
         ),
@@ -3366,18 +3663,38 @@ def run_partitioned_progressive(
     def low_callback(step, x0, x, _total):
         if callback is None:
             return None
-        x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
-        x = _resize_packed_latent_image(x, source_shapes, target_shapes)
+        if target_band is not None:
+            x0 = _target_band_preview_packed(x0, target_band, target_shapes)
+            x = _target_band_preview_packed(x, target_band, target_shapes)
+        else:
+            x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
+            x = _resize_packed_latent_image(x, source_shapes, target_shapes)
         return callback(step, x0, x, len(sigmas) - 1)
 
-    _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
+    if target_band is None:
+        _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
+    else:
+        # Guidance consumes a uniform reduced-grid low trajectory, as in
+        # progressive_low_to_high; record the reduced-grid view of each prediction.
+        _begin_capture(
+            binding,
+            guider,
+            sampler,
+            low_sigmas,
+            source_shapes,
+            sampler_shapes=target_shapes,
+            video_view=lambda video: target_band_source_view(video, target_band),
+        )
     try:
         _reset_guider_conds(guider, template=conditioning_template)
         low_started = time.perf_counter()
         try:
             sampler_invocation_count += 1
             binding.metrics.increment("progressive_sampler_invocations")
-            with _flow_stage_contract(guider, "low"), _partitioned_stage_contract(guider, stage_plan, binding.metrics):
+            with (
+                _flow_stage_contract(guider, "low"),
+                _partitioned_stage_contract(guider, stage_plan, binding.metrics, target_band=target_band),
+            ):
                 low_result = executor(
                     low_noise,
                     low_latent_image,
@@ -3387,7 +3704,7 @@ def run_partitioned_progressive(
                     low_callback,
                     disable_pbar,
                     seed,
-                    latent_shapes=source_shapes,
+                    latent_shapes=low_shapes,
                 )
         finally:
             binding.metrics.event(
@@ -3397,8 +3714,8 @@ def run_partitioned_progressive(
             )
 
         base_model = guider.model_patcher.model
-        source_raw = _raw_sampler_state(base_model, low_result, source_shapes, sigma)
-        source_latent_internal = _process_latent_in(base_model, low_latent_image, source_shapes)
+        source_raw = _raw_sampler_state(base_model, low_result, low_shapes, sigma)
+        source_latent_internal = _process_latent_in(base_model, low_latent_image, low_shapes)
         active = binding.active_capture
         if active is not None:
             active.phases = (*active.phases, (index, "handoff_probe"))
@@ -3415,7 +3732,7 @@ def run_partitioned_progressive(
             with (
                 _flow_stage_contract(guider, "probe"),
                 _high_stage_contract(guider),
-                _partitioned_stage_contract(guider, stage_plan, binding.metrics),
+                _partitioned_stage_contract(guider, stage_plan, binding.metrics, target_band=target_band),
             ):
                 source_x0 = executor(
                     probe_noise,
@@ -3426,7 +3743,7 @@ def run_partitioned_progressive(
                     None,
                     disable_pbar,
                     seed,
-                    latent_shapes=source_shapes,
+                    latent_shapes=low_shapes,
                 )
         finally:
             if previous_probe is None:
@@ -3738,7 +4055,36 @@ def run_partitioned_progressive(
                 fail_closed=True,
             )
 
-        source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        band_raw_video = None
+        band_clean_video = None
+        if target_band is not None:
+            if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
+                try:
+                    boundary_window_evidence = BoundaryWindowEvidence(
+                        stage_plan.prefix, target_band.temporal, capture_full_video=True
+                    )
+                except ValueError as exc:
+                    binding.metrics.event(
+                        "partitioned_boundary_window_evidence",
+                        policy="native_boundary_decoder_window_evidence_v1",
+                        status="unsupported",
+                        reason=str(exc),
+                        output_mutated=False,
+                        diagnostic_only=True,
+                    )
+                else:
+                    native_probe_video, _ = unpack_streams(source_x0, target_shapes)
+                    boundary_window_evidence.capture("low_probe_native_carrier_clean", native_probe_video)
+                    del native_probe_video
+            source_raw, source_x0, band_raw_video, band_clean_video, band_low_receipt = _target_band_source_views(
+                source_raw,
+                source_x0,
+                target_band,
+                target_shapes=target_shapes,
+                source_shapes=source_shapes,
+            )
+            binding.metrics.event("partitioned_target_band_low_state", **band_low_receipt)
 
         # The learned 3D upscaler may use all prefix frames as transient temporal
         # context.  This resized copy never enters H3 attention and its upscaled
@@ -3915,6 +4261,8 @@ def run_partitioned_progressive(
                 raise RuntimeError("partitioned low trajectory and target video temporal geometry differ")
 
         split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
+        if target_band is not None and boundary_window_evidence is not None:
+            boundary_window_evidence.capture("source_probe_clean", clean_video)
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
         boundary_content_pre_high_receipt: dict[str, Any] | None = None
@@ -3965,7 +4313,35 @@ def run_partitioned_progressive(
         }
 
         clean_video_postprocess = None
-        if config.frame_gauge_repair:
+        band_provider_native_clean: torch.Tensor | None = None
+        if target_band is not None:
+            # The band is not spatially transferred, so the protected prefix is
+            # followed by identical-grid state exactly as in same-grid control.
+            # The prefix-boundary frame gauge therefore has no transfer boundary
+            # to register; the remaining transfer boundary is the band/tail edge.
+            frame_gauge_transaction.update(reason="target_band_identity_boundary")
+
+            def clean_video_postprocess(learned_clean):
+                nonlocal actual_handoff_clean
+                nonlocal band_provider_native_clean
+
+                band_provider_native_clean = learned_clean.detach().clone()
+                if boundary_window_evidence is not None:
+                    boundary_window_evidence.capture("provider_native_clean", learned_clean)
+                spliced = learned_clean.clone()
+                spliced[:, :, stage_plan.prefix_t : target_band.head_t] = band_clean_video.to(spliced)
+                actual_handoff_clean = spliced.detach().clone()
+                return CleanVideoPostprocessResult(
+                    clean_video=spliced,
+                    protected_prefix_t=int(stage_plan.prefix_t),
+                    metadata={
+                        "result": "target_band_identity_splice",
+                        "target_band_tokens": int(target_band.band_t),
+                        "identity_frames": [int(stage_plan.prefix_t), int(target_band.head_t)],
+                    },
+                )
+
+        elif config.frame_gauge_repair:
 
             def clean_video_postprocess(learned_clean):
                 nonlocal pending_registered_reference
@@ -3995,9 +4371,15 @@ def run_partitioned_progressive(
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         deterministic_handoff_sampler, handoff_sampler = _dense_drift_sampler_contract(sampler)
+        # Target-band continuation re-noises its learned tail with independent
+        # Gaussian noise, as the uniform progressive handoff does. Transporting the
+        # low-stage residual into the tail carries content-correlated structure
+        # into the high-stage entry noise, which the high stage sharpens.
         handoff_noise_mode = (
             (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
-            if config.frame_gauge_repair and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            if config.frame_gauge_repair
+            and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+            and target_band is None
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
         if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
@@ -4006,11 +4388,12 @@ def run_partitioned_progressive(
             source_effective_residual = (
                 source_state_video.to(torch.float32) - (1.0 - float(sigma)) * source_clean_video.to(torch.float32)
             ) / float(sigma)
-            residual_suffix = source_effective_residual[:, :, stage_plan.prefix_t :]
+            transfer_start_t = target_band.head_t if target_band is not None else stage_plan.prefix_t
+            residual_suffix = source_effective_residual[:, :, transfer_start_t:]
             model_noise_scale = float(getattr(base_model.model_sampling, "noise_scale", 1.0))
             if not math.isfinite(model_noise_scale) or model_noise_scale <= 0.0:
                 raise ValueError("partitioned H3 handoff requires a finite positive model noise_scale")
-            initial_suffix = source_video_noise[:, :, stage_plan.prefix_t :].to(
+            initial_suffix = source_video_noise[:, :, transfer_start_t:].to(
                 device=residual_suffix.device,
                 dtype=torch.float32,
             )
@@ -4029,6 +4412,7 @@ def run_partitioned_progressive(
                 policy=handoff_noise_mode,
                 source="same_sigma_source_state_minus_clean_probe",
                 generated_suffix_only=True,
+                transfer_start_t=int(transfer_start_t),
                 prefix_t=int(stage_plan.prefix_t),
                 residual_rms=float(residual_suffix.square().mean().sqrt().item()),
                 initial_source_noise_rms=float(initial_suffix.square().mean().sqrt().item()),
@@ -4173,6 +4557,8 @@ def run_partitioned_progressive(
                 "frame_gauge_selected" if frame_gauge_accepted else "frame_gauge_repair_disabled",
             )
         )
+        if target_band is not None and (frame_gauge_accepted or exact_overlap_fallback_requested):
+            raise RuntimeError("progressive_target_band must not select a prefix-boundary frame-gauge splice")
         representation_metrics = disabled_suffix_representation_bridge_metrics(
             prefix_t=stage_plan.prefix_t,
             requested=False,
@@ -4212,6 +4598,8 @@ def run_partitioned_progressive(
                 provider_boundary_stabilization_receipt["reason"] = "frame_gauge_selected"
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
             corrected_clean = frame_gauge_witnesses["corrected_clean"]
+            if not suffix_dc_bridge_enabled:
+                raise RuntimeError("the accepted frame-gauge arm requires the partitioned suffix DC bridge")
             dc_metrics = frame_gauge_transaction.get("dc_metrics")
             if not isinstance(dc_metrics, dict):
                 raise RuntimeError("accepted frame-gauge transaction lost the existing DC bridge receipt")
@@ -4269,8 +4657,22 @@ def run_partitioned_progressive(
                         exact_prefix,
                         sigma=sigma,
                         weights=PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS,
+                        dc_enabled=suffix_dc_bridge_enabled,
                     )
                 )
+            elif target_band is not None:
+                if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
+                    provider_boundary_stabilization_receipt["reason"] = "target_band_identity_boundary"
+                target_video, corrected_clean, dc_metrics = _apply_target_band_head_dc_bridge(
+                    target_video,
+                    learned_clean,
+                    band_provider_native_clean,
+                    exact_prefix,
+                    target_band,
+                    sigma=sigma,
+                    enabled=suffix_dc_bridge_enabled,
+                )
+                band_provider_native_clean = None
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
                     provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
@@ -4279,7 +4681,7 @@ def run_partitioned_progressive(
                     learned_clean,
                     exact_prefix,
                     sigma=sigma,
-                    enabled=True,
+                    enabled=suffix_dc_bridge_enabled,
                 )
             if exact_overlap_fallback_requested:
                 if splice_clean_source == "inverse_recovered":
@@ -4312,7 +4714,7 @@ def run_partitioned_progressive(
                 extra_h3_nfe=0,
                 extra_provider_calls=0,
             )
-        if residual_mode == "measure":
+        if residual_mode == "measure" and target_band is None:
             binding.metrics.event(
                 "partitioned_same_frame_prefix_affine",
                 **measure_paired_prefix_affine(learned_clean, exact_prefix, prefix_t=stage_plan.prefix_t),
@@ -4419,7 +4821,8 @@ def run_partitioned_progressive(
                 if frame_gauge_transaction.get("result") == "shadow_only"
                 else None
             ),
-            dc_bridge_applied=True,
+            dc_bridge_applied=bool(dc_metrics.get("suffix_dc_bridge_enabled", False)),
+            suffix_dc_bridge_requested=suffix_dc_bridge_enabled,
             dc_policy="existing_one_token_spatial_mean_v1",
             dc_order=(
                 "after_spatial_registration_before_conditional_renoise"
@@ -4486,12 +4889,16 @@ def run_partitioned_progressive(
             ),
         )
 
-        exact_overlap_dc_weights = (
-            PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
-        )
-        exact_overlap_dc_support_policy = (
-            "bounded_linear_return_v2" if len(exact_overlap_dc_weights) > 1 else "first_suffix_only_v1"
-        )
+        if suffix_dc_bridge_enabled:
+            exact_overlap_dc_weights = (
+                PARTITIONED_EXACT_OVERLAP_PRODUCTION_WEIGHTS if exact_overlap_fallback_requested else (1.0,)
+            )
+            exact_overlap_dc_support_policy = (
+                "bounded_linear_return_v2" if len(exact_overlap_dc_weights) > 1 else "first_suffix_only_v1"
+            )
+        else:
+            exact_overlap_dc_weights = ()
+            exact_overlap_dc_support_policy = "disabled"
         binding.metrics.event(
             "partitioned_exact_overlap_bridge",
             policy=exact_overlap_policy,
@@ -4522,7 +4929,7 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
-        if residual_mode == "measure":
+        if residual_mode == "measure" and target_band is None:
             try:
                 boundary_window_evidence = BoundaryWindowEvidence(exact_prefix, int(target_video.shape[2]))
             except ValueError as exc:
@@ -4537,6 +4944,8 @@ def run_partitioned_progressive(
             else:
                 boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
                 boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
+        elif boundary_window_evidence is not None:
+            boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
 
         high_video_reference_enabled = PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED
         high_audio_reference_enabled = PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED
@@ -5023,6 +5432,21 @@ def run_partitioned_progressive(
                 )
 
         target_video[:, :, : stage_plan.prefix_t] = stage_plan.prefix.to(target_video)
+        band_handoff_receipt = None
+        if target_band is not None:
+            # Identity handoff: the high sampler resumes the band exactly where the
+            # low/probe sampler left it.
+            target_video[:, :, stage_plan.prefix_t : target_band.head_t] = band_raw_video.to(target_video)
+            band_handoff_receipt = {
+                "target_band_tokens": int(target_band.band_t),
+                "target_band_identity_state": bool(
+                    torch.equal(
+                        target_video[:, :, stage_plan.prefix_t : target_band.head_t],
+                        band_raw_video.to(target_video),
+                    )
+                ),
+                "target_band_transfer_start_t": int(target_band.head_t),
+            }
         target_raw = pack_streams((target_video, target_audio))[0]
         binding.metrics.event(
             "partitioned_transfer",
@@ -5030,18 +5454,19 @@ def run_partitioned_progressive(
             spatial_stage_control=spatial_stage_control,
             learned_transfer_performed=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+                and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             ),
             spatial_transfer_control_applied=spatial_transfer_control is not None,
             same_grid_identity_transfer_applied=(spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID),
             actual_learned_checkpoint_provider_invoked=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+                and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             ),
             upscaler_prefix_context_used=(
                 handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+                and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             ),
+            **(band_handoff_receipt or {}),
             transferred_prefix_output_discarded=True,
             authoritative_target_prefix_restored=True,
             target_prefix_resized_for_transformer=False,
@@ -5049,11 +5474,18 @@ def run_partitioned_progressive(
             frame_gauge_repair_enabled=bool(config.frame_gauge_repair),
             frame_gauge_result=str(frame_gauge_transaction.get("result", "baseline")),
             frame_gauge_reason=str(frame_gauge_transaction.get("reason", "unknown")),
+            suffix_dc_bridge_requested=suffix_dc_bridge_enabled,
             suffix_dc_bridge_state_mapping=(
-                "pre_renoise_clean_operand" if frame_gauge_accepted else "conditional_renoise_affine"
+                "disabled"
+                if not suffix_dc_bridge_enabled
+                else "pre_renoise_clean_operand"
+                if frame_gauge_accepted
+                else "conditional_renoise_affine"
             ),
             suffix_dc_bridge_policy=(
-                "successor_safe_linear_v2"
+                "disabled"
+                if not suffix_dc_bridge_enabled
+                else "successor_safe_linear_v2"
                 if int(dc_metrics.get("suffix_dc_bridge_corrected_tokens", 0)) > 1
                 else "one_token_spatial_mean_v1"
             ),
@@ -5102,7 +5534,7 @@ def run_partitioned_progressive(
             learned_upscale_elapsed_ms=(
                 transfer_metrics.get("learned_upscale_elapsed_ms")
                 if handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-                and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+                and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
                 else None
             ),
             clean_video_postprocess=transfer_metrics.get("clean_video_postprocess"),
@@ -5194,13 +5626,17 @@ def run_partitioned_progressive(
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and handoff_transfer_control == PARTITIONED_HANDOFF_TRANSFER_LEARNED
-            and spatial_stage_control == PARTITIONED_SPATIAL_STAGE_PROGRESSIVE
+            and spatial_stage_control in _LEARNED_TRANSFER_SPATIAL_STAGES
             and splice_clean_source in {"actual_clean_postprocess", "actual_provider"}
         ):
+            # Under target-band control the high stage starts from the identity
+            # band and the learned tail (with its head-boundary DC correction), so
+            # guidance binds to that actual clean operand rather than to the
+            # provider's discarded rendering of the band.
             handoff_guidance_reference = _prepare_handoff_guidance_reference(
                 run=guidance_run,
                 provider_input=clean_video,
-                provider_output=provider_native_clean,
+                provider_output=corrected_clean if target_band is not None else provider_native_clean,
                 prefix_t=stage_plan.prefix_t,
                 split_coordinate=split_coordinate,
                 high_sigmas=high_sigmas,
@@ -5896,7 +6332,25 @@ def run_partitioned_progressive(
                     "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
                     "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
                     "initial_mask_domain": "initial_high_sampler_and_model_video_denoise_mask",
-                    "provider_clean_provenance": splice_clean_source,
+                    "provider_clean_provenance": (
+                        "actual_learned_provider_before_target_band_splice"
+                        if target_band is not None
+                        else splice_clean_source
+                    ),
+                    **(
+                        {
+                            "target_band_tokens": int(target_band.band_t),
+                            "target_band_transfer_start_t": int(target_band.head_t),
+                            "full_video_snapshots": True,
+                            "full_video_temporal_start_t": 0,
+                            "cpu_byte_budget": int(boundary_window_evidence.max_bytes),
+                            "source_probe_clean_grid": [int(source_h), int(source_w)],
+                            "low_probe_native_carrier_layout": "target_head_and_top_left_reduced_tail_with_padding",
+                            "low_probe_native_carrier_decodable": False,
+                        }
+                        if target_band is not None
+                        else {}
+                    ),
                     "registration_result": str(frame_gauge_transaction.get("result")),
                     "registration_reason": str(frame_gauge_transaction.get("reason")),
                     "registration_acceptance_required": False,

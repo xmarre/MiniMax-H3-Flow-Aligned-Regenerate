@@ -20,9 +20,16 @@ from .vae_boundary_video import (
 
 
 class BoundaryWindowEvidence:
-    """CPU snapshots of the one native decoder window across existing stages."""
+    """CPU stage snapshots, with optional full video for target-band evidence."""
 
-    def __init__(self, exact_prefix: torch.Tensor, temporal: int):
+    def __init__(
+        self,
+        exact_prefix: torch.Tensor,
+        temporal: int,
+        *,
+        capture_full_video: bool = False,
+        max_bytes=256 * 1024 * 1024,
+    ):
         prefix_t = int(exact_prefix.shape[2])
         start = prefix_t - H3_VAE_TOKEN_OVERLAP
         stop = start + H3_VAE_WINDOW_TOKENS
@@ -44,6 +51,9 @@ class BoundaryWindowEvidence:
             "first_retained_local_frame": H3_VAE_FRAME_OVERLAP,
         }
         self.tensors: dict[str, torch.Tensor] = {}
+        self.capture_full_video = capture_full_video
+        self.max_bytes = max_bytes
+        self.cpu_tensor_bytes = 0
         self.first_high_call_index: int | None = None
         self.first_high_sigma: float | None = None
         self.copy_wall_s = 0.0
@@ -54,16 +64,27 @@ class BoundaryWindowEvidence:
         return self
 
     def capture(self, name: str, video: torch.Tensor) -> None:
-        if name in self.tensors:
-            raise RuntimeError(f"boundary-window snapshot {name!r} was reused")
         start, stop = self.plan["window_start_t"], self.plan["window_stop_t"]
         if name == "authoritative_prefix":
             stop = self.plan["prefix_t"]
         window = video[:, :, start:stop].detach()
         if window.shape[2] != stop - start:
             raise RuntimeError("boundary-window snapshot is missing native decoder context")
+        snapshots = {name: window}
+        if self.capture_full_video:
+            expected_t = self.plan["prefix_t"] if name == "authoritative_prefix" else self.plan["temporal"]
+            if video.shape[2] != expected_t:
+                raise RuntimeError("full-video stage snapshot does not match the declared timeline")
+            snapshots[name + "_full"] = video.detach()
+        if any(key in self.tensors for key in snapshots):
+            raise RuntimeError(f"boundary-window snapshot {name!r} was reused")
+        size = sum(value.numel() * value.element_size() for value in snapshots.values())
+        if self.capture_full_video and self.cpu_tensor_bytes + size > self.max_bytes:
+            raise RuntimeError("full-video stage evidence exceeded its explicit CPU byte budget")
         started = time.perf_counter()
-        self.tensors[name] = window.to(device="cpu", copy=True).contiguous()
+        for key, value in snapshots.items():
+            self.tensors[key] = value.to(device="cpu", copy=True).contiguous()
+        self.cpu_tensor_bytes += size
         self.copy_wall_s += time.perf_counter() - started
 
     def observe_prediction(self, video, *, point, call_index, sigma, actual, sampler_input=None):
@@ -83,6 +104,7 @@ class BoundaryWindowEvidence:
 
     def close(self):
         self.tensors.clear()
+        self.cpu_tensor_bytes = 0
 
 
 def _safe_component(value: Any) -> str:

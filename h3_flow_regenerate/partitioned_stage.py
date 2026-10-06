@@ -4,6 +4,13 @@ This is deliberately separate from the retired Mixed-Grid contract.  The sampler
 uses a uniform low-grid carrier, while the transformer receives an explicit
 [target-grid exact prefix | source-grid generated suffix] video domain.  The
 cross-repo attention contract is published separately by ``partitioned_prefix``.
+
+Target-band continuation keeps the sampler state on the uniform *target* grid.
+The first generated tokens after the protected prefix (the band) are ordinary
+target-grid state; every later generated token stores its reduced-grid state in
+the top-left source-sized window of its target-sized frame, and the rest of that
+frame is inert padding.  The transformer receives
+[target-grid prefix | target-grid band | source-grid tail].
 """
 
 from __future__ import annotations
@@ -114,6 +121,98 @@ class PartitionedStagePlan:
         return self.prefix_rows + self.suffix_rows
 
 
+@dataclass(frozen=True, slots=True)
+class PartitionedTargetBandGeometry:
+    """Attention-domain geometry of a target-band continuation stage.
+
+    ``prefix_t`` is the length of the target-grid head (protected prefix plus
+    band), matching the partition contract consumed by VDN and Sol.  The truly
+    protected prefix length is ``protected_t``.
+    """
+
+    protected_t: int
+    band_t: int
+    temporal: int
+    source_h: int
+    source_w: int
+    target_h: int
+    target_w: int
+
+    def __post_init__(self) -> None:
+        for name in ("protected_t", "band_t", "temporal", "source_h", "source_w", "target_h", "target_w"):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"target-band geometry field {name} must be a positive integer")
+        if self.protected_t + self.band_t >= self.temporal:
+            raise ValueError(
+                "target-band continuation must leave at least one generated token on the reduced grid "
+                f"(protected {self.protected_t} + band {self.band_t} >= {self.temporal} tokens)"
+            )
+        if any(value % 2 for value in (self.source_h, self.source_w, self.target_h, self.target_w)):
+            raise ValueError("target-band spatial axes must be H3 patch-safe")
+        if self.source_h > self.target_h or self.source_w > self.target_w:
+            raise ValueError("target-band source grid must fit inside the target grid")
+        if (self.source_h, self.source_w) == (self.target_h, self.target_w):
+            raise ValueError("target-band continuation requires a strictly reduced source grid")
+
+    @property
+    def head_t(self) -> int:
+        return self.protected_t + self.band_t
+
+    @property
+    def prefix_t(self) -> int:
+        return self.head_t
+
+    @property
+    def target_hw(self) -> tuple[int, int]:
+        return self.target_h, self.target_w
+
+    @property
+    def source_grid(self) -> tuple[int, int]:
+        return self.source_h // 2, self.source_w // 2
+
+    @property
+    def target_grid(self) -> tuple[int, int]:
+        return self.target_h // 2, self.target_w // 2
+
+    @property
+    def source_rows(self) -> int:
+        return self.source_h * self.source_w // 4
+
+    @property
+    def target_rows(self) -> int:
+        return self.target_h * self.target_w // 4
+
+    @property
+    def protected_rows(self) -> int:
+        return self.protected_t * self.target_rows
+
+    @property
+    def prefix_rows(self) -> int:
+        return self.head_t * self.target_rows
+
+    @property
+    def suffix_rows(self) -> int:
+        return (self.temporal - self.head_t) * self.source_rows
+
+    @property
+    def partitioned_rows(self) -> int:
+        return self.prefix_rows + self.suffix_rows
+
+    @property
+    def native_rows(self) -> int:
+        return self.temporal * self.target_rows
+
+    def tail_native_rows(self, device=None) -> torch.Tensor:
+        """Native target-grid video row indices of the stored tail, in partitioned order."""
+        target_grid_w = self.target_w // 2
+        frames = torch.arange(self.head_t, self.temporal, dtype=torch.long, device=device)
+        rows = torch.arange(self.source_h // 2, dtype=torch.long, device=device)
+        columns = torch.arange(self.source_w // 2, dtype=torch.long, device=device)
+        index = frames[:, None, None] * self.target_rows + rows[None, :, None] * target_grid_w + columns[None, None, :]
+        return index.reshape(-1)
+
+
 @dataclass(slots=True)
 class PartitionedStageRuntime:
     """One mutable owner whose identity is stable for one sampler-stage lifetime.
@@ -148,6 +247,8 @@ class PartitionedStageRuntime:
     audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
     position_policy: PartitionedPositionPolicy | None = None
     position_policy_positions: torch.Tensor | None = None
+    # Present only for target-band continuation low/probe stages.
+    target_band: PartitionedTargetBandGeometry | None = None
 
 
 def build_partitioned_stage_plan(
@@ -233,6 +334,12 @@ def partitioned_positions(native, plan: PartitionedStagePlan, layout):
     origin = float(layout.position_ids[video_start, 0])
     frame, _ = native._frame_grid(*plan.target_hw)
     prefix = native._video_grid(plan.temporal, frame, origin)[: plan.prefix_rows]
+    if isinstance(plan, PartitionedTargetBandGeometry):
+        # The native carrier is the target grid, so the reduced-grid tail rows
+        # are constructed on the same global timeline as the head.
+        source_frame, _ = native._frame_grid(plan.source_h, plan.source_w)
+        suffix = native._video_grid(plan.temporal, source_frame, origin)[plan.head_t * plan.source_rows :]
+        return torch.cat((layout.position_ids[:video_start], prefix, suffix))
     # The suffix remains on the globally constructed low-grid timeline.  Never
     # restart temporal phase at the prefix/suffix boundary.
     suffix = layout.position_ids[video_start + plan.prefix_t * plan.source_rows :]
@@ -336,7 +443,7 @@ def partitioned_positions_for_runtime(native, runtime: PartitionedStageRuntime, 
     mode = str(runtime.audio_position_domain)
     positions, policy = partitioned_positions_with_audio_policy(
         native,
-        runtime.plan,
+        runtime.target_band if runtime.target_band is not None else runtime.plan,
         layout,
         mode,
         stage_owner_generation=id(runtime),
@@ -368,6 +475,18 @@ def partitioned_mod_segments(segments, plan: PartitionedStagePlan, video_start: 
         elif (start, stop) == (video_start, video_end):
             if not torch.is_tensor(row) or row.ndim != 1 or row.numel() != video_end - video_start:
                 raise RuntimeError("partitioned exact-prefix requires native per-video-row timestep indices")
+            if isinstance(plan, PartitionedTargetBandGeometry):
+                protected = row[: plan.protected_rows]
+                generated = torch.cat(
+                    (row[plan.protected_rows : plan.prefix_rows], row[plan.tail_native_rows(row.device)])
+                )
+                checks = torch.stack(((protected == protected[0]).all(), (generated == generated[0]).all()))
+                if not bool(checks.all().item()):
+                    raise RuntimeError(
+                        "target-band continuation requires uniform protected-prefix and generated timestep labels"
+                    )
+                result.append((video_start, video_start + plan.partitioned_rows, torch.cat((protected, generated))))
+                continue
             carrier_prefix_rows = plan.prefix_t * plan.source_rows
             if not bool((row[:carrier_prefix_rows] == row[0]).all().item()):
                 raise RuntimeError("partitioned exact-prefix protected prefix has inconsistent timestep labels")
@@ -384,6 +503,7 @@ __all__ = [
     "PartitionedPositionPolicy",
     "PartitionedStagePlan",
     "PartitionedStageRuntime",
+    "PartitionedTargetBandGeometry",
     "build_partitioned_stage_plan",
     "partitioned_carrier_layout",
     "partitioned_mod_segments",

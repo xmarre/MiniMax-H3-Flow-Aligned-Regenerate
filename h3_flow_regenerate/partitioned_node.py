@@ -34,6 +34,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
     PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
@@ -365,9 +366,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": "off",
                 "tooltip": (
-                    "off preserves rigid v2 exactly. measure records bounded regional residual "
-                    "geometry after an accepted rigid v2 transaction without changing any tensor, "
-                    "guidance reference, DC bridge, sampler work, or final output."
+                    "measure exports existing low/high stage tensors without changing sampling. "
+                    "Target-band runs also export full video snapshots within a 256 MiB CPU budget. "
+                    "Accepted rigid transactions additionally record bounded regional residual geometry. "
+                    "CPU copies and file I/O add diagnostic overhead; off disables these exports."
                 ),
             },
         )
@@ -435,7 +437,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "same_grid_target_control runs continuation low/probe directly on the target grid, keeps "
                     "the same handoff split and downstream high stage, and uses an identity "
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
-                    "progressive_low_to_high selects the configured reduced continuation grid."
+                    "progressive_low_to_high selects the configured reduced continuation grid. "
+                    "progressive_target_band keeps the first target_band_tokens generated tokens after the "
+                    "protected prefix on the target grid with identity handoff, and runs the remaining "
+                    "continuation tokens on the reduced grid with learned transfer."
                 ),
             },
         )
@@ -471,6 +476,32 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "do not feather or regenerate carried video tokens: target-high keeps the authoritative exact "
                     "video prefix for every evaluation and reports requested_tokens with applied_tokens=0 and "
                     "retired_prefix_release=true. Audio overlap is independent."
+                ),
+            },
+        )
+        # Append-only: never shift historical serialized widget positions.
+        spec["required"]["suffix_dc_bridge"] = (
+            "BOOLEAN",
+            {
+                "default": True,
+                "tooltip": (
+                    "Continuation only. When enabled, the first generated token that receives learned spatial "
+                    "transfer gets the per-channel spatial-mean offset the transfer produced on the carried "
+                    "context. Disable to leave that token exactly as transferred. Same-grid continuation "
+                    "measures a zero offset either way."
+                ),
+            },
+        )
+        spec["required"]["target_band_tokens"] = (
+            "INT",
+            {
+                "default": PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+                "min": 1,
+                "step": 1,
+                "tooltip": (
+                    "Used only by spatial_stage_control=progressive_target_band: the number of generated H3 "
+                    "temporal latent tokens directly after the protected prefix that stay on the target grid "
+                    "through low/probe. It must leave at least one generated token on the reduced grid."
                 ),
             },
         )
@@ -519,6 +550,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
         video_guided_overlap_tokens=6,
+        suffix_dc_bridge=True,
+        target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -578,6 +611,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             spatial_stage_control=spatial_stage_control,
             softmax_diagnostic=softmax_diagnostic,
             video_guided_overlap_tokens=video_guided_overlap_tokens,
+            suffix_dc_bridge=suffix_dc_bridge,
+            target_band_tokens=target_band_tokens,
         )
 
 

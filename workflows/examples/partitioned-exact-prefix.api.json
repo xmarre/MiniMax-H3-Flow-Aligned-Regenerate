@@ -111,7 +111,9 @@
       "handoff_transfer_control": "learned_3d",
       "spatial_stage_control": "same_grid_target_control",
       "softmax_diagnostic": "normal",
-      "video_guided_overlap_tokens": 6
+      "video_guided_overlap_tokens": 6,
+      "suffix_dc_bridge": true,
+      "target_band_tokens": 4
     },
     "class_type": "H3PartitionedExactPrefixDiagnosticHandoff",
     "_meta": {

@@ -15,6 +15,40 @@ from h3_flow_regenerate.residual_evidence import BoundaryWindowEvidence, export_
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
 
 
+def test_full_stage_capture_keeps_late_changes_and_owns_cpu_storage():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    video[:, :, 21] = 3.0
+    evidence.observe_prediction(video, point="before_flow", call_index=0, sigma=0.8, actual=True)
+    assert torch.count_nonzero(evidence.tensors["first_high_before_flow"]) == 0
+    full = evidence.tensors["first_high_before_flow_full"]
+    assert torch.equal(full, video)
+    video.zero_()
+    assert torch.all(full[:, :, 21] == 3.0)
+    assert full.device.type == "cpu"
+    assert full.untyped_storage().nbytes() == full.numel() * full.element_size()
+    evidence.close()
+    assert evidence.tensors == {}
+
+
+def test_full_stage_capture_checks_budget_before_copying_or_recording_a_stage():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    # Enough for the authoritative prefix window, not a full stage.
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True, max_bytes=24000)
+    names = set(evidence.tensors)
+    with pytest.raises(RuntimeError, match="CPU byte budget"):
+        evidence.capture("provider_native_clean", video)
+    assert set(evidence.tensors) == names
+
+
+def test_full_stage_capture_rejects_a_different_timeline():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    with pytest.raises(RuntimeError, match="declared timeline"):
+        evidence.capture("provider_native_clean", video[:, :, :-1])
+    assert set(evidence.tensors) == {"authoritative_prefix", "authoritative_prefix_full"}
+
+
 @pytest.mark.parametrize("measure", [False, True])
 def test_rejected_registration_captures_first_actual_window_without_changing_predictions(
     tmp_path, monkeypatch, measure

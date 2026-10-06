@@ -1,3 +1,70 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.10
+
+Add an opt-in target-band continuation arm and a suffix DC bridge selector to
+partitioned exact-prefix continuation. The production default remains
+`same_grid_target_control`; existing workflows load unchanged.
+
+## Target-band continuation (opt-in)
+
+`spatial_stage_control=progressive_target_band` adds a continuation arm between
+the reduced-grid and target-grid controls. The protected prefix and the next
+`target_band_tokens` (default 4) generated temporal latent tokens stay on the
+target grid through low/probe. Later tokens run on the configured reduced grid.
+At the handoff the band continues by identity and the reduced-grid tokens use
+the learned 3D transfer. They are re-noised with independent Gaussian noise for
+the high stage regardless of `frame_gauge_repair`; source residual transport is
+not used in this mode.
+
+- The low/probe sampler state is target-sized. Reduced-grid tokens are stored in
+  a source-sized window of their frame. Padding is masked and excluded from
+  transformer blocks; stochastic raw-state padding is discarded at the handoff.
+- The transformer receives `[target-grid prefix | target-grid band | reduced-grid
+  tail]` and returns its rows to Core's native layout, so Spectrum forecasting
+  and the native final layer see one consistent row set.
+- The partition contract declares `native_carrier_grid="target"` and
+  `native_carrier_rows_per_frame` only in this mode. Historical contracts and
+  their semantic digests are unchanged. The mode requires the paired VDN-H3-Plus
+  and Sol-H3 changes that accept a target-grid native carrier; older companions
+  fail before sampling.
+- Carrier row counts require a matching declaration and integer values in both
+  Flow and VDN contracts. Malformed optional metadata fails before attention.
+- The low trajectory is recorded on the uniform reduced grid. Learned-handoff
+  guidance binds to the actual high-stage entry state.
+- The one-token DC bridge applies at the band/tail boundary, measured against the
+  target-grid head. The paired-prefix frame gauge does not run because no transfer
+  boundary is adjacent to the prefix.
+
+Transporting the low-stage residual into the learned tail produced visibly
+over-sharpened tails in testing; independent tail noise removed it. The band/tail
+boundary has not been qualified on continuous shots. Low/probe cost falls with
+the reduced-grid size, while input projection and the final layer still process
+the target-sized carrier. The default remains `same_grid_target_control`.
+
+## Suffix DC bridge selector
+
+The partitioned node appends `suffix_dc_bridge` (default `true`). Disabling it
+leaves the first transferred generated token exactly as transferred on both
+production DC paths. Transfer and frame-gauge receipts record the request, and
+the runtime evidence gate validates the disabled arm. Existing workflows load
+with the bridge enabled.
+
+## Evidence and CI
+
+Target-band continuation accepts `frame_gauge_residual_mode=measure`. It exports
+the native decoder window and full stage video snapshots, including the source
+probe, provider output before the identity-band splice, high predictions before
+and after Flow, and final clean video. The manifest distinguishes the native
+carrier's padded storage from decodable target-grid tensors. Full snapshots use
+a 256 MiB CPU tensor budget. Measurement adds copies and file I/O, with no extra
+model/provider/VAE evaluations; its default remains off.
+
+The runtime evidence gate expects low/probe VDN boundary-query receipts at the
+band/tail edge for target-band runs. The cross-repo contract check covers the
+target-carrier contract through VDN and Sol. CI runs target-band tests through
+the real Core forward and the actual scheduler on CPU.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.9
 
 Default Continuum exact-prefix continuation to the accepted target-grid profile,

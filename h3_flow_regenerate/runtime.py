@@ -72,6 +72,9 @@ class _ActiveCapture:
     shapes: list[tuple[int, ...]]
     phases: tuple[tuple[int, str], ...]
     call_index: int = 0
+    # Optional map from the sampler's packed prediction to the recorded video
+    # geometry, for samplers whose state layout differs from the trajectory's.
+    video_view: Any = None
 
 
 @dataclass(slots=True)
@@ -305,12 +308,23 @@ def _begin_capture(
     sampler: Any,
     sigmas: torch.Tensor,
     latent_shapes: list[tuple[int, ...]],
+    *,
+    sampler_shapes: list[tuple[int, ...]] | None = None,
+    video_view: Any = None,
 ) -> None:
+    """Begin a trajectory capture recorded in ``latent_shapes`` geometry.
+
+    ``sampler_shapes``/``video_view`` describe a sampler whose packed state uses
+    another layout: predictions are unpacked with ``sampler_shapes`` and mapped to
+    the recorded video geometry by ``video_view``.
+    """
     trajectory = binding.trajectory
     if not binding.capture_enabled or trajectory is None or sampler_name(sampler) == PROBE_MARKER:
         return
     if len(latent_shapes) != 2:
         raise ValueError("H3 trajectory capture requires exactly video and audio latent shapes")
+    if (sampler_shapes is None) != (video_view is None):
+        raise ValueError("H3 trajectory capture view requires both sampler shapes and a video view")
     video = torch.empty(latent_shapes[0], device="meta")
     geometry = geometry_from_video(video)
     session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
@@ -327,8 +341,9 @@ def _begin_capture(
     )
     binding.active_capture = _ActiveCapture(
         run_id=run_id,
-        shapes=list(latent_shapes),
+        shapes=list(sampler_shapes if sampler_shapes is not None else latent_shapes),
         phases=_sampler_phases(sampler, sigmas),
+        video_view=video_view,
     )
     binding.metrics.event(
         "trajectory_begin",
@@ -480,6 +495,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
             outer = int(probe_context["outer_step"])
         if actual or binding.capture_forecasts:
             video_x0 = unpack_streams(result, active.shapes)[0]
+            if active.video_view is not None:
+                video_x0 = active.video_view(video_x0)
             binding.trajectory.append(
                 active.run_id,
                 TrajectorySample(

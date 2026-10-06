@@ -32,7 +32,7 @@ def test_resolution_shift_matrix_preserves_base_and_refine():
     assert matrix["runs"][1]["id"] == "E1-refine-resolution-aware"
 
 
-def test_progressive_overlay_defines_v039_partitioned_defaults_and_preserves_controls():
+def test_progressive_overlay_defines_partitioned_defaults_and_preserves_controls():
     overlay = _load("workflows/progressive-handoff.overlay.json")
     defaults = overlay["canonical_defaults"]
     provider = overlay["latent_upscaler_provider"]
@@ -73,6 +73,8 @@ def test_progressive_overlay_defines_v039_partitioned_defaults_and_preserves_con
         "spatial_stage_control": "same_grid_target_control",
         "softmax_diagnostic": "normal",
         "video_guided_overlap_tokens": 6,
+        "suffix_dc_bridge": True,
+        "target_band_tokens": 4,
         "weight_semantics": (
             "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values "
             "only; apply_guidance does not use them unless the corresponding guidance mode is selected."
