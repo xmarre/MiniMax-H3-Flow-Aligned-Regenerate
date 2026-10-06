@@ -230,9 +230,50 @@ def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(b
     assert torch.equal(torch.random.get_rng_state(), rng)
     assert report["stages"]["final"]["frame_labels"] == list(range(184, 196))
     assert len(report["comparisons"]) == 4
+    for stage in report["stages"].values():
+        assert stage["adjacent_rgb_difference_rms"] == [0.0] * 12
+        assert stage["adjacent_luma_mean_change"] == [0.0] * 12
+        assert stage["adjacent_frame_geometry"]["frames"] == list(range(184, 196))
+        assert stage["adjacent_frame_geometry_upper45"]["frames"] == list(range(184, 196))
+    assert report["final_adjacent_frame_geometry"] is report["stages"]["final"]["adjacent_frame_geometry"]
     encoded = json.dumps(report, allow_nan=False)
     assert str(directory) not in encoded
     assert "tensor(" not in encoded
+
+
+def test_temporal_increment_locates_new_stage_discontinuity_without_confusing_stable_bias(bundle, monkeypatch):
+    directory, _manifest, _video = bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class TemporalVAE(FakeVAE):
+        def decode(self, value):
+            pixels = super().decode(value)
+            stage = len(self.inputs) - 1
+            times = torch.arange(39, dtype=pixels.dtype)[None, :, None, None, None]
+            pixels += 0.1 + times * 0.001  # Same smooth motion in every stage.
+            if stage >= 1:
+                pixels += 0.02  # Stable provider-to-pre-high bias, no temporal edge.
+            if stage >= 2:
+                pixels[:, 18:] += 0.1  # First high creates a step at assembled frame 188.
+            return pixels
+
+    vae = TemporalVAE()
+    rng = torch.random.get_rng_state().clone()
+    report = audit.audit_local_boundary(vae, directory, 175, lambda value: value)
+    assert report["extra_vae_calls"] == len(vae.inputs) == 5
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    index = report["stages"]["pre_high"]["frame_labels"].index(188)
+    for stage in ("provider", "pre_high"):
+        assert report["stages"][stage]["adjacent_rgb_difference_rms"] == pytest.approx([0.001] * 12, abs=1e-7)
+    for stage in ("first_high_before_flow", "first_high_after_flow", "final"):
+        expected = [0.001] * 12
+        expected[index] = 0.101
+        assert report["stages"][stage]["adjacent_rgb_difference_rms"] == pytest.approx(expected, abs=1e-7)
+    for pair, measurement in report["comparisons"].items():
+        expected = [0.0] * 12
+        if pair == "pre_high_to_first_high_before_flow":
+            expected[index] = 0.1
+        assert measurement["temporal_increment_change_rms"] == pytest.approx(expected, abs=1e-7)
 
 
 def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path):

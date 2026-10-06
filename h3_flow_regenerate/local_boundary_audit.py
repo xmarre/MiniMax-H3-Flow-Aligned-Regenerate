@@ -292,12 +292,14 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out):
         pixels[name] = decoded[0, begin - 1 : end].detach().float().cpu().clone()
         report["extra_vae_calls"] += 1
         del decoded
-        frames = pixels[name][1:]
+        frames = pixels[name]
         luma = frames @ torch.tensor([0.2126, 0.7152, 0.0722])
         report["stages"][name] = {
             "frame_labels": labels,
-            "luma_mean": luma.mean((1, 2)).tolist(),
-            "luma_std": luma.std((1, 2), correction=0).tolist(),
+            "luma_mean": luma[1:].mean((1, 2)).tolist(),
+            "luma_std": luma[1:].std((1, 2), correction=0).tolist(),
+            "adjacent_rgb_difference_rms": (frames[1:] - frames[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
+            "adjacent_luma_mean_change": (luma[1:] - luma[:-1]).mean((1, 2)).tolist(),
         }
     pairs = [
         ("provider", "pre_high"),
@@ -308,15 +310,28 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out):
     for left, right in pairs:
         LOG.info("H3 local boundary audit: comparing %s to %s", left, right)
         a, b = pixels[left][1:], pixels[right][1:]
+        a_previous, b_previous = pixels[left][:-1], pixels[right][:-1]
         report["comparisons"][f"{left}_to_{right}"] = {
             "frame_labels": labels,
             "rgb_difference_rms": (b - a).square().mean((1, 2, 3)).sqrt().tolist(),
+            # Difference between temporal increments, not a speech/scene-cut or
+            # defect classifier. It distinguishes a stable per-stage change from
+            # one that develops between these two adjacent pixel times.
+            "temporal_increment_change_rms": (
+                ((b - b_previous) - (a - a_previous)).square().mean((1, 2, 3)).sqrt().tolist()
+            ),
             "geometry": geometry_comparison(a, b, labels),
             "geometry_upper45": geometry_comparison(
                 a[:, : round(a.shape[1] * 0.45)], b[:, : round(b.shape[1] * 0.45)], labels
             ),
         }
-    report["final_adjacent_frame_geometry"] = geometry_comparison(pixels["final"][:-1], pixels["final"][1:], labels)
+    for name, frames in pixels.items():
+        LOG.info("H3 local boundary audit: measuring temporal continuity of %s", name)
+        report["stages"][name]["adjacent_frame_geometry"] = geometry_comparison(frames[:-1], frames[1:], labels)
+        upper = frames[:, : round(frames.shape[1] * 0.45)]
+        report["stages"][name]["adjacent_frame_geometry_upper45"] = geometry_comparison(upper[:-1], upper[1:], labels)
+    # Preserve the existing final-stage field for report consumers.
+    report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
     return report
 
 

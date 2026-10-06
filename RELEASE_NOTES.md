@@ -1,5 +1,11 @@
 # Unreleased: consistent target-band handoff
 
+- Local Boundary Audit measures adjacent-frame geometry and RGB/luminance
+  changes for every saved stage, and compares temporal pixel increments across
+  stages. This fills the gap between same-frame stage differences and temporal
+  discontinuities. It uses already decoded pixels, keeps five VAE calls and
+  adds CPU affine fitting. The original final-stage geometry field is retained.
+
 - Local Boundary Audit accepts quoted paths and translates Explorer's
   `\\wsl.localhost\...` and `\\wsl$\...` paths to Linux when the distribution
   matches the running WSL environment. Invalid cross-platform paths and missing

@@ -299,6 +299,12 @@ frames across stages, and reports translation, scale/shear gradients, RGB
 differences and luminance statistics. Full-frame and upper-region affine fits
 are diagnostic estimates; moving subjects, changed details and weak texture
 can confound them. They do not establish rendered acceptance.
+Adjacent-frame geometry and RGB/luminance changes are measured for every stage.
+Stage comparisons also report how much the temporal pixel increment changes,
+which helps distinguish a stable refinement difference from one that develops
+between adjacent frames. These measurements do not classify motion or cuts as
+defects. The extra comparisons use already decoded pixels and add CPU fitting
+work without additional VAE calls.
 
 Only numerical JSON is saved in `output/h3_flow_regenerate/boundary_audits` and
 returned by the node. Images, prompts and binary operands are not included in
