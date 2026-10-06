@@ -142,11 +142,28 @@ With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
 first reduced-grid token after the band and is measured against the target-grid
 head. The band must leave at least one generated token on the reduced grid.
 The mode requires `handoff_transfer_control=learned_3d`,
-`vdn_temporal_carrier_policy=native_grid_then_map_v1`,
 `prefix_transformer_context=exact_target_partitioned`, the main handoff and
 guidance sources and boundary-witness capture off.
 It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
 native partition carrier. Unsupported combinations fail before sampling.
+
+The default `vdn_temporal_carrier_policy=native_grid_then_map_v1` applies each
+neighbor's spatial short-convolution on that neighbor's grid before resampling
+it for a temporal tap. The opt-in `destination_grid_stencil_v1` resamples the
+raw projected neighbor onto the receiving frame's grid before applying the
+checkpoint spatial convolution. This keeps a temporal tap's spatial stencil
+on the receiving grid while retaining cross-grid temporal coupling. Same-grid
+taps are unchanged. Use `vdn_linear_diagnostic=normal` with this policy; it
+cannot be combined with cross-grid tap suppression. Paired VDN checkpoint
+capability and completed carrier work are verified. High refinement restores
+the native policy. The destination policy uses the batched linear path rather
+than the fused short-convolution path, so wall time requires measurement.
+Rendered quality of this target-band combination remains unqualified.
+
+`vdn_linear_diagnostic=suppress_cross_grid_temporal_taps` remains available as
+an ablation: it removes only temporal taps crossing the grid boundary, retaining
+same-grid taps and the learned linear complement. Improvement under suppression
+does not establish that the destination policy produces the same improvement.
 
 For stage localization, set `frame_gauge_residual_mode=measure`. Target-band
 runs export the native decoder window and full video snapshots of the low/probe

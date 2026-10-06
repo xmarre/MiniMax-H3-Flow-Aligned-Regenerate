@@ -21,6 +21,8 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+    PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+    PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
     PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
     apply_partitioned_diagnostic_controls,
     resolve_partitioned_suffix_dc_bridge,
@@ -115,7 +117,6 @@ def test_target_band_tokens_are_published_only_for_the_band_arm():
     ("override", "error"),
     [
         ({"handoff_transfer_control": PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL}, "learned_3d"),
-        ({"vdn_temporal_carrier_policy": PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION}, "native_grid_then_map_v1"),
         ({"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE}, "exact_target_partitioned"),
         ({"low_probe_execution_source": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY}, "main_then_shadow"),
         ({"av_handoff_source": PARTITIONED_AV_HANDOFF_SOURCE_SHADOW}, "main partitioned"),
@@ -124,6 +125,26 @@ def test_target_band_tokens_are_published_only_for_the_band_arm():
 def test_target_band_rejects_unsupported_companion_selectors(override, error):
     with pytest.raises(ValueError, match=error):
         _apply(spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND, **override)
+
+
+def test_target_band_destination_stencil_preserves_other_controls_and_rejects_suppression():
+    transformer, fields = _apply(
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        target_band_tokens=7,
+        suffix_dc_bridge=False,
+    )
+    assert transformer[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY] == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    assert transformer[PARTITIONED_TARGET_BAND_TOKENS_KEY] == 7
+    assert transformer[PARTITIONED_SUFFIX_DC_BRIDGE_KEY] is False
+    assert transformer["keep"] == "value"
+    assert fields["vdn_temporal_carrier_policy"] == PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION
+    with pytest.raises(ValueError, match="vdn_linear_diagnostic='normal'"):
+        _apply(
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        )
 
 
 def _bridge_operands():

@@ -1490,8 +1490,7 @@ def _validate_target_band_configuration(
     unsupported = []
     if handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
         unsupported.append("handoff_transfer_control must be 'learned_3d'")
-    if vdn_temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
-        unsupported.append(f"vdn_temporal_carrier_policy must be {PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE!r}")
+    normalize_vdn_temporal_carrier_policy(vdn_temporal_carrier_policy)
     if prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
         unsupported.append(f"prefix_transformer_context must be {PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT!r}")
     if low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:

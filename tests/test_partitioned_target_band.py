@@ -325,7 +325,6 @@ def test_head_dc_bridge_corrects_only_the_first_transferred_tail_token(enabled):
     ("override", "error"),
     [
         ({"handoff_transfer_control": "bicubic_same_source_control"}, "learned_3d"),
-        ({"vdn_temporal_carrier_policy": "destination_grid_stencil_v1"}, "vdn_temporal_carrier_policy"),
         ({"prefix_transformer_context": "source_carrier_uniform"}, "prefix_transformer_context"),
         ({"low_probe_execution_source": "source_carrier_uniform_only"}, "low_probe_execution_source"),
         ({"guidance_trajectory_source": "source_carrier_uniform_shadow"}, "main partitioned sources"),
@@ -349,6 +348,7 @@ def test_runtime_configuration_rejects_unimplemented_band_combinations(override,
     )
     _validate_target_band_configuration(**fields)
     _validate_target_band_configuration(**dict(fields, residual_mode="measure"))
+    _validate_target_band_configuration(**dict(fields, vdn_temporal_carrier_policy="destination_grid_stencil_v1"))
     if override == "witness":
         override = {"model_options": {WITNESS_DIRECTORY_OPTION: "/tmp/witness"}}
     fields.update(override)

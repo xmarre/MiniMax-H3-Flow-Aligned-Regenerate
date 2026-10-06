@@ -355,6 +355,49 @@ def _events(metrics, kind):
     return [event.fields for event in metrics.events if event.kind == kind]
 
 
+def test_band_destination_contract_reaches_core_and_refuses_missing_vdn_work(monkeypatch):
+    """Core/Sol fixture verifies transport; its unpatched VDN branch must fail verification."""
+    from h3_flow_regenerate import partitioned_transformer as transform
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+        PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
+    )
+
+    make_owner = _vdn_owner
+
+    def capable_owner():
+        owner = make_owner()
+        owner._vdn_partitioned_temporal_carrier_api = 1
+        owner._vdn_partitioned_temporal_carrier_policies = (PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,)
+        owner._vdn_partitioned_temporal_carrier_short_conv_spec = "vdn_solve_short_conv_v1|test"
+        return owner
+
+    monkeypatch.setitem(globals(), "_vdn_owner", capable_owner)
+    publish = transform._partitioned_transformer_options
+    observed = []
+
+    def capture(*args, **kwargs):
+        result = publish(*args, **kwargs)
+        runtime = kwargs["runtime"]
+        contract = result[PARTITIONED_VDN_TEMPORAL_CARRIER_KEY]
+        observed.append((runtime.target_band.head_t, runtime.plan.prefix_t, contract))
+        return result
+
+    monkeypatch.setattr(transform, "_partitioned_transformer_options", capture)
+    with pytest.raises(RuntimeError, match="no verified cross-grid carrier work"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            extra_transformer_options={
+                PARTITIONED_TARGET_BAND_TOKENS_KEY: 2,
+                PARTITIONED_VDN_TEMPORAL_CARRIER_KEY: PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
+            },
+        )
+    assert observed
+    assert all(head == PROTECTED_T + 2 and protected == PROTECTED_T for head, protected, _ in observed)
+    assert len({contract["numerical_digest"] for _, _, contract in observed}) == 1
+
+
 def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(monkeypatch, tmp_path):
     import runpy
     import sys

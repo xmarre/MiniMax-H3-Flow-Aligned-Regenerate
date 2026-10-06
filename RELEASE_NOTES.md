@@ -1,5 +1,14 @@
 # Unreleased: consistent target-band handoff
 
+- Target-band continuation now accepts the existing opt-in
+  `vdn_temporal_carrier_policy=destination_grid_stencil_v1`. Cross-grid temporal
+  neighbors are resampled before the checkpoint spatial convolution, retaining
+  coupling with the receiving grid's stencil. Paired VDN capability, completed
+  work and high-stage policy cleanup remain required. Use
+  `vdn_linear_diagnostic=normal`; tap suppression is a separate ablation.
+  Defaults are unchanged. This policy uses the batched linear path; target-band
+  rendered quality and runtime require validation.
+
 - Local Boundary Audit adds opt-in `transfer_and_decoder_context` scope. It
   validates and decodes the saved uniform reduced-grid handoff view, and compares
   the same five frame times from standalone decoder windows near the band/tail edge at every

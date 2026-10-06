@@ -402,16 +402,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             },
         )
         # Append after the witness toggle so every existing serialized widget index
-        # remains stable. The candidate is hardware-gated and never the default.
+        # remains stable. The candidate requires paired capability and is never the default.
         spec["required"]["vdn_temporal_carrier_policy"] = (
             list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS),
             {
                 "default": PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
                 "tooltip": (
                     "native_grid_then_map_v1 preserves the current VDN short-conv arithmetic. "
-                    "destination_grid_stencil_v1 is the hardware-gated candidate C: only cross-grid "
+                    "destination_grid_stencil_v1 supports exact-prefix and target-band continuation: cross-grid "
                     "temporal taps map the raw projected feature to the receiving frame lattice "
-                    "before the checkpoint spatial stencil; same-grid work is unchanged."
+                    "before the checkpoint spatial stencil. Requires vdn_linear_diagnostic=normal "
+                    "and paired VDN capability; same-grid work is unchanged."
                 ),
             },
         )

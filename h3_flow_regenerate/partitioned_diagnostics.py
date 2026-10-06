@@ -447,8 +447,6 @@ def apply_partitioned_diagnostic_controls(
     if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
         if handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
             raise ValueError("progressive_target_band requires handoff_transfer_control='learned_3d'")
-        if temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
-            raise ValueError("progressive_target_band requires vdn_temporal_carrier_policy='native_grid_then_map_v1'")
         if prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT:
             raise ValueError("progressive_target_band requires prefix_transformer_context='exact_target_partitioned'")
         if execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW:
