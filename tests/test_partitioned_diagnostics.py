@@ -1478,6 +1478,7 @@ def test_source_carrier_audio_position_allows_linear_discriminator_arms():
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     ):
         _validate_audio_position_candidate_configuration(
             PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -1489,7 +1490,7 @@ def test_source_carrier_audio_position_allows_linear_discriminator_arms():
         _validate_audio_position_candidate_configuration(
             PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+            "unsupported_linear_mode",
         )
 
 

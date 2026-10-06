@@ -38,6 +38,12 @@ handoff state through ComfyUI's Euler, res_multistep and euler_ancestral sampler
 on a small CPU model with a bicubic provider; rendered quality on the trained
 model still requires a matched run.
 
+`vdn_linear_diagnostic=raw_token_measure` is now accepted together with
+`audio_position_domain=source_carrier`, so the attention-measure diagnostic can
+run on the default continuation profile. The audio-position policy changes only
+block-0 RoPE positions; the raw-token measure changes only VDN's target-prefix
+key measure and linear measure scales, and each keeps its own verification.
+
 The review follow-up measures the raw provider boundary inside the clean hook,
 so it no longer retains a full provider video solely for later diagnostics.
 The existing `measure` selector controls the eight additional FFT trajectory

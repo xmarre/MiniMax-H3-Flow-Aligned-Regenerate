@@ -1349,15 +1349,19 @@ def _validate_audio_position_candidate_configuration(
         raise PartitionedPreflightUnsupported(
             "source_carrier audio-position candidate requires prefix_transformer_context='exact_target_partitioned'"
         )
+    # The audio-position policy rewrites block-0 RoPE positions only. These VDN
+    # modes change the linear complement or the target-prefix key measure and
+    # leave positions untouched, so each is verified by its own counters.
     compatible_vdn_modes = {
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     }
     if vdn_linear_diagnostic not in compatible_vdn_modes:
         raise PartitionedPreflightUnsupported(
             "source_carrier audio-position candidate requires vdn_linear_diagnostic="
-            "'normal', 'bypass_partitioned_linear', or 'suppress_cross_grid_temporal_taps'"
+            "'normal', 'bypass_partitioned_linear', 'suppress_cross_grid_temporal_taps' or 'raw_token_measure'"
         )
 
 
