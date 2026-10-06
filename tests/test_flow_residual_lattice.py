@@ -312,14 +312,12 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
         transfer_metrics={},
         clean_video_postprocess=None,
         spatial_stage_control="learned",
-        transfer_lattice=scheduler.H3_TRANSFER_LATTICE,
         build_handoff_state=capture,
     )
     program = ast.fix_missing_locations(ast.Module(body=[contract, assignment, provenance, handoff], type_ignores=[]))
     exec(compile(program, scheduler.__file__, "exec"), env)
     assert len(calls) == 1
     assert calls[0]["noise_mode"] == expected_mode
-    assert calls[0]["drift_lattice"] == scheduler.H3_TRANSFER_LATTICE
     assert calls[0]["initial_source_noise"] is (noise if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None)
     assert calls[0]["model_noise_scale"] == (1.7 if expected_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0)
     assert len(env["effective_upscaler"].calls) == 1
@@ -333,44 +331,3 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
             else "stochastic_or_unverified_sampler_gaussian_refinement"
         )
     assert env["transfer_metrics"]["handoff_noise"]["policy"] == expected_mode
-
-
-@pytest.mark.parametrize(
-    "lattice_name,center_sign",
-    [
-        ("h3_dense_patch_center_lattice_v2", -1),
-        ("h3_rope_box_half_pixel_lattice_v1", 1),
-    ],
-)
-def test_selected_lattice_moves_only_drift_and_preserves_scaled_gaussian(lattice_name, center_sign):
-    source_h, source_w, target_h, target_w = 8, 12, 12, 16
-    initial = torch.randn(1, 1, 2, source_h, source_w, generator=torch.Generator().manual_seed(812))
-    y = torch.arange(source_h, dtype=torch.float32)[:, None]
-    x = torch.arange(source_w, dtype=torch.float32)[None, :]
-    drift = ((y + x) / 10)[None, None, None].expand_as(initial)
-    scale = 1.7
-    gaussian, _ = refine_h3_patch_lattice_residual(initial, target_h=target_h, target_w=target_w, seed=67)
-    actual, receipt = refine_h3_flow_residual(
-        initial * scale + drift,
-        initial,
-        target_h=target_h,
-        target_w=target_w,
-        seed=67,
-        noise_scale=scale,
-        lattice=lattice_name,
-    )
-    source_area, target_area = math.sqrt(source_h * source_w), math.sqrt(target_h * target_w)
-    source_step, target_step = 32 / source_area, 32 / target_area
-
-    def source_indices(source_n, target_n):
-        source_origin = 16 * (1 - source_n / source_area) + center_sign * source_step / 2
-        target_origin = 16 * (1 - target_n / target_area) + center_sign * target_step / 2
-        return ((target_origin + torch.arange(target_n) * target_step - source_origin) / source_step).clamp(
-            0, source_n - 1
-        )
-
-    expected_drift = (source_indices(source_h, target_h)[:, None] + source_indices(source_w, target_w)[None, :]) / 10
-    expected = gaussian * scale + expected_drift[None, None, None]
-    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-5)
-    assert receipt["drift_lattice"] == lattice_name
-    assert receipt["gaussian_noise_scale"] == scale

@@ -38,35 +38,6 @@ handoff state through ComfyUI's Euler, res_multistep and euler_ancestral sampler
 on a small CPU model with a bicubic provider; rendered quality on the trained
 model still requires a matched run.
 
-## Selectable cross-grid lattice
-
-The diagnostic node adds `transfer_lattice` (last widget, so saved workflows
-load unchanged). H3 places patch `k` of an axis at
-`16*(1-n/sqrt(A)) + 2k*32/sqrt(A)`: the interval starts of an `endpoint=False`
-tiling of a box centred on 16. The existing `h3_dense_patch_center_lattice_v2`
-reads each position as the patch centre. The new
-`h3_rope_box_half_pixel_lattice_v1` reads it as the patch start and places
-latent cells at half-pixel centres of the box, which equals the upscaler's
-trained half-pixel map whenever aspect ratios match. Between different grids
-the two maps differ by one constant offset in their source sampling
-coordinates. This operator relation does not establish the displacement of learned decoder output: border
-clamping and nonlinear decoder blocks can change that response.
-
-- The choice applies to the prefix source carrier, the target-band reduced-grid
-  views, the learned transfer (through the provider's new
-  `spatial_lattice` argument) and dense drift transport. Paired VDN cross-grid
-  temporal taps are unchanged and stay on the patch-centre map.
-- `partitioned_transfer_lattice` and `partitioned_prefix_source_resample`
-  report the lattice actually used; `partitioned_transfer_lattice` also
-  reports `vdn_temporal_tap_lattice`.
-- The default is unchanged. Which lattice matches H3's cross-resolution
-  placement is an empirical question that needs a matched rendered comparison.
-- Requires Latent Upscaler-Plus with `h3_transport_lattices`; Flow rejects the
-  RoPE-box setting before sampling with an older provider.
-- Paired source tests require both advertised maps. End-to-end tests exercise
-  the selected transfer, independent handoff noise, guidance trajectory views
-  and byte-identical target-band low/probe execution.
-
 The review follow-up measures the raw provider boundary inside the clean hook,
 so it no longer retains a full provider video solely for later diagnostics.
 The existing `measure` selector controls the eight additional FFT trajectory

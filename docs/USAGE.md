@@ -81,7 +81,6 @@ softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
 suffix_dc_bridge                 = true
 target_band_tokens               = 4
-transfer_lattice                 = h3_dense_patch_center_lattice_v2
 ```
 
 Continuation low/probe and high share the target grid. Clean/residual transfer
@@ -170,23 +169,6 @@ same-grid join next to the carried prefix at a lower low/probe cost.
 - `target_band_tokens` counts H3 temporal latent tokens. It must leave at least
   one generated token on the reduced grid; otherwise the chunk fails before
   sampling.
-- `transfer_lattice` chooses how reduced-grid and target-grid latent cells are
-  aligned wherever continuation moves content between grids: the source-carrier
-  projection of the prefix (and band), the learned transfer and, for frame-gauge
-  repair, the drift transport. H3 gives patch `k` of an axis the position
-  `16*(1-n/sqrt(A)) + 2k*32/sqrt(A)`, the interval start of an `endpoint=False`
-  tiling of a box centred on 16. `h3_dense_patch_center_lattice_v2` (default)
-  reads that position as the patch centre. `h3_rope_box_half_pixel_lattice_v1`
-  reads it as the patch start and places latent cells at half-pixel centres of
-  the box; for equal source/target aspect ratios that is exactly the upscaler's
-  trained half-pixel map. Between different grids the two differ by one
-  offset in source sampling coordinates of
-  `1 - sqrt(source_area/target_area)` cells. Border clamping and the learned
-  decoder mean this does not imply the same translation in generated frames.
-  Which reading matches H3's own cross-resolution placement has not been established on
-  rendered output; compare both on the same seed. The RoPE-box lattice requires
-  an upscaler provider that advertises it in `h3_transport_lattices`. Paired
-  VDN cross-grid temporal taps keep the patch-centre map in both settings.
 - Low/probe video rows are `(prefix + band) x target rows + tail x source rows`.
   Every actual low/probe evaluation also processes the text, reference and audio
   rows. The video input projection and final layer process the full target-sized
