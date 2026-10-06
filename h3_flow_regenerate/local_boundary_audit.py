@@ -172,17 +172,25 @@ def geometry_comparison(reference, candidate, frame_labels):
     b = F.interpolate(candidate.permute(0, 3, 1, 2), (height, width), mode="area")
     sx, sy = w / width, h / height
     fitted_frames = []
+    textured = (a.var((-1, -2), correction=0).mean(1) > 1e-12) & (b.var((-1, -2), correction=0).mean(1) > 1e-12)
     for start in range(0, len(frame_labels), 4):
         stop = min(start + 4, len(frame_labels))
-        exact = a[start:stop].permute(1, 0, 2, 3)[None]
-        learned = b[start:stop].permute(1, 0, 2, 3)[None]
-        fit = measure_paired_prefix_affine(learned, exact, prefix_t=stop - start, frames=stop - start)
+        indices = [i for i in range(start, stop) if bool(textured[i])]
+        for i in range(start, stop):
+            if not bool(textured[i]):
+                fitted_frames.append({"frame": frame_labels[i], "status": "insufficient_texture"})
+        if not indices:
+            continue
+        exact = a[indices].permute(1, 0, 2, 3)[None]
+        learned = b[indices].permute(1, 0, 2, 3)[None]
+        fit = measure_paired_prefix_affine(learned, exact, prefix_t=len(indices), frames=len(indices))
         for row in fit.get("frames", []):
             dx, dy = row["center_dx_dy_cells"]
             g = row["affine_displacement_gradients"]
             fitted_frames.append(
                 {
-                    "frame": frame_labels[start + row["frame"]],
+                    "frame": frame_labels[indices[row["frame"]]],
+                    "status": "estimated",
                     "center_dx_dy_pixels": [dx * sx, dy * sy],
                     "displacement_gradients": [[g[0][0], g[0][1] * sx / sy], [g[1][0] * sy / sx, g[1][1]]],
                     "zero_huber": row["zero_huber"],
@@ -191,11 +199,11 @@ def geometry_comparison(reference, candidate, frame_labels):
                 }
             )
     return {
-        "status": "measured",
+        "status": "estimated" if bool(textured.any()) else "insufficient_texture",
         "analysis_hw": [height, width],
         "sign_convention": "sample candidate at (x-dx,y-dy) to compare with reference",
         "fit_is_diagnostic_not_causal_proof": True,
-        "frames": fitted_frames,
+        "frames": sorted(fitted_frames, key=lambda row: row["frame"]),
     }
 
 

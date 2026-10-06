@@ -223,6 +223,16 @@ def test_affine_measurement_detects_scale_and_shear_as_distinct_from_translation
     assert row["affine_huber"] < row["zero_huber"] * 0.5
 
 
+def test_untextured_regions_are_not_reported_as_zero_geometric_shift():
+    pixels = torch.zeros(2, 64, 80, 3)
+    report = audit.geometry_comparison(pixels, pixels, [188, 189])
+    assert report["status"] == "insufficient_texture"
+    assert report["frames"] == [
+        {"frame": 188, "status": "insufficient_texture"},
+        {"frame": 189, "status": "insufficient_texture"},
+    ]
+
+
 def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(bundle):
     root = os.environ.get("COMFYUI_ROOT")
     if root is None:
