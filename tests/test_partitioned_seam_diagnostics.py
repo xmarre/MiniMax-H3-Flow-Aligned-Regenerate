@@ -593,3 +593,51 @@ def test_exact_overlap_fallback_rejects_ambiguous_hardware_shadow_boundary():
 
     assert eligible is False
     assert trigger == "boundary_full_candidate_clipped"
+
+
+@pytest.mark.parametrize("tail_t", [1, 4])
+def test_band_tail_default_diagnostics_skip_fft_and_preserve_video(monkeypatch, tail_t):
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+    from h3_flow_regenerate.partitioned_stage import PartitionedTargetBandGeometry
+
+    band = PartitionedTargetBandGeometry(2, 2, 4 + tail_t, 4, 6, 8, 12)
+    video = torch.randn(1, 24, band.temporal, 8, 12)
+    original = video.clone()
+    events = []
+
+    class Metrics:
+        def event(self, name, **fields):
+            events.append((name, fields))
+
+    def forbidden_fft(*args, **kwargs):
+        raise AssertionError("ordinary target-band diagnostics must not fit trajectories")
+
+    monkeypatch.setattr(scheduler, "measure_translation_trajectory", forbidden_fft)
+    scheduler._emit_target_band_tail_boundary(
+        Metrics(),
+        video,
+        band,
+        stage="provider_native",
+        measure_trajectory=False,
+    )
+    assert torch.equal(video, original)
+    assert len(events) == 1
+    name, fields = events[0]
+    assert name == "partitioned_target_band_tail_seam"
+    assert fields["boundary_t"] == band.head_t
+    assert fields["boundary_seam_rms"] > 0
+    assert ("after_seam_rms" in fields) is (tail_t > 1)
+
+
+def test_band_overlap_reports_energy_and_dc_without_mutation():
+    from h3_flow_regenerate.seam_diagnostics import measure_target_band_overlap
+
+    native = torch.arange(2 * 8 * 12, dtype=torch.float32).reshape(1, 1, 2, 8, 12) / 100
+    provider = native + 0.25
+    before_native, before_provider = native.clone(), provider.clone()
+    receipt = measure_target_band_overlap(native, provider)
+    assert receipt["delta_spatial_mean_rms_per_frame"] == pytest.approx([0.25, 0.25])
+    assert receipt["delta_lowpass_rms_per_frame"] == pytest.approx([0.25, 0.25])
+    assert receipt["transferred_over_native_highpass_ratio"] == pytest.approx(1.0, abs=1e-5)
+    assert torch.equal(native, before_native)
+    assert torch.equal(provider, before_provider)

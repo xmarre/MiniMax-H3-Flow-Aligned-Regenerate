@@ -413,6 +413,16 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     assert len(affine) == 1 and [frame["frame"] for frame in affine[0]["frames"]] == [12, 13, 14, 15]
     assert affine[0]["output_mutated"] is False
     assert not _events(control.metrics, "partitioned_target_band_same_frame_affine")
+    trajectories = _events(measured.metrics, "partitioned_target_band_tail_trajectory")
+    assert [(event["stage"], event["roi"]) for event in trajectories] == [
+        (stage, roi)
+        for stage in ("source_low", "provider_native", "pre_high", "final_post_high")
+        for roi in ("upper45", "full")
+    ]
+    assert all(event["boundary_t"] == 16 and event["output_mutated"] is False for event in trajectories)
+    assert trajectories[0]["grid"] == "source"
+    assert all(event["grid"] == "target" for event in trajectories[2:])
+    assert not _events(control.metrics, "partitioned_target_band_tail_trajectory")
     assert torch.equal(before_high[:, :, 17:], provider[:, :, 17:])
     assert tensors["first_high_before_flow_full"].shape[2] == TEMPORAL
     assert not torch.equal(tensors["first_high_before_flow_full"], tensors["first_high_after_flow_full"])
@@ -547,12 +557,7 @@ def test_target_band_renoises_its_native_band_with_the_tail_noise(monkeypatch):
     assert overlap[0]["output_mutated"] is False
 
     stages = ["source_low", "provider_native", "pre_high", "final_post_high"]
-    trajectories = _events(run.metrics, "partitioned_target_band_tail_trajectory")
-    assert [(event["stage"], event["roi"]) for event in trajectories] == [
-        (stage, roi) for stage in stages for roi in ("upper45", "full")
-    ]
-    assert all(event["boundary_t"] == head and event["output_mutated"] is False for event in trajectories)
-    assert trajectories[0]["grid"] == "source" and all(event["grid"] == "target" for event in trajectories[2:])
+    assert not _events(run.metrics, "partitioned_target_band_tail_trajectory")
     seams = _events(run.metrics, "partitioned_target_band_tail_seam")
     assert [event["stage"] for event in seams] == stages
     for event in seams:

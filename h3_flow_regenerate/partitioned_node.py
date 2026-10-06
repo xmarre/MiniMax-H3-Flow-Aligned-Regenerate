@@ -367,7 +367,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": "off",
                 "tooltip": (
                     "measure exports existing low/high stage tensors without changing sampling. "
-                    "Target-band runs also export full video snapshots within a 256 MiB CPU budget. "
+                    "Target-band runs also fit band/tail trajectories and export full video snapshots "
+                    "within a 256 MiB CPU budget. "
                     "Accepted rigid transactions additionally record bounded regional residual geometry. "
                     "CPU copies and file I/O add diagnostic overhead; off disables these exports."
                 ),
@@ -439,7 +440,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
                     "progressive_low_to_high selects the configured reduced continuation grid. "
                     "progressive_target_band keeps the first target_band_tokens generated tokens after the "
-                    "protected prefix on the target grid with identity handoff, and runs the remaining "
+                    "protected prefix on the target grid, keeps their native clean prediction and re-noises "
+                    "all generated tokens. It runs the remaining "
                     "continuation tokens on the reduced grid with learned transfer."
                 ),
             },

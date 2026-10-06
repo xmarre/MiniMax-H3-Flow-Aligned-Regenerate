@@ -16,9 +16,10 @@ the tail started from a clean estimate plus fresh Gaussian noise.
   also reports the fitted same-frame displacement. Neither adds a model,
   provider or VAE evaluation, and neither changes the output.
 - `partitioned_target_band_tail_trajectory` and `partitioned_target_band_tail_seam`
-  measure motion and seam size at the band/tail boundary for the low-stage
+  report seam size at the band/tail boundary for the low-stage
   reduced-grid view, the raw provider output, the pre-high clean operand and the
-  final video. Seams of the neighbouring token pairs are reported beside it. The
+  final video. Motion fitting runs only with `frame_gauge_residual_mode=measure`.
+  Seams of the neighbouring token pairs are reported beside it. The
   prefix-boundary `partitioned_multiframe_trajectory` receipts are unchanged; in
   target-band mode their `learned_native` stage measures the spliced handoff
   clean, not the raw provider output.
@@ -36,6 +37,12 @@ bridge and same-grid or progressive continuation are unchanged. Tests verify the
 handoff state through ComfyUI's Euler, res_multistep and euler_ancestral samplers
 on a small CPU model with a bicubic provider; rendered quality on the trained
 model still requires a matched run.
+
+The review follow-up measures the raw provider boundary inside the clean hook,
+so it no longer retains a full provider video solely for later diagnostics.
+The existing `measure` selector controls the eight additional FFT trajectory
+fits; ordinary runs retain the overlap and neighbouring-seam receipts.
+Sampling, exact-prefix ownership, attention policy and RNG are unchanged.
 
 ---
 

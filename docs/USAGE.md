@@ -162,7 +162,9 @@ same-grid join next to the carried prefix at a lower low/probe cost.
   native reduced-grid latent, so this rendering is diagnostic only and never
   enters the high stage. It adds no model or provider call. With
   `frame_gauge_residual_mode=measure`, `partitioned_target_band_same_frame_affine`
-  also fits the same-frame displacement between the two.
+  also fits the same-frame displacement between the two and band/tail motion
+  at low, raw-provider, pre-high and final stages. Ordinary runs keep overlap
+  and neighbouring-seam receipts without those FFT trajectory fits.
 
 - `target_band_tokens` counts H3 temporal latent tokens. It must leave at least
   one generated token on the reduced grid; otherwise the chunk fails before

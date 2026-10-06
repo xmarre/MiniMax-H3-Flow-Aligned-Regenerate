@@ -1629,17 +1629,19 @@ def _emit_target_band_tail_boundary(
     band: PartitionedTargetBandGeometry,
     *,
     stage: str,
+    measure_trajectory: bool,
     source_hw: tuple[int, int] | None = None,
     target_hw: tuple[int, int] | None = None,
 ) -> None:
     """Record motion and seam evidence at the band/tail boundary for one stage.
 
-    Diagnostic only. The seam values of the two neighbouring token pairs are
-    reported beside the band/tail pair so a discontinuity can be told apart
+    FFT trajectory fitting is opt-in; inexpensive neighbouring seam receipts
+    remain available in ordinary runs. Diagnostic only. Neighbouring seam
+    values are reported beside the band/tail pair so a discontinuity can be told apart
     from ordinary frame-to-frame change.
     """
     boundary_t = int(band.head_t)
-    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
+    for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)) if measure_trajectory else ():
         trajectory = measure_translation_trajectory(
             video,
             boundary_t,
@@ -4115,6 +4117,7 @@ def run_partitioned_progressive(
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
         band_clean_video = None
+        measure_band_trajectory = normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure"
         if target_band is not None:
             if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
                 try:
@@ -4205,6 +4208,7 @@ def run_partitioned_progressive(
                 clean_video,
                 target_band,
                 stage="source_low",
+                measure_trajectory=measure_band_trajectory,
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
             )
@@ -4380,7 +4384,6 @@ def run_partitioned_progressive(
 
         clean_video_postprocess = None
         band_provider_native_clean: torch.Tensor | None = None
-        band_provider_trajectory_clean: torch.Tensor | None = None
         if target_band is not None:
             # The band keeps its own target-grid prediction, so the protected
             # prefix is followed by identical-grid content exactly as in same-grid
@@ -4396,6 +4399,15 @@ def run_partitioned_progressive(
                 band_provider_native_clean = learned_clean.detach().clone()
                 if boundary_window_evidence is not None:
                     boundary_window_evidence.capture("provider_native_clean", learned_clean)
+                # Measure before splicing while the provider operand is already live.
+                # Do not retain a full extra video through the handoff for diagnostics.
+                _emit_target_band_tail_boundary(
+                    binding.metrics,
+                    learned_clean,
+                    target_band,
+                    stage="provider_native",
+                    measure_trajectory=measure_band_trajectory,
+                )
                 # Diagnostic only: the provider's rendering of the band comes from a
                 # reduced-grid projection of a target-grid latent, not from a native
                 # reduced-grid latent, so it is compared with the band but never mixed in.
@@ -4770,7 +4782,6 @@ def run_partitioned_progressive(
                     sigma=sigma,
                     enabled=suffix_dc_bridge_enabled,
                 )
-                band_provider_trajectory_clean = band_provider_native_clean
                 band_provider_native_clean = None
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
@@ -5495,15 +5506,13 @@ def run_partitioned_progressive(
                 **restored_trajectory,
             )
         if target_band is not None:
-            if band_provider_trajectory_clean is None:
-                raise RuntimeError("target-band handoff lost the learned provider's raw output for diagnostics")
-            # The raw provider output, before the band splice: in target-band mode the
-            # prefix-boundary "learned_native" receipt measures the spliced handoff clean.
             _emit_target_band_tail_boundary(
-                binding.metrics, band_provider_trajectory_clean, target_band, stage="provider_native"
+                binding.metrics,
+                restored_clean,
+                target_band,
+                stage="pre_high",
+                measure_trajectory=measure_band_trajectory,
             )
-            band_provider_trajectory_clean = None
-            _emit_target_band_tail_boundary(binding.metrics, restored_clean, target_band, stage="pre_high")
         binding.metrics.increment("partitioned_splice_diagnostic_runs")
         binding.metrics.increment("partitioned_multiframe_trajectory_runs")
 
@@ -6326,7 +6335,13 @@ def run_partitioned_progressive(
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
         if target_band is not None:
-            _emit_target_band_tail_boundary(binding.metrics, final_video, target_band, stage="final_post_high")
+            _emit_target_band_tail_boundary(
+                binding.metrics,
+                final_video,
+                target_band,
+                stage="final_post_high",
+                measure_trajectory=measure_band_trajectory,
+            )
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             final_trajectory = measure_translation_trajectory(
                 final_video,
