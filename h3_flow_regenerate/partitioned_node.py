@@ -36,6 +36,10 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+    PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS,
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS,
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
@@ -514,6 +518,33 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after target_band_tokens so serialized widget positions remain stable.
+        spec["required"]["target_band_handoff_state"] = (
+            list(PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS),
+            {
+                "default": PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+                "tooltip": (
+                    "Used only by progressive_target_band. renoise_clean re-noises the band's clean "
+                    "prediction with the tail's independent handoff noise. carry_raw_band resumes the band "
+                    "from its actual low/probe sampler state at the handoff sigma; the protected prefix, "
+                    "tail and audio entry are unchanged. Experimental comparison control."
+                ),
+            },
+        )
+        spec["required"]["target_band_context"] = (
+            list(PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS),
+            {
+                "default": PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+                "tooltip": (
+                    "Used only by progressive_target_band low/probe. mixed_grid runs one transformer "
+                    "sequence containing target-grid prefix/band and reduced-grid tail. domain_uniform_v1 "
+                    "runs two uniform-grid hidden streams per model call: target prefix+band, and reduced "
+                    "projected prefix+band plus tail. The streams share no hidden state or conditioning "
+                    "rows; the learned band/tail handoff is unchanged. Experimental comparison control "
+                    "with additional low/probe compute."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -561,6 +592,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         video_guided_overlap_tokens=6,
         suffix_dc_bridge=True,
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+        target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+        target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -627,6 +660,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             video_guided_overlap_tokens=video_guided_overlap_tokens,
             suffix_dc_bridge=suffix_dc_bridge,
             target_band_tokens=target_band_tokens,
+            target_band_handoff_state=target_band_handoff_state,
+            target_band_context=target_band_context,
         )
 
 

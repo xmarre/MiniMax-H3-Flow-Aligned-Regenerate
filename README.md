@@ -75,6 +75,8 @@ softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
 suffix_dc_bridge                 = true
 target_band_tokens               = 4
+target_band_handoff_state        = renoise_clean
+target_band_context              = mixed_grid
 ```
 
 Flow defaults exact-prefix continuation to `same_grid_target_control`: low/probe
@@ -199,6 +201,72 @@ band's far edge, tone and audio against `same_grid_target_control` before using
 it for production output. The low/probe saving depends on the reduced-grid size:
 a larger `source_scale` (or larger explicit source size) leaves less to save, and
 the video-row reduction is not a wall-time measurement.
+
+#### Target-band comparison controls (opt-in)
+
+Two selectors apply only to `progressive_target_band`. Both default to the
+behaviour described above and publish no option leaf at their defaults. Either
+can be enabled independently. They are comparison controls, not qualified
+quality fixes. Requesting either one disables the target-grid fallback: an
+unsupported combination fails before sampling instead of running a different
+path.
+
+`target_band_handoff_state=carry_raw_band` resumes the band tokens from their
+actual low/probe sampler state at the handoff sigma. This is the same entry
+that `same_grid_target_control` uses for every generated token. The protected
+prefix, the re-noised tail (including the DC-bridged first tail token), audio
+and the high-stage masks are unchanged. The band stays fully generated in high.
+This control cannot change anything that low/probe has already produced.
+
+`target_band_context=domain_uniform_v1` changes only the low/probe transformer
+evaluation. Each model call evaluates two uniform-grid hidden streams through
+every block:
+
+- Target stream: text, references, the audio covering the head's duration, the
+  exact target-grid prefix and the target-grid band. Its layout and RoPE rows
+  are those of a native clip of `prefix + band` tokens on the target grid.
+- Source stream: text, references, all audio, the prefix and band projected to
+  the reduced grid, and the reduced-grid tail. Its layout and RoPE rows are
+  those of the native chunk on the reduced grid.
+
+Each stream owns its own conditioning rows. Within a model call, no attention
+key, VDN local window, global or anchor query, linear-complement state, or
+modulation/MLP row is shared between the streams. VDN and Sol see an ordinary
+equal-grid partition contract per stream, so key measures are unity. Row and
+column anchors are those of each stream's clip; the target stream's last band
+frame is an anchor of that stream. Band queries stay dense in both streams, and
+the source stream keeps the local group containing the first tail token dense,
+matching the mixed-grid path.
+
+The streams communicate only through the sampler state between model calls.
+The source stream reads the band's current state projected with the H3 physical
+lattice. Projection is a convex resample that lowers Gaussian noise variance,
+so a fixed complementary noise field restores the nominal per-cell variance of
+`sigma * noise_scale`. Both streams read the shared audio state. The band
+velocity comes from the target stream; tail and audio velocity come from the
+source stream. The protected prefix and padding remain excluded. The band
+cannot see tail hidden states within a call, so band content is produced as the
+end of a shorter clip. Clip lengths of the form `5k + 2` tokens match the H3
+temporal pattern; with a 12-token prefix, a 5-token band gives a 17-token
+target stream. The `partitioned_target_band_domain_plan` receipt reports this
+as `target_stream_native_clip_length`.
+
+The mode requires `vdn_linear_diagnostic=normal`, `softmax_diagnostic=normal`
+and `vdn_temporal_carrier_policy=native_grid_then_map_v1`: no cross-grid taps
+or non-unit key measures exist for those selectors to act on. Keyframe-anchored
+layouts and audio whose duration differs from the native video/audio relation
+are rejected. The audio-position selector does not apply because each stream
+uses its own native positions. Paired VDN-H3-Plus and Sol-H3 releases that
+accept domain-stream API 1 are required. Completed work is verified: every
+low/probe stage must run both streams through every transformer block.
+
+The learned band/tail handoff and the high stage are unchanged. This control
+therefore does not make the band and the upscaled tail one coherent trajectory.
+The source stream adds its projected head rows and both streams carry their own
+conditioning rows. Attention cost depends on the sum of the two sequences'
+squared lengths instead of the square of one combined length. Paired VDN weights
+that are streamed per block may be fetched twice. Wall time and peak memory
+require measurement.
 
 ### Suffix DC bridge
 

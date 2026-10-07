@@ -213,6 +213,86 @@ class PartitionedTargetBandGeometry:
         return index.reshape(-1)
 
 
+TARGET_BAND_DOMAIN_UNIFORM_POLICY = "domain_uniform_v1"
+TARGET_BAND_DOMAIN_STREAM_KEY = "h3_flow_partitioned_domain_stream_v1"
+TARGET_BAND_DOMAIN_STREAM_API = 1
+TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY = "h3_patch_lattice_projection_noise_variance_matched_v1"
+
+
+@dataclass(frozen=True, slots=True)
+class TargetBandDomainContext:
+    """Per-stage constants for target-band domain-uniform low/probe execution.
+
+    The target stream carries the protected prefix and the band on the target
+    grid. The source stream carries the protected prefix and band projected to
+    the reduced grid plus the reduced-grid tail. ``source_prefix`` is the H3
+    physical projection of the authoritative prefix and ``source_prefix_noise``
+    its visual-conditioning augmentation noise on that grid. The band carrier
+    is the projected band state plus ``band_noise_complement * sigma *
+    model_noise_scale * source_band_noise``: the projection is a convex
+    combination, so this restores the projected Gaussian noise variance to the
+    state's nominal per-cell variance without changing its expected signal.
+    """
+
+    policy: str
+    source_prefix: torch.Tensor
+    source_prefix_noise: torch.Tensor
+    source_band_noise: torch.Tensor
+    band_noise_complement: torch.Tensor
+    model_noise_scale: float
+
+    def __post_init__(self) -> None:
+        if self.policy != TARGET_BAND_DOMAIN_UNIFORM_POLICY:
+            raise ValueError(f"unsupported target-band domain policy {self.policy!r}")
+        tensors = (self.source_prefix, self.source_prefix_noise, self.source_band_noise)
+        if any(not isinstance(value, torch.Tensor) or value.ndim != 5 for value in tensors):
+            raise ValueError("target-band domain context requires BxCxTxHxW source tensors")
+        if tuple(self.source_prefix.shape) != tuple(self.source_prefix_noise.shape):
+            raise ValueError("target-band domain prefix noise does not match the projected prefix")
+        if tuple(self.source_prefix.shape[-2:]) != tuple(self.source_band_noise.shape[-2:]):
+            raise ValueError("target-band domain band noise is not on the projected prefix grid")
+        if tuple(self.band_noise_complement.shape) != tuple(self.source_band_noise.shape[-2:]):
+            raise ValueError("target-band domain noise complement does not match the reduced grid")
+        if not (self.model_noise_scale > 0.0 and torch.isfinite(torch.tensor(self.model_noise_scale))):
+            raise ValueError("target-band domain context requires a finite positive model noise scale")
+
+    @property
+    def numerical_identity(self) -> tuple[object, ...]:
+        return (
+            TARGET_BAND_DOMAIN_STREAM_KEY,
+            self.policy,
+            TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY,
+            tuple(map(int, self.source_prefix.shape)),
+            int(self.source_band_noise.shape[2]),
+            float(self.model_noise_scale),
+        )
+
+
+class PartitionedStageStreamView:
+    """Read-only per-stream view of a stage runtime for paired consumers.
+
+    Domain-uniform execution publishes one view per hidden stream. Every
+    attribute resolves to the stage owner except the stream's dense-query head.
+    """
+
+    __slots__ = ("_attention_head_t", "_owner", "stream")
+
+    def __init__(self, owner: PartitionedStageRuntime, *, stream: str, attention_head_t: int) -> None:
+        object.__setattr__(self, "_owner", owner)
+        object.__setattr__(self, "_attention_head_t", int(attention_head_t))
+        object.__setattr__(self, "stream", str(stream))
+
+    @property
+    def attention_head_t(self) -> int:
+        return self._attention_head_t
+
+    def __getattr__(self, name):
+        return getattr(self._owner, name)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("partitioned stream views are read-only")
+
+
 @dataclass(slots=True)
 class PartitionedStageRuntime:
     """One mutable owner whose identity is stable for one sampler-stage lifetime.
@@ -252,6 +332,8 @@ class PartitionedStageRuntime:
     # High keeps the band's local query groups dense without extending the
     # protected prefix or retaining the low/probe mixed-grid carrier.
     attention_head_t: int | None = None
+    # Present only for target-band low/probe stages using domain_uniform_v1.
+    target_band_domain: TargetBandDomainContext | None = None
 
 
 def build_partitioned_stage_plan(
@@ -503,10 +585,16 @@ def partitioned_mod_segments(segments, plan: PartitionedStagePlan, video_start: 
 __all__ = [
     "PARTITIONED_POSITION_POLICY_TAG",
     "PARTITIONED_STAGE_KEY",
+    "TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY",
+    "TARGET_BAND_DOMAIN_STREAM_API",
+    "TARGET_BAND_DOMAIN_STREAM_KEY",
+    "TARGET_BAND_DOMAIN_UNIFORM_POLICY",
     "PartitionedPositionPolicy",
     "PartitionedStagePlan",
     "PartitionedStageRuntime",
+    "PartitionedStageStreamView",
     "PartitionedTargetBandGeometry",
+    "TargetBandDomainContext",
     "build_partitioned_stage_plan",
     "partitioned_carrier_layout",
     "partitioned_mod_segments",

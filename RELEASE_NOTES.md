@@ -1,5 +1,24 @@
 # Unreleased: consistent target-band handoff
 
+- Add two opt-in `progressive_target_band` comparison controls. Defaults publish
+  no option leaf, so existing workflows and numerical identities are unchanged.
+  Requesting either disables the target-grid fallback.
+  - `target_band_handoff_state=carry_raw_band` resumes the band from its actual
+    low/probe sampler state at the handoff sigma. The prefix, re-noised tail,
+    audio and high masks are unchanged.
+  - `target_band_context=domain_uniform_v1` evaluates low/probe as two
+    uniform-grid hidden streams per model call: target-grid prefix and band, and
+    reduced-grid projected prefix, projected band and tail. Each stream has its
+    own conditioning rows and a native layout; no rows or keys are shared within
+    a call. Band velocity comes from the target stream, and tail/audio velocity
+    from the source stream. Requires normal VDN linear/softmax diagnostics, the
+    native temporal-carrier policy, and VDN-H3-Plus/Sol-H3 domain-stream API 1.
+    Completed execution of both streams through every block is verified, and the
+    runtime evidence gate accepts the per-stream boundary receipts.
+  - The learned band/tail handoff and high stage are unchanged. CPU oracles
+    establish routing, ownership and isolation. Rendered quality, wall time and
+    peak memory require GPU validation.
+
 - Local Boundary Audit adds opt-in `detail_region=upper_left`. It measures
   tone, temporal changes and affine geometry over the left third of the upper
   45% of each decoded canvas, including matching-time stage and decoder-context

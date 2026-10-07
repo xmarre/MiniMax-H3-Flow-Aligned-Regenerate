@@ -357,6 +357,38 @@ def resize_spatial_5d_h3_patch_lattice(
     return out.reshape(b, t, c, target_h, target_w).permute(0, 2, 1, 3, 4)
 
 
+def h3_patch_lattice_weight_square_sum(
+    source_h: int,
+    source_w: int,
+    target_h: int,
+    target_w: int,
+    *,
+    device: torch.device | str = "cpu",
+) -> torch.Tensor:
+    """Return sum(w**2) of the H3 physical resample weights for each output cell.
+
+    ``resize_spatial_5d_h3_patch_lattice`` is a separable bilinear map, so each
+    output cell is a convex combination of input cells. For white input noise
+    of variance one, the output variance at a cell is exactly this sum of
+    squared weights. The per-axis weight matrices are measured by applying the
+    actual resample to one-hot lines, so the result tracks that operator exactly.
+    """
+    source_h, source_w, target_h, target_w = map(int, (source_h, source_w, target_h, target_w))
+    rows = torch.zeros((1, 1, source_h, source_h, 1), dtype=torch.float32, device=device)
+    rows[0, 0, torch.arange(source_h), torch.arange(source_h), 0] = 1.0
+    rows = rows.expand(1, 1, source_h, source_h, source_w).contiguous()
+    cols = torch.zeros((1, 1, source_w, 1, source_w), dtype=torch.float32, device=device)
+    cols[0, 0, torch.arange(source_w), 0, torch.arange(source_w)] = 1.0
+    cols = cols.expand(1, 1, source_w, source_h, source_w).contiguous()
+    # Frame index selects the one-hot input row/column; each output column of a
+    # constant-along-x row image carries that row's vertical weight.
+    row_weights = resize_spatial_5d_h3_patch_lattice(rows, target_h, target_w)[0, 0, :, :, 0]
+    col_weights = resize_spatial_5d_h3_patch_lattice(cols, target_h, target_w)[0, 0, :, 0, :]
+    vertical = row_weights.square().sum(dim=0)
+    horizontal = col_weights.square().sum(dim=0)
+    return vertical[:, None] * horizontal[None, :]
+
+
 def resize_spatial_5d(tensor: torch.Tensor, target_h: int, target_w: int, *, mode: str = "bicubic") -> torch.Tensor:
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 5 or not tensor.is_floating_point():
         raise TypeError("spatial resize input must be a floating-point BxCxTxHxW tensor")

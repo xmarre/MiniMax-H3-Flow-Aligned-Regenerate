@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -2472,6 +2473,55 @@ def test_gate_expects_target_band_boundary_queries_at_the_band_tail_edge():
     with pytest.raises(RuntimeGateError, match="target-band width is malformed"):
         validate_partitioned_runtime_evidence(
             malformed,
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+
+
+def _domain_uniform_metrics(*, verified_stages=("low", "probe")):
+    metrics = _high_attention_metrics()
+    events = metrics["events"]
+    events[0]["fields"]["target_band_tokens"] = 2
+    duplicated = []
+    for event in events:
+        duplicated.append(event)
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] in {"low", "probe"}:
+            # Each uniform stream owns its boundary group at the protected prefix.
+            duplicated.append(copy.deepcopy(event))
+    duplicated.insert(1, {"kind": "partitioned_target_band_domain_plan", "fields": {"policy": "domain_uniform_v1"}})
+    for stage in verified_stages:
+        duplicated.append(
+            {"kind": "partitioned_target_band_domain_stage", "fields": {"stage": stage, "verified": True}}
+        )
+    metrics["events"] = duplicated
+    return metrics
+
+
+def test_gate_accepts_domain_uniform_stream_boundaries_at_the_protected_prefix():
+    validate_partitioned_runtime_evidence(
+        _domain_uniform_metrics(),
+        _log(),
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+    )
+
+
+def test_gate_rejects_domain_uniform_without_verified_streams_or_with_one_stream():
+    with pytest.raises(RuntimeGateError, match="did not verify both low/probe streams"):
+        validate_partitioned_runtime_evidence(
+            _domain_uniform_metrics(verified_stages=("low",)),
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+    single = _domain_uniform_metrics()
+    boundary = [
+        index
+        for index, event in enumerate(single["events"])
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] == "low"
+    ]
+    del single["events"][boundary[-1]]
+    with pytest.raises(RuntimeGateError, match="did not reach every actual partitioned model call"):
+        validate_partitioned_runtime_evidence(
+            single,
             _log(),
             expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
         )

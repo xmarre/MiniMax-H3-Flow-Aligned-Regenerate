@@ -123,6 +123,31 @@ PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
 PARTITIONED_TARGET_BAND_TOKENS_KEY = "h3_flow_partitioned_target_band_tokens_v1"
 PARTITIONED_TARGET_BAND_TOKENS_DEFAULT = 4
 
+# Target-band high-stage entry state for the band tokens. Absence is the
+# historical contract: the band's clean prediction is re-noised with the same
+# independent field as the tail. ``carry_raw_band`` resumes the band from its
+# actual low/probe sampler state at the handoff sigma instead.
+PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY = "h3_flow_partitioned_target_band_handoff_state_v1"
+PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE = "renoise_clean"
+PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY = "carry_raw_band"
+PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS = (
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY,
+)
+
+# Target-band low/probe transformer context. Absence is the historical single
+# mixed-grid sequence [target prefix | target band | source tail].
+# ``domain_uniform_v1`` evaluates two uniform-grid hidden streams per model call:
+# the target stream carries prefix and band, the source stream carries the
+# projected prefix and band plus the tail. Streams share no hidden state.
+PARTITIONED_TARGET_BAND_CONTEXT_KEY = "h3_flow_partitioned_target_band_context_v1"
+PARTITIONED_TARGET_BAND_CONTEXT_MIXED = "mixed_grid"
+PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM = "domain_uniform_v1"
+PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS = (
+    PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+    PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM,
+)
+
 # Absence is the historical contract: the one-token suffix DC bridge is active.
 # The leaf is published only when a node explicitly disables the bridge.
 PARTITIONED_SUFFIX_DC_BRIDGE_KEY = "h3_flow_partitioned_suffix_dc_bridge_v1"
@@ -197,6 +222,42 @@ def resolve_partitioned_target_band_tokens(transformer_options: dict[str, Any]) 
     return validate_target_band_tokens(
         transformer_options.get(PARTITIONED_TARGET_BAND_TOKENS_KEY, PARTITIONED_TARGET_BAND_TOKENS_DEFAULT),
         source=PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    )
+
+
+def normalize_target_band_handoff_state(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS:
+        raise ValueError(
+            f"target-band handoff state must be one of {PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
+def normalize_target_band_context(value: str) -> str:
+    value = str(value)
+    if value not in PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS:
+        raise ValueError(
+            f"target-band context must be one of {PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS!r}, got {value!r}"
+        )
+    return value
+
+
+def resolve_partitioned_target_band_handoff_state(transformer_options: dict[str, Any]) -> str:
+    return normalize_target_band_handoff_state(
+        transformer_options.get(
+            PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
+            PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+        )
+    )
+
+
+def resolve_partitioned_target_band_context(transformer_options: dict[str, Any]) -> str:
+    return normalize_target_band_context(
+        transformer_options.get(
+            PARTITIONED_TARGET_BAND_CONTEXT_KEY,
+            PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        )
     )
 
 
@@ -402,6 +463,8 @@ def apply_partitioned_diagnostic_controls(
     video_guided_overlap_tokens: int = 0,
     suffix_dc_bridge: bool = True,
     target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+    target_band_handoff_state: str = PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+    target_band_context: str = PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -439,6 +502,16 @@ def apply_partitioned_diagnostic_controls(
     if type(suffix_dc_bridge) is not bool:
         raise TypeError("suffix_dc_bridge must be a boolean")
     band_tokens = validate_target_band_tokens(target_band_tokens, source="target_band_tokens")
+    band_handoff_state = normalize_target_band_handoff_state(target_band_handoff_state)
+    band_context = normalize_target_band_context(target_band_context)
+    if spatial_stage != PARTITIONED_SPATIAL_STAGE_TARGET_BAND and (
+        band_handoff_state != PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE
+        or band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED
+    ):
+        raise ValueError(
+            "target_band_handoff_state and target_band_context apply only to "
+            "spatial_stage_control='progressive_target_band'"
+        )
     if (
         spatial_stage == PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
@@ -516,6 +589,15 @@ def apply_partitioned_diagnostic_controls(
         transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
     else:
         transformer_options.pop(PARTITIONED_TARGET_BAND_TOKENS_KEY, None)
+    # Defaults publish no leaf, so existing workflows keep byte-identical options.
+    if band_handoff_state == PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE:
+        transformer_options.pop(PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY, None)
+    else:
+        transformer_options[PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY] = band_handoff_state
+    if band_context == PARTITIONED_TARGET_BAND_CONTEXT_MIXED:
+        transformer_options.pop(PARTITIONED_TARGET_BAND_CONTEXT_KEY, None)
+    else:
+        transformer_options[PARTITIONED_TARGET_BAND_CONTEXT_KEY] = band_context
     model_options["transformer_options"] = transformer_options
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] = ticks
     model_options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] = audio_mode
@@ -561,6 +643,10 @@ def apply_partitioned_diagnostic_controls(
             fields["suffix_dc_bridge"] = False
         if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
             fields["target_band_tokens"] = band_tokens
+        if band_handoff_state != PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE:
+            fields["target_band_handoff_state"] = band_handoff_state
+        if band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED:
+            fields["target_band_context"] = band_context
         event("partitioned_diagnostic_controls", **fields)
     return model, metrics
 
@@ -618,6 +704,14 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",
     "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
+    "PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM",
+    "PARTITIONED_TARGET_BAND_CONTEXT_KEY",
+    "PARTITIONED_TARGET_BAND_CONTEXT_MIXED",
+    "PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS",
+    "PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY",
+    "PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY",
+    "PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS",
+    "PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE",
     "PARTITIONED_TARGET_BAND_TOKENS_DEFAULT",
     "PARTITIONED_TARGET_BAND_TOKENS_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
@@ -648,11 +742,15 @@ __all__ = [
     "normalize_prefix_transformer_context",
     "normalize_provider_boundary_stabilization",
     "normalize_spatial_stage_control",
+    "normalize_target_band_context",
+    "normalize_target_band_handoff_state",
     "normalize_vdn_linear_diagnostic",
     "normalize_vdn_temporal_carrier_policy",
     "resolve_partitioned_audio_guided_overlap_mode",
     "resolve_partitioned_audio_guided_overlap_ticks",
     "resolve_partitioned_suffix_dc_bridge",
+    "resolve_partitioned_target_band_context",
+    "resolve_partitioned_target_band_handoff_state",
     "resolve_partitioned_target_band_tokens",
     "resolve_partitioned_video_guided_overlap_tokens",
     "validate_target_band_tokens",

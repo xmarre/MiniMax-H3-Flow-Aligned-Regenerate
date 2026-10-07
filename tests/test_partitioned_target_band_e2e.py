@@ -72,6 +72,7 @@ def _vdn_owner():
     owner._vdn_partitioned_boundary_query_policy = VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
     owner._vdn_external_sequence_api = 4
     owner._vdn_partitioned_native_carrier_grids = ("source", "target")
+    owner._vdn_partitioned_domain_stream_api = 1
     return owner
 
 
@@ -828,3 +829,285 @@ def test_target_band_tail_uses_independent_handoff_noise_with_frame_gauge_repair
     assert [event["policy"] for event in noise] == [policy]
     provenance = _events(run.metrics, "partitioned_handoff_residual_provenance")
     assert len(provenance) == (0 if policy == "independent" else 1)
+
+
+@pytest.mark.parametrize("sampler", [None, "euler", "euler_ancestral"])
+def test_target_band_raw_carry_replaces_only_the_band_entry_state(monkeypatch, sampler):
+    from h3_flow_regenerate.partitioned_band import TARGET_BAND_RAW_CARRY_HANDOFF_POLICY
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY,
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
+    )
+
+    band_t = 2
+    extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: band_t}
+    baseline = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=extra,
+        native_sampler=sampler,
+    )
+    carried = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={
+            **extra,
+            PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY: PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY,
+        },
+        native_sampler=sampler,
+    )
+    band = slice(PROTECTED_T, PROTECTED_T + band_t)
+    assert [call["stage"] for call in carried.calls] == ["low", "probe", "high"]
+    # Low/probe are untouched by the handoff control.
+    for base_call, carry_call in zip(baseline.calls[:2], carried.calls[:2], strict=True):
+        assert torch.equal(base_call["entry_state"], carry_call["entry_state"])
+    assert torch.equal(baseline.calls[0]["final_state"], carried.calls[0]["final_state"])
+    low_final, _ = unpack_streams(carried.calls[0]["final_state"], carried.shapes)
+    base_entry_video, base_entry_audio = unpack_streams(baseline.calls[2]["entry_state"], baseline.shapes)
+    carry_entry_video, carry_entry_audio = unpack_streams(carried.calls[2]["entry_state"], carried.shapes)
+    # The band resumes its actual low/probe state at the handoff sigma. The
+    # scheduler-assembled state is byte-identical (receipt below); the sampler
+    # re-forms it from its noise argument, which rounds at float32 precision.
+    torch.testing.assert_close(carry_entry_video[:, :, band], low_final[:, :, band], rtol=0, atol=1e-5)
+    assert (base_entry_video[:, :, band] - low_final[:, :, band]).abs().max() > 1e-2
+    # Prefix, tail (including the DC-bridged first tail token) and audio are byte-identical.
+    assert torch.equal(carry_entry_video[:, :, :PROTECTED_T], base_entry_video[:, :, :PROTECTED_T])
+    assert torch.equal(carry_entry_video[:, :, band.stop :], base_entry_video[:, :, band.stop :])
+    assert torch.equal(carry_entry_audio, base_entry_audio)
+    assert not torch.equal(carry_entry_video[:, :, band], base_entry_video[:, :, band])
+    # The high mask still protects only the original prefix.
+    video_mask, _ = unpack_streams(carried.calls[2]["mask"], carried.shapes)
+    assert torch.count_nonzero(video_mask[:, :, :PROTECTED_T]) == 0
+    assert bool((video_mask[:, :, PROTECTED_T:] == 1).all())
+    final, _ = unpack_streams(carried.result, carried.shapes)
+    original, _ = unpack_streams(carried.latent_image, carried.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    transfer = _events(carried.metrics, "partitioned_transfer")[0]
+    assert transfer["target_band_handoff_policy"] == TARGET_BAND_RAW_CARRY_HANDOFF_POLICY
+    assert transfer["target_band_handoff_state"] == PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY
+    assert transfer["target_band_raw_state_carried"] is True
+    assert transfer["target_band_raw_state_identity"] is True
+    low_state = _events(carried.metrics, "partitioned_target_band_low_state")[0]
+    assert low_state["band_raw_state_carried"] is True
+    base_transfer = _events(baseline.metrics, "partitioned_transfer")[0]
+    assert base_transfer["target_band_raw_state_carried"] is False
+    assert base_transfer["target_band_raw_state_identity"] is None
+    assert _events(carried.metrics, "partitioned_handoff_noise") == _events(
+        baseline.metrics, "partitioned_handoff_noise"
+    )
+
+
+def test_target_band_explicit_default_selectors_match_absent_leaves(monkeypatch):
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_TARGET_BAND_CONTEXT_KEY,
+        PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+    )
+
+    extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 2}
+    absent = _harness(
+        monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND, extra_transformer_options=extra
+    )
+    explicit = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={
+            **extra,
+            PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY: PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+            PARTITIONED_TARGET_BAND_CONTEXT_KEY: PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        },
+    )
+    assert torch.equal(absent.result, explicit.result)
+    for left, right in zip(absent.calls, explicit.calls, strict=True):
+        assert torch.equal(left["entry_state"], right["entry_state"])
+        if "final_state" in left:
+            assert torch.equal(left["final_state"], right["final_state"])
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    ["h3_flow_partitioned_target_band_handoff_state_v1", "h3_flow_partitioned_target_band_context_v1"],
+)
+def test_target_band_selectors_are_refused_outside_band_mode(monkeypatch, leaf):
+    value = "carry_raw_band" if "handoff" in leaf else "domain_uniform_v1"
+    with pytest.raises(RuntimeError, match="require spatial_stage_control='progressive_target_band'"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+            extra_transformer_options={leaf: value},
+        )
+
+
+def _domain_extra(**extra):
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM,
+        PARTITIONED_TARGET_BAND_CONTEXT_KEY,
+    )
+
+    return {
+        PARTITIONED_TARGET_BAND_TOKENS_KEY: 2,
+        PARTITIONED_TARGET_BAND_CONTEXT_KEY: PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM,
+        **extra,
+    }
+
+
+@pytest.fixture
+def native_audio_duration(monkeypatch):
+    import sys
+
+    # 14 tokens span 47 frames; the native audio/video relation gives 78 latents.
+    monkeypatch.setattr(sys.modules[__name__], "AUDIO_T", 78)
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+def test_domain_uniform_low_and_probe_run_both_streams_and_leave_high_unchanged(monkeypatch):
+    history = pytest.importorskip("sol_h3.partitioned_history")
+    if getattr(history, "PARTITIONED_DOMAIN_STREAM_API", 0) != 1:
+        pytest.skip("installed Sol-H3 predates domain-stream history recognition")
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(),
+    )
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+    stages = _events(run.metrics, "partitioned_target_band_domain_stage")
+    assert [event["stage"] for event in stages] == ["low", "probe"]
+    assert all(event["verified"] and event["blocks_per_call"] == 2 for event in stages)
+    transformer_calls = _events(run.metrics, "partitioned_target_band_domain_transformer")
+    assert {event["stage"] for event in transformer_calls} == {"low", "probe"}
+    plan = _events(run.metrics, "partitioned_target_band_domain_plan")
+    assert len(plan) == 1 and plan[0]["high_stage_changed"] is False
+    assert 0.0 < plan[0]["projected_noise_variance_min"] <= plan[0]["projected_noise_variance_max"] <= 1.0
+    # High keeps its uniform target-grid partitioned path.
+    high_events = [
+        event for event in _events(run.metrics, "partitioned_exact_prefix_transformer") if event["stage"] == "high"
+    ]
+    assert high_events and all(event["attention_head_t"] == PROTECTED_T + 2 for event in high_events)
+    final, _ = unpack_streams(run.result, run.shapes)
+    original, _ = unpack_streams(run.latent_image, run.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    assert bool(torch.isfinite(final).all())
+    assert "h3_flow_partitioned_stage_v1" not in run.guider.model_options["transformer_options"]
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+def test_domain_uniform_changes_only_low_probe_numerics_and_combines_with_raw_carry(monkeypatch):
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY,
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
+    )
+
+    history = pytest.importorskip("sol_h3.partitioned_history")
+    if getattr(history, "PARTITIONED_DOMAIN_STREAM_API", 0) != 1:
+        pytest.skip("installed Sol-H3 predates domain-stream history recognition")
+    mixed = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={PARTITIONED_TARGET_BAND_TOKENS_KEY: 2},
+    )
+    domain = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(),
+    )
+    both = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(
+            **{PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY: PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY}
+        ),
+    )
+    # The sampler inputs of low are identical; only the transformer context differs.
+    assert torch.equal(mixed.calls[0]["entry_state"], domain.calls[0]["entry_state"])
+    assert not torch.equal(mixed.calls[0]["final_state"], domain.calls[0]["final_state"])
+    assert torch.equal(domain.calls[0]["final_state"], both.calls[0]["final_state"])
+    band = slice(PROTECTED_T, PROTECTED_T + 2)
+    low_final, _ = unpack_streams(both.calls[0]["final_state"], both.shapes)
+    domain_entry, domain_audio = unpack_streams(domain.calls[2]["entry_state"], domain.shapes)
+    both_entry, both_audio = unpack_streams(both.calls[2]["entry_state"], both.shapes)
+    torch.testing.assert_close(both_entry[:, :, band], low_final[:, :, band], rtol=0, atol=1e-5)
+    assert torch.equal(both_entry[:, :, band.stop :], domain_entry[:, :, band.stop :])
+    assert torch.equal(both_entry[:, :, :PROTECTED_T], domain_entry[:, :, :PROTECTED_T])
+    assert torch.equal(both_audio, domain_audio)
+    transfer = _events(both.metrics, "partitioned_transfer")[0]
+    assert transfer["target_band_raw_state_carried"] is True
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+@pytest.mark.parametrize(
+    ("leaf", "value"),
+    [
+        ("h3_flow_partitioned_vdn_linear_diagnostic_v1", "suppress_cross_grid_temporal_taps"),
+        ("h3_flow_partitioned_softmax_diagnostic_v1", "target_query_sink_measure"),
+        ("h3_flow_partitioned_vdn_temporal_carrier_v1", "destination_grid_stencil_v1"),
+    ],
+)
+def test_domain_uniform_refuses_mixed_grid_selectors_without_fallback(monkeypatch, leaf, value):
+    with pytest.raises(RuntimeError, match="domain_uniform_v1' requires"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            extra_transformer_options=_domain_extra(**{leaf: value}),
+        )
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+def test_domain_uniform_requires_paired_vdn_capability_without_fallback(monkeypatch):
+    make_owner = _vdn_owner
+
+    def legacy_owner():
+        owner = make_owner()
+        del owner._vdn_partitioned_domain_stream_api
+        return owner
+
+    monkeypatch.setitem(globals(), "_vdn_owner", legacy_owner)
+    with pytest.raises(RuntimeError, match=r"refusing target-grid fallback|domain-stream API"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            extra_transformer_options=_domain_extra(),
+        )
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+def test_sol_history_recognizes_domain_low_probe_and_uniform_high(monkeypatch):
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    interop = pytest.importorskip("sol_h3.interop")
+    history = pytest.importorskip("sol_h3.partitioned_history")
+    if getattr(history, "PARTITIONED_DOMAIN_STREAM_API", 0) != 1:
+        pytest.skip("installed Sol-H3 predates domain-stream history recognition")
+    history.install_partitioned_history_bridge()
+
+    from h3_flow_regenerate import partitioned_transformer as transform
+
+    original = transform.partitioned_diffusion_wrapper
+    recognized = {}
+
+    def recording_wrapper(executor, *args, **kwargs):
+        class Recording:
+            class_obj = executor.class_obj
+
+            def __call__(self, *call_args, **call_kwargs):
+                options = call_kwargs.get("transformer_options", call_args[3] if len(call_args) > 3 else None)
+                patch = options["patches_replace"]["dit"][("double_block", 0)]
+                identity = interop._flow_mixed_grid_replacement_identity(patch, 0)
+                kind = None if identity is None else identity[0][0]
+                recognized.setdefault(options.get("h3_flow_stage"), set()).add(kind)
+                return executor(*call_args, **call_kwargs)
+
+        return original(Recording(), *args, **kwargs)
+
+    monkeypatch.setattr(transform, "partitioned_diffusion_wrapper", recording_wrapper)
+    _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(),
+    )
+    domain_kind = history.PARTITIONED_DOMAIN_UNIFORM_IDENTITY
+    assert recognized == {
+        "low": {domain_kind},
+        "probe": {domain_kind},
+        "high": {history.PARTITIONED_FLOW_IDENTITY},
+    }

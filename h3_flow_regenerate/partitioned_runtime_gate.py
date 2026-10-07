@@ -4203,13 +4203,26 @@ def validate_partitioned_runtime_evidence(
     boundary_query_events = [
         _event_fields(event) for event in window if _event_kind(event) == "partitioned_vdn_boundary_suffix_dense"
     ]
+    # Target-band domain-uniform low/probe runs two uniform streams per model
+    # call; each stream's VDN call owns its own boundary group at the protected
+    # prefix, and both streams must be verified for every low/probe stage.
+    domain_uniform = "partitioned_target_band_domain_plan" in kinds
+    if domain_uniform:
+        domain_stages = [
+            _event_fields(event) for event in window if _event_kind(event) == "partitioned_target_band_domain_stage"
+        ]
+        _require(
+            sorted(fields.get("stage") for fields in domain_stages) == ["low", "probe"]
+            and all(fields.get("verified") is True for fields in domain_stages),
+            "domain-uniform target-band run did not verify both low/probe streams",
+        )
     if expected_boundary_query_policy is not None:
         _require(
             expected_boundary_query_policy == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
             "unsupported expected VDN boundary-query policy",
         )
         _require(
-            len(boundary_query_events) == partitioned_actual,
+            len(boundary_query_events) == partitioned_actual + (low_actual + probe_actual if domain_uniform else 0),
             "VDN boundary-query policy did not reach every actual partitioned model call",
         )
         protected_prefix_t = plan_fields.get("prefix_temporal_length")
@@ -4224,7 +4237,7 @@ def validate_partitioned_runtime_evidence(
             query_frames = fields.get("query_frames")
             expected_prefix_t = (
                 protected_prefix_t + target_band_tokens
-                if target_band_tokens and fields.get("stage") in {"low", "probe"}
+                if target_band_tokens and not domain_uniform and fields.get("stage") in {"low", "probe"}
                 else protected_prefix_t
             )
             _require(

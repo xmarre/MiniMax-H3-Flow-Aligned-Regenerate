@@ -270,6 +270,50 @@ def _validate_target_band_transport() -> None:
         raise SystemExit("Sol accepted a target-band closure with a reduced-grid native carrier")
 
 
+def _validate_domain_stream_transport() -> None:
+    """Flow's domain-uniform stream leaf must be accepted by VDN and named identically by Sol."""
+    from types import SimpleNamespace
+
+    from sol_h3 import partitioned_history as sol_history
+    from vdn_h3 import partitioned_runtime as vdn_runtime
+
+    from h3_flow_regenerate import partitioned_transformer as flow_transform
+    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_PREFIX_KEY, PartitionedExactPrefixPlan
+    from h3_flow_regenerate.partitioned_stage import (
+        TARGET_BAND_DOMAIN_STREAM_API,
+        TARGET_BAND_DOMAIN_STREAM_KEY,
+        TARGET_BAND_DOMAIN_UNIFORM_POLICY,
+    )
+
+    if (
+        TARGET_BAND_DOMAIN_STREAM_KEY != vdn_runtime.FLOW_DOMAIN_STREAM_KEY
+        or TARGET_BAND_DOMAIN_STREAM_KEY != sol_history.PARTITIONED_DOMAIN_STREAM_KEY
+        or TARGET_BAND_DOMAIN_STREAM_API != vdn_runtime.FLOW_DOMAIN_STREAM_API
+        or TARGET_BAND_DOMAIN_STREAM_API != sol_history.PARTITIONED_DOMAIN_STREAM_API
+        or TARGET_BAND_DOMAIN_UNIFORM_POLICY != vdn_runtime.FLOW_DOMAIN_STREAM_POLICY
+        or TARGET_BAND_DOMAIN_UNIFORM_POLICY != sol_history.PARTITIONED_DOMAIN_UNIFORM_POLICY
+        or flow_transform.DOMAIN_UNIFORM_IDENTITY != sol_history.PARTITIONED_DOMAIN_UNIFORM_IDENTITY
+    ):
+        raise SystemExit("Flow/VDN/Sol domain-stream contract diverged")
+    native_layout = SimpleNamespace(
+        seq_len=7 + 6 * 12, video_start=7, text_start=1, text_len=2, segments=[(7, 7 + 6 * 12, "video")]
+    )
+    for name, plan in (
+        ("target", PartitionedExactPrefixPlan(5, 4, 2, 3, 4, 3, 4, same_grid_control=True)),
+        ("source", PartitionedExactPrefixPlan(7, 6, 2, 2, 3, 2, 3, same_grid_control=True)),
+    ):
+        contract = plan.to_contract()
+        leaf = flow_transform._domain_stream_leaf(
+            name=name, contract=contract, native_layout=native_layout, policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY
+        )
+        options = {PARTITIONED_PREFIX_KEY: contract, TARGET_BAND_DOMAIN_STREAM_KEY: leaf}
+        layout, stream = vdn_runtime.resolve_domain_stream_layout(
+            options, native_layout, {"radius": 1, "chunk": 1, "anchor_frames": "rows"}, plan.sequence_rows
+        )
+        if stream != name or layout.num_frames != plan.temporal or layout.tokens_per_frame != plan.target_rows:
+            raise SystemExit("VDN rejected or misread Flow's domain-stream leaf")
+
+
 def _namespace_package(name: str, package_dir: Path) -> None:
     """Load source-contract modules without executing custom-node __init__.py."""
     if not package_dir.is_dir():
@@ -782,12 +826,14 @@ def main() -> None:
     _validate_same_grid_history_transport()
     _validate_high_attention_transport()
     _validate_target_band_transport()
+    _validate_domain_stream_transport()
     print(
         "partitioned exact-prefix contracts: OK ",
         f"abi={PARTITIONED_REQUEST_ABI} groups={len(grouped.groups)} sequence_rows={flow.sequence_rows}",
         "same_grid_history=True",
         "high_prefix_attention=True",
         "target_band_native_carrier=True",
+        "target_band_domain_stream=True",
     )
 
 

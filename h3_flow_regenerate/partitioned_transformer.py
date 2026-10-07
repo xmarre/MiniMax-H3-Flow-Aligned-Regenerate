@@ -10,9 +10,11 @@ to the Sol/VDN partitioned backend.
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 
 import torch
 
+from .geometry import resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -38,9 +40,14 @@ from .partitioned_prefix import (
 )
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
+    TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY,
+    TARGET_BAND_DOMAIN_STREAM_API,
+    TARGET_BAND_DOMAIN_STREAM_KEY,
     PartitionedStagePlan,
     PartitionedStageRuntime,
+    PartitionedStageStreamView,
     PartitionedTargetBandGeometry,
+    TargetBandDomainContext,
     partitioned_carrier_layout,
     partitioned_mod_segments,
     partitioned_positions_for_runtime,
@@ -248,6 +255,8 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
         numerical_identity.append(("vdn_temporal_carrier_v1", carrier_digest))
     if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
         numerical_identity.append((PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY, runtime.softmax_diagnostic))
+    if runtime.target_band_domain is not None:
+        numerical_identity.append(runtime.target_band_domain.numerical_identity)
     cache_identity = identity if not numerical_identity else (tuple(numerical_identity), identity)
     cached = cache.get(cache_identity)
     if cached is not None:
@@ -276,8 +285,16 @@ def _partitioned_transformer_options(
     *,
     runtime: PartitionedStageRuntime,
     block_index,
+    stage_view: PartitionedStageStreamView | None = None,
+    domain_stream: dict | None = None,
 ):
     block_options = dict(options)
+    if stage_view is not None:
+        block_options[PARTITIONED_STAGE_KEY] = stage_view
+    if domain_stream is None:
+        block_options.pop(TARGET_BAND_DOMAIN_STREAM_KEY, None)
+    else:
+        block_options[TARGET_BAND_DOMAIN_STREAM_KEY] = domain_stream
     if any(key in block_options for key in _DEPRECATED_MIXED_GRID_KEYS):
         raise RuntimeError("partitioned exact-prefix found a deprecated Mixed-Grid contract")
     block_options["minimax_h3_layout"] = partitioned_layout
@@ -366,6 +383,463 @@ def _audio_model_timestep_kwargs(options, kwargs):
     )
     context.record_call()
     return local
+
+
+DOMAIN_UNIFORM_IDENTITY = "h3_flow_partitioned_domain_uniform_v1"
+DOMAIN_STREAM_TARGET = "target"
+DOMAIN_STREAM_SOURCE = "source"
+
+
+@dataclass(frozen=True, slots=True)
+class DomainUniformStream:
+    """One uniform-grid hidden stream of target-band domain-uniform execution.
+
+    ``layout`` is a native Core layout for the stream geometry whose signature
+    carries the Flow partition identity. ``plan`` is a canonical equal-grid
+    partition contract, so VDN and Sol execute their ordinary uniform routing
+    for this stream: local windows, globals, row/column anchors and the learned
+    linear complement all span only this stream's rows.
+    """
+
+    name: str
+    plan: PartitionedExactPrefixPlan
+    layout: object
+    contract: dict
+    view: PartitionedStageStreamView
+    leaf: dict
+    attention_head_t: int
+    audio_rows: int
+
+    @property
+    def rows(self) -> int:
+        return int(self.plan.sequence_rows)
+
+
+def _domain_stream_leaf(*, name, contract, native_layout, policy):
+    return {
+        "api": TARGET_BAND_DOMAIN_STREAM_API,
+        "policy": policy,
+        "stream": name,
+        "flow_semantic_digest": contract["semantic_digest"],
+        "native_sequence_rows": int(native_layout.seq_len),
+        "native_video_start": int(native_layout.segments[-1][0]),
+    }
+
+
+def _segment(layout, kind):
+    matches = [(int(start), int(stop)) for start, stop, seg_kind in layout.segments if seg_kind == kind]
+    if len(matches) != 1:
+        raise RuntimeError(f"domain-uniform execution requires exactly one target {kind} segment")
+    return matches[0]
+
+
+def _audio_crop_rows(audio_start: int, audio_t: int, keep_t: int, device) -> torch.Tensor:
+    # Core packs stereo audio channel-major: [left 0..T) then [right 0..T).
+    first = torch.arange(audio_start, audio_start + keep_t, device=device)
+    return torch.cat((first, first + audio_t))
+
+
+def _video_frame_count(native, tokens: int) -> int:
+    return sum(int(native.FRAME_PER_TOKEN[k % len(native.FRAME_PER_TOKEN)]) for k in range(int(tokens)))
+
+
+def _domain_video_labels(row, *, protected_rows, generated_rows, band: PartitionedTargetBandGeometry, device):
+    """Return (protected, generated) per-row timestep labels from Core's native video row."""
+    if not torch.is_tensor(row):
+        return row, row
+    if row.ndim != 1:
+        raise RuntimeError("domain-uniform execution requires native per-video-row timestep indices")
+    protected = row[: band.protected_rows]
+    generated = torch.cat((row[band.protected_rows : band.prefix_rows], row[band.tail_native_rows(row.device)]))
+    checks = torch.stack(((protected == protected[0]).all(), (generated == generated[0]).all()))
+    if not bool(checks.all().item()):
+        raise RuntimeError("domain-uniform execution requires uniform protected-prefix and generated timestep labels")
+    return protected[0], generated[0]
+
+
+def _domain_mod_segments(native_segments, *, audio_range, native_video_start, video_range, crop_audio, video_row):
+    result = []
+    audio_start, audio_stop = audio_range
+    video_start, video_end = video_range
+    for start, stop, row in native_segments:
+        if stop <= audio_start:
+            result.append((start, stop, row))
+        elif (start, stop) == (audio_start, audio_stop):
+            if crop_audio is None:
+                result.append((start, stop, row))
+            else:
+                rows, keep = crop_audio
+                cropped = row.index_select(0, rows - audio_start) if torch.is_tensor(row) else row
+                result.append((start, start + keep, cropped))
+        elif start == native_video_start:
+            result.append((video_start, video_end, video_row))
+        else:
+            raise RuntimeError("domain-uniform execution requires [conditioning | audio | video] native segments")
+    if not result or result[-1][0] != video_start or video_end <= video_start:
+        raise RuntimeError("domain-uniform execution lost the native video segment")
+    return result
+
+
+def _domain_partitioned_layout(stream_layout, plan, policy, name):
+    partitioned = copy.copy(stream_layout)
+    partitioned.signature = (
+        PARTITIONED_PREFIX_KEY,
+        *stream_layout.signature,
+        plan.prefix_t,
+        plan.target_grid_h * 2,
+        plan.target_grid_w * 2,
+        (TARGET_BAND_DOMAIN_STREAM_KEY, policy, name),
+    )
+    return partitioned
+
+
+def _domain_uniform_forward(
+    executor,
+    x,
+    timestep,
+    context,
+    options,
+    payload,
+    kwargs,
+    *,
+    native,
+    inner,
+    runtime: PartitionedStageRuntime,
+    owner: PartitionedStagePlan,
+    band: PartitionedTargetBandGeometry,
+    layout,
+    tail_rows,
+):
+    """Evaluate target-band low/probe as two uniform-grid hidden streams.
+
+    Routing contract (``domain_uniform_v1``):
+
+    * Target stream: [text | references | audio covering the head duration |
+      exact target prefix | target band]. Its Core layout is the native layout of
+      a ``head_t``-token clip on the target grid; RoPE rows equal the matching
+      rows of the chunk's native target layout.
+    * Source stream: [text | references | full audio | projected exact prefix |
+      projected band carrier | reduced-grid tail]. Its Core layout is the native
+      layout of the whole chunk on the reduced grid.
+    * Each stream owns its conditioning rows. No attention key, VDN local window,
+      global or anchor query, linear-complement state or MLP/modulation row is
+      shared between streams within a model call, so a stream's hidden states
+      never read the other stream's hidden states.
+    * Communication across streams happens only through the sampler state
+      between model calls: the source stream reads the band's current state
+      (projected), and both streams read the shared audio state.
+    * Outputs: band velocity from the target stream; tail and audio velocity
+      from the source stream; the protected prefix and tail padding stay zero.
+    """
+    domain: TargetBandDomainContext = runtime.target_band_domain
+    domain_policy = domain.policy
+    metrics = runtime.metrics
+    if payload.get("keyframes"):
+        raise RuntimeError("domain-uniform target-band context does not support keyframe-anchored layouts")
+    if runtime.vdn_temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE:
+        raise RuntimeError("domain-uniform target-band context requires the native VDN temporal-carrier policy")
+    video_start, video_end, _ = layout.segments[-1]
+    audio_start, audio_stop = _segment(layout, "audio")
+    if audio_stop != video_start:
+        raise RuntimeError("domain-uniform execution requires target audio directly before target video")
+    audio_t = int(x[1].shape[-1])
+    if audio_stop - audio_start != 2 * audio_t:
+        raise RuntimeError("domain-uniform execution audio rows do not match the sampler audio state")
+    rescale = float(native.FRAME_RESCALE)
+    chunk_audio_t = round(_video_frame_count(native, band.temporal) * rescale)
+    if abs(chunk_audio_t - audio_t) > 1:
+        raise RuntimeError(
+            "domain-uniform execution requires the native audio/video duration relation; "
+            f"audio has {audio_t} latent frames but the video spans {chunk_audio_t}"
+        )
+    head_audio_t = min(audio_t, round(_video_frame_count(native, band.head_t) * rescale))
+    if head_audio_t <= 0:
+        raise RuntimeError("domain-uniform target stream would contain no audio rows")
+    text_len = int(context.shape[1])
+    refs = payload.get("refs")
+    target_layout = native.PackedLayout(text_len, band.head_t, *owner.target_hw, head_audio_t, refs=refs)
+    source_layout = native.PackedLayout(text_len, band.temporal, band.source_h, band.source_w, audio_t, refs=refs)
+    device = x[0].device
+    crop_rows = _audio_crop_rows(audio_start, audio_t, head_audio_t, device)
+
+    # Physical coordinate invariants: both streams reuse the chunk's conditioning
+    # coordinates and global timeline; only the video grid of each stream differs.
+    t_audio_start, t_audio_stop = _segment(target_layout, "audio")
+    s_audio_start, s_audio_stop = _segment(source_layout, "audio")
+    t_video_start = int(target_layout.segments[-1][0])
+    if (
+        tuple(target_layout.segments[:-2]) != tuple(layout.segments[:-2])
+        or tuple(source_layout.segments) != (*layout.segments[:-1], (video_start, source_layout.seq_len, "video"))
+        or (t_audio_start, s_audio_start, s_audio_stop) != (audio_start, audio_start, audio_stop)
+        or t_audio_stop != t_video_start
+        or t_audio_stop - t_audio_start != 2 * head_audio_t
+    ):
+        raise RuntimeError("domain-uniform stream layouts drifted from the native conditioning layout")
+    native_positions = layout.position_ids
+    target_positions = target_layout.position_ids
+    source_positions = source_layout.position_ids
+    head_rows = band.head_t * band.target_rows
+    if not (
+        torch.equal(target_positions[:audio_start], native_positions[:audio_start])
+        and torch.equal(target_positions[t_audio_start:t_audio_stop], native_positions[crop_rows.cpu()])
+        and torch.equal(target_positions[t_video_start:], native_positions[video_start : video_start + head_rows])
+        and torch.equal(source_positions[:audio_start], native_positions[:audio_start])
+        and torch.equal(source_positions[audio_start:audio_stop, 0], native_positions[audio_start:audio_stop, 0])
+    ):
+        raise RuntimeError("domain-uniform stream RoPE rows drifted from the chunk's physical coordinates")
+    native_frame_t = native_positions[video_start : video_end : band.target_rows, 0]
+    source_frame_t = source_positions[video_start :: band.source_rows, 0]
+    if not torch.equal(native_frame_t, source_frame_t):
+        raise RuntimeError("domain-uniform source stream changed the chunk's temporal coordinates")
+
+    target_plan = PartitionedExactPrefixPlan(
+        video_start=t_video_start,
+        temporal=int(band.head_t),
+        prefix_t=int(band.protected_t),
+        source_grid_h=int(band.target_grid[0]),
+        source_grid_w=int(band.target_grid[1]),
+        target_grid_h=int(band.target_grid[0]),
+        target_grid_w=int(band.target_grid[1]),
+        same_grid_control=True,
+    )
+    source_plan = PartitionedExactPrefixPlan(
+        video_start=int(video_start),
+        temporal=int(band.temporal),
+        prefix_t=int(band.protected_t),
+        source_grid_h=int(band.source_grid[0]),
+        source_grid_w=int(band.source_grid[1]),
+        target_grid_h=int(band.source_grid[0]),
+        target_grid_w=int(band.source_grid[1]),
+        same_grid_control=True,
+    )
+    if target_plan.sequence_rows != int(target_layout.seq_len) or source_plan.sequence_rows != int(
+        source_layout.seq_len
+    ):
+        raise RuntimeError("domain-uniform stream plans do not match their native layouts")
+    streams = []
+    # Dense-query ownership matches the mixed-grid band path: every band query
+    # stays dense in both streams, and the source stream keeps the local group
+    # containing the first tail token dense as the mixed path's boundary group.
+    for name, plan, stream_layout, head, audio_rows in (
+        (DOMAIN_STREAM_TARGET, target_plan, target_layout, band.head_t - 1, 2 * head_audio_t),
+        (DOMAIN_STREAM_SOURCE, source_plan, source_layout, band.head_t, 2 * audio_t),
+    ):
+        contract = plan.to_contract()
+        partitioned_layout = _domain_partitioned_layout(stream_layout, plan, domain_policy, name)
+        streams.append(
+            DomainUniformStream(
+                name=name,
+                plan=plan,
+                layout=partitioned_layout,
+                contract=contract,
+                view=PartitionedStageStreamView(runtime, stream=name, attention_head_t=head),
+                leaf=_domain_stream_leaf(name=name, contract=contract, native_layout=layout, policy=domain_policy),
+                attention_head_t=int(head),
+                audio_rows=int(audio_rows),
+            )
+        )
+    streams = tuple(streams)
+    target_stream, source_stream = streams
+
+    local = dict(options)
+    local.pop(PARTITIONED_VDN_TEMPORAL_CARRIER_KEY, None)
+    runtime.vdn_temporal_carrier_contract = None
+    local["optimized_attention_override"] = _stage_partitioned_attention_override(
+        runtime,
+        local.get("optimized_attention_override"),
+        metrics,
+    )
+    patches = dict(local.get("patches_replace") or {})
+    blocks = dict(patches.get("dit") or {})
+    patches["dit"] = blocks
+    local["patches_replace"] = patches
+    cached = {}
+    last_layer = len(inner.blocks) - 1
+
+    def build_streams(img):
+        aug = float(native.VISUAL_COND_TIMESTEP)
+        prefix = owner.prefix.to(device=img.device, dtype=torch.float32)
+        prefix_noise = owner.prefix_noise.to(device=img.device, dtype=torch.float32)
+        target_prefix = inner.video_patch_proj(native.patchify_video(aug * prefix + (1.0 - aug) * prefix_noise)).to(img)
+        source_prefix = domain.source_prefix.to(device=img.device, dtype=torch.float32)
+        source_prefix_noise = domain.source_prefix_noise.to(device=img.device, dtype=torch.float32)
+        projected_prefix = inner.video_patch_proj(
+            native.patchify_video(aug * source_prefix + (1.0 - aug) * source_prefix_noise)
+        ).to(img)
+        # Band carrier on the reduced grid at the model call's own sigma. The
+        # physical projection is convex, so it lowers Gaussian noise variance;
+        # the fixed complementary field restores the nominal per-cell variance.
+        sigma = (timestep.flatten()[0] / 1000.0).float().clamp(min=1e-6)
+        band_state = x[0][:, :, band.protected_t : band.head_t].to(torch.float32)
+        projected_band = resize_spatial_5d_h3_patch_lattice(band_state, band.source_h, band.source_w)
+        complement = domain.band_noise_complement.to(device=img.device, dtype=torch.float32)
+        band_noise = domain.source_band_noise.to(device=img.device, dtype=torch.float32)
+        carrier = projected_band + (sigma * float(domain.model_noise_scale)) * complement * band_noise
+        band_rows = inner.video_patch_proj(native.patchify_video(carrier)).to(img)
+        target_rows = torch.cat(
+            (
+                img[:audio_start],
+                img.index_select(0, crop_rows),
+                target_prefix,
+                img[video_start + band.protected_rows : video_start + band.prefix_rows],
+            )
+        )
+        source_rows = torch.cat(
+            (
+                img[:video_start],
+                projected_prefix,
+                band_rows,
+                img.index_select(0, tail_rows),
+            )
+        )
+        if len(target_rows) != target_stream.rows or len(source_rows) != source_stream.rows:
+            raise RuntimeError("domain-uniform stream construction changed its row count")
+        return torch.cat((target_rows, source_rows))
+
+    def stream_mod_segments(native_segments):
+        video_row = next(row for start, _stop, row in native_segments if start == video_start)
+        protected, generated = _domain_video_labels(
+            video_row,
+            protected_rows=band.protected_rows,
+            generated_rows=None,
+            band=band,
+            device=device,
+        )
+        segments = {}
+        for stream, crop in ((target_stream, (crop_rows, 2 * head_audio_t)), (source_stream, None)):
+            plan = stream.plan
+            if torch.is_tensor(video_row):
+                row = torch.cat(
+                    (
+                        protected.reshape(1).expand(plan.prefix_rows),
+                        generated.reshape(1).expand(plan.sequence_rows - plan.video_start - plan.prefix_rows),
+                    )
+                )
+            else:
+                row = video_row
+            segments[stream.name] = _domain_mod_segments(
+                native_segments,
+                audio_range=(audio_start, audio_stop),
+                native_video_start=video_start,
+                video_range=(plan.video_start, plan.sequence_rows),
+                crop_audio=crop,
+                video_row=row,
+            )
+        return segments
+
+    def wrap(layer, previous):
+        def call(args, extra):
+            img = args["img"]
+            if layer == 0:
+                img = build_streams(img)
+                metrics.increment("partitioned_transformer_calls")
+                metrics.increment("partitioned_domain_uniform_calls")
+                metrics.increment("partitioned_domain_uniform_target_rows", target_stream.rows)
+                metrics.increment("partitioned_domain_uniform_source_rows", source_stream.rows)
+                metrics.event(
+                    "partitioned_target_band_domain_transformer",
+                    policy=domain_policy,
+                    band_carrier_policy=TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY,
+                    stage=options.get("h3_flow_stage"),
+                    native_sequence_rows=int(layout.seq_len),
+                    protected_prefix_t=int(band.protected_t),
+                    head_t=int(band.head_t),
+                    temporal=int(band.temporal),
+                    target_hw=tuple(map(int, owner.target_hw)),
+                    source_hw=(int(band.source_h), int(band.source_w)),
+                    streams=tuple(
+                        {
+                            "stream": stream.name,
+                            "sequence_rows": stream.rows,
+                            "video_start": int(stream.plan.video_start),
+                            "temporal": int(stream.plan.temporal),
+                            "rows_per_frame": int(stream.plan.target_rows),
+                            "audio_rows": stream.audio_rows,
+                            "attention_head_t": stream.attention_head_t,
+                            "semantic_digest": stream.contract["semantic_digest"],
+                        }
+                        for stream in streams
+                    ),
+                    shared_hidden_rows=0,
+                    conditioning_rows_per_stream=True,
+                    cross_stream_attention_keys=0,
+                    output_owner={
+                        "band": DOMAIN_STREAM_TARGET,
+                        "tail": DOMAIN_STREAM_SOURCE,
+                        "audio": DOMAIN_STREAM_SOURCE,
+                    },
+                )
+            if len(img) != target_stream.rows + source_stream.rows:
+                raise RuntimeError("domain-uniform transformer row count mismatch")
+            if "rope" not in cached:
+                cached["rope"] = {
+                    stream.name: native.rope_rotation_table(
+                        inner.rope_freqs(stream.layout.position_ids, img.device),
+                        img.dtype,
+                    )
+                    for stream in streams
+                }
+            if cached.get("mod_source") is not args["mod_segments"]:
+                cached["mod_segments"] = stream_mod_segments(args["mod_segments"])
+                cached["mod_source"] = args["mod_segments"]
+                metrics.increment("partitioned_modulation_validations")
+            views = {
+                target_stream.name: img[: target_stream.rows],
+                source_stream.name: img[target_stream.rows :],
+            }
+            output = None
+            for stream in streams:
+                view = views[stream.name]
+                forwarded = dict(args)
+                forwarded.update(
+                    img=view,
+                    layout=stream.layout,
+                    rope_freqs=cached["rope"][stream.name],
+                    mod_segments=[
+                        (start, stop, row.clone() if start == stream.plan.video_start and torch.is_tensor(row) else row)
+                        for start, stop, row in cached["mod_segments"][stream.name]
+                    ],
+                )
+                forwarded["transformer_options"] = _partitioned_transformer_options(
+                    args["transformer_options"],
+                    stream.layout,
+                    stream.contract,
+                    metrics,
+                    runtime=runtime,
+                    block_index=layer,
+                    stage_view=stream.view,
+                    domain_stream=stream.leaf,
+                )
+                output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
+                result = output["img"]
+                if result.shape != view.shape:
+                    raise RuntimeError("domain-uniform stream block returned incompatible hidden state")
+                if result.data_ptr() != view.data_ptr():
+                    view.copy_(result)
+                metrics.increment(f"partitioned_domain_uniform_{stream.name}_block_calls")
+            if layer == last_layer:
+                target_view = views[target_stream.name]
+                source_view = views[source_stream.name]
+                native_rows = img.new_zeros((int(layout.seq_len), img.shape[1]))
+                native_rows[:video_start] = source_view[:video_start]
+                band_start = target_stream.plan.video_start + band.protected_rows
+                native_rows[video_start + band.protected_rows : video_start + band.prefix_rows] = target_view[
+                    band_start : band_start + band.band_t * band.target_rows
+                ]
+                native_rows.index_copy_(0, tail_rows, source_view[video_start + band.head_t * band.source_rows :])
+                return {**output, "img": native_rows}
+            return {**output, "img": img}
+
+        return call
+
+    for layer in range(len(inner.blocks)):
+        blocks[("double_block", layer)] = wrap(layer, blocks.get(("double_block", layer)))
+    result = executor(x, timestep, context, local, minimax_payload=payload, **kwargs)
+    video = result[0].clone()
+    video[:, :, : owner.prefix_t] = 0
+    video[:, :, band.head_t :, band.source_h :] = 0
+    video[:, :, band.head_t :, : band.source_h, band.source_w :] = 0
+    return [video, result[1]]
 
 
 def partitioned_diffusion_wrapper(
@@ -494,6 +968,23 @@ def partitioned_diffusion_wrapper(
         if video_end - video_start != band.native_rows:
             raise RuntimeError("target-band native layout does not match the target-grid sampler state")
         tail_rows = band.tail_native_rows(x[0].device) + int(video_start)
+        if runtime.target_band_domain is not None:
+            return _domain_uniform_forward(
+                executor,
+                x,
+                timestep,
+                context,
+                options,
+                payload,
+                kwargs,
+                native=native,
+                inner=inner,
+                runtime=runtime,
+                owner=owner,
+                band=band,
+                layout=layout,
+                tail_rows=tail_rows,
+            )
     positions, position_policy = partitioned_positions_for_runtime(native, runtime, layout)
     partitioned_layout = copy.copy(layout)
     partitioned_layout.position_ids = positions
@@ -764,10 +1255,14 @@ def partitioned_diffusion_wrapper(
 
 
 __all__ = [
+    "DOMAIN_STREAM_SOURCE",
+    "DOMAIN_STREAM_TARGET",
+    "DOMAIN_UNIFORM_IDENTITY",
     "PARTITIONED_BLOCK_INDEX_KEY",
     "PARTITIONED_WRAPPER_KEY",
     "VDN_PARTITIONED_SEQUENCE_API",
     "VDN_PARTITIONED_SEQUENCE_MODE",
+    "DomainUniformStream",
     "make_partitioned_attention_override",
     "partitioned_diffusion_wrapper",
 ]

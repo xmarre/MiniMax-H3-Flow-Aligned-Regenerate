@@ -1974,7 +1974,15 @@ def test_target_sink_requires_advertised_vdn_mode_before_sampling():
     _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
 
 
-@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize(
+    "selected",
+    [
+        None,
+        {PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "target_query_sink_measure"},
+        {"h3_flow_partitioned_target_band_handoff_state_v1": "carry_raw_band"},
+        {"h3_flow_partitioned_target_band_context_v1": "domain_uniform_v1"},
+    ],
+)
 def test_target_sink_outer_cannot_silently_fallback_and_clears_ownership(monkeypatch, selected):
     monkeypatch.setenv(AUDIO_GUIDED_OVERLAP_ENV, "0")
     video, audio = torch.randn(1, 24, 5, 8, 12), torch.randn(1, 32, 2, 12)
@@ -1983,7 +1991,7 @@ def test_target_sink_outer_cannot_silently_fallback_and_clears_ownership(monkeyp
     video_mask[:, :, :2] = 0
     mask = pack_streams((video_mask, torch.ones_like(audio)))[0]
     binding = FlowBinding(metrics=H3FlowMetrics())
-    options = {PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "target_query_sink_measure"} if selected else {}
+    options = dict(selected or {})
     guider = SimpleNamespace(
         model_options={
             FLOW_BINDING_KEY: binding,

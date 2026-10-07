@@ -81,6 +81,8 @@ softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
 suffix_dc_bridge                 = true
 target_band_tokens               = 4
+target_band_handoff_state        = renoise_clean
+target_band_context              = mixed_grid
 ```
 
 Continuation low/probe and high share the target grid. Clean/residual transfer
@@ -201,6 +203,37 @@ and is measured against the target-grid head.
 This mode is not qualified for rendered quality. Before relying on it, inspect
 the prefix join, the band's far edge, tone and audio against
 `same_grid_target_control` on the same seed.
+
+#### Target-band comparison controls
+
+Both selectors are used only by `progressive_target_band`, default to the
+behaviour above and can be combined. Requesting either disables the target-grid
+fallback, so unsupported combinations fail before sampling.
+
+- `target_band_handoff_state=carry_raw_band` resumes the band from its actual
+  low/probe sampler state at the handoff sigma, as same-grid control does for
+  every generated token. Prefix, tail, audio and high masks are unchanged.
+  Receipts: `partitioned_target_band_low_state.band_raw_state_carried` and
+  `partitioned_transfer.target_band_raw_state_identity`.
+- `target_band_context=domain_uniform_v1` evaluates low/probe as two
+  uniform-grid hidden streams per model call. The target stream holds
+  conditioning, head-duration audio, exact prefix and band on the target grid.
+  The source stream holds conditioning, all audio, the projected prefix and band
+  and the reduced-grid tail. The streams share no rows or keys inside a call.
+  The source stream reads a noise-variance-matched projection of the band
+  state. Band velocity comes from the target stream; tail and audio velocity
+  come from the source stream.
+  Requires `vdn_linear_diagnostic=normal`, `softmax_diagnostic=normal`, the
+  native temporal-carrier policy and paired VDN/Sol domain-stream API 1.
+  Receipts: `partitioned_target_band_domain_plan`, one
+  `partitioned_target_band_domain_transformer` per actual call, and a verified
+  `partitioned_target_band_domain_stage` for low and probe.
+  A prefix plus band of `5k + 2` tokens gives the target stream a native H3 clip
+  length, for example a 5-token band after a 12-token prefix.
+
+Neither control changes the learned band/tail handoff, and neither is qualified
+for rendered quality. Compare each against the unchanged mixed-grid baseline on
+identical inputs.
 
 ### Suffix DC bridge selector
 
