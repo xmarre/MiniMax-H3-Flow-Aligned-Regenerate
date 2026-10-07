@@ -256,7 +256,12 @@ and `vdn_temporal_carrier_policy=native_grid_then_map_v1`: no cross-grid taps
 or non-unit key measures exist for those selectors to act on. Keyframe-anchored
 layouts and audio whose duration differs from the native video/audio relation
 are rejected. The audio-position selector does not apply because each stream
-uses its own native positions. Paired VDN-H3-Plus and Sol-H3 releases that
+uses its own native positions; selecting `source_carrier` leaves this mode's
+output unchanged and does not request mixed-grid execution verification.
+Audio-only references also use each receiving stream's native spatial
+endpoints while preserving reference times. Duration and keyframe restrictions
+are checked before opening the low-stage sampler lifetime.
+Paired VDN-H3-Plus and Sol-H3 releases that
 accept domain-stream API 1 are required. Completed work is verified: every
 low/probe stage must run both streams through every transformer block.
 

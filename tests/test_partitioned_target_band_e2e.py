@@ -1111,3 +1111,36 @@ def test_sol_history_recognizes_domain_low_probe_and_uniform_high(monkeypatch):
         "probe": {domain_kind},
         "high": {history.PARTITIONED_FLOW_IDENTITY},
     }
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+def test_domain_uniform_audio_position_selector_is_inactive(monkeypatch):
+    from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_AUDIO_POSITION_DOMAIN_KEY
+
+    default = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(),
+    )
+    selected = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options=_domain_extra(**{PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: "source_carrier"}),
+    )
+    assert torch.equal(default.result, selected.result)
+    assert not _events(selected.metrics, "partitioned_audio_position_domain_verified")
+
+
+def test_domain_invalid_audio_fails_before_sampler_lifetime(monkeypatch):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+
+    def sampling_started(*_args, **_kwargs):
+        pytest.fail("unsupported domain input reached the sampler lifetime")
+
+    monkeypatch.setattr(scheduler, "_begin_capture", sampling_started)
+    with pytest.raises(RuntimeError, match="native audio/video duration relation"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+            extra_transformer_options=_domain_extra(),
+        )

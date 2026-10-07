@@ -834,6 +834,8 @@ def _partitioned_stage_contract(
             PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         )
     )
+    if target_band_domain is not None:
+        audio_position_domain = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
     temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(
         transformer.get(
             PARTITIONED_VDN_TEMPORAL_CARRIER_KEY,
@@ -1841,6 +1843,31 @@ def _validate_partitioned_sol_domain_stream() -> None:
         )
 
 
+def _validate_target_band_domain_inputs(guider, latent_shapes) -> None:
+    """Reject unsupported uniform-stream inputs before opening a sampler lifetime."""
+    from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
+
+    tokens = int(latent_shapes[0][2])
+    audio_t = int(latent_shapes[1][-1])
+    frames = sum(int(FRAME_PER_TOKEN[k % len(FRAME_PER_TOKEN)]) for k in range(tokens))
+    expected = round(frames * float(FRAME_RESCALE))
+    if abs(expected - audio_t) > 1:
+        raise PartitionedPreflightUnsupported(
+            "domain-uniform execution requires the native audio/video duration relation; "
+            f"audio has {audio_t} latent frames but the video spans {expected}"
+        )
+    for entries in getattr(guider, "conds", {}).values():
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            prepared = entry.get("model_conds", {}).get("minimax_payload")
+            payload = getattr(prepared, "cond", prepared)
+            if entry.get("minimax_keyframes") or (isinstance(payload, dict) and payload.get("keyframes")):
+                raise PartitionedPreflightUnsupported(
+                    "domain-uniform target-band context does not support keyframe-anchored layouts"
+                )
+
+
 def _preflight(
     guider: Any,
     config: ProgressiveTargetInputConfig,
@@ -1895,6 +1922,7 @@ def _preflight(
     _validate_partitioned_sol_native_carrier(native_carrier)
     if target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM:
         _validate_partitioned_sol_domain_stream()
+        _validate_target_band_domain_inputs(guider, latent_shapes)
     if required_softmax_diagnostic == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
         _validate_partitioned_sol_sink_measure(required_softmax_diagnostic)
         if required_vdn_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE:
@@ -3474,7 +3502,11 @@ def run_partitioned_progressive(
             model_options=initial_model_options,
         )
     domain_context_requested = band_mode and target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM
+    requested_audio_position_domain = audio_position_domain
     if domain_context_requested:
+        # Uniform streams own their native audio coordinates. The mixed-grid
+        # selector has no operation or execution counter to verify here.
+        audio_position_domain = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
         # Each domain stream is a uniform grid: there are no cross-grid temporal
         # taps, destination stencils or non-unit key measures for these
         # selectors to act on, so they cannot be combined with this context.
@@ -3780,7 +3812,7 @@ def run_partitioned_progressive(
             # Each stream is an ordinary uniform clip, so its audio rows use that
             # clip's native spatial endpoints; the mixed-grid audio-position
             # selector has no row to act on in this context.
-            audio_position_domain_requested=audio_position_domain,
+            audio_position_domain_requested=requested_audio_position_domain,
             stream_audio_positions="per_stream_native",
             target_stream_native_clip_length=(head_t % 5 == 2),
             high_stage_changed=False,

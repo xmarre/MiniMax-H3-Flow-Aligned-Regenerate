@@ -579,11 +579,20 @@ def _domain_uniform_forward(
     target_positions = target_layout.position_ids
     source_positions = source_layout.position_ids
     head_rows = band.head_t * band.target_rows
+    # Audio-only references use the receiving clip's spatial endpoints. Their
+    # times stay fixed, while image/video reference coordinates stay unchanged.
+    source_conditioning_matches = all(
+        torch.equal(
+            source_positions[start:stop, :1] if kind == "ref_audio" else source_positions[start:stop],
+            native_positions[start:stop, :1] if kind == "ref_audio" else native_positions[start:stop],
+        )
+        for start, stop, kind in source_layout.segments[:-2]
+    )
     if not (
         torch.equal(target_positions[:audio_start], native_positions[:audio_start])
         and torch.equal(target_positions[t_audio_start:t_audio_stop], native_positions[crop_rows.cpu()])
         and torch.equal(target_positions[t_video_start:], native_positions[video_start : video_start + head_rows])
-        and torch.equal(source_positions[:audio_start], native_positions[:audio_start])
+        and source_conditioning_matches
         and torch.equal(source_positions[audio_start:audio_stop, 0], native_positions[audio_start:audio_stop, 0])
     ):
         raise RuntimeError("domain-uniform stream RoPE rows drifted from the chunk's physical coordinates")
