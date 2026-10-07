@@ -30,6 +30,7 @@ STAGES = {
     "final": "final_post_high_internal_clean_full",
 }
 SCOPES = ("stage_continuity", "transfer_and_decoder_context")
+DETAIL_REGIONS = ("off", "upper_left")
 
 
 def replay_plan(metadata, join_frame):
@@ -303,12 +304,54 @@ def _decode_owned_pixels(vae, latent, process_out, expected_frames):
     return decoded
 
 
-def measure_window_context(vae, latent, process_out, plan):
+def _detail_crop(pixels, region):
+    if region == "off":
+        return None
+    if region != "upper_left":
+        raise ValueError(f"unsupported local boundary detail region: {region!r}")
+    h, w = pixels.shape[1:3]
+    stop_y, stop_x = max(1, round(h * 0.45)), max(1, round(w / 3))
+    return pixels[:, :stop_y, :stop_x], {
+        "region": region,
+        "bounds_xyxy": [0, 0, stop_x, stop_y],
+        "decoded_canvas_hw": [h, w],
+        "geometry_units": "pixels_on_this_stage_native_decoder_grid_at_region_center",
+    }
+
+
+def _detail_pair(reference, candidate, labels, region, *, previous=None):
+    selected = _detail_crop(reference, region)
+    if selected is None:
+        return None
+    a, metadata = selected
+    b = _detail_crop(candidate, region)[0]
+    delta = b - a
+    luma = delta @ torch.tensor([0.2126, 0.7152, 0.0722])
+    result = {
+        **metadata,
+        "frame_labels": labels,
+        "rgb_difference_rms": delta.square().mean((1, 2, 3)).sqrt().tolist(),
+        "rgb_mean_change": delta.mean((1, 2)).tolist(),
+        "luma_mean_change": luma.mean((1, 2)).tolist(),
+        "geometry": geometry_comparison(a, b, labels),
+    }
+    if previous is not None:
+        a_previous = _detail_crop(previous[0], region)[0]
+        b_previous = _detail_crop(previous[1], region)[0]
+        result["temporal_increment_change_rms"] = (
+            ((b - b_previous) - (a - a_previous)).square().mean((1, 2, 3)).sqrt().tolist()
+        )
+    return result
+
+
+def measure_window_context(vae, latent, process_out, plan, *, detail_region="off"):
     """Compare identical pixel times from two standalone seven-token contexts.
 
     These are finalized/clamped standalone pixels. Native production blending
     happens before clamping, so these outputs must not reassemble the video.
     """
+    if detail_region not in DETAIL_REGIONS:
+        raise ValueError(f"unsupported local boundary detail region: {detail_region!r}")
     overlap = []
     window_start = max(0, (plan["head_t"] // 5 - 1) * 5)
     first_offset = window_start - plan["token_start"]
@@ -322,7 +365,7 @@ def measure_window_context(vae, latent, process_out, plan):
     delta = right - left
     luma = delta @ torch.tensor([0.2126, 0.7152, 0.0722])
     upper_h = round(left.shape[1] * 0.45)
-    return {
+    result = {
         "frame_labels": labels,
         "token_contexts": [[window_start, window_start + 7], [window_start + 5, window_start + 12]],
         "domain": "finalized_standalone_window_rgb",
@@ -334,11 +377,16 @@ def measure_window_context(vae, latent, process_out, plan):
         "geometry": geometry_comparison(left, right, labels),
         "geometry_upper45": geometry_comparison(left[:, :upper_h], right[:, :upper_h], labels),
     }
+    if detail_region != "off":
+        result["detail_region"] = _detail_pair(left, right, labels, detail_region)
+    return result
 
 
-def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity"):
+def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity", detail_region="off"):
     if scope not in SCOPES:
         raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
+    if detail_region not in DETAIL_REGIONS:
+        raise ValueError(f"unsupported local boundary detail region: {detail_region!r}")
     extended = scope == "transfer_and_decoder_context"
     native = getattr(vae, "first_stage_model", None)
     expected = {"tokens_chunk_size": 5, "token_overlap": 2, "frame_pre_padding": 3, "clip_length": 17}
@@ -350,6 +398,7 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
     report = {
         "policy": "local_target_band_native_window_audit_v2",
         "scope": scope,
+        "detail_region": detail_region,
         "fps": 24,
         **identity,
         "plan": plan,
@@ -385,12 +434,27 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
             "adjacent_rgb_difference_rms": (frames[1:] - frames[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
             "adjacent_luma_mean_change": (luma[1:] - luma[:-1]).mean((1, 2)).tolist(),
         }
+        if detail_region != "off":
+            selected, metadata = _detail_crop(frames, detail_region)
+            selected_luma = selected @ torch.tensor([0.2126, 0.7152, 0.0722])
+            report["stages"][name]["detail_region"] = {
+                **metadata,
+                "frame_labels": labels,
+                "rgb_mean": selected[1:].mean((1, 2)).tolist(),
+                "luma_mean": selected_luma[1:].mean((1, 2)).tolist(),
+                "luma_std": selected_luma[1:].std((1, 2), correction=0).tolist(),
+                "adjacent_rgb_difference_rms": (selected[1:] - selected[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
+                "adjacent_luma_mean_change": (selected_luma[1:] - selected_luma[:-1]).mean((1, 2)).tolist(),
+                "adjacent_frame_geometry": geometry_comparison(selected[:-1], selected[1:], labels),
+            }
         if name == "source_grid":
             report["stages"][name]["state_role"] = "uniform_reduced_view_with_projected_target_grid_head"
             report["stages"][name]["native_reduced_grid_generation_for_head"] = False
         if extended:
             LOG.info("H3 local boundary audit: comparing decoder contexts of %s", name)
-            report["stages"][name]["window_context"] = measure_window_context(vae, latent, process_out, plan)
+            report["stages"][name]["window_context"] = measure_window_context(
+                vae, latent, process_out, plan, detail_region=detail_region
+            )
             report["extra_vae_calls"] += 2
     pairs = [
         ("provider", "pre_high"),
@@ -416,6 +480,10 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
                 a[:, : round(a.shape[1] * 0.45)], b[:, : round(b.shape[1] * 0.45)], labels
             ),
         }
+        if detail_region != "off":
+            report["comparisons"][f"{left}_to_{right}"]["detail_region"] = _detail_pair(
+                a, b, labels, detail_region, previous=(a_previous, b_previous)
+            )
     for name, frames in pixels.items():
         LOG.info("H3 local boundary audit: measuring temporal continuity of %s", name)
         report["stages"][name]["adjacent_frame_geometry"] = geometry_comparison(frames[:-1], frames[1:], labels)
@@ -455,6 +523,17 @@ class H3FlowLocalBoundaryAudit:
                         ),
                     },
                 ),
+                "detail_region": (
+                    list(DETAIL_REGIONS),
+                    {
+                        "default": "off",
+                        "tooltip": (
+                            "Upper left adds measurements over the left third of the upper 45% of each decoded canvas. "
+                            "Uses the same decoded pixels without extra VAE calls. "
+                            "A region can still contain subject motion."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -475,12 +554,17 @@ class H3FlowLocalBoundaryAudit:
     def IS_CHANGED(cls, **_kwargs):
         return float("nan")
 
-    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity"):
+    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity", detail_region="off"):
         import folder_paths
         from comfy.latent_formats import MiniMaxH3Video
 
         report = audit_local_boundary(
-            video_vae, bundle_path, chunk_join_frame, MiniMaxH3Video().process_out, scope=audit_scope
+            video_vae,
+            bundle_path,
+            chunk_join_frame,
+            MiniMaxH3Video().process_out,
+            scope=audit_scope,
+            detail_region=detail_region,
         )
         text = json.dumps(report, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"

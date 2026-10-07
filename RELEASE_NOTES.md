@@ -1,5 +1,13 @@
 # Unreleased: consistent target-band handoff
 
+- Local Boundary Audit adds opt-in `detail_region=upper_left`. It measures
+  tone, temporal changes and affine geometry over the left third of the upper
+  45% of each decoded canvas, including matching-time stage and decoder-context
+  comparisons. Existing full-frame and upper45 measurements are preserved.
+  The region uses already decoded pixels; VAE call counts and numeric-only
+  output are unchanged. The default is off; motion and weak texture can still
+  confound the region's estimates.
+
 - Allow `capture_boundary_witness=true` with target-band continuation. The
   selector saves the existing scheduler stage snapshots for Local Boundary
   Audit, including the first actual high prediction before and after Flow,

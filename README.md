@@ -341,6 +341,16 @@ between adjacent frames. These measurements do not classify motion or cuts as
 defects. The extra comparisons use already decoded pixels and add CPU fitting
 work without additional VAE calls.
 
+Set the optional `detail_region=upper_left` to also measure the left third of
+the upper 45% of each decoded canvas. Its per-stage luminance, RGB changes,
+adjacent-frame geometry and matching-time stage comparisons help inspect a
+localized feature separately from broader motion. Extended scope also compares
+that region across the two decoder contexts. Each result includes the region's
+pixel bounds and canvas size; reduced-grid measurements retain their native
+pixel units. The region can still contain motion or insufficient texture, so
+these measurements are not automatic defect classifications. The default is
+`off`. Region analysis adds CPU work without extra decoding or image export.
+
 Set `audit_scope=transfer_and_decoder_context` for the extended replay. It adds
 the saved uniform reduced-grid handoff view and compares identical pixel times
 from two independently decoded seven-token contexts near the band/tail edge for

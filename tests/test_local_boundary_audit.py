@@ -405,7 +405,8 @@ def test_temporal_increment_locates_new_stage_discontinuity_without_confusing_st
         assert measurement["temporal_increment_change_rms"] == pytest.approx(expected, abs=1e-7)
 
 
-def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path):
+@pytest.mark.parametrize("detail_region", ["off", "upper_left"])
+def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path, detail_region):
     import sys
 
     directory, _manifest, _video = bundle
@@ -418,11 +419,112 @@ def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path):
         SimpleNamespace(MiniMaxH3Video=lambda: SimpleNamespace(process_out=lambda value: value)),
     )
     monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
-    result = audit.H3FlowLocalBoundaryAudit().audit(FakeVAE(), str(directory), 175)
+    result = audit.H3FlowLocalBoundaryAudit().audit(FakeVAE(), str(directory), 175, detail_region=detail_region)
     files = list(output.rglob("*.*"))
     assert len(files) == 1 and files[0].suffix == ".json"
     assert json.loads(files[0].read_text()) == json.loads(result["result"][0])
+    assert json.loads(result["result"][0])["detail_region"] == detail_region
     assert audit.NODE_CLASS_MAPPINGS["H3FlowLocalBoundaryAudit"] is audit.H3FlowLocalBoundaryAudit
+
+
+@pytest.mark.parametrize("scope,call_count", [("stage_continuity", 5), ("transfer_and_decoder_context", 18)])
+def test_detail_region_is_additive_without_new_decodes_or_changed_native_measurements(
+    source_bundle, monkeypatch, scope, call_count
+):
+    directory, _manifest, _source = source_bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    baseline = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda v: v, scope=scope)
+    vae = FakeVAE()
+    rng = torch.random.get_rng_state().clone()
+    detailed = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope=scope, detail_region="upper_left")
+    assert len(vae.inputs) == detailed["extra_vae_calls"] == call_count
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    for stage in detailed["stages"].values():
+        region = stage["detail_region"]
+        h, w = stage["decoded_pixel_hw"]
+        assert region["bounds_xyxy"] == [0, 0, round(w / 3), round(h * 0.45)]
+        assert region["frame_labels"] == stage["frame_labels"]
+        if scope == "transfer_and_decoder_context":
+            context = stage["window_context"]["detail_region"]
+            assert context["frame_labels"] == list(range(187, 192))
+            assert context["luma_mean_change"] == [0.0] * 5
+    for pair in detailed["comparisons"].values():
+        assert pair["detail_region"]["temporal_increment_change_rms"] == [0.0] * 25
+
+    def remove_detail(value):
+        if isinstance(value, dict):
+            return {k: remove_detail(v) for k, v in value.items() if k != "detail_region"}
+        if isinstance(value, list):
+            return [remove_detail(v) for v in value]
+        return value
+
+    assert remove_detail(detailed) == remove_detail(baseline)
+
+
+def test_detail_region_separates_local_tone_onset_from_motion_elsewhere(bundle, monkeypatch):
+    directory, _manifest, _video = bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class LocalToneVAE(FakeVAE):
+        def decode(self, value):
+            pixels = super().decode(value)
+            times = torch.arange(pixels.shape[1])[None, :, None, None, None]
+            pixels += 0.2 + times * 0.001
+            h, w = pixels.shape[2:4]
+            stop_y, stop_x = round(h * 0.45), round(w / 3)
+            # Motion outside the chosen region contributes to broad frame statistics.
+            pixels[:, :, :, stop_x:] += (times % 2) * 0.1
+            stage = len(self.inputs) - 1
+            if stage >= 1:
+                pixels += 0.02
+            if stage >= 2:
+                pixels[:, 27:, :stop_y, :stop_x] -= 0.02
+            return pixels
+
+    vae = LocalToneVAE()
+    report = audit.audit_local_boundary(vae, directory, 175, lambda v: v, detail_region="upper_left")
+    assert len(vae.inputs) == report["extra_vae_calls"] == 5
+    labels = report["stages"]["final"]["frame_labels"]
+    index = labels.index(180)
+    for stage in ("provider", "pre_high"):
+        region = report["stages"][stage]["detail_region"]
+        assert region["adjacent_luma_mean_change"] == pytest.approx([0.001] * 25, abs=1e-7)
+    region = report["stages"]["final"]["detail_region"]
+    expected = [0.001] * 25
+    expected[index] -= 0.02
+    assert region["adjacent_luma_mean_change"] == pytest.approx(expected, abs=1e-7)
+    stable = report["comparisons"]["provider_to_pre_high"]["detail_region"]
+    assert stable["luma_mean_change"] == pytest.approx([0.02] * 25, abs=1e-7)
+    assert stable["temporal_increment_change_rms"] == pytest.approx([0.0] * 25, abs=1e-7)
+    onset = report["comparisons"]["pre_high_to_first_high_before_flow"]["detail_region"]
+    expected = [0.0] * 25
+    expected[index] = 0.02
+    assert onset["temporal_increment_change_rms"] == pytest.approx(expected, abs=1e-7)
+
+
+def test_detail_geometry_measures_local_translation_without_foreground_changes_or_pixel_mutation():
+    generator = torch.Generator().manual_seed(71)
+    image = F.avg_pool2d(torch.rand(1, 3, 128, 192, generator=generator), 3, stride=1, padding=1)
+    shifted = torch.roll(image, 2, dims=-1)
+    shifted[:, :, :, 64:] = 0.1
+    a, b = image.permute(0, 2, 3, 1), shifted.permute(0, 2, 3, 1)
+    original_a, original_b = a.clone(), b.clone()
+    rng = torch.random.get_rng_state().clone()
+    measured = audit._detail_pair(a, b, [188], "upper_left")
+    row = measured["geometry"]["frames"][0]
+    assert row["center_dx_dy_pixels"][0] == pytest.approx(-2.0, abs=0.15)
+    assert row["affine_huber"] < row["zero_huber"] * 0.1
+    assert torch.equal(a, original_a) and torch.equal(b, original_b)
+    assert torch.equal(torch.random.get_rng_state(), rng)
+
+
+@pytest.mark.parametrize("region", ["unknown", None, True])
+def test_unsupported_detail_region_fails_before_decoding(bundle, region):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="unsupported local boundary detail region"):
+        audit.audit_local_boundary(vae, directory, 175, lambda v: v, detail_region=region)
+    assert vae.inputs == []
 
 
 def test_affine_measurement_recovers_translation_without_pixel_or_rng_mutation():
