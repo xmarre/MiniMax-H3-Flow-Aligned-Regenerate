@@ -180,10 +180,18 @@ same-grid join next to the carried prefix at a lower low/probe cost.
   `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
   `prefix_transformer_context=exact_target_partitioned`,
   `low_probe_execution_source=main_then_shadow`, the main audio/AV/guidance
-  sources, `frame_gauge_residual_mode=off` (or `measure` for stage evidence) and
-  `capture_boundary_witness=false`.
+  sources and `frame_gauge_residual_mode=off` (or `measure` for additional
+  trajectory measurements).
 - Required companions: VDN-H3-Plus and Sol-H3 releases that accept a target-grid
   native partition carrier.
+
+`capture_boundary_witness=true` saves the target-band stage tensors for Local
+Boundary Audit under `output/h3_flow_regenerate/residual_geometry`, including
+the first actual high prediction before and after Flow. It works with
+`frame_gauge_residual_mode=off`, retains the 256 MiB CPU capture budget and native
+decoder timing requirements, and adds copy and disk-write time. Other
+partitioned modes retain the existing VDN feature witness. Capture is off by
+default and adds no model, provider or VAE evaluations.
 
 The paired-prefix frame gauge does not run in this mode. The prefix is followed
 by the band's own target-grid prediction, so no transfer boundary sits next to it. With

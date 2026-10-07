@@ -150,9 +150,19 @@ first reduced-grid token after the band and is measured against the target-grid
 head. The band must leave at least one generated token on the reduced grid.
 The mode requires `handoff_transfer_control=learned_3d`,
 `prefix_transformer_context=exact_target_partitioned`, the main handoff and
-guidance sources and boundary-witness capture off.
+guidance sources.
 It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
 native partition carrier. Unsupported combinations fail before sampling.
+
+With `capture_boundary_witness=true`, target-band continuation saves CPU copies
+of the low/probe carrier, uniform reduced-grid provider input, provider output,
+pre-high state, first actual high prediction before and after Flow, sampler
+input, mask and final state. The bundle is written under
+`output/h3_flow_regenerate/residual_geometry` for Local Boundary Audit.
+This uses the existing stage-evidence path with a 256 MiB CPU byte budget and
+requires native decoder timing. It adds copies and disk I/O without model,
+provider or VAE calls. It does not enable the VDN feature sink or change
+`frame_gauge_residual_mode`; capture remains off by default.
 
 The default `vdn_temporal_carrier_policy=native_grid_then_map_v1` applies each
 neighbor's spatial short-convolution on that neighbor's grid before resampling

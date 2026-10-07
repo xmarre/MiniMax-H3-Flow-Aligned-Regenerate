@@ -35,6 +35,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
@@ -395,8 +396,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": False,
                 "tooltip": (
-                    "Capture the bounded actual-feature VDN boundary witness for this execution. "
-                    "Artifacts are written under ComfyUI's output/h3-flow-boundary-witness directory. "
+                    "Capture boundary evidence for this execution. Target-band continuation saves "
+                    "stage tensors under output/h3_flow_regenerate/residual_geometry for Local Boundary Audit; "
+                    "other partitioned modes save VDN feature tensors under output/h3-flow-boundary-witness. "
+                    "Target-band stage copies have a 256 MiB CPU budget and add copy and disk-write time. "
                     "This is per-run and does not require an environment variable or ComfyUI restart."
                 ),
             },
@@ -587,7 +590,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 import folder_paths
             except ImportError as exc:
                 raise RuntimeError("boundary witness capture requires ComfyUI folder_paths at node execution") from exc
-            witness_directory = str(folder_paths.get_output_directory() + "/h3-flow-boundary-witness")
+            witness_subdirectory = (
+                "/h3_flow_regenerate/residual_geometry"
+                if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+                else "/h3-flow-boundary-witness"
+            )
+            witness_directory = str(folder_paths.get_output_directory() + witness_subdirectory)
         # Store an explicit per-model value even when disabled so stale process
         # environment cannot silently override the node on subsequent runs.
         patched.model_options[WITNESS_DIRECTORY_OPTION] = witness_directory

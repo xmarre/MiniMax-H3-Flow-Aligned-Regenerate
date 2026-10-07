@@ -1,5 +1,14 @@
 # Unreleased: consistent target-band handoff
 
+- Allow `capture_boundary_witness=true` with target-band continuation. The
+  selector saves the existing scheduler stage snapshots for Local Boundary
+  Audit, including the first actual high prediction before and after Flow,
+  without enabling the VDN feature sink or requiring residual measurement mode.
+  Copies retain the 256 MiB CPU budget and native decoder timing requirements;
+  generation and evaluation counts are unchanged. Capture adds copy and disk
+  I/O time and remains off by default. Other partitioned modes retain their
+  existing feature witness.
+
 - Pass the target band's dense-query extent to VDN during uniform target-grid
   high refinement. Previously the final band tokens could switch from dense
   low/probe attention to sparse high attention because only the protected-prefix

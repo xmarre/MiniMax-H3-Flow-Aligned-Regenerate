@@ -329,7 +329,6 @@ def test_head_dc_bridge_corrects_only_the_first_transferred_tail_token(enabled):
         ({"low_probe_execution_source": "source_carrier_uniform_only"}, "low_probe_execution_source"),
         ({"guidance_trajectory_source": "source_carrier_uniform_shadow"}, "main partitioned sources"),
         ({"residual_mode": "apply"}, "frame_gauge_residual_mode"),
-        ("witness", "capture_boundary_witness"),
     ],
 )
 def test_runtime_configuration_rejects_unimplemented_band_combinations(override, error):
@@ -349,8 +348,7 @@ def test_runtime_configuration_rejects_unimplemented_band_combinations(override,
     _validate_target_band_configuration(**fields)
     _validate_target_band_configuration(**dict(fields, residual_mode="measure"))
     _validate_target_band_configuration(**dict(fields, vdn_temporal_carrier_policy="destination_grid_stencil_v1"))
-    if override == "witness":
-        override = {"model_options": {WITNESS_DIRECTORY_OPTION: "/tmp/witness"}}
+    _validate_target_band_configuration(**dict(fields, model_options={WITNESS_DIRECTORY_OPTION: "/tmp/witness"}))
     fields.update(override)
     with pytest.raises(PartitionedPreflightUnsupported, match=error):
         _validate_target_band_configuration(**fields)

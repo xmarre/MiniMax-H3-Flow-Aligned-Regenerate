@@ -83,6 +83,7 @@ def _harness(
     guidance_mode="off",
     native_sampler=None,
     residual_mode="off",
+    witness_directory=None,
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -175,6 +176,10 @@ def _harness(
         ),
     )
     guider.model_patcher.model_options = guider.model_options
+    if witness_directory is not None:
+        from h3_flow_regenerate.boundary_witness import WITNESS_DIRECTORY_OPTION
+
+        guider.model_options[WITNESS_DIRECTORY_OPTION] = str(witness_directory)
     guider.model_patcher.get_model_object = lambda name: getattr(base_model, name)
     from h3_flow_regenerate.guidance import GuidanceConfig
 
@@ -444,7 +449,10 @@ def test_band_destination_contract_reaches_core_and_refuses_missing_vdn_work(mon
     assert len({contract["numerical_digest"] for _, _, contract in observed}) == 1
 
 
-def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(monkeypatch, tmp_path):
+@pytest.mark.parametrize("capture_mode", ["measure", "node", "environment"])
+def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_ownership(
+    monkeypatch, tmp_path, capture_mode
+):
     import runpy
     import sys
     from pathlib import Path
@@ -461,12 +469,14 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
         return native_export(tensors, **kwargs)
 
     monkeypatch.setattr(scheduler, "export_residual_geometry_evidence", export)
+    monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path / "witness"))
     extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 4}
     control = _harness(
         monkeypatch,
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         extra_transformer_options=extra,
         guidance_mode="direction",
+        witness_directory="",
     )
     import folder_paths
 
@@ -476,7 +486,10 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
         spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         extra_transformer_options=extra,
         guidance_mode="direction",
-        residual_mode="measure",
+        residual_mode="measure" if capture_mode == "measure" else "off",
+        witness_directory=str(tmp_path / "witness")
+        if capture_mode == "node"
+        else ("" if capture_mode == "measure" else None),
     )
     assert torch.equal(measured.result, control.result)
     assert [call["stage"] for call in measured.calls] == [call["stage"] for call in control.calls]
@@ -487,6 +500,8 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     assert metadata["target_band_tokens"] == 4
     assert metadata["target_band_transfer_start_t"] == 16
     assert metadata["full_video_snapshots"] is True
+    assert metadata["first_high_actual"] is True
+    assert metadata["capture_boundary_witness_requested"] is (capture_mode != "measure")
     assert metadata["provider_clean_provenance"] == "actual_learned_provider_before_target_band_splice"
     provider = tensors["provider_native_clean_full"]
     source = tensors["source_probe_clean_full"]
@@ -499,18 +514,25 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     assert torch.equal(before_high[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
     assert not torch.equal(provider[:, :, PROTECTED_T:16], band_probe[:, :, PROTECTED_T:16])
     affine = _events(measured.metrics, "partitioned_target_band_same_frame_affine")
-    assert len(affine) == 1 and [frame["frame"] for frame in affine[0]["frames"]] == [12, 13, 14, 15]
-    assert affine[0]["output_mutated"] is False
+    if capture_mode == "measure":
+        assert len(affine) == 1 and [frame["frame"] for frame in affine[0]["frames"]] == [12, 13, 14, 15]
+        assert affine[0]["output_mutated"] is False
+    else:
+        assert not affine
     assert not _events(control.metrics, "partitioned_target_band_same_frame_affine")
     trajectories = _events(measured.metrics, "partitioned_target_band_tail_trajectory")
-    assert [(event["stage"], event["roi"]) for event in trajectories] == [
+    expected_trajectories = [
         (stage, roi)
         for stage in ("source_low", "provider_native", "pre_high", "final_post_high")
         for roi in ("upper45", "full")
     ]
-    assert all(event["boundary_t"] == 16 and event["output_mutated"] is False for event in trajectories)
-    assert trajectories[0]["grid"] == "source"
-    assert all(event["grid"] == "target" for event in trajectories[2:])
+    assert [(event["stage"], event["roi"]) for event in trajectories] == (
+        expected_trajectories if capture_mode == "measure" else []
+    )
+    if trajectories:
+        assert all(event["boundary_t"] == 16 and event["output_mutated"] is False for event in trajectories)
+        assert trajectories[0]["grid"] == "source"
+        assert all(event["grid"] == "target" for event in trajectories[2:])
     assert not _events(control.metrics, "partitioned_target_band_tail_trajectory")
     assert torch.equal(before_high[:, :, 17:], provider[:, :, 17:])
     assert tensors["first_high_before_flow_full"].shape[2] == TEMPORAL
@@ -519,6 +541,8 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
     assert torch.equal(tensors["final_post_high_internal_clean_full"], final)
     assert measured.binding.high_boundary_trace is None
     receipt = _events(measured.metrics, "partitioned_boundary_window_evidence")[-1]
+    assert receipt["capture_boundary_witness_requested"] is (capture_mode != "measure")
+    assert receipt["requested_mode"] == ("measure" if capture_mode == "measure" else "off")
     replay = runpy.run_path(str(Path(__file__).parents[1] / "tools" / "decode_native_boundary_evidence.py"))
     manifest, window_values = replay["load_bundle"](tmp_path / receipt["bundle"])
     assert set(window_values) == replay["TENSOR_NAMES"]

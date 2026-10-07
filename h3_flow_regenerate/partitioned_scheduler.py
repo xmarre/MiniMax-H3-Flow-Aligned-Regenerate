@@ -836,7 +836,7 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None,
         vdn_temporal_carrier_short_conv_spec=temporal_carrier_spec,
         boundary_witness=(
             None
-            if transformer.get(FLOW_STAGE_KEY) == "high"
+            if transformer.get(FLOW_STAGE_KEY) == "high" or target_band is not None
             else configured_boundary_witness(metrics, directory=witness_directory)
         ),
         prefix_transformer_context=prefix_context,
@@ -1055,7 +1055,11 @@ def _validate_partitioned_vdn_compat(
 
     model_options = getattr(patcher, "model_options", None)
     witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION, None) if isinstance(model_options, dict) else None
-    boundary_witness_requested = witness_requested(witness_directory)
+    # Target-band capture uses scheduler-owned stage snapshots, not the VDN
+    # short-convolution feature sink used by the reduced-grid carrier.
+    boundary_witness_requested = required_native_carrier != PARTITIONED_NATIVE_CARRIER_TARGET and witness_requested(
+        witness_directory
+    )
     required_temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(required_temporal_carrier_policy)
     required_softmax_diagnostic = normalize_partitioned_softmax_diagnostic(required_softmax_diagnostic)
     carrier_specs: set[str] = set()
@@ -1500,8 +1504,6 @@ def _validate_target_band_configuration(
     model_options: Any,
 ) -> None:
     """Reject selector combinations that progressive_target_band does not implement."""
-    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
-
     unsupported = []
     if handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED:
         unsupported.append("handoff_transfer_control must be 'learned_3d'")
@@ -1520,9 +1522,6 @@ def _validate_target_band_configuration(
         unsupported.append("audio, AV and guidance handoff sources must be the main partitioned sources")
     if residual_mode not in {"off", "measure"}:
         unsupported.append("frame_gauge_residual_mode must be 'off' or 'measure'")
-    witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION) if isinstance(model_options, dict) else None
-    if witness_requested(witness_directory):
-        unsupported.append("capture_boundary_witness must be disabled")
     if unsupported:
         raise PartitionedPreflightUnsupported("progressive_target_band requires: " + "; ".join(unsupported))
 
@@ -3335,6 +3334,9 @@ def run_partitioned_progressive(
     )
     suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
+
+    band_witness_requested = band_mode and witness_requested(initial_model_options.get(WITNESS_DIRECTORY_OPTION))
     target_band_tokens = resolve_partitioned_target_band_tokens(initial_transformer) if band_mode else 0
     if (
         spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID
@@ -4180,12 +4182,14 @@ def run_partitioned_progressive(
         band_clean_video = None
         measure_band_trajectory = normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure"
         if target_band is not None:
-            if normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure":
+            if measure_band_trajectory or band_witness_requested:
                 try:
                     boundary_window_evidence = BoundaryWindowEvidence(
                         stage_plan.prefix, target_band.temporal, capture_full_video=True
                     )
                 except ValueError as exc:
+                    if band_witness_requested:
+                        raise RuntimeError(f"requested target-band stage capture is unsupported: {exc}") from exc
                     binding.metrics.event(
                         "partitioned_boundary_window_evidence",
                         policy="native_boundary_decoder_window_evidence_v1",
@@ -5900,7 +5904,7 @@ def run_partitioned_progressive(
                 binding,
                 high_boundary_context,
                 target_shapes,
-                measure=residual_mode == "measure",
+                measure=residual_mode == "measure" or band_witness_requested,
                 video_reference_suffix=high_video_reference_suffix,
                 audio_reference=high_audio_reference,
                 exact_denoise_mask=(diagnostic_target_mask if high_audio_reference is not None else None),
@@ -6544,6 +6548,7 @@ def run_partitioned_progressive(
                     "first_high_sigma": boundary_window_evidence.first_high_sigma,
                     "first_high_actual": boundary_window_evidence.first_high_call_index is not None,
                     "process_latent_out_required_before_vae": True,
+                    "capture_boundary_witness_requested": bool(band_witness_requested),
                     "extra_h3_nfe": 0,
                     "extra_provider_calls": 0,
                     "extra_vae_calls": 0,
@@ -6553,6 +6558,7 @@ def run_partitioned_progressive(
                 "partitioned_boundary_window_evidence",
                 policy="native_boundary_decoder_window_evidence_v1",
                 requested_mode=residual_mode,
+                capture_boundary_witness_requested=bool(band_witness_requested),
                 registration_acceptance_required=False,
                 first_high_call_index=boundary_window_evidence.first_high_call_index,
                 first_high_sigma=boundary_window_evidence.first_high_sigma,
