@@ -777,7 +777,7 @@ def _select_source_uniform_shadow_clean_video(
 
 
 @contextlib.contextmanager
-def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None):
+def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None, attention_head_t=None):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
         raise RuntimeError("partitioned exact-prefix requires mutable model options")
@@ -842,6 +842,7 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None)
         prefix_transformer_context=prefix_context,
         audio_position_domain=audio_position_domain,
         target_band=target_band,
+        attention_head_t=attention_head_t,
     )
     try:
         yield
@@ -869,8 +870,16 @@ def _partitioned_stage_contract(guider: Any, plan, metrics, *, target_band=None)
 
 
 @contextlib.contextmanager
-def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True):
+def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True, attention_head_t=None):
     """Keep exact-prefix query policy across the target-grid refinement boundary."""
+    if attention_head_t is not None and (
+        type(attention_head_t) is not int
+        or not plan.prefix_t <= attention_head_t < plan.temporal
+        or not exact_prefix_attention
+    ):
+        raise ValueError(
+            "target-band dense-query head requires exact-prefix high attention and a valid temporal extent"
+        )
     transformer = guider.model_options["transformer_options"]
     with _high_stage_contract(guider, source="h3_flow_partitioned_refinement"):
         metrics.event(
@@ -878,10 +887,15 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
             policy=PARTITIONED_HIGH_ATTENTION_POLICY,
             exact_prefix_attention=bool(exact_prefix_attention),
             prefix_t=int(plan.prefix_t),
+            attention_head_t=int(plan.prefix_t if attention_head_t is None else attention_head_t),
             temporal=int(plan.temporal),
             target_hw=plan.target_hw,
             protected_prefix_local_queries="dense" if exact_prefix_attention else "native",
-            generated_local_queries="boundary_dense_then_native_sol_selection",
+            generated_local_queries=(
+                "boundary_and_band_dense_then_native_sol_selection"
+                if attention_head_t is not None
+                else "boundary_dense_then_native_sol_selection"
+            ),
             boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
             startup_density_exemption=False,
             refinement_source="h3_flow_partitioned_refinement",
@@ -903,7 +917,8 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
             source_w=plan.target_hw[1],
         )
         # These selectors describe low/probe interventions. High keeps its native
-        # learned complement, target-audio positions and generated-query policy.
+        # learned complement and target-audio positions. The free band's local
+        # query groups retain their low/probe dense policy through attention_head_t.
         controls = {
             PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY: PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
             PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
@@ -914,7 +929,7 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
         previous = {key: transformer[key] for key in controls if key in transformer}
         transformer.update(controls)
         try:
-            with _partitioned_stage_contract(guider, high_plan, metrics):
+            with _partitioned_stage_contract(guider, high_plan, metrics, attention_head_t=attention_head_t):
                 yield
         finally:
             for key in controls:
@@ -5879,6 +5894,7 @@ def run_partitioned_progressive(
                 stage_plan,
                 binding.metrics,
                 exact_prefix_attention=prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+                attention_head_t=target_band.head_t if target_band is not None else None,
             ),
             high_boundary_contract(
                 binding,

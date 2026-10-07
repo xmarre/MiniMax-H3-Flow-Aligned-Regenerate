@@ -613,6 +613,9 @@ def partitioned_diffusion_wrapper(
                     temporal=int(plan.temporal),
                     prefix_t=int(plan.prefix_t),
                     protected_prefix_t=int(owner.prefix_t),
+                    attention_head_t=int(
+                        plan.prefix_t if runtime.attention_head_t is None else runtime.attention_head_t
+                    ),
                     target_band_t=int(band.band_t) if band is not None else 0,
                     native_carrier_grid=(
                         PARTITIONED_NATIVE_CARRIER_TARGET if band is not None else PARTITIONED_NATIVE_CARRIER_SOURCE

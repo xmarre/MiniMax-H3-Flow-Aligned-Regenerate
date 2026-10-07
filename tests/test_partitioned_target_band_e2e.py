@@ -355,6 +355,52 @@ def _events(metrics, kind):
     return [event.fields for event in metrics.events if event.kind == kind]
 
 
+def test_target_band_dense_head_reaches_every_high_core_block_and_cleans_up(monkeypatch):
+    from h3_flow_regenerate import partitioned_transformer as transform
+    from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY
+
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    vdn_runtime = pytest.importorskip("vdn_h3.partitioned_runtime")
+
+    observed = []
+    native_options = transform._partitioned_transformer_options
+
+    def options(*args, **kwargs):
+        result = native_options(*args, **kwargs)
+        runtime = result[PARTITIONED_STAGE_KEY]
+        stage = result["h3_flow_stage"]
+        if stage == "high":
+            # A local group after the protected boundary still contains the
+            # last free band token; VDN must keep that entire group dense.
+            group = SimpleNamespace(query_prefix_domain=False, query_frames=(9, 10, 11))
+            dense, _, _ = vdn_runtime._partitioned_local_force_dense(
+                group,
+                runtime.softmax_diagnostic,
+                prefix_t=runtime.plan.prefix_t,
+                attention_head_t=runtime.attention_head_t,
+            )
+            observed.append((runtime.plan.prefix_t, runtime.attention_head_t, dense))
+        else:
+            assert runtime.attention_head_t is None
+        return result
+
+    monkeypatch.setattr(transform, "_partitioned_transformer_options", options)
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        extra_transformer_options={PARTITIONED_TARGET_BAND_TOKENS_KEY: 2},
+    )
+    assert len(observed) == 2 * run.metrics.counters["transformer_actual_nfe_high"]
+    assert set(observed) == {(PROTECTED_T, PROTECTED_T + 2, True)}
+    high_call = next(call for call in run.calls if call["stage"] == "high")
+    video_mask, _ = unpack_streams(high_call["mask"], high_call["shapes"])
+    assert torch.count_nonzero(video_mask[:, :, :PROTECTED_T]) == 0
+    assert bool((video_mask[:, :, PROTECTED_T:] == 1).all())
+    assert PARTITIONED_STAGE_KEY not in run.guider.model_options["transformer_options"]
+    assert _events(run.metrics, "partitioned_exact_prefix_complete")[0]["final_prefix_exact"] is True
+
+
 def test_band_destination_contract_reaches_core_and_refuses_missing_vdn_work(monkeypatch):
     """Core/Sol fixture verifies transport; its unpatched VDN branch must fail verification."""
     from h3_flow_regenerate import partitioned_transformer as transform

@@ -249,6 +249,9 @@ class PartitionedStageRuntime:
     position_policy_positions: torch.Tensor | None = None
     # Present only for target-band continuation low/probe stages.
     target_band: PartitionedTargetBandGeometry | None = None
+    # High keeps the band's local query groups dense without extending the
+    # protected prefix or retaining the low/probe mixed-grid carrier.
+    attention_head_t: int | None = None
 
 
 def build_partitioned_stage_plan(

@@ -138,6 +138,13 @@ Spectrum forecasting, the native final layer and Flow guidance keep their usual
 contracts. Guidance binds to the actual high-stage clean operand (the band's own
 prediction plus the learned tail).
 
+High refinement keeps the band's local query groups dense through VDN's
+`attention_head_t` contract. Only the original carried prefix remains protected;
+the band stays fully generated, and later query groups retain native Sol
+selection. A group that intersects the band uses one dense attention operation
+over its existing key domain. This can add high-stage attention work. Rendered
+camera continuity and the timing cost require GPU validation.
+
 With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
 first reduced-grid token after the band and is measured against the target-grid
 head. The band must leave at least one generated token on the reduced grid.

@@ -1,5 +1,13 @@
 # Unreleased: consistent target-band handoff
 
+- Pass the target band's dense-query extent to VDN during uniform target-grid
+  high refinement. Previously the final band tokens could switch from dense
+  low/probe attention to sparse high attention because only the protected-prefix
+  length was carried. The band's existing local query groups now stay dense;
+  masks, key domains, prefix length and other spatial modes are unchanged.
+  This adds bounded high-stage attention work. Rendered camera continuity and
+  performance remain unverified.
+
 - Target-band continuation now accepts the existing opt-in
   `vdn_temporal_carrier_policy=destination_grid_stencil_v1`. Cross-grid temporal
   neighbors are resampled before the checkpoint spatial convolution, retaining
