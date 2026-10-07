@@ -107,28 +107,30 @@ def _forward(dm, wrappers, video, audio, context, options, mask, audio_mask, pay
 
 
 class _Case:
-    def __init__(self, seed=31):
+    def __init__(self, seed=31, *, same_grid=False):
         generator = torch.Generator().manual_seed(seed)
         self.generator = generator
         self.dm = _core(generator)
+        source_hw = TARGET_HW if same_grid else SOURCE_HW
         self.geometry = PartitionedTargetBandGeometry(
             protected_t=PROTECTED_T,
             band_t=BAND_T,
             temporal=TEMPORAL,
-            source_h=SOURCE_HW[0],
-            source_w=SOURCE_HW[1],
+            source_h=source_hw[0],
+            source_w=source_hw[1],
             target_h=TARGET_HW[0],
             target_w=TARGET_HW[1],
+            same_grid_control=same_grid,
         )
         head = self.geometry.head_t
         self.prefix = torch.randn(1, 24, PROTECTED_T, *TARGET_HW, generator=generator)
         self.prefix_noise = torch.randn(self.prefix.shape, generator=generator)
         band = torch.randn(1, 24, BAND_T, *TARGET_HW, generator=generator)
-        tail = torch.randn(1, 24, TEMPORAL - head, *SOURCE_HW, generator=generator)
+        tail = torch.randn(1, 24, TEMPORAL - head, *source_hw, generator=generator)
         self.video = pack_target_band_video(torch.cat((self.prefix, band), dim=2), tail, self.geometry)
         self.mask = pack_target_band_video(
             torch.cat((torch.zeros(1, 1, PROTECTED_T, *TARGET_HW), torch.ones(1, 1, BAND_T, *TARGET_HW)), dim=2),
-            torch.ones(1, 1, TEMPORAL - head, *SOURCE_HW),
+            torch.ones(1, 1, TEMPORAL - head, *source_hw),
             self.geometry,
         )
         self.audio = torch.randn(1, 32, 2, AUDIO_T, generator=generator)
@@ -137,14 +139,16 @@ class _Case:
         self.context = torch.randn(1, 3, 8, generator=generator)
         self.payload = None
         self.wrappers = []
-        self.owner = PartitionedStagePlan(self.prefix, TEMPORAL, *SOURCE_HW, self.prefix_noise)
-        self.source_prefix = resize_spatial_5d_h3_patch_lattice(self.prefix, *SOURCE_HW)
+        self.owner = PartitionedStagePlan(self.prefix, TEMPORAL, *source_hw, self.prefix_noise)
+        self.source_prefix = resize_spatial_5d_h3_patch_lattice(self.prefix, *source_hw)
         self.domain = TargetBandDomainContext(
             policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY,
             source_prefix=self.source_prefix,
-            source_prefix_noise=torch.randn(1, 24, PROTECTED_T, *SOURCE_HW, generator=generator),
-            source_band_noise=torch.randn(1, 24, BAND_T, *SOURCE_HW, generator=generator),
-            band_noise_complement=(1.0 - h3_patch_lattice_weight_square_sum(*TARGET_HW, *SOURCE_HW))
+            source_prefix_noise=self.prefix_noise
+            if same_grid
+            else torch.randn(1, 24, PROTECTED_T, *source_hw, generator=generator),
+            source_band_noise=torch.randn(1, 24, BAND_T, *source_hw, generator=generator),
+            band_noise_complement=(1.0 - h3_patch_lattice_weight_square_sum(*TARGET_HW, *source_hw))
             .clamp_min(0)
             .sqrt(),
             model_noise_scale=NOISE_SCALE,
@@ -160,6 +164,8 @@ class _Case:
 
     def domain_call(self, video=None, audio=None, metrics=None, extra_options=None):
         options = {PARTITIONED_STAGE_KEY: self.runtime(metrics), **(extra_options or {})}
+        if self.geometry.same_grid_control:
+            options["h3_flow_stage"] = "high"
         return _forward(
             self.dm,
             [*self.wrappers, transform.partitioned_diffusion_wrapper],
@@ -174,7 +180,11 @@ class _Case:
 
     def carrier(self, video):
         head = self.geometry.head_t
-        projected = resize_spatial_5d_h3_patch_lattice(video[:, :, PROTECTED_T:head], *SOURCE_HW)
+        if self.geometry.same_grid_control:
+            return video[:, :, PROTECTED_T:head]
+        projected = resize_spatial_5d_h3_patch_lattice(
+            video[:, :, PROTECTED_T:head], self.geometry.source_h, self.geometry.source_w
+        )
         sigma = TIMESTEP / 1000.0
         return projected + sigma * NOISE_SCALE * self.domain.band_noise_complement * self.domain.source_band_noise
 
@@ -196,10 +206,11 @@ class _Case:
         )
 
     def source_reference(self, video, audio=None):
-        owner = PartitionedStagePlan(self.source_prefix, TEMPORAL, *SOURCE_HW, self.domain.source_prefix_noise)
+        source_hw = (self.geometry.source_h, self.geometry.source_w)
+        owner = PartitionedStagePlan(self.source_prefix, TEMPORAL, *source_hw, self.domain.source_prefix_noise)
         runtime = PartitionedStageRuntime(plan=owner, metrics=H3FlowMetrics())
         source_video = torch.cat((self.source_prefix, self.carrier(video), target_band_tail(video, self.geometry)), 2)
-        mask = torch.ones(1, 1, TEMPORAL, *SOURCE_HW)
+        mask = torch.ones(1, 1, TEMPORAL, *source_hw)
         mask[:, :, :PROTECTED_T] = 0
         return _forward(
             self.dm,
@@ -241,6 +252,68 @@ def test_each_stream_equals_an_independent_uniform_core_call(monkeypatch):
     assert streams["source"]["temporal"] == TEMPORAL and streams["source"]["audio_rows"] == 2 * AUDIO_T
     assert streams["target"]["attention_head_t"] == head - 1
     assert streams["source"]["attention_head_t"] == head
+
+
+@pytest.mark.parametrize("band_t", [4, 5])
+def test_high_domain_preserves_the_short_clip_operator_and_excludes_tail_and_late_audio(monkeypatch, band_t):
+    import sys
+
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
+
+    monkeypatch.setattr(sys.modules[__name__], "BAND_T", band_t)
+    head_audio_t = round(sum(FRAME_PER_TOKEN[k % 5] for k in range(PROTECTED_T + band_t)) * FRAME_RESCALE)
+    monkeypatch.setattr(sys.modules[__name__], "HEAD_AUDIO_T", head_audio_t)
+    _sol(monkeypatch)
+    case = _Case(same_grid=True)
+    head = case.geometry.head_t
+    metrics = H3FlowMetrics()
+    output = case.domain_call(metrics=metrics)
+    target = case.target_reference(case.video)
+    source = case.source_reference(case.video)
+    torch.testing.assert_close(output[0][:, :, PROTECTED_T:head], target[0][:, :, PROTECTED_T:head], rtol=0, atol=1e-6)
+    torch.testing.assert_close(output[0][:, :, head:], source[0][:, :, head:], rtol=0, atol=1e-6)
+    torch.testing.assert_close(output[1], source[1], rtol=0, atol=1e-6)
+    changed = case.video.clone()
+    changed[:, :, head:] += 2.0
+    late_audio = case.audio.clone()
+    late_audio[..., HEAD_AUDIO_T:] += 2.0
+    for video, audio in ((changed, case.audio), (case.video, late_audio)):
+        isolated = case.domain_call(video=video, audio=audio)
+        assert torch.equal(output[0][:, :, PROTECTED_T:head], isolated[0][:, :, PROTECTED_T:head])
+        full = case.source_reference(video, audio)
+        # The ordinary full-clip high operator does read both inputs in the band.
+        assert not torch.equal(source[0][:, :, PROTECTED_T:head], full[0][:, :, PROTECTED_T:head])
+        delta = full[0][:, :, PROTECTED_T:head] - source[0][:, :, PROTECTED_T:head]
+        assert torch.count_nonzero(delta.mean(dim=(-2, -1))) > 0
+    event = next(event.fields for event in metrics.events if event.kind == "partitioned_target_band_domain_transformer")
+    assert event["stage"] == "high"
+    assert event["source_hw"] == event["target_hw"] == TARGET_HW
+    assert event["band_carrier_policy"] == "native_target_sampler_state_v1"
+
+
+def test_high_domain_failure_restores_the_model_options(monkeypatch):
+    from types import SimpleNamespace
+
+    from h3_flow_regenerate.partitioned_scheduler import _partitioned_high_stage_contract
+
+    case = _Case()
+    options = {"h3_flow_stage": "high", "h3_flow_partitioned_vdn_linear_diagnostic_v1": "raw_token_measure"}
+    original = dict(options)
+    guider = SimpleNamespace(model_options={"transformer_options": options})
+    with (
+        pytest.raises(RuntimeError, match="high failed"),
+        _partitioned_high_stage_contract(
+            guider, case.owner, H3FlowMetrics(), attention_head_t=case.geometry.head_t, domain_uniform_band_t=BAND_T
+        ),
+    ):
+        runtime = options[PARTITIONED_STAGE_KEY]
+        assert runtime.target_band.same_grid_control is True
+        assert runtime.target_band_domain is not None
+        raise RuntimeError("high failed")
+    assert options == original
+    assert (case.owner.source_h, case.owner.source_w) == SOURCE_HW
 
 
 def test_band_never_reads_the_tail_and_the_tail_reads_the_projected_band(monkeypatch):
@@ -319,13 +392,14 @@ def test_domain_streams_publish_uniform_contracts_and_stream_views(monkeypatch):
             assert attention_head_t == head
 
 
-def test_sol_history_recognizes_the_domain_replacement(monkeypatch):
+@pytest.mark.parametrize("same_grid", [False, True])
+def test_sol_history_recognizes_the_domain_replacement(monkeypatch, same_grid):
     _sol(monkeypatch)
     interop = pytest.importorskip("sol_h3.interop")
     history = pytest.importorskip("sol_h3.partitioned_history")
     if getattr(history, "PARTITIONED_DOMAIN_STREAM_API", 0) != 1:
         pytest.skip("installed Sol-H3 predates domain-stream history recognition")
-    case = _Case(seed=47)
+    case = _Case(seed=47, same_grid=same_grid)
     captured = {}
 
     class Capture:
@@ -449,10 +523,11 @@ def test_domain_audio_duration_is_rejected_at_preflight():
 
 @pytest.mark.parametrize("retain", [False, True])
 @pytest.mark.parametrize("anchors", ["rows", "both"])
-def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch, retain, anchors):
+@pytest.mark.parametrize("same_grid", [False, True])
+def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch, retain, anchors, same_grid):
     """Execute Core, Sol dense arithmetic and VDN's learned branch without substituting its readout."""
     _sol(monkeypatch)
-    case = _Case(seed=67)
+    case = _Case(seed=67, same_grid=same_grid)
     pytest.importorskip("vdn_h3.partitioned_runtime")
     from vdn_h3 import branch as branch_math
     from vdn_h3.hybrid import VDNState, make_layout_wrapper
@@ -507,6 +582,12 @@ def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch
 
     for index, block in enumerate(case.dm.blocks):
         install(block.attn, index)
+    if same_grid:
+        # Reuse the model and VDN owner across reduced low/probe streams and
+        # native high streams, including retained workspace reallocations.
+        low = _Case(seed=73)
+        low.dm, low.wrappers = case.dm, case.wrappers
+        low.domain_call()
     metrics = H3FlowMetrics()
     output = case.domain_call(metrics=metrics)
     target = case.target_reference(case.video)
@@ -522,6 +603,11 @@ def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch
     changed[:, :, -1, : SOURCE_HW[0], : SOURCE_HW[1]] += 1.0
     after_tail = case.domain_call(video=changed)
     assert torch.equal(output[0][:, :, PROTECTED_T:head], after_tail[0][:, :, PROTECTED_T:head])
+    if same_grid:
+        low.domain_call()
+        repeated = case.domain_call()
+        assert torch.equal(output[0], repeated[0])
+        assert torch.equal(output[1], repeated[1])
     cfg["linear_enabled"] = False
     without_linear = case.domain_call()
     assert not torch.equal(output[0][:, :, PROTECTED_T:head], without_linear[0][:, :, PROTECTED_T:head])

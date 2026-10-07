@@ -1035,6 +1035,58 @@ def test_domain_uniform_changes_only_low_probe_numerics_and_combines_with_raw_ca
 
 
 @pytest.mark.usefixtures("native_audio_duration")
+@pytest.mark.parametrize("handoff_state", ["renoise_clean", "carry_raw_band"])
+@pytest.mark.parametrize("guidance_mode", ["off", "direction+temporal"])
+def test_all_stage_domain_preserves_low_probe_and_handoff_and_verifies_high(monkeypatch, handoff_state, guidance_mode):
+    from h3_flow_regenerate.partitioned_diagnostics import (
+        PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
+        PARTITIONED_TARGET_BAND_CONTEXT_KEY,
+        PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
+    )
+
+    baseline = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        guidance_mode=guidance_mode,
+        extra_transformer_options=_domain_extra(
+            **{PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY: handoff_state, PARTITIONED_TARGET_BAND_TOKENS_KEY: 4}
+        ),
+    )
+    continued = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        guidance_mode=guidance_mode,
+        extra_transformer_options=_domain_extra(
+            **{
+                PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY: handoff_state,
+                PARTITIONED_TARGET_BAND_CONTEXT_KEY: PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
+                PARTITIONED_TARGET_BAND_TOKENS_KEY: 4,
+            }
+        ),
+    )
+    assert [call["stage"] for call in continued.calls] == ["low", "probe", "high"]
+    for old, new in zip(baseline.calls, continued.calls, strict=True):
+        assert torch.equal(old["entry_state"], new["entry_state"])
+        assert torch.equal(old["noise"], new["noise"])
+        assert torch.equal(old["mask"], new["mask"])
+        if old["stage"] == "low":
+            assert torch.equal(old["final_state"], new["final_state"])
+    assert torch.equal(baseline.upscaler.inputs[0], continued.upscaler.inputs[0])
+    assert not torch.equal(baseline.result, continued.result)
+    stages = _events(continued.metrics, "partitioned_target_band_domain_stage")
+    assert [event["stage"] for event in stages] == ["low", "probe", "high"]
+    assert all(event["verified"] and event["blocks_per_call"] == 2 for event in stages)
+    high = [e for e in _events(continued.metrics, "partitioned_target_band_domain_transformer") if e["stage"] == "high"]
+    assert high and all(e["source_hw"] == e["target_hw"] == TARGET_HW for e in high)
+    plan = _events(continued.metrics, "partitioned_target_band_domain_plan")[0]
+    assert plan["high_stage_changed"] is True
+    final, _ = unpack_streams(continued.result, continued.shapes)
+    original, _ = unpack_streams(continued.latent_image, continued.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    assert "h3_flow_partitioned_stage_v1" not in continued.guider.model_options["transformer_options"]
+
+
+@pytest.mark.usefixtures("native_audio_duration")
 @pytest.mark.parametrize(
     ("leaf", "value"),
     [

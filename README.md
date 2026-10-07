@@ -246,10 +246,10 @@ so a fixed complementary noise field restores the nominal per-cell variance of
 velocity comes from the target stream; tail and audio velocity come from the
 source stream. The protected prefix and padding remain excluded. The band
 cannot see tail hidden states within a call, so band content is produced as the
-end of a shorter clip. Clip lengths of the form `5k + 2` tokens match the H3
-temporal pattern; with a 12-token prefix, a 5-token band gives a 17-token
-target stream. The `partitioned_target_band_domain_plan` receipt reports this
-as `target_stream_native_clip_length`.
+end of a shorter clip. The `partitioned_target_band_domain_plan` receipt reports
+whether its length matches H3's `5k + 2` temporal pattern as
+`target_stream_native_clip_length`. Other supported band lengths remain valid;
+matching this pattern does not establish rendered continuity.
 
 The mode requires `vdn_linear_diagnostic=normal`, `softmax_diagnostic=normal`
 and `vdn_temporal_carrier_policy=native_grid_then_map_v1`: no cross-grid taps
@@ -272,6 +272,26 @@ conditioning rows. Attention cost depends on the sum of the two sequences'
 squared lengths instead of the square of one combined length. Paired VDN weights
 that are streamed per block may be fetched twice. Wall time and peak memory
 require measurement.
+
+`target_band_context=domain_uniform_all_stages_v1` preserves that isolated head
+operator during high refinement. Low/probe and the learned handoff are identical
+to `domain_uniform_v1`. High also evaluates two separate hidden streams through
+every block: the same short prefix/band clip with head-duration audio, and the
+full clip with all audio. Both streams use the target grid. The full stream reads
+the band's current native sampler state directly; high adds no projection or
+noise complement. Band velocity comes from the short stream; tail and audio
+velocity come from the full stream. The band remains generated, with the native
+final layer, original masks and selected handoff-state policy. Each completed
+high stage also emits a verified `partitioned_target_band_domain_stage` event.
+
+This experimental mode removes the within-call change from isolated head
+conditioning to full-clip conditioning at the start of high. It has not been
+validated for rendered tone continuity. Shared audio state and Flow guidance can
+still transmit information between calls or frames, and the learned band/tail
+splice remains. High now processes the extra short head and duplicated
+conditioning rows, and streamed VDN weights may be fetched twice per block.
+Wall time and peak memory need measurement. Existing modes and defaults retain
+their previous execution paths.
 
 ### Suffix DC bridge
 

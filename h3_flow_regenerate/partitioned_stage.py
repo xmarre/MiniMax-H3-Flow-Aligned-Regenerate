@@ -127,7 +127,8 @@ class PartitionedTargetBandGeometry:
 
     ``prefix_t`` is the length of the target-grid head (protected prefix plus
     band), matching the partition contract consumed by VDN and Sol.  The truly
-    protected prefix length is ``protected_t``.
+    protected prefix length is ``protected_t``. Equal grids are permitted only
+    for explicitly selected high refinement through ``same_grid_control``.
     """
 
     protected_t: int
@@ -137,6 +138,7 @@ class PartitionedTargetBandGeometry:
     source_w: int
     target_h: int
     target_w: int
+    same_grid_control: bool = False
 
     def __post_init__(self) -> None:
         for name in ("protected_t", "band_t", "temporal", "source_h", "source_w", "target_h", "target_w"):
@@ -145,15 +147,18 @@ class PartitionedTargetBandGeometry:
                 raise ValueError(f"target-band geometry field {name} must be a positive integer")
         if self.protected_t + self.band_t >= self.temporal:
             raise ValueError(
-                "target-band continuation must leave at least one generated token on the reduced grid "
+                "target-band execution must leave at least one generated token after the head "
                 f"(protected {self.protected_t} + band {self.band_t} >= {self.temporal} tokens)"
             )
         if any(value % 2 for value in (self.source_h, self.source_w, self.target_h, self.target_w)):
             raise ValueError("target-band spatial axes must be H3 patch-safe")
         if self.source_h > self.target_h or self.source_w > self.target_w:
             raise ValueError("target-band source grid must fit inside the target grid")
-        if (self.source_h, self.source_w) == (self.target_h, self.target_w):
-            raise ValueError("target-band continuation requires a strictly reduced source grid")
+        same_grid = (self.source_h, self.source_w) == (self.target_h, self.target_w)
+        if type(self.same_grid_control) is not bool or same_grid != self.same_grid_control:
+            raise ValueError(
+                "target-band continuation requires a strictly reduced source grid or explicit same-grid refinement"
+            )
 
     @property
     def head_t(self) -> int:
@@ -221,7 +226,7 @@ TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY = "h3_patch_lattice_projection_noise_vari
 
 @dataclass(frozen=True, slots=True)
 class TargetBandDomainContext:
-    """Per-stage constants for target-band domain-uniform low/probe execution.
+    """Per-stage constants for target-band domain-uniform execution.
 
     The target stream carries the protected prefix and the band on the target
     grid. The source stream carries the protected prefix and band projected to
@@ -232,6 +237,8 @@ class TargetBandDomainContext:
     model_noise_scale * source_band_noise``: the projection is a convex
     combination, so this restores the projected Gaussian noise variance to the
     state's nominal per-cell variance without changing its expected signal.
+    Equal-grid high refinement uses the native prefix and its augmentation
+    noise directly; the band noise field and complement are unused.
     """
 
     policy: str
@@ -327,12 +334,12 @@ class PartitionedStageRuntime:
     audio_position_domain: str = PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY
     position_policy: PartitionedPositionPolicy | None = None
     position_policy_positions: torch.Tensor | None = None
-    # Present only for target-band continuation low/probe stages.
+    # Target-band low/probe or explicitly selected two-stream high refinement.
     target_band: PartitionedTargetBandGeometry | None = None
     # High keeps the band's local query groups dense without extending the
     # protected prefix or retaining the low/probe mixed-grid carrier.
     attention_head_t: int | None = None
-    # Present only for target-band low/probe stages using domain_uniform_v1.
+    # The two-stream operator is also used by opt-in equal-grid high refinement.
     target_band_domain: TargetBandDomainContext | None = None
 
 

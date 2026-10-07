@@ -42,6 +42,7 @@ from .high_stage_guard import (
     HIGH_STAGE_VIDEO_GUARD_POLICY,
     HIGH_STAGE_VIDEO_GUARD_TOKENS,
 )
+from .partitioned_diagnostics import PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES
 from .residual_geometry import (
     DEFAULT_RESIDUAL_POLICY,
     RESIDUAL_GEOMETRY_POLICY_VERSION,
@@ -4207,14 +4208,25 @@ def validate_partitioned_runtime_evidence(
     # call; each stream's VDN call owns its own boundary group at the protected
     # prefix, and both streams must be verified for every low/probe stage.
     domain_uniform = "partitioned_target_band_domain_plan" in kinds
+    domain_uniform_high = False
     if domain_uniform:
+        domain_plan = next(
+            _event_fields(event) for event in window if _event_kind(event) == "partitioned_target_band_domain_plan"
+        )
+        domain_uniform_high = domain_plan.get("target_band_context") == PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES
+        _require(
+            domain_plan.get("high_stage_changed", False) == domain_uniform_high,
+            "domain-uniform high-stage selection disagrees with the context policy",
+        )
         domain_stages = [
             _event_fields(event) for event in window if _event_kind(event) == "partitioned_target_band_domain_stage"
         ]
         _require(
-            sorted(fields.get("stage") for fields in domain_stages) == ["low", "probe"]
+            sorted(fields.get("stage") for fields in domain_stages)
+            == (["high", "low", "probe"] if domain_uniform_high else ["low", "probe"])
             and all(fields.get("verified") is True for fields in domain_stages),
-            "domain-uniform target-band run did not verify both low/probe streams",
+            "domain-uniform target-band run did not verify both low/probe streams"
+            + (" and high streams" if domain_uniform_high else ""),
         )
     if expected_boundary_query_policy is not None:
         _require(
@@ -4222,7 +4234,9 @@ def validate_partitioned_runtime_evidence(
             "unsupported expected VDN boundary-query policy",
         )
         _require(
-            len(boundary_query_events) == partitioned_actual + (low_actual + probe_actual if domain_uniform else 0),
+            len(boundary_query_events)
+            == partitioned_actual
+            + (partitioned_actual if domain_uniform_high else low_actual + probe_actual if domain_uniform else 0),
             "VDN boundary-query policy did not reach every actual partitioned model call",
         )
         protected_prefix_t = plan_fields.get("prefix_temporal_length")

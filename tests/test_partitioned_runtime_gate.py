@@ -2478,17 +2478,21 @@ def test_gate_expects_target_band_boundary_queries_at_the_band_tail_edge():
         )
 
 
-def _domain_uniform_metrics(*, verified_stages=("low", "probe")):
+def _domain_uniform_metrics(*, verified_stages=("low", "probe"), high=False):
     metrics = _high_attention_metrics()
     events = metrics["events"]
     events[0]["fields"]["target_band_tokens"] = 2
     duplicated = []
     for event in events:
         duplicated.append(event)
-        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] in {"low", "probe"}:
+        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and (
+            high or event["fields"]["stage"] in {"low", "probe"}
+        ):
             # Each uniform stream owns its boundary group at the protected prefix.
             duplicated.append(copy.deepcopy(event))
     duplicated.insert(1, {"kind": "partitioned_target_band_domain_plan", "fields": {"policy": "domain_uniform_v1"}})
+    if high:
+        duplicated[1]["fields"].update(target_band_context="domain_uniform_all_stages_v1", high_stage_changed=True)
     for stage in verified_stages:
         duplicated.append(
             {"kind": "partitioned_target_band_domain_stage", "fields": {"stage": stage, "verified": True}}
@@ -2503,6 +2507,24 @@ def test_gate_accepts_domain_uniform_stream_boundaries_at_the_protected_prefix()
         _log(),
         expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
     )
+
+
+def test_gate_requires_verified_high_streams_for_the_all_stage_context():
+    validate_partitioned_runtime_evidence(
+        _domain_uniform_metrics(high=True, verified_stages=("low", "probe", "high")),
+        _log(),
+        expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+    )
+    with pytest.raises(RuntimeGateError, match="and high streams"):
+        validate_partitioned_runtime_evidence(
+            _domain_uniform_metrics(high=True),
+            _log(),
+            expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        )
+    mixed_receipt = _domain_uniform_metrics(high=True, verified_stages=("low", "probe", "high"))
+    mixed_receipt["events"][1]["fields"]["high_stage_changed"] = False
+    with pytest.raises(RuntimeGateError, match="selection disagrees"):
+        validate_partitioned_runtime_evidence(mixed_receipt, _log())
 
 
 def test_gate_rejects_domain_uniform_without_verified_streams_or_with_one_stream():

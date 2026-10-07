@@ -536,12 +536,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
                 "tooltip": (
-                    "Used only by progressive_target_band low/probe. mixed_grid runs one transformer "
+                    "Used only by progressive_target_band. mixed_grid runs one transformer "
                     "sequence containing target-grid prefix/band and reduced-grid tail. domain_uniform_v1 "
                     "runs two uniform-grid hidden streams per model call: target prefix+band, and reduced "
                     "projected prefix+band plus tail. The streams share no hidden state or conditioning "
-                    "rows; the learned band/tail handoff is unchanged. Experimental comparison control "
-                    "with additional low/probe compute."
+                    "rows. domain_uniform_all_stages_v1 also keeps the short head stream separate during "
+                    "high refinement, with both streams on the target grid. The learned band/tail handoff "
+                    "is unchanged. Experimental controls with additional compute; rendered tone continuity "
+                    "is unvalidated."
                 ),
             },
         )
