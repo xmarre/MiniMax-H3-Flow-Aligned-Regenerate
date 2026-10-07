@@ -107,7 +107,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
-    PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM,
+    PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
     PARTITIONED_TARGET_BAND_HANDOFF_STATE_CARRY,
@@ -870,9 +870,13 @@ def _partitioned_stage_contract(
         attention_head_t=attention_head_t,
         target_band_domain=target_band_domain,
     )
-    if target_band_domain is not None and (target_band is None or attention_head_t is not None):
+    if target_band_domain is not None and (
+        target_band is None
+        or attention_head_t is not None
+        or target_band.same_grid_control != (transformer.get(FLOW_STAGE_KEY) == "high")
+    ):
         transformer.pop(PARTITIONED_STAGE_KEY, None)
-        raise RuntimeError("domain-uniform target-band context applies only to target-band low/probe stages")
+        raise RuntimeError("domain-uniform target-band geometry must match the active sampler stage")
     try:
         yield
         owner = transformer[PARTITIONED_STAGE_KEY]
@@ -899,8 +903,16 @@ def _partitioned_stage_contract(
 
 
 @contextlib.contextmanager
-def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_attention=True, attention_head_t=None):
+def _partitioned_high_stage_contract(
+    guider, plan, metrics, *, exact_prefix_attention=True, attention_head_t=None, domain_uniform_band_t=0
+):
     """Keep exact-prefix query policy across the target-grid refinement boundary."""
+    if (
+        type(domain_uniform_band_t) is not int
+        or domain_uniform_band_t < 0
+        or (domain_uniform_band_t and not exact_prefix_attention)
+    ):
+        raise ValueError("domain-uniform high refinement requires exact-prefix attention and a non-negative band width")
     if attention_head_t is not None and (
         type(attention_head_t) is not int
         or not plan.prefix_t <= attention_head_t < plan.temporal
@@ -955,11 +967,43 @@ def _partitioned_high_stage_contract(guider, plan, metrics, *, exact_prefix_atte
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_KEY: PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
             PARTITIONED_AUDIO_POSITION_DOMAIN_KEY: PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
         }
+        high_band = None
+        high_domain = None
+        if domain_uniform_band_t:
+            high_band = PartitionedTargetBandGeometry(
+                protected_t=plan.prefix_t,
+                band_t=domain_uniform_band_t,
+                temporal=plan.temporal,
+                source_h=plan.target_hw[0],
+                source_w=plan.target_hw[1],
+                target_h=plan.target_hw[0],
+                target_w=plan.target_hw[1],
+                same_grid_control=True,
+            )
+            if attention_head_t != high_band.head_t:
+                raise ValueError("domain-uniform high refinement must retain the low/probe band extent")
+            high_domain = TargetBandDomainContext(
+                policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY,
+                source_prefix=high_plan.prefix,
+                source_prefix_noise=high_plan.prefix_noise,
+                source_band_noise=high_plan.prefix.new_zeros((1, 24, domain_uniform_band_t, *plan.target_hw)),
+                band_noise_complement=high_plan.prefix.new_zeros(plan.target_hw),
+                model_noise_scale=1.0,
+            )
         previous = {key: transformer[key] for key in controls if key in transformer}
         transformer.update(controls)
         try:
-            with _partitioned_stage_contract(guider, high_plan, metrics, attention_head_t=attention_head_t):
+            domain_before = _domain_uniform_counters(metrics)
+            with _partitioned_stage_contract(
+                guider,
+                high_plan,
+                metrics,
+                target_band=high_band,
+                target_band_domain=high_domain,
+                attention_head_t=None if high_domain is not None else attention_head_t,
+            ):
                 yield
+            _verify_domain_uniform_stage(metrics, "high", high_domain, domain_before)
         finally:
             for key in controls:
                 if key in previous:
@@ -1916,11 +1960,11 @@ def _preflight(
         required_temporal_carrier_policy=required_vdn_temporal_carrier_policy,
         required_softmax_diagnostic=required_softmax_diagnostic,
         required_native_carrier=native_carrier,
-        required_domain_stream=target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM,
+        required_domain_stream=target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
     )
     _validate_partitioned_sol_compat(guider)
     _validate_partitioned_sol_native_carrier(native_carrier)
-    if target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM:
+    if target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED:
         _validate_partitioned_sol_domain_stream()
         _validate_target_band_domain_inputs(guider, latent_shapes)
     if required_softmax_diagnostic == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
@@ -3501,7 +3545,8 @@ def run_partitioned_progressive(
             residual_mode=normalize_residual_geometry_mode(config.frame_gauge_residual_mode),
             model_options=initial_model_options,
         )
-    domain_context_requested = band_mode and target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM
+    domain_context_requested = band_mode and target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED
+    high_domain_context_requested = band_mode and target_band_context == PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES
     requested_audio_position_domain = audio_position_domain
     if domain_context_requested:
         # Uniform streams own their native audio coordinates. The mixed-grid
@@ -3519,7 +3564,7 @@ def run_partitioned_progressive(
             unsupported.append("vdn_temporal_carrier_policy='native_grid_then_map_v1'")
         if unsupported:
             raise PartitionedPreflightUnsupported(
-                "target_band_context='domain_uniform_v1' requires " + "; ".join(unsupported)
+                f"target_band_context={target_band_context!r} requires " + "; ".join(unsupported)
             )
     audio_guided_overlap_mode, _audio_mode_source = resolve_partitioned_audio_guided_overlap_mode(initial_model_options)
     audio_guided_overlap_ticks, _audio_ticks_source = resolve_partitioned_audio_guided_overlap_ticks(
@@ -3815,7 +3860,8 @@ def run_partitioned_progressive(
             audio_position_domain_requested=requested_audio_position_domain,
             stream_audio_positions="per_stream_native",
             target_stream_native_clip_length=(head_t % 5 == 2),
-            high_stage_changed=False,
+            high_stage_changed=high_domain_context_requested,
+            target_band_context=target_band_context,
             handoff_changed=False,
             extra_sampler_lifetimes=0,
         )
@@ -6138,6 +6184,7 @@ def run_partitioned_progressive(
                 binding.metrics,
                 exact_prefix_attention=prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
                 attention_head_t=target_band.head_t if target_band is not None else None,
+                domain_uniform_band_t=target_band.band_t if high_domain_context_requested else 0,
             ),
             high_boundary_contract(
                 binding,

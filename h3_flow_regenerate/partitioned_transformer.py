@@ -510,7 +510,7 @@ def _domain_uniform_forward(
     layout,
     tail_rows,
 ):
-    """Evaluate target-band low/probe as two uniform-grid hidden streams.
+    """Evaluate a target band and the full clip as separate uniform hidden streams.
 
     Routing contract (``domain_uniform_v1``):
 
@@ -680,10 +680,13 @@ def _domain_uniform_forward(
         # the fixed complementary field restores the nominal per-cell variance.
         sigma = (timestep.flatten()[0] / 1000.0).float().clamp(min=1e-6)
         band_state = x[0][:, :, band.protected_t : band.head_t].to(torch.float32)
-        projected_band = resize_spatial_5d_h3_patch_lattice(band_state, band.source_h, band.source_w)
-        complement = domain.band_noise_complement.to(device=img.device, dtype=torch.float32)
-        band_noise = domain.source_band_noise.to(device=img.device, dtype=torch.float32)
-        carrier = projected_band + (sigma * float(domain.model_noise_scale)) * complement * band_noise
+        if band.same_grid_control:
+            carrier = band_state
+        else:
+            projected_band = resize_spatial_5d_h3_patch_lattice(band_state, band.source_h, band.source_w)
+            complement = domain.band_noise_complement.to(device=img.device, dtype=torch.float32)
+            band_noise = domain.source_band_noise.to(device=img.device, dtype=torch.float32)
+            carrier = projected_band + (sigma * float(domain.model_noise_scale)) * complement * band_noise
         band_rows = inner.video_patch_proj(native.patchify_video(carrier)).to(img)
         target_rows = torch.cat(
             (
@@ -748,7 +751,11 @@ def _domain_uniform_forward(
                 metrics.event(
                     "partitioned_target_band_domain_transformer",
                     policy=domain_policy,
-                    band_carrier_policy=TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY,
+                    band_carrier_policy=(
+                        "native_target_sampler_state_v1"
+                        if band.same_grid_control
+                        else TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY
+                    ),
                     stage=options.get("h3_flow_stage"),
                     native_sequence_rows=int(layout.seq_len),
                     protected_prefix_t=int(band.protected_t),
