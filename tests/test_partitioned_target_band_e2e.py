@@ -725,7 +725,7 @@ def test_target_band_dc_selector_controls_only_the_first_tail_token(monkeypatch,
 
 
 def test_target_band_wider_than_the_generated_suffix_fails_before_sampling(monkeypatch):
-    with pytest.raises(RuntimeError, match="at least one generated token on the reduced grid"):
+    with pytest.raises(RuntimeError, match="at least one generated token after the head"):
         _harness(
             monkeypatch,
             spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,

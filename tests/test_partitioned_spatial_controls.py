@@ -72,7 +72,11 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert "target_band_handoff_state" not in ordinary and "target_band_context" not in ordinary
     assert production["target_band_handoff_state"][0] == ["renoise_clean", "carry_raw_band"]
     assert production["target_band_handoff_state"][1]["default"] == "renoise_clean"
-    assert production["target_band_context"][0] == ["mixed_grid", "domain_uniform_v1"]
+    from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS
+
+    # Historical option order is preserved; later contexts are appended.
+    assert production["target_band_context"][0] == list(PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS)
+    assert production["target_band_context"][0][:2] == ["mixed_grid", "domain_uniform_v1"]
     assert production["target_band_context"][1]["default"] == "mixed_grid"
     assert production["suffix_dc_bridge"][0] == "BOOLEAN"
     assert production["suffix_dc_bridge"][1]["default"] is True
