@@ -1,5 +1,13 @@
 # Unreleased: consistent target-band handoff
 
+- Equal-grid partitioned calls route attention natively. The target-grid high
+  stage and domain-uniform low/probe streams no longer force protected-prefix,
+  target-band and first-generated local groups dense, and no longer pin protected
+  keys in sparse calls. Every local group uses the selected backend's own
+  selection, as in a first chunk. Mixed-grid low/probe keeps its dense boundary
+  group. Requires the paired VDN-H3-Plus equal-grid routing policy. GPU time and
+  rendered effect require validation.
+
 - Partitioned continuation supports the selected ComfyUI attention backend
   without requiring Sol-H3 runtime ownership or package installation. VDN
   partitioned attention provider API 1 carries the same restricted Q/K/V unions

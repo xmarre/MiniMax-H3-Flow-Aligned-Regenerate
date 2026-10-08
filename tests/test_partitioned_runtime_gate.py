@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 
 import pytest
@@ -128,9 +127,9 @@ def _high_attention_metrics():
             "partitioned_high_attention_plan",
             policy="exact_prefix_query_continuity_v1",
             exact_prefix_attention=True,
-            protected_prefix_local_queries="dense",
-            generated_local_queries="boundary_dense_then_native_sol_selection",
-            boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+            protected_prefix_local_queries="native_backend_selection",
+            generated_local_queries="native_backend_selection",
+            uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
             startup_density_exemption=False,
             refinement_source="h3_flow_partitioned_refinement",
             high_linear_diagnostic="normal",
@@ -157,7 +156,6 @@ def _high_attention_metrics():
                 "audio_position_domain": "legacy_target",
             },
         ),
-        _boundary_query_event("high"),
     ]
     metrics["counters"].update(
         partitioned_transformer_calls=3,
@@ -200,7 +198,7 @@ def test_gate_rejects_missing_or_drifted_vdn_boundary_query_policy_receipts():
         for event in missing["events"]
         if not (event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"].get("stage") == "probe")
     ]
-    with pytest.raises(RuntimeGateError, match="every actual partitioned model call"):
+    with pytest.raises(RuntimeGateError, match="every actual mixed-grid partitioned model call"):
         validate_partitioned_runtime_evidence(
             missing,
             _log(),
@@ -2482,14 +2480,8 @@ def _domain_uniform_metrics(*, verified_stages=("low", "probe"), high=False):
     metrics = _high_attention_metrics()
     events = metrics["events"]
     events[0]["fields"]["target_band_tokens"] = 2
-    duplicated = []
-    for event in events:
-        duplicated.append(event)
-        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and (
-            high or event["fields"]["stage"] in {"low", "probe"}
-        ):
-            # Each uniform stream owns its boundary group at the protected prefix.
-            duplicated.append(copy.deepcopy(event))
+    # Uniform streams route every local group natively: no boundary receipts.
+    duplicated = [event for event in events if event["kind"] != "partitioned_vdn_boundary_suffix_dense"]
     duplicated.insert(1, {"kind": "partitioned_target_band_domain_plan", "fields": {"policy": "domain_uniform_v1"}})
     if high:
         duplicated[1]["fields"].update(target_band_context="domain_uniform_all_stages_v1", high_stage_changed=True)
@@ -2501,7 +2493,7 @@ def _domain_uniform_metrics(*, verified_stages=("low", "probe"), high=False):
     return metrics
 
 
-def test_gate_accepts_domain_uniform_stream_boundaries_at_the_protected_prefix():
+def test_gate_accepts_domain_uniform_streams_without_dense_boundary_groups():
     validate_partitioned_runtime_evidence(
         _domain_uniform_metrics(),
         _log(),
@@ -2534,16 +2526,11 @@ def test_gate_rejects_domain_uniform_without_verified_streams_or_with_one_stream
             _log(),
             expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
         )
-    single = _domain_uniform_metrics()
-    boundary = [
-        index
-        for index, event in enumerate(single["events"])
-        if event["kind"] == "partitioned_vdn_boundary_suffix_dense" and event["fields"]["stage"] == "low"
-    ]
-    del single["events"][boundary[-1]]
-    with pytest.raises(RuntimeGateError, match="did not reach every actual partitioned model call"):
+    stray = _domain_uniform_metrics()
+    stray["events"].insert(2, _boundary_query_event("low"))
+    with pytest.raises(RuntimeGateError, match="did not reach every actual mixed-grid partitioned model call"):
         validate_partitioned_runtime_evidence(
-            single,
+            stray,
             _log(),
             expected_boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
         )

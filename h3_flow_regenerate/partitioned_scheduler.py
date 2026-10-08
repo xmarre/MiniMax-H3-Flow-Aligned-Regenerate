@@ -257,6 +257,9 @@ PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 VDN_PARTITIONED_BOUNDARY_QUERY_API = 1
 VDN_PARTITIONED_BOUNDARY_QUERY_POLICY = "boundary_suffix_local_group_dense_v1"
+# Equal-grid partitions route every local query group through the selected
+# backend's native selection, as a non-partitioned call does.
+VDN_PARTITIONED_UNIFORM_QUERY_POLICY = "uniform_grid_native_backend_local_routing_v1"
 FRAME_GAUGE_HARDWARE_INVALIDATED_RIGID_REASON = "hardware_invalidated_global_rigid_application_00687"
 
 
@@ -931,13 +934,9 @@ def _partitioned_high_stage_contract(
             attention_head_t=int(plan.prefix_t if attention_head_t is None else attention_head_t),
             temporal=int(plan.temporal),
             target_hw=plan.target_hw,
-            protected_prefix_local_queries="dense" if exact_prefix_attention else "native",
-            generated_local_queries=(
-                "boundary_and_band_dense_then_native_sol_selection"
-                if attention_head_t is not None
-                else "boundary_dense_then_native_sol_selection"
-            ),
-            boundary_query_policy=VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+            protected_prefix_local_queries="native_backend_selection" if exact_prefix_attention else "native",
+            generated_local_queries="native_backend_selection",
+            uniform_query_policy=VDN_PARTITIONED_UNIFORM_QUERY_POLICY,
             startup_density_exemption=False,
             refinement_source="h3_flow_partitioned_refinement",
             high_linear_diagnostic="normal",
@@ -1159,6 +1158,11 @@ def _validate_partitioned_vdn_compat(
             raise PartitionedPreflightUnsupported(
                 "installed VDN bridge does not advertise the required continuation "
                 f"boundary-query policy {VDN_PARTITIONED_BOUNDARY_QUERY_POLICY!r}"
+            )
+        if getattr(owner, "_vdn_partitioned_uniform_query_policy", None) != VDN_PARTITIONED_UNIFORM_QUERY_POLICY:
+            raise PartitionedPreflightUnsupported(
+                "installed VDN bridge does not advertise the equal-grid query routing policy "
+                f"{VDN_PARTITIONED_UNIFORM_QUERY_POLICY!r}; update the VDN overlay"
             )
         if int(getattr(owner, "_vdn_external_sequence_api", 0)) != VDN_PARTITIONED_SEQUENCE_API:
             raise PartitionedPreflightUnsupported(

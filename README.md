@@ -141,12 +141,10 @@ Spectrum forecasting, the native final layer and Flow guidance keep their usual
 contracts. Guidance binds to the actual high-stage clean operand (the band's own
 prediction plus the learned tail).
 
-High refinement keeps the band's local query groups dense through VDN's
-`attention_head_t` contract. Only the original carried prefix remains protected;
-the band stays fully generated, and later query groups retain native Sol
-selection. A group that intersects the band uses one dense attention operation
-over its existing key domain. This can add high-stage attention work. Rendered
-camera continuity and the timing cost require GPU validation.
+High refinement runs on one uniform target grid. Only the original carried
+prefix remains protected; the band stays fully generated. Every local query
+group, including protected-prefix and band frames, uses the selected backend's
+native selection, as in a first chunk.
 
 With `suffix_dc_bridge=true`, the one-token channel-mean bridge applies to the
 first reduced-grid token after the band and is measured against the target-grid
@@ -248,9 +246,8 @@ key, VDN local window, global or anchor query, linear-complement state, or
 modulation/MLP row is shared between the streams. VDN and Sol see an ordinary
 equal-grid partition contract per stream, so key measures are unity. Row and
 column anchors are those of each stream's clip; the target stream's last band
-frame is an anchor of that stream. Band queries stay dense in both streams, and
-the source stream keeps the local group containing the first tail token dense,
-matching the mixed-grid path.
+frame is an anchor of that stream. Every local query group in both streams uses
+the selected backend's native selection, as in a non-partitioned clip.
 
 The streams communicate only through the sampler state between model calls.
 The source stream reads the band's current state projected with the H3 physical

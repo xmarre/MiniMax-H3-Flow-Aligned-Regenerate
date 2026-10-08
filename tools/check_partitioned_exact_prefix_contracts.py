@@ -405,7 +405,7 @@ def _validate_preprocess_transport() -> None:
 def _validate_high_attention_transport() -> None:
     from h3_flow_regenerate.metrics import H3FlowMetrics
     from h3_flow_regenerate.partitioned_scheduler import (
-        VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        VDN_PARTITIONED_UNIFORM_QUERY_POLICY,
         _partitioned_high_stage_contract,
     )
     from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
@@ -414,6 +414,7 @@ def _validate_high_attention_transport() -> None:
     from sol_h3.contracts import Config
     from sol_h3.interop import dense_evaluation_warmup
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
+    from vdn_h3.partitioned_runtime import VDN_PARTITIONED_UNIFORM_QUERY_POLICY as VDN_UNIFORM_QUERY_POLICY
     from vdn_h3.partitioned_runtime import _partitioned_local_force_dense
     from vdn_h3.partitioned_sequence import validate_flow_partition_contract
     from vdn_h3.window import window_bounds
@@ -441,32 +442,21 @@ def _validate_high_attention_transport() -> None:
         grouped = build_partitioned_grouped_plan(
             vdn, bounds=window_bounds(47, 1, 5), anchor_frames="both", semantic_digest=flow.semantic_digest
         )
-        saw_boundary_suffix = False
-        saw_later_suffix = False
+        uniform = (vdn.source_grid_h, vdn.source_grid_w) == (vdn.target_grid_h, vdn.target_grid_w)
+        if not uniform:
+            raise SystemExit("high attention published a mixed-grid VDN partition")
+        saw_prefix = False
+        saw_generated = False
         for group in grouped.groups:
-            force_dense, diagnostic, boundary_suffix = _partitioned_local_force_dense(
-                group,
-                "normal",
-                prefix_t=vdn.prefix_t,
-            )
-            expected_boundary_suffix = bool(not group.query_prefix_domain and vdn.prefix_t in group.query_frames)
-            if boundary_suffix != expected_boundary_suffix or diagnostic:
-                raise SystemExit("high VDN boundary-query discriminator drifted")
-            if group.query_prefix_domain:
-                if not force_dense:
-                    raise SystemExit("high VDN protected-prefix group lost dense ownership")
-            elif expected_boundary_suffix:
-                saw_boundary_suffix = True
-                if not force_dense:
-                    raise SystemExit("high VDN first generated boundary group lost dense continuity")
-            else:
-                saw_later_suffix = True
-                if force_dense:
-                    raise SystemExit("high VDN later generated group lost native sparse routing")
-        if not saw_boundary_suffix or not saw_later_suffix:
-            raise SystemExit("high VDN contract did not exercise boundary and later suffix groups")
-        if VDN_PARTITIONED_BOUNDARY_QUERY_POLICY != "boundary_suffix_local_group_dense_v1":
-            raise SystemExit("Flow boundary-query policy identity drifted")
+            routing = _partitioned_local_force_dense(group, "normal", prefix_t=vdn.prefix_t, uniform=uniform)
+            if routing != (False, False, False):
+                raise SystemExit("high VDN equal-grid local group left native backend routing")
+            saw_prefix |= bool(group.query_prefix_domain)
+            saw_generated |= not bool(group.query_prefix_domain)
+        if not saw_prefix or not saw_generated:
+            raise SystemExit("high VDN contract did not exercise protected and generated groups")
+        if VDN_PARTITIONED_UNIFORM_QUERY_POLICY != VDN_UNIFORM_QUERY_POLICY:
+            raise SystemExit("Flow/VDN equal-grid query routing policy diverged")
     if options:
         raise SystemExit("high attention left sampler-stage state behind")
 

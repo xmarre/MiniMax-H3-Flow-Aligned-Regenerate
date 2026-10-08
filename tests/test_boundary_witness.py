@@ -63,6 +63,7 @@ def test_requested_witness_missing_capability_fails_before_sampling(monkeypatch,
         _vdn_external_sequence_api=4,
         _vdn_partitioned_boundary_query_api=1,
         _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
     )
     patcher = SimpleNamespace(
         object_patches={"diffusion_model.blocks.0.attn.forward": owner},

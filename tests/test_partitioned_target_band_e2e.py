@@ -70,6 +70,7 @@ def _vdn_owner():
     owner._vdn_forward = True
     owner._vdn_partitioned_boundary_query_api = VDN_PARTITIONED_BOUNDARY_QUERY_API
     owner._vdn_partitioned_boundary_query_policy = VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+    owner._vdn_partitioned_uniform_query_policy = "uniform_grid_native_backend_local_routing_v1"
     owner._vdn_external_sequence_api = 4
     owner._vdn_partitioned_native_carrier_grids = ("source", "target")
     owner._vdn_partitioned_domain_stream_api = 1

@@ -603,6 +603,7 @@ def test_vdn_bypass_preflight_requires_boundary_query_capability_and_policy():
         _vdn_external_sequence_api=4,
         _vdn_partitioned_boundary_query_api=1,
         _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
         _vdn_partitioned_linear_diagnostic_api=1,
     )
     patcher.object_patches["diffusion_model.blocks.0.attn.forward"] = current
@@ -1964,6 +1965,7 @@ def test_target_sink_requires_advertised_vdn_mode_before_sampling():
         _vdn_external_sequence_api=4,
         _vdn_partitioned_boundary_query_api=1,
         _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
     )
     current._vdn_partitioned_softmax_diagnostic_api = 1
     current._vdn_partitioned_softmax_diagnostic_modes = ("normal", "dense_suffix_same_domain")

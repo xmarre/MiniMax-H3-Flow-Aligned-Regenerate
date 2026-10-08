@@ -60,6 +60,7 @@ VDN_LINEAR_ACTIVE_MARKER = (
 )
 PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 VDN_PARTITIONED_BOUNDARY_QUERY_POLICY = "boundary_suffix_local_group_dense_v1"
+VDN_PARTITIONED_UNIFORM_QUERY_POLICY = "uniform_grid_native_backend_local_routing_v1"
 AUDIO_OVERLAP_MARKER = "partitioned audio guided overlap mode="
 _AUDIO_OVERLAP_RE = re.compile(
     r"partitioned audio guided overlap mode=(?P<mode>\S+) "
@@ -4131,8 +4132,8 @@ def validate_partitioned_runtime_evidence(
             "high attention consumed the low/probe startup exemption",
         )
         _require(
-            high_attention.get("generated_local_queries") == "boundary_dense_then_native_sol_selection"
-            and high_attention.get("boundary_query_policy") == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
+            high_attention.get("generated_local_queries") == "native_backend_selection"
+            and high_attention.get("uniform_query_policy") == VDN_PARTITIONED_UNIFORM_QUERY_POLICY
             and high_attention.get("high_linear_diagnostic") == "normal"
             and high_attention.get("high_softmax_diagnostic") == "normal"
             and high_attention.get("high_audio_position_domain") == AUDIO_POSITION_DOMAIN_LEGACY,
@@ -4145,8 +4146,8 @@ def validate_partitioned_runtime_evidence(
         )
         if high_attention.get("exact_prefix_attention") is True:
             _require(
-                high_attention.get("protected_prefix_local_queries") == "dense",
-                "high attention released protected-prefix query policy",
+                high_attention.get("protected_prefix_local_queries") == "native_backend_selection",
+                "high attention changed protected-prefix query routing",
             )
             _require(
                 len(high_transformer_events) == high_actual,
@@ -4233,11 +4234,17 @@ def validate_partitioned_runtime_evidence(
             expected_boundary_query_policy == VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
             "unsupported expected VDN boundary-query policy",
         )
+        # Only mixed-grid calls have a dense boundary group. Equal-grid calls
+        # (domain streams, same-grid control and high) route natively.
+        low_probe_uniform = bool(low_probe_transformer_events) and all(
+            _event_fields(event).get("source_rows_per_frame") is not None
+            and _event_fields(event).get("source_rows_per_frame") == _event_fields(event).get("target_rows_per_frame")
+            for event in low_probe_transformer_events
+        )
         _require(
-            len(boundary_query_events)
-            == partitioned_actual
-            + (partitioned_actual if domain_uniform_high else low_actual + probe_actual if domain_uniform else 0),
-            "VDN boundary-query policy did not reach every actual partitioned model call",
+            len(boundary_query_events) == (0 if domain_uniform or low_probe_uniform else low_actual + probe_actual)
+            and all(fields.get("stage") in {"low", "probe"} for fields in boundary_query_events),
+            "VDN boundary-query policy did not reach every actual mixed-grid partitioned model call",
         )
         protected_prefix_t = plan_fields.get("prefix_temporal_length")
         # Target-band continuation partitions low/probe at the band/tail edge;
