@@ -407,10 +407,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": False,
                 "tooltip": (
-                    "Capture boundary evidence for this execution. Target-band continuation saves "
-                    "stage tensors under output/h3_flow_regenerate/residual_geometry for Local Boundary Audit; "
-                    "other partitioned modes save VDN feature tensors under output/h3-flow-boundary-witness. "
-                    "Target-band stage copies have a 256 MiB CPU budget and add copy and disk-write time. "
+                    "Capture boundary evidence for this execution. Target-band and progressive_uniform_source "
+                    "continuation save scheduler-owned stage snapshots under "
+                    "output/h3_flow_regenerate/residual_geometry for Local Boundary Audit; other partitioned "
+                    "modes save VDN feature tensors under output/h3-flow-boundary-witness. "
+                    "Stage copies have a CPU byte budget and add copy and disk-write time. "
                     "This is per-run and does not require an environment variable or ComfyUI restart."
                 ),
             },

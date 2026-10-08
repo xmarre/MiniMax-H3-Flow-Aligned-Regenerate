@@ -4768,10 +4768,24 @@ def run_partitioned_progressive(
         if target_band is not None and boundary_window_evidence is not None:
             boundary_window_evidence.capture("source_probe_clean", clean_video)
         if uniform_source and (measure_band_trajectory or band_witness_requested):
-            boundary_window_evidence = BoundaryWindowEvidence(
-                stage_plan.prefix, stage_plan.temporal, capture_full_video=True
-            )
-            boundary_window_evidence.capture("source_probe_clean", clean_video)
+            try:
+                boundary_window_evidence = BoundaryWindowEvidence(
+                    stage_plan.prefix, stage_plan.temporal, capture_full_video=True
+                )
+            except ValueError as exc:
+                # Measurement is output-neutral; only an explicit capture request fails.
+                if band_witness_requested:
+                    raise RuntimeError(f"requested uniform-source stage capture is unsupported: {exc}") from exc
+                binding.metrics.event(
+                    "partitioned_boundary_window_evidence",
+                    policy="native_boundary_decoder_window_evidence_v1",
+                    status="unsupported",
+                    reason=str(exc),
+                    output_mutated=False,
+                    diagnostic_only=True,
+                )
+            else:
+                boundary_window_evidence.capture("source_probe_clean", clean_video)
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
         boundary_content_pre_high_receipt: dict[str, Any] | None = None

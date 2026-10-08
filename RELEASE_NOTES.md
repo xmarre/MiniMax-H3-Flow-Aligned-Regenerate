@@ -205,6 +205,36 @@ Sampling, exact-prefix ownership, attention policy and RNG are unchanged.
 
 ---
 
+# Unreleased: target-query non-video key measure
+
+Adds `target_query_sink_measure` to the diagnostic node's existing
+`softmax_diagnostic` selector. In heterogeneous low/probe it scales conditioning
+keys alongside target-grid video keys for target-grid queries. Reduced-grid and
+global queries, physical gathers, VDN linear measure policy and high refinement
+retain their existing policy. Target-grid row anchors follow the selected
+weighting; anchors on different grids are dispatched separately. The mode
+requires paired VDN/Sol capability and records completed execution. Numerical
+history includes the selector. Normal remains the default; rendered acceptance
+and GPU timing remain empirical. See `docs/USAGE.md` for scope and compatibility.
+
+# Unreleased: local target-band decoder audit
+
+Add **MiniMax H3 Local Boundary Audit**, an offline ComfyUI node for saved
+target-band evidence. It uses the connected production video VAE to replay
+two adjacent temporal windows and their native blend at the native-band to
+transferred-tail interface. Matching-frame comparisons cover provider output,
+pre-high state, first high prediction before/after Flow and final state.
+
+The node validates saved tensor hashes, exact prefix/mask ownership and native
+band identity before decoding. It saves numerical JSON only, with affine
+translation/scale/shear estimates and RGB/luminance differences. No media or
+latent samples enter the report. It runs independently of sampling and leaves
+production behavior unchanged. Native temporal-source and synthetic geometry
+tests verify replay timing and diagnostic arithmetic; rendered quality and GPU
+execution require evaluation with the connected production VAE.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.10
 
 Add an opt-in target-band continuation arm and a suffix DC bridge selector to
@@ -1028,30 +1058,3 @@ v0.2.0 added the optional `learned_3d` handoff provider for Progressive Target I
 # MiniMax H3 Flow-Aligned Regenerate v0.1.0
 
 Initial public release: H3 trajectory capture, flow-aligned second-pass guidance, progressive target-input handoff, Continuum refine-state guidance, runtime metrics and the initial experimental research controls.
-
-## Target-query non-video key measure
-
-Adds `target_query_sink_measure` to the diagnostic node's existing
-`softmax_diagnostic` selector. In heterogeneous low/probe it scales conditioning
-keys alongside target-grid video keys for target-grid queries. Reduced-grid and
-global queries, physical gathers, VDN linear measure policy and high refinement
-retain their existing policy. Target-grid row anchors follow the selected
-weighting; anchors on different grids are dispatched separately. The mode
-requires paired VDN/Sol capability and records completed execution. Numerical
-history includes the selector. Normal remains the default; rendered acceptance
-and GPU timing remain empirical. See `docs/USAGE.md` for scope and compatibility.
-# Unreleased: local target-band decoder audit
-
-Add **MiniMax H3 Local Boundary Audit**, an offline ComfyUI node for saved
-target-band evidence. It uses the connected production video VAE to replay
-two adjacent temporal windows and their native blend at the native-band to
-transferred-tail interface. Matching-frame comparisons cover provider output,
-pre-high state, first high prediction before/after Flow and final state.
-
-The node validates saved tensor hashes, exact prefix/mask ownership and native
-band identity before decoding. It saves numerical JSON only, with affine
-translation/scale/shear estimates and RGB/luminance differences. No media or
-latent samples enter the report. It runs independently of sampling and leaves
-production behavior unchanged. Native temporal-source and synthetic geometry
-tests verify replay timing and diagnostic arithmetic; rendered quality and GPU
-execution require evaluation with the connected production VAE.
