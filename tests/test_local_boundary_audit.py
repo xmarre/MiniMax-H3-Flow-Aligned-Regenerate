@@ -837,22 +837,51 @@ def test_audit_decode_keeps_other_models_resident(monkeypatch, oom):
     assert model_management.loaded_models() == [*others, vae.patcher]
 
 
-@pytest.mark.parametrize("state", ["absent", "partial", "other_device"])
-def test_audit_never_loads_or_moves_a_nonresident_vae(monkeypatch, state):
+def test_audit_decodes_a_partially_loaded_vae_in_place(monkeypatch):
     pytest.importorskip("comfy.cli_args").args.cpu = True
     management = pytest.importorskip("comfy.model_management")
     vae = ManagedVAE()
-    monkeypatch.setattr(management, "loaded_models", lambda: [] if state == "absent" else [vae.patcher])
-    if state == "partial":
-        vae.patcher.loaded_size = lambda: 512
-    elif state == "other_device":
-        vae.patcher.current_loaded_device = lambda: torch.device("cuda:0")
+    vae.patcher.loaded_size = lambda: 512
+    monkeypatch.setattr(management, "loaded_models", lambda: [vae.patcher])
 
     def forbidden(*args, **kwargs):
         pytest.fail("an audit entered model memory admission")
 
     monkeypatch.setattr(management, "load_models_gpu", forbidden)
     monkeypatch.setattr(management, "free_memory", forbidden)
-    with pytest.raises(RuntimeError, match="requires the connected VAE"):
-        audit._decode_owned_pixels(vae, torch.zeros(1, 24, 7, 2, 3), lambda x: x, 22)
+    decoded = audit._decode_owned_pixels(vae, torch.zeros(1, 24, 7, 2, 3), lambda x: x, 22)
+    assert float(decoded.max()) == 0.25
+    assert vae.managed_calls == 0
+
+
+@pytest.mark.parametrize("state", ["absent", "other_device"])
+@pytest.mark.parametrize("fits", [True, False])
+def test_audit_loads_a_nonresident_vae_only_into_free_memory(monkeypatch, state, fits):
+    pytest.importorskip("comfy.cli_args").args.cpu = True
+    management = pytest.importorskip("comfy.model_management")
+    vae = ManagedVAE()
+    vae.patcher.loaded_size = lambda: 0
+    vae.memory_used_decode = lambda shape, dtype: 4096
+    monkeypatch.setattr(management, "loaded_models", lambda: [] if state == "absent" else [vae.patcher])
+    if state == "other_device":
+        vae.patcher.current_loaded_device = lambda: torch.device("cuda:0")
+    monkeypatch.setattr(management, "minimum_inference_memory", lambda: 2048)
+    monkeypatch.setattr(management, "extra_reserved_memory", lambda: 0)
+    monkeypatch.setattr(management, "get_free_memory", lambda device: (1024 + 4096) if fits else 4096)
+    requests = []
+    monkeypatch.setattr(
+        management,
+        "load_models_gpu",
+        lambda models, memory_required=0, **kwargs: requests.append((tuple(models), memory_required)),
+    )
+    monkeypatch.setattr(management, "free_memory", lambda *args, **kwargs: pytest.fail("audit freed memory"))
+    latent = torch.zeros(1, 24, 7, 2, 3)
+    if fits:
+        decoded = audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
+        assert float(decoded.max()) == 0.25
+        assert requests == [((vae.patcher,), 4096)]
+    else:
+        with pytest.raises(RuntimeError, match="without unloading other models"):
+            audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
+        assert requests == []
     assert vae.managed_calls == 0

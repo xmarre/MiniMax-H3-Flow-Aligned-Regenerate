@@ -27,8 +27,11 @@
 - Local Boundary Audit reuses the fully resident connected VAE without entering
   ComfyUI's model loader. Even zero-workspace model admission can evict other
   models because Core reserves minimum inference memory. Missing or offloaded
-  VAE weights and decode OOM now stop the audit without loading or unloading
-  models. The managed decode fallback that could evict models is removed.
+  VAE weights are used in place (ComfyUI streams the offloaded part). A VAE
+  that is not loaded on its device is loaded only when free memory already
+  covers its weights and the decode workspace; otherwise, and on decode OOM, the
+  audit stops without loading or unloading models. The managed decode fallback
+  that could evict models is removed.
 
 - Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
   streams' independent normalization, AdaLN, residual and MLP operations in

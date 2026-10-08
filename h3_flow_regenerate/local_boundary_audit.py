@@ -368,22 +368,38 @@ def geometry_comparison(reference, candidate, frame_labels):
 
 
 def _resident_decode(vae, samples):
-    """Use the resident VAE without entering ComfyUI's memory admission path.
+    """Decode with the connected VAE without ever evicting another model.
 
-    Even ``load_models_gpu(memory_required=0)`` reserves Core's minimum
-    inference workspace and can evict unrelated models. Auditing must never
-    change their residency, including after an allocation failure.
+    ``VAE.decode`` and even ``load_models_gpu(memory_required=0)`` can unload
+    unrelated models to reserve workspace. A VAE already on its decode device is
+    used as it is; partially loaded weights stream through ComfyUI's per-layer
+    casting. A VAE that is not on its device is loaded only when free memory
+    already covers its weights and the decode, so admission evicts nothing.
     """
     import comfy.model_management as model_management
 
-    if not any(model is vae.patcher for model in model_management.loaded_models()):
-        raise RuntimeError(
-            "Local Boundary Audit requires the connected VAE to be resident. "
-            "Decode a video with this VAE before running the audit."
+    patcher = vae.patcher
+    resident = any(model is patcher for model in model_management.loaded_models()) and (
+        patcher.current_loaded_device() == vae.device
+    )
+    if not resident:
+        missing = max(0, int(patcher.model_size()) - int(patcher.loaded_size()))
+        workspace = int(vae.memory_used_decode(samples.shape, vae.vae_dtype))
+        reserve = max(
+            int(model_management.minimum_inference_memory()),
+            workspace + int(model_management.extra_reserved_memory()),
         )
-    if vae.patcher.current_loaded_device() != vae.device or vae.patcher.loaded_size() < vae.patcher.model_size():
-        raise RuntimeError(
-            "Local Boundary Audit requires the connected VAE's weights fully loaded on its decode device."
+        free = int(model_management.get_free_memory(vae.device))
+        if free < missing + reserve:
+            raise RuntimeError(
+                "Local Boundary Audit requires the connected VAE to be resident, or enough free memory to load it "
+                f"without unloading other models ({(missing + reserve) / 2**30:.2f} GiB needed, "
+                f"{free / 2**30:.2f} GiB free)."
+            )
+        # Free memory already covers the weights and the workspace, so ComfyUI's
+        # admission finds nothing to unload.
+        model_management.load_models_gpu(
+            [patcher], memory_required=workspace, force_full_load=bool(vae.disable_offload)
         )
     try:
         with model_management.cuda_device_context(vae.device), torch.inference_mode():
