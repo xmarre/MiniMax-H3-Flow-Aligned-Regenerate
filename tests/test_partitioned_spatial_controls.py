@@ -17,6 +17,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
@@ -89,8 +90,35 @@ def test_new_controls_are_appended_after_every_historical_widget():
         PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
         PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     )
     assert production["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"prefix_transformer_context": PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE},
+        {"vdn_linear_diagnostic": PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL},
+        {"vdn_temporal_carrier_policy": PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION},
+        {"softmax_diagnostic": "raw_token_measure"},
+        {"handoff_transfer_control": PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL},
+        {"low_probe_execution_source": PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_SOURCE_ONLY},
+        {"audio_handoff_source": "source_carrier_uniform_shadow"},
+        {"av_handoff_source": "source_carrier_uniform_shadow"},
+        {"guidance_trajectory_source": "source_carrier_uniform_shadow"},
+    ],
+)
+def test_uniform_source_rejects_inapplicable_attention_controls(override):
+    with pytest.raises(ValueError):
+        _apply(spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, **override)
+
+
+def test_uniform_source_is_explicit_and_does_not_publish_band_tokens():
+    transformer, fields = _apply(spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, target_band_tokens=7)
+    assert transformer[PARTITIONED_SPATIAL_STAGE_CONTROL_KEY] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    assert PARTITIONED_TARGET_BAND_TOKENS_KEY not in transformer
+    assert fields["spatial_stage_control"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
 
 
 def test_suffix_dc_bridge_leaf_is_absent_by_default_and_explicit_only_when_disabled():

@@ -108,14 +108,19 @@ def test_native_partitioned_attention_reports_one_stage_receipt_per_call():
         assert not policy.accept_receipts(foreign[ATTENTION_BACKEND_RECEIPTS_KEY])
 
 
-def test_spectrum_uses_flow_history_instead_of_core_bsa_audit():
+@pytest.mark.parametrize("stage", ["low", "probe", "high"])
+@pytest.mark.parametrize("uniform", [False, True])
+def test_spectrum_uses_flow_history_instead_of_core_bsa_audit(stage, uniform):
     root = os.environ.get("SPECTRUM_PATH")
     if root and root not in sys.path:
         sys.path.insert(0, root)
     backend_history = pytest.importorskip("comfyui_spectrum_h3.backend_history")
     guider = SimpleNamespace(model_options={"transformer_options": {}})
     options = guider.model_options["transformer_options"]
-    with _flow_stage_contract(guider, "high"), _partitioned_stage_contract(guider, _plan(), H3FlowMetrics()):
+    plan = _plan()
+    if uniform:
+        plan = PartitionedStagePlan(plan.prefix, plan.temporal, *plan.target_hw, plan.prefix_noise)
+    with _flow_stage_contract(guider, stage), _partitioned_stage_contract(guider, plan, H3FlowMetrics()):
         identity, safe = backend_history.preflight(options, _layout(), SimpleNamespace(dtype=torch.bfloat16))
         assert safe is True
         assert dict(identity)[PARTITIONED_NATIVE_HISTORY_NAME] is not None

@@ -1983,6 +1983,7 @@ def test_target_sink_requires_advertised_vdn_mode_before_sampling():
         {PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "target_query_sink_measure"},
         {"h3_flow_partitioned_target_band_handoff_state_v1": "carry_raw_band"},
         {"h3_flow_partitioned_target_band_context_v1": "domain_uniform_v1"},
+        {"h3_flow_partitioned_spatial_stage_control_v1": "progressive_uniform_source"},
     ],
 )
 def test_target_sink_outer_cannot_silently_fallback_and_clears_ownership(monkeypatch, selected):

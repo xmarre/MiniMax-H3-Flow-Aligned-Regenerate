@@ -25,6 +25,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
+    PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
     PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
@@ -347,6 +349,10 @@ def partitioned_outer_wrapper(
             or transformer_options.get(PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY) == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK
             or PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY in transformer_options
             or PARTITIONED_TARGET_BAND_CONTEXT_KEY in transformer_options
+            or (
+                transformer_options.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY)
+                == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+            )
         ):
             raise RuntimeError(
                 "partitioned diagnostic controls require supported partitioned exact-prefix "

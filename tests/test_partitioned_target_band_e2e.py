@@ -27,6 +27,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
 )
@@ -554,7 +555,12 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
 
 @pytest.mark.parametrize(
     "control",
-    [PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_SAME_GRID, PARTITIONED_SPATIAL_STAGE_TARGET_BAND],
+    [
+        PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    ],
 )
 def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, control):
     extra = {PARTITIONED_TARGET_BAND_TOKENS_KEY: 2} if control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND else None
@@ -570,6 +576,64 @@ def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, c
     transfers = _events(run.metrics, "partitioned_transfer")
     assert len(transfers) == 1
     assert transfers[0]["authoritative_target_prefix_restored"] is True
+
+
+@pytest.mark.parametrize("sampler", ["euler", "euler_ancestral"])
+def test_uniform_source_with_native_samplers_preserves_protected_streams(monkeypatch, sampler):
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, native_sampler=sampler)
+    protected = run.calls[-1]["mask"] == 0
+    assert torch.equal(run.result[protected], run.latent_image[protected])
+    assert bool(torch.isfinite(run.result).all())
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+    assert run.binding.active_capture is None
+    assert run.binding.active_guidance_run is None
+
+
+def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch):
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    plan = _events(run.metrics, "partitioned_uniform_source_plan")
+    assert len(plan) == 1
+    assert plan[0]["hidden_streams"] == 1
+    assert plan[0]["low_probe_video_rows"] == TEMPORAL * SOURCE_HW[0] * SOURCE_HW[1] // 4
+    assert plan[0]["independent_target_band"] is False
+    assert plan[0]["native_band_splice"] is False
+    assert not _events(run.metrics, "partitioned_target_band_overlap")
+    assert not _events(run.metrics, "partitioned_target_band_domain_transformer")
+    forwards = _events(run.metrics, "partitioned_exact_prefix_transformer")
+    assert {event["stage"] for event in forwards} == {"low", "probe", "high"}
+    for event in forwards:
+        hw = TARGET_HW if event["stage"] == "high" else SOURCE_HW
+        assert event["source_rows_per_frame"] == hw[0] * hw[1] // 4
+        assert event["target_rows_per_frame"] == hw[0] * hw[1] // 4
+        assert event["prefix_log_key_measure"] == 0.0
+        assert event["temporal"] == TEMPORAL
+
+
+def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path):
+    import sys
+
+    folder_paths = pytest.importorskip("folder_paths")
+
+    from h3_flow_regenerate.local_boundary_audit import load_replay_operands
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
+    control = _harness(
+        monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, witness_directory=""
+    )
+    captured = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        witness_directory=str(tmp_path / "witness"),
+    )
+    assert torch.equal(control.result, captured.result)
+    assert control.metrics.counters["transformer_actual_nfe"] == captured.metrics.counters["transformer_actual_nfe"]
+    receipt = _events(captured.metrics, "partitioned_boundary_window_evidence")[-1]
+    assert receipt["capture_boundary_witness_requested"] is True
+    plan, stages, _identity = load_replay_operands(tmp_path / receipt["bundle"], 175, include_source=True)
+    assert plan["head_t"] == plan["prefix_t"] == 12
+    assert torch.equal(stages["source_grid"], captured.upscaler.inputs[0][:, :, 5:22].cpu())
 
 
 def _record_band_clean(monkeypatch):
@@ -783,7 +847,12 @@ def test_target_band_handoff_through_native_comfy_samplers(monkeypatch, sampler)
 
 @pytest.mark.parametrize(
     "control",
-    [PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_SAME_GRID, PARTITIONED_SPATIAL_STAGE_TARGET_BAND],
+    [
+        PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    ],
 )
 def test_sol_history_recognizes_the_block_replacement_in_every_stage(monkeypatch, control):
     """An unbound closure cell would make Sol's history identity opaque for that stage."""

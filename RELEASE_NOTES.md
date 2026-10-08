@@ -1,5 +1,14 @@
 # Unreleased: consistent target-band handoff
 
+- Add opt-in `progressive_uniform_source`: low/probe evaluates one native
+  reduced-grid full clip, transfers every generated frame together and restores
+  the caller's exact target-grid prefix before high refinement and return.
+  There is no independent target band or band/tail splice. Low/probe prefix
+  attention uses the projected source-grid prefix. Both selected attention
+  backends retain equal-grid history ownership. Capture exports replayable
+  native source and target stage operands. Rendered continuity, tone and GPU
+  performance remain unqualified; existing defaults are unchanged.
+
 - Domain-uniform low/probe conditions the tail on the band. After the first
   low call, the source stream holds the band as known, prefix-conditioned frames
   built from the target stream's latest clean band estimate, carried from low
@@ -15,11 +24,11 @@
   step as an actual model call. Sol stages keep Sol's history provider.
   Domain-uniform streams report the receipt of their owning stage, so the
   two-stream low/probe stage is forecastable as well.
-- Local Boundary Audit decodes with the connected VAE's weights only. It no
-  longer requests the whole-decode workspace through `VAE.decode`, which made
-  ComfyUI unload the diffusion model and other resident models; an already
-  loaded VAE stays in place. Running out of memory falls back to the managed
-  decode.
+- Local Boundary Audit reuses the fully resident connected VAE without entering
+  ComfyUI's model loader. Even zero-workspace model admission can evict other
+  models because Core reserves minimum inference memory. Missing or offloaded
+  VAE weights and decode OOM now stop the audit without loading or unloading
+  models. The managed decode fallback that could evict models is removed.
 
 - Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
   streams' independent normalization, AdaLN, residual and MLP operations in

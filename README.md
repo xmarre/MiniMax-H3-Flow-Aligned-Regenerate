@@ -214,6 +214,37 @@ it for production output. The low/probe saving depends on the reduced-grid size:
 a larger `source_scale` (or larger explicit source size) leaves less to save, and
 the video-row reduction is not a wall-time measurement.
 
+#### One uniform source trajectory (opt-in)
+
+`spatial_stage_control=progressive_uniform_source` evaluates one full-duration
+reduced-grid clip in low/probe. Every generated frame and all conditioning rows
+share that clip's attention context. The learned provider transfers the entire
+generated trajectory to the target grid; there is no separately authored
+target-grid band or band/tail splice. The caller's exact target-grid prefix is
+restored before high refinement and in the returned latent. High refinement
+retains its original target-grid contract.
+
+Low/probe sees the physical-lattice projection of the protected prefix on the
+source grid. This is an explicit context change, not exact target-grid prefix
+attention. Reduced prefix detail and the learned transfer can still affect the
+join. Rendered tone, frame alignment, audio, GPU timing and memory have not been
+qualified. The single stream removes duplicated conditioning and head work;
+fewer hidden rows are not a measured wall-time improvement.
+
+Use `learned_3d` transfer, main handoff/guidance sources, normal VDN/softmax
+diagnostics and `native_grid_then_map_v1`. Unsupported requests stop before
+sampling instead of falling back to the target-grid mode. Keep
+`prefix_transformer_context=exact_target_partitioned` and reset the inapplicable
+band selectors to `target_band_context=mixed_grid` and
+`target_band_handoff_state=renoise_clean`. `target_band_tokens` is unused in this
+mode. Both Sol and the native backend use the equal-grid partition/history
+contract. Existing mode defaults and target-band behavior are unchanged.
+
+`capture_boundary_witness=true` or `frame_gauge_residual_mode=measure` saves the
+real uniform source operand and target-grid stage operands for Local Boundary
+Audit, without changing sampler output. The bundle records zero band tokens
+and identifies the source as directly decodable native video.
+
 #### Target-band comparison controls (opt-in)
 
 Two selectors apply only to `progressive_target_band`. Both default to the
@@ -256,8 +287,9 @@ restores the nominal per-cell variance of `sigma * noise_scale` after the convex
 resample. Every later low/probe call holds the band as known frames in the
 source stream: the target stream's latest clean band estimate
 (`x - sigma * v`), projected and conditioned exactly like the protected prefix.
-The tail is therefore generated as a continuation of the band rather than of a
-noisy band it re-interprets independently. Both streams read the shared audio state. The band
+This gives the tail the previous call's clean band estimate as context; it
+does not give the target stream the tail's hidden states. Both streams read
+the shared audio state. The band
 velocity comes from the target stream; tail and audio velocity come from the
 source stream. The protected prefix and padding remain excluded. The band
 cannot see tail hidden states within a call, so band content is produced as the
@@ -421,10 +453,13 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 
 ### Diagnostics
 
-**MiniMax H3 Local Boundary Audit** replays a saved target-band bundle across
-native temporal decoder windows spanning the prefix and band/tail joins. Use a
-separate workflow containing the same video VAE loader/settings used for
-production and this audit node. Set
+**MiniMax H3 Local Boundary Audit** replays saved target-band or uniform-source
+bundles across native temporal decoder windows spanning the continuation join.
+Connect the same resident video VAE instance and settings used for production.
+The node does not enter ComfyUI's model loader or memory admission path, reload
+the VAE, or retry through the model-unloading decode path after OOM. If the VAE
+is not fully resident on its decode device, or decode memory is insufficient,
+the audit stops with an error and preserves model residency. Set
 `bundle_path` to the existing exported directory containing `manifest.json` and
 the full binary operands. Set `chunk_join_frame` to the assembled output's
 first new frame, or leave it at zero for frame labels relative to that join.

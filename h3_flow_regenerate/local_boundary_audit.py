@@ -1,4 +1,4 @@
-"""Offline target-band replay through the connected native H3 VAE.
+"""Offline continuation replay through the resident native H3 VAE.
 
 Only scalar measurements leave this node. Binary operands and decoded pixels
 stay local; no sampler, production latent, or decoder configuration is modified.
@@ -31,6 +31,7 @@ STAGES = {
 }
 SCOPES = ("stage_continuity", "transfer_and_decoder_context", "high_prediction_tone")
 DETAIL_REGIONS = ("off", "upper_left")
+UNIFORM_SOURCE_STAGE = "progressive_uniform_source"
 
 
 def replay_plan(metadata, join_frame):
@@ -38,11 +39,12 @@ def replay_plan(metadata, join_frame):
     prefix, temporal = window["prefix_t"], window["temporal"]
     band = metadata.get("target_band_tokens")
     head = metadata.get("target_band_transfer_start_t")
+    uniform_source = metadata.get("spatial_stage_control") == UNIFORM_SOURCE_STAGE
     if (
         type(prefix) is not int
         or type(temporal) is not int
         or type(band) is not int
-        or band <= 0
+        or (band != 0 if uniform_source else band <= 0)
         or type(head) is not int
         or head != prefix + band
         or prefix < 2
@@ -58,7 +60,10 @@ def replay_plan(metadata, join_frame):
     # Include the preceding prefix window and both contexts near the band/tail
     # edge. All starts retain the native five-token phase.
     start = max(0, (prefix // 5 - 1) * 5)
-    band_window_start = max(0, (head // 5 - 1) * 5)
+    # With one generated source trajectory there is no band edge. Retain the
+    # same four-token observation extent beyond the protected prefix instead.
+    measured_head = prefix + 4 if uniform_source else head
+    band_window_start = max(0, (measured_head // 5 - 1) * 5)
     stop = max(start + 12, band_window_start + 12)
     if stop > temporal:
         raise ValueError("saved timeline lacks the complete following decoder window")
@@ -136,17 +141,23 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
         ) from exc
     manifest = json.loads(raw_manifest)
     metadata = manifest.get("metadata", {})
+    uniform_source = metadata.get("spatial_stage_control") == UNIFORM_SOURCE_STAGE
+    expected_provenance = (
+        "actual_learned_provider_uniform_source"
+        if uniform_source
+        else "actual_learned_provider_before_target_band_splice"
+    )
     if (
         manifest.get("schema") != 1
         or manifest.get("kind") != "h3_flow_native_boundary_decoder_window_evidence"
         or metadata.get("policy") != "native_boundary_decoder_window_evidence_v1"
         or metadata.get("first_high_actual") is not True
-        or metadata.get("provider_clean_provenance") != "actual_learned_provider_before_target_band_splice"
+        or metadata.get("provider_clean_provenance") != expected_provenance
         or metadata.get("decoder_comparison_prefix") != "replace_with_authoritative_prefix_bytes"
         or metadata.get("process_latent_out_required_before_vae") is not True
         or metadata.get("full_video_snapshots") is not True
         or metadata.get("full_video_temporal_start_t") != 0
-        or metadata.get("low_probe_native_carrier_decodable") is not False
+        or metadata.get("low_probe_native_carrier_decodable") is not uniform_source
     ):
         raise ValueError("local audit requires a complete target-band boundary bundle")
     plan = replay_plan(metadata, join_frame)
@@ -206,16 +217,20 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
         value[:, :, : plan["prefix_t"]] = prefix
         stages[stage] = value[:, :, crop].clone()
         del value
-    native = read("low_probe_native_carrier_clean_full")
-    if tuple(native.shape) != shape:
-        raise ValueError("native low carrier geometry differs")
-    lo = max(plan["prefix_t"], plan["token_start"])
-    hi = min(plan["head_t"], plan["token_stop"])
-    if not torch.equal(
-        native[:, :, lo:hi].contiguous().view(torch.int32),
-        stages["pre_high"][:, :, lo - plan["token_start"] : hi - plan["token_start"]].contiguous().view(torch.int32),
-    ):
-        raise ValueError("pre-high band differs from the native low/probe prediction")
+    native = None
+    if not uniform_source:
+        native = read("low_probe_native_carrier_clean_full")
+        if tuple(native.shape) != shape:
+            raise ValueError("native low carrier geometry differs")
+        lo = max(plan["prefix_t"], plan["token_start"])
+        hi = min(plan["head_t"], plan["token_stop"])
+        if not torch.equal(
+            native[:, :, lo:hi].contiguous().view(torch.int32),
+            stages["pre_high"][:, :, lo - plan["token_start"] : hi - plan["token_start"]]
+            .contiguous()
+            .view(torch.int32),
+        ):
+            raise ValueError("pre-high band differs from the native low/probe prediction")
     if include_source:
         source_grid = metadata.get("source_probe_clean_grid")
         if (
@@ -231,12 +246,12 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
             raise ValueError("saved reduced-grid handoff geometry differs from its metadata")
         h, w = source_grid
         head = plan["head_t"]
-        if not torch.equal(
+        if not uniform_source and not torch.equal(
             source[:, :, head:].contiguous().view(torch.int32),
             native[:, :, head:, :h, :w].contiguous().view(torch.int32),
         ):
             raise ValueError("reduced-grid handoff tail differs from native low/probe storage")
-        native_head = native[:, :, :head].clone()
+        native_head = prefix.clone() if uniform_source else native[:, :, :head].clone()
         native_head[:, :, : plan["prefix_t"]] = prefix
         expected_head = resize_spatial_5d_h3_patch_lattice(native_head, h, w)
         # Saved projection ran on the production device. CPU reconstruction can
@@ -353,29 +368,35 @@ def geometry_comparison(reference, candidate, frame_labels):
 
 
 def _resident_decode(vae, samples):
-    """Decode with the connected VAE without reserving a whole-decode workspace.
+    """Use the resident VAE without entering ComfyUI's memory admission path.
 
-    ``VAE.decode`` asks ComfyUI to free its full decode estimate, which unloads
-    other resident models such as the diffusion model. The audit only needs the
-    VAE weights resident: ComfyUI keeps an already loaded VAE in place and evicts
-    nothing else unless the weights themselves do not fit. A decode that runs out
-    of memory falls back to the regular managed decode.
+    Even ``load_models_gpu(memory_required=0)`` reserves Core's minimum
+    inference workspace and can evict unrelated models. Auditing must never
+    change their residency, including after an allocation failure.
     """
     import comfy.model_management as model_management
 
-    model_management.load_models_gpu([vae.patcher], memory_required=0, force_full_load=bool(vae.disable_offload))
+    if not any(model is vae.patcher for model in model_management.loaded_models()):
+        raise RuntimeError(
+            "Local Boundary Audit requires the connected VAE to be resident. "
+            "Decode a video with this VAE before running the audit."
+        )
+    if vae.patcher.current_loaded_device() != vae.device or vae.patcher.loaded_size() < vae.patcher.model_size():
+        raise RuntimeError(
+            "Local Boundary Audit requires the connected VAE's weights fully loaded on its decode device."
+        )
     try:
-        with torch.inference_mode():
+        with model_management.cuda_device_context(vae.device), torch.inference_mode():
             pixels = vae.first_stage_model.decode(samples.to(device=vae.device, dtype=vae.vae_dtype))
             pixels = pixels.to(device=vae.output_device, dtype=vae.vae_output_dtype(), copy=True)
             vae.process_output(pixels)
         return pixels.movedim(1, -1)
     except getattr(model_management, "OOM_EXCEPTION", torch.cuda.OutOfMemoryError):
         pass
-    LOG.info("H3 local boundary audit: resident VAE decode ran out of memory; using managed decode")
-    model_management.soft_empty_cache()
-    with torch.inference_mode():
-        return vae.decode(samples)
+    raise RuntimeError(
+        "Local Boundary Audit ran out of decode memory. Resident models were preserved; "
+        "the audit did not retry through the model-unloading decode path."
+    ) from None
 
 
 def _decode_owned_pixels(vae, latent, process_out, expected_frames):
@@ -709,8 +730,10 @@ class H3FlowLocalBoundaryAudit:
     CATEGORY = "MiniMax H3/diagnostics"
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "Replay saved target-band operands across native VAE windows spanning both joins. "
-        "Use the production video VAE and the boundary bundle directory. "
+        "Replay saved continuation operands across native VAE windows at the protected-prefix join. "
+        "Supports target-band and uniform-source bundles. Use the resident production video VAE "
+        "and the boundary bundle directory. Resident models are never unloaded for the audit; "
+        "insufficient decode memory stops the audit. "
         "Linux paths and verified local WSL UNC paths are accepted. "
         "Set the assembled chunk-join frame, or zero for relative frame labels. "
         "Saves numerical JSON only; images and latent tensors remain local."

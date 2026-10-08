@@ -115,6 +115,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
@@ -873,7 +874,11 @@ def _partitioned_stage_contract(
         vdn_temporal_carrier_short_conv_spec=temporal_carrier_spec,
         boundary_witness=(
             None
-            if transformer.get(FLOW_STAGE_KEY) == "high" or target_band is not None
+            if (
+                transformer.get(FLOW_STAGE_KEY) == "high"
+                or target_band is not None
+                or transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+            )
             else configured_boundary_witness(metrics, directory=witness_directory)
         ),
         prefix_transformer_context=prefix_context,
@@ -1154,8 +1159,15 @@ def _validate_partitioned_vdn_compat(
     witness_directory = model_options.get(WITNESS_DIRECTORY_OPTION, None) if isinstance(model_options, dict) else None
     # Target-band capture uses scheduler-owned stage snapshots, not the VDN
     # short-convolution feature sink used by the reduced-grid carrier.
-    boundary_witness_requested = required_native_carrier != PARTITIONED_NATIVE_CARRIER_TARGET and witness_requested(
-        witness_directory
+    scheduler_capture = (
+        isinstance(model_options, dict)
+        and (model_options.get("transformer_options") or {}).get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY)
+        == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    )
+    boundary_witness_requested = (
+        required_native_carrier != PARTITIONED_NATIVE_CARRIER_TARGET
+        and not scheduler_capture
+        and witness_requested(witness_directory)
     )
     required_temporal_carrier_policy = normalize_vdn_temporal_carrier_policy(required_temporal_carrier_policy)
     required_softmax_diagnostic = normalize_partitioned_softmax_diagnostic(required_softmax_diagnostic)
@@ -3554,9 +3566,27 @@ def run_partitioned_progressive(
     )
     suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+    uniform_source = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    if uniform_source and (
+        prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+        or vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
+        or vdn_temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
+        or softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+        or handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_LEARNED
+        or low_probe_execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        or audio_handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+        or av_handoff_source != PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+        or guidance_trajectory_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    ):
+        raise PartitionedPreflightUnsupported(
+            "progressive_uniform_source requires native uniform attention, normal VDN diagnostics, "
+            "learned_3d transfer and main handoff/guidance sources"
+        )
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
 
-    band_witness_requested = band_mode and witness_requested(initial_model_options.get(WITNESS_DIRECTORY_OPTION))
+    band_witness_requested = (band_mode or uniform_source) and witness_requested(
+        initial_model_options.get(WITNESS_DIRECTORY_OPTION)
+    )
     target_band_tokens = resolve_partitioned_target_band_tokens(initial_transformer) if band_mode else 0
     target_band_handoff_state = resolve_partitioned_target_band_handoff_state(initial_transformer)
     target_band_context = resolve_partitioned_target_band_context(initial_transformer)
@@ -3874,6 +3904,34 @@ def run_partitioned_progressive(
         extra_history_boundaries=0,
     )
     del prefix_resample_delta
+    low_transformer_plan = stage_plan
+    if uniform_source:
+        # One native reduced-grid clip owns every generated frame and all
+        # conditioning rows. Equal-grid partition transport preserves backend
+        # and Spectrum history ownership without a second hidden stream.
+        low_transformer_plan = PartitionedStagePlan(
+            prefix=physical_prefix_source.detach().to(torch.float32).clone(),
+            temporal=stage_plan.temporal,
+            source_h=source_h,
+            source_w=source_w,
+            prefix_noise=source_video_noise[:, :, : stage_plan.prefix_t].detach().to(torch.float32).clone(),
+        )
+        binding.metrics.event(
+            "partitioned_uniform_source_plan",
+            policy="one_uniform_clip_one_generated_trajectory_v1",
+            temporal=stage_plan.temporal,
+            prefix_t=stage_plan.prefix_t,
+            source_hw=(source_h, source_w),
+            target_hw=(target_h, target_w),
+            low_probe_video_rows=stage_plan.temporal * stage_plan.source_rows,
+            hidden_streams=1,
+            generated_video_owner="full_source_clip",
+            conditioning_owner="full_source_clip",
+            independent_target_band=False,
+            learned_transfer_scope="all_generated_frames",
+            native_band_splice=False,
+            authoritative_target_prefix_restore=True,
+        )
     target_band_domain = None
     if domain_context_requested:
         head_t = int(stage_plan.prefix_t) + int(target_band_tokens)
@@ -3970,9 +4028,11 @@ def run_partitioned_progressive(
         low_probe_sampler_shape=tuple(low_shapes[0]),
         native_carrier_grid="target" if target_band is not None else "source",
         prefix_exact_latent_resized_for_transformer=(
-            prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
+            uniform_source or prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_SOURCE
         ),
-        prefix_target_grid_rows_injected=(prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT),
+        prefix_target_grid_rows_injected=(
+            not uniform_source and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+        ),
         deprecated_mixed_grid_contract_active=False,
         vdn_linear_diagnostic=vdn_linear_diagnostic,
         vdn_temporal_carrier_policy=vdn_temporal_carrier_policy,
@@ -4110,7 +4170,7 @@ def run_partitioned_progressive(
                 _flow_stage_contract(guider, "low"),
                 _partitioned_stage_contract(
                     guider,
-                    stage_plan,
+                    low_transformer_plan,
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
@@ -4157,7 +4217,7 @@ def run_partitioned_progressive(
                 _high_stage_contract(guider),
                 _partitioned_stage_contract(
                     guider,
-                    stage_plan,
+                    low_transformer_plan,
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
@@ -4706,6 +4766,11 @@ def run_partitioned_progressive(
 
         split_coordinate = float(normalized_coordinate(sigma, video_shift=video_shift))
         if target_band is not None and boundary_window_evidence is not None:
+            boundary_window_evidence.capture("source_probe_clean", clean_video)
+        if uniform_source and (measure_band_trajectory or band_witness_requested):
+            boundary_window_evidence = BoundaryWindowEvidence(
+                stage_plan.prefix, stage_plan.temporal, capture_full_video=True
+            )
             boundary_window_evidence.capture("source_probe_clean", clean_video)
         residual_mode = normalize_residual_geometry_mode(config.frame_gauge_residual_mode)
         boundary_content_diagnostic_enabled = bool(config.frame_gauge_repair)
@@ -5413,7 +5478,10 @@ def run_partitioned_progressive(
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
 
-        if residual_mode == "measure" and target_band is None:
+        if boundary_window_evidence is not None and uniform_source:
+            boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
+            boundary_window_evidence.capture("pre_high_exact_restored", restored_clean)
+        elif residual_mode == "measure" and target_band is None:
             try:
                 boundary_window_evidence = BoundaryWindowEvidence(exact_prefix, int(target_video.shape[2]))
             except ValueError as exc:
@@ -6859,6 +6927,8 @@ def run_partitioned_progressive(
                     "provider_clean_provenance": (
                         "actual_learned_provider_before_target_band_splice"
                         if target_band is not None
+                        else "actual_learned_provider_uniform_source"
+                        if uniform_source
                         else splice_clean_source
                     ),
                     **(
@@ -6873,7 +6943,21 @@ def run_partitioned_progressive(
                             "low_probe_native_carrier_decodable": False,
                         }
                         if target_band is not None
-                        else {}
+                        else (
+                            {
+                                "spatial_stage_control": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+                                "target_band_tokens": 0,
+                                "target_band_transfer_start_t": int(stage_plan.prefix_t),
+                                "full_video_snapshots": True,
+                                "full_video_temporal_start_t": 0,
+                                "cpu_byte_budget": int(boundary_window_evidence.max_bytes),
+                                "source_probe_clean_grid": [int(source_h), int(source_w)],
+                                "low_probe_native_carrier_layout": "uniform_source",
+                                "low_probe_native_carrier_decodable": True,
+                            }
+                            if uniform_source
+                            else {}
+                        )
                     ),
                     "registration_result": str(frame_gauge_transaction.get("result")),
                     "registration_reason": str(frame_gauge_transaction.get("reason")),

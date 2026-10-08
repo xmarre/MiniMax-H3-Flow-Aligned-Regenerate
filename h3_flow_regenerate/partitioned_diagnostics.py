@@ -112,10 +112,12 @@ PARTITIONED_SPATIAL_STAGE_CONTROL_KEY = "h3_flow_partitioned_spatial_stage_contr
 PARTITIONED_SPATIAL_STAGE_PROGRESSIVE = "progressive_low_to_high"
 PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
 PARTITIONED_SPATIAL_STAGE_TARGET_BAND = "progressive_target_band"
+PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE = "progressive_uniform_source"
 PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
 )
 
 # Number of generated H3 temporal latent tokens that stay on the target grid
@@ -491,6 +493,21 @@ def apply_partitioned_diagnostic_controls(
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
+    if spatial_stage == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE and (
+        prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
+        or mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
+        or temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
+        or softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
+        or handoff_transfer != PARTITIONED_HANDOFF_TRANSFER_LEARNED
+        or execution_source != PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
+        or handoff_source != PARTITIONED_AUDIO_HANDOFF_SOURCE_MAIN
+        or av_handoff != PARTITIONED_AV_HANDOFF_SOURCE_MAIN
+        or guidance_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
+    ):
+        raise ValueError(
+            "progressive_uniform_source requires native uniform attention, normal VDN diagnostics, "
+            "learned_3d transfer and main handoff/guidance sources"
+        )
     softmax_mode = normalize_partitioned_softmax_diagnostic(softmax_diagnostic)
     if (
         softmax_mode == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK
@@ -705,6 +722,7 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",
+    "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE",
     "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
     "PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES",
     "PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM",

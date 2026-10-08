@@ -353,6 +353,27 @@ def test_extended_replay_validates_saved_source_view_and_preserves_native_tail_b
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
+def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle):
+    directory, manifest, source = source_bundle
+    metadata = manifest["metadata"]
+    metadata.update(
+        spatial_stage_control="progressive_uniform_source",
+        provider_clean_provenance="actual_learned_provider_uniform_source",
+        target_band_tokens=0,
+        target_band_transfer_start_t=12,
+        low_probe_native_carrier_layout="uniform_source",
+        low_probe_native_carrier_decodable=True,
+    )
+    manifest["tensor_bytes"].pop("low_probe_native_carrier_clean_full")
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    plan, stages, _identity = audit.load_replay_operands(directory, 175, include_source=True)
+    assert plan["head_t"] == plan["prefix_t"] == 12
+    assert torch.equal(stages["source_grid"], source[:, :, 5:22])
+    report = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
+    assert report["extra_vae_calls"] == 5
+    assert report["stages"]["provider"]["frame_labels"] == list(range(171, 196))
+
+
 @pytest.mark.parametrize("failure", ["head", "tail", "grid", "shape", "hash"])
 def test_extended_replay_rejects_wrong_or_corrupt_source_view(source_bundle, failure):
     directory, manifest, source = source_bundle
@@ -755,7 +776,11 @@ class ManagedVAE:
     """ComfyUI VAE surface: managed ``decode`` versus the resident first-stage model."""
 
     def __init__(self, oom=False):
-        self.patcher = object()
+        self.patcher = SimpleNamespace(
+            current_loaded_device=lambda: torch.device("cpu"),
+            loaded_size=lambda: 1024,
+            model_size=lambda: 1024,
+        )
         self.device = torch.device("cpu")
         self.output_device = torch.device("cpu")
         self.vae_dtype = torch.float32
@@ -797,11 +822,37 @@ def test_audit_decode_keeps_other_models_resident(monkeypatch, oom):
     )
     monkeypatch.setattr(model_management, "soft_empty_cache", lambda *args, **kwargs: None)
     vae = ManagedVAE(oom=oom)
+    others = [object(), object()]
+    monkeypatch.setattr(model_management, "loaded_models", lambda: [*others, vae.patcher])
     latent = torch.zeros(1, 24, 7, 2, 3)
-    decoded = audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
-    assert tuple(decoded.shape) == (1, 22, 32, 48, 3)
-    # Only the VAE weights are requested; no whole-decode workspace that would
-    # unload the diffusion model or other resident models.
-    assert requests == [((vae.patcher,), 0)]
-    assert vae.managed_calls == (1 if oom else 0)
-    assert float(decoded.max()) == (0.0 if oom else 0.25)
+    if oom:
+        with pytest.raises(RuntimeError, match="Resident models were preserved"):
+            audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
+    else:
+        decoded = audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
+        assert tuple(decoded.shape) == (1, 22, 32, 48, 3)
+        assert float(decoded.max()) == 0.25
+    assert requests == []
+    assert vae.managed_calls == 0
+    assert model_management.loaded_models() == [*others, vae.patcher]
+
+
+@pytest.mark.parametrize("state", ["absent", "partial", "other_device"])
+def test_audit_never_loads_or_moves_a_nonresident_vae(monkeypatch, state):
+    pytest.importorskip("comfy.cli_args").args.cpu = True
+    management = pytest.importorskip("comfy.model_management")
+    vae = ManagedVAE()
+    monkeypatch.setattr(management, "loaded_models", lambda: [] if state == "absent" else [vae.patcher])
+    if state == "partial":
+        vae.patcher.loaded_size = lambda: 512
+    elif state == "other_device":
+        vae.patcher.current_loaded_device = lambda: torch.device("cuda:0")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an audit entered model memory admission")
+
+    monkeypatch.setattr(management, "load_models_gpu", forbidden)
+    monkeypatch.setattr(management, "free_memory", forbidden)
+    with pytest.raises(RuntimeError, match="requires the connected VAE"):
+        audit._decode_owned_pixels(vae, torch.zeros(1, 24, 7, 2, 3), lambda x: x, 22)
+    assert vae.managed_calls == 0

@@ -252,7 +252,7 @@ def test_vdn_preprocess_runs_once_on_full_domain_before_gather_without_sol(monke
     assert seen
 
 
-@pytest.mark.parametrize("context", ["mixed_grid", "domain_uniform_v1"])
+@pytest.mark.parametrize("context", ["mixed_grid", "domain_uniform_v1", "uniform_source"])
 def test_continuation_scheduler_completes_low_probe_high_without_sol_backend(monkeypatch, context):
     import test_partitioned_target_band_e2e as fixture
 
@@ -270,18 +270,25 @@ def test_continuation_scheduler_completes_low_probe_high_without_sol_backend(mon
         return patched
 
     monkeypatch.setattr(fixture, "_vdn_owner", native_owner)
-    if context != "mixed_grid":
+    if context == "domain_uniform_v1":
         from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
 
         frames = sum(int(FRAME_PER_TOKEN[i % len(FRAME_PER_TOKEN)]) for i in range(fixture.TEMPORAL))
         monkeypatch.setattr(fixture, "AUDIO_T", round(frames * float(FRAME_RESCALE)))
     run = fixture._harness(
         monkeypatch,
-        spatial_stage_control=fixture.PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        spatial_stage_control=(
+            fixture.PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+            if context == "uniform_source"
+            else fixture.PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+        ),
         extra_transformer_options={
             fixture.SOL_RUNTIME_KEY: None,
-            PARTITIONED_TARGET_BAND_CONTEXT_KEY: context,
-            PARTITIONED_TARGET_BAND_TOKENS_KEY: 4,
+            **(
+                {PARTITIONED_TARGET_BAND_CONTEXT_KEY: context, PARTITIONED_TARGET_BAND_TOKENS_KEY: 4}
+                if context != "uniform_source"
+                else {}
+            ),
         },
     )
     assert run.metrics.counters["partitioned_native_attention_calls"] > 0

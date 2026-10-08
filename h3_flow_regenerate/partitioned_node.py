@@ -458,7 +458,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "progressive_target_band keeps the first target_band_tokens generated tokens after the "
                     "protected prefix on the target grid, keeps their native clean prediction and re-noises "
                     "all generated tokens. It runs the remaining "
-                    "continuation tokens on the reduced grid with learned transfer."
+                    "continuation tokens on the reduced grid with learned transfer. "
+                    "progressive_uniform_source runs one full-duration reduced-grid clip for all generated "
+                    "frames, transfers the whole generated trajectory through the learned upscaler, then restores "
+                    "the exact target-grid prefix. It has no independently generated target band. "
+                    "Use normal attention/VDN diagnostics and the default target-band selectors with this mode. "
+                    "Its rendered boundary continuity remains unvalidated."
                 ),
             },
         )
