@@ -70,26 +70,32 @@ audio_handoff_source             = main_partitioned
 av_handoff_source                = main_partitioned
 guidance_trajectory_source       = main_exact_partitioned
 low_probe_execution_source       = main_then_shadow
-frame_gauge_repair               = true
+frame_gauge_repair               = false
 frame_gauge_residual_mode        = off
 provider_boundary_stabilization  = soft_support_v1
 capture_boundary_witness         = false
 vdn_temporal_carrier_policy      = native_grid_then_map_v1
 handoff_transfer_control         = learned_3d
-spatial_stage_control            = same_grid_target_control
+spatial_stage_control            = progressive_uniform_source
 softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
-suffix_dc_bridge                 = true
+suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
 ```
 
-Continuation low/probe and high share the target grid. Clean/residual transfer
-is identity, paired-prefix checks resolve to identity, and the main source
-selectors do not add shadow sampler lifetimes. All-generated first chunks
-retain learned progressive transfer, so the upscaler input remains connected.
+Continuation low/probe runs one full-duration clip on the reduced grid, the
+learned upscaler transfers the whole generated trajectory to the target grid,
+and the exact target-grid prefix is restored before high refinement. The main
+source selectors do not add shadow sampler lifetimes. Keep the upscaler input
+connected: it is used by every continuation and by all-generated first chunks.
 The historical serialized node ID remains unchanged.
+
+Workflows saved with an older release keep their stored widget values. To move
+one to the recommended profile, set
+`spatial_stage_control=progressive_uniform_source`, `frame_gauge_repair=false`
+and `suffix_dc_bridge=false`.
 
 `sampler_mask_exact_timestep` aliases coherent `exact_mask`: carried audio stays
 protected by matching native input, timestep and velocity masks, with zero
@@ -99,11 +105,12 @@ The stored video width is provenance-only, with zero applied prefix release.
 `soft_support_v1` observes the post-high boundary without its retired pre-high
 correction. Residual tensor export and actual-feature witness capture are off.
 
-The heterogeneous path retains the first-token channel-mean bridge and remains
-opt-in with unresolved boundary quality. The accepted target-grid profile does
-not qualify every model, scene or seed. Target-grid low/probe uses more spatial
-work than a reduced-grid stage; compare continuation timings separately from
-model loading and first-chunk work.
+The recommended profile has one accepted reference continuation (no visible
+join, continuation sampling about 1.2 times the first chunk, Spectrum forecasts
+active in low and high); see
+[validation: run 01737](validation/CONTINUATION_01737_AUDIT_LIFETIME.md). That
+does not qualify every model, scene, seed or attention backend. Compare
+continuation timings separately from model loading and first-chunk work.
 
 ## Common concepts
 
@@ -125,9 +132,38 @@ Guidance and progressive handoff match states by H3's shared flow coordinate rat
 
 H3 is a joint audio/video model. The progressive path changes only the **video spatial grid**. Audio is never spatially resized and remains on the native joint H3 path.
 
-### Target-grid exact-prefix continuation
+### Uniform-source exact-prefix continuation (recommended)
 
-On **MiniMax H3 Partitioned Exact-Prefix Handoff**, select
+`spatial_stage_control=progressive_uniform_source` is the default and
+recommended continuation mode. Low/probe evaluates one full-duration clip on the
+configured reduced grid: the protected prefix is projected onto that grid with
+the H3 physical lattice, and every generated frame and all conditioning rows
+share one attention context. There is no separately generated target-grid band
+and no band/tail splice. At the handoff the learned 3D upscaler transfers all
+generated frames together. The caller's exact target-grid prefix is restored
+before high refinement, high runs on the target grid with the original
+exact-prefix contract, and the returned latent carries the exact prefix.
+
+- Required selectors (all defaults): `handoff_transfer_control=learned_3d`,
+  `prefix_transformer_context=exact_target_partitioned`,
+  `low_probe_execution_source=main_then_shadow`, the main audio/AV/guidance
+  sources, `vdn_linear_diagnostic=normal`, `softmax_diagnostic=normal`,
+  `vdn_temporal_carrier_policy=native_grid_then_map_v1`,
+  `target_band_context=mixed_grid` and `target_band_handoff_state=renoise_clean`.
+  `target_band_tokens` is unused.
+- Unsupported combinations stop before sampling instead of running another mode.
+- Low/probe and high are equal-grid partitions, so every local query group uses
+  the selected attention backend's own sparse selection. Each stage publishes a
+  verifiable Spectrum attention-history identity (Flow's own for non-Sol
+  backends, Sol's when Sol is selected), so forecasting is not forced to
+  actual-only.
+- `capture_boundary_witness=true` or `frame_gauge_residual_mode=measure` saves the
+  reduced-grid source operand and target-grid stage operands for Local Boundary
+  Audit without changing sampler output.
+
+### Target-grid exact-prefix continuation (retained)
+
+The following modes remain for existing workflows and comparisons. Select
 `spatial_stage_control=same_grid_target_control` to run continuation low/probe
 stages at the final target resolution. The carried prefix and generated suffix
 then share one spatial grid, and clean/residual handoff uses identity transfer.
@@ -141,9 +177,9 @@ first chunk retains the ordinary progressive path, so keep the learned-upscaler
 provider connected. Increasing the low-stage spatial grid increases its work;
 compare continuation stage timings when assessing cost. Audio can also change
 because it is predicted jointly with the differently conditioned video.
-New nodes default to `same_grid_target_control`. Explicit saved controls remain active.
+This was the default of v0.3.9 and v0.3.10; explicit saved controls remain active.
 
-### Target-band exact-prefix continuation
+### Target-band exact-prefix continuation (retained)
 
 `spatial_stage_control=progressive_target_band` keeps the protected prefix and
 the next `target_band_tokens` generated temporal latent tokens on the target grid
@@ -237,9 +273,10 @@ identical inputs.
 
 ### Suffix DC bridge selector
 
-`suffix_dc_bridge=true` (default) keeps the historical one-token channel-mean
-bridge for learned-transfer continuations. `false` leaves the first transferred
-token exactly as the transfer produced it. Use it to test whether that bridge
+`suffix_dc_bridge=false` (default since v0.3.11) leaves the first transferred
+token exactly as the transfer produced it. `true` applies the historical
+one-token channel-mean bridge for learned-transfer continuations and is what
+workflows saved with older releases store. Use it to test whether that bridge
 contributes to a boundary artifact. Transfer receipts record
 `suffix_dc_bridge_requested`, and the runtime evidence gate validates both
 settings.

@@ -1,13 +1,45 @@
-# Unreleased: consistent target-band handoff
+# MiniMax H3 Flow-Aligned Regenerate v0.3.11
 
-- Add opt-in `progressive_uniform_source`: low/probe evaluates one native
-  reduced-grid full clip, transfers every generated frame together and restores
-  the caller's exact target-grid prefix before high refinement and return.
-  There is no independent target band or band/tail splice. Low/probe prefix
-  attention uses the projected source-grid prefix. Both selected attention
-  backends retain equal-grid history ownership. Capture exports replayable
-  native source and target stage operands. Rendered continuity, tone and GPU
-  performance remain unqualified; existing defaults are unchanged.
+Make one uniform source trajectory the default exact-prefix continuation, run
+partitioned continuation with any selected attention backend, keep Spectrum
+forecasting active during continuation, and stop Local Boundary Audit from
+unloading other models.
+
+## Recommended continuation (new default)
+
+New **MiniMax H3 Partitioned Exact-Prefix Handoff** nodes use
+`spatial_stage_control=progressive_uniform_source` with
+`frame_gauge_repair=false` and `suffix_dc_bridge=false`. Continuation low/probe
+evaluates one full-duration clip on the reduced grid, so every generated frame
+shares one attention context and there is no target-band/tail splice. The
+learned 3D upscaler transfers the whole generated trajectory, and the caller's
+exact target-grid prefix is restored before target-grid high refinement.
+
+The accepted reference continuation showed no visible join; final luminance
+changed by less than 0.001 across it. Continuation sampling took 1.23 times the
+first chunk, with Spectrum forecasting in both low and high. See
+[validation: run 01737](docs/validation/CONTINUATION_01737_AUDIT_LIFETIME.md).
+This is one accepted continuation on the native attention backend, not a
+guarantee for every model, scene, seed, backend or hardware.
+
+Saved workflows keep their stored widget values. To adopt the profile, set the
+three widgets above. `same_grid_target_control` (the previous default),
+`progressive_low_to_high` and `progressive_target_band` remain selectable for
+existing workflows and comparisons.
+
+Requires VDN-H3-Plus v1.5.9 (equal-grid native routing and partitioned
+attention provider API 1). Sol-H3 v0.1.10 is required only when Sol attention
+is selected.
+
+## Continuation, attention, history and audit changes
+
+- Add `progressive_uniform_source` (now the default, see above): low/probe
+  evaluates one native reduced-grid full clip, transfers every generated frame
+  together and restores the caller's exact target-grid prefix before high
+  refinement and return. There is no independent target band or band/tail
+  splice. Low/probe prefix attention uses the projected source-grid prefix.
+  Sol and non-Sol backends both keep equal-grid history ownership. Capture
+  exports replayable native source and target stage operands.
 
 - Domain-uniform low/probe conditions the tail on the band. After the first
   low call, the source stream holds the band as known, prefix-conditioned frames
@@ -24,14 +56,21 @@
   step as an actual model call. Sol stages keep Sol's history provider.
   Domain-uniform streams report the receipt of their owning stage, so the
   two-stream low/probe stage is forecastable as well.
-- Local Boundary Audit reuses the fully resident connected VAE without entering
-  ComfyUI's model loader. Even zero-workspace model admission can evict other
-  models because Core reserves minimum inference memory. Missing or offloaded
-  VAE weights are used in place (ComfyUI streams the offloaded part). A VAE
-  that is not loaded on its device is loaded only when free memory already
-  covers its weights and the decode workspace; otherwise, and on decode OOM, the
-  audit stops without loading or unloading models. The managed decode fallback
-  that could evict models is removed.
+- Local Boundary Audit no longer unloads the models of the previous
+  generation. Preparing an audit-only prompt prunes the previous prompt's
+  output caches, and Core's loaded-model registry holds only weak references to
+  model patchers, so post-prompt cleanup could release every loaded model. The
+  audit now holds strong references to the loaded models from fingerprint
+  evaluation through completion via Core's public cache-provider lifecycle; the
+  next non-audit prompt releases them after it runs. Explicit unload requests
+  and Core's memory management are not overridden.
+- The connected VAE is decoded in place without entering Core's model loader
+  when it is already on its decode device, including partially loaded weights.
+  A VAE that is not on its device is loaded only when free memory covers its
+  off-device weights with Core's 110% weight reserve plus the decode
+  workspace; otherwise, and on decode OOM, the audit stops without loading or
+  unloading models. The managed decode fallback that could evict models is
+  removed.
 
 - Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
   streams' independent normalization, AdaLN, residual and MLP operations in
@@ -203,9 +242,7 @@ The existing `measure` selector controls the eight additional FFT trajectory
 fits; ordinary runs retain the overlap and neighbouring-seam receipts.
 Sampling, exact-prefix ownership, attention policy and RNG are unchanged.
 
----
-
-# Unreleased: target-query non-video key measure
+## Target-query non-video key measure
 
 Adds `target_query_sink_measure` to the diagnostic node's existing
 `softmax_diagnostic` selector. In heterogeneous low/probe it scales conditioning
@@ -217,7 +254,7 @@ requires paired VDN/Sol capability and records completed execution. Numerical
 history includes the selector. Normal remains the default; rendered acceptance
 and GPU timing remain empirical. See `docs/USAGE.md` for scope and compatibility.
 
-# Unreleased: local target-band decoder audit
+## Local target-band decoder audit
 
 Add **MiniMax H3 Local Boundary Audit**, an offline ComfyUI node for saved
 target-band evidence. It uses the connected production video VAE to replay

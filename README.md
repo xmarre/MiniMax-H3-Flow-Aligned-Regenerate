@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For Continuum exact-prefix continuation with VDN-H3-Plus, the production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**. It supports the selected ComfyUI attention backend; Sol-H3 attention is optional. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
+For Continuum exact-prefix continuation with VDN-H3-Plus, the production path is **MiniMax H3 Partitioned Exact-Prefix Handoff** with `spatial_stage_control=progressive_uniform_source` (the default for new nodes; see [Recommended continuation](#recommended-continuation-one-uniform-source-trajectory)). It supports the selected ComfyUI attention backend; Sol-H3 attention is optional. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -26,7 +26,7 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget target-grid profile (`same_grid_target_control`, exact audio/video ownership, `main_then_shadow`, paired-prefix checks, the suffix DC bridge, the target-band width, and the current overlap/provenance values);
+- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget recommended profile (`progressive_uniform_source`, exact audio/video ownership, `main_then_shadow`, `frame_gauge_repair=false`, `suffix_dc_bridge=false`, the unused target-band width, and the current overlap/provenance values);
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
@@ -65,57 +65,132 @@ audio_handoff_source             = main_partitioned
 av_handoff_source                = main_partitioned
 guidance_trajectory_source       = main_exact_partitioned
 low_probe_execution_source       = main_then_shadow
-frame_gauge_repair               = true
+frame_gauge_repair               = false
 frame_gauge_residual_mode        = off
 provider_boundary_stabilization  = soft_support_v1
 capture_boundary_witness         = false
 vdn_temporal_carrier_policy      = native_grid_then_map_v1
 handoff_transfer_control         = learned_3d
-spatial_stage_control            = same_grid_target_control
+spatial_stage_control            = progressive_uniform_source
 softmax_diagnostic               = normal
 video_guided_overlap_tokens      = 6
-suffix_dc_bridge                 = true
+suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
 ```
 
-Flow defaults exact-prefix continuation to `same_grid_target_control`: low/probe
-and high operate at the target video resolution, with identity clean/residual
-handoff and exact carried audio/video ownership. The first all-generated chunk
-retains progressive learned transfer. The learned-upscaler provider therefore
-remains connected. The selected profile has reported visual/audio acceptance;
-heterogeneous continuation remains an opt-in path with unresolved boundary
-quality. This does not establish acceptance for every model, scene or seed.
+**Workflows saved with an older release keep their stored widget values.** To
+move such a workflow to the recommended profile, set
+`spatial_stage_control=progressive_uniform_source`, `frame_gauge_repair=false`
+and `suffix_dc_bridge=false`, and leave the other values above unchanged.
+
+### Recommended continuation: one uniform source trajectory
+
+`spatial_stage_control=progressive_uniform_source` is the recommended
+continuation mode. Low/probe evaluates one full-duration clip on the configured
+reduced grid. Every generated frame and all conditioning rows share that clip's
+attention context, so there is no separately generated target-grid band and no
+band/tail splice. At the handoff the learned 3D upscaler transfers the whole
+generated trajectory to the target grid. The caller's exact target-grid prefix
+is then restored, and high refinement runs on the target grid with the original
+exact-prefix contract. The returned latent carries the exact prefix.
+
+Low/probe sees the physical-lattice projection of the protected prefix on the
+reduced grid, not exact target-grid prefix attention. The handoff re-enters the
+target grid through the same learned transfer as the first chunk, and high
+refinement re-attends to the exact prefix.
+
+In the accepted reference continuation (default profile, native attention
+backend), the join had no visible discontinuity. Measured final luminance
+changed by less than 0.001 across the join. Continuation sampling took 1.23
+times the first chunk's sampling time, and Spectrum forecast both the low and
+the high stage. See [validation: run 01737](docs/validation/CONTINUATION_01737_AUDIT_LIFETIME.md).
+This is acceptance of one continuation, not a guarantee for every model,
+scene, seed or hardware. Sol attention selection uses the same equal-grid
+partition and history contract and is covered by CPU contract tests; it has
+no separate rendered acceptance.
+
+Requirements, all satisfied by the defaults above:
+
+- `handoff_transfer_control=learned_3d` with the companion learned 3D upscaler
+  connected;
+- `prefix_transformer_context=exact_target_partitioned`;
+- the main handoff, AV and guidance sources and
+  `low_probe_execution_source=main_then_shadow`;
+- `vdn_linear_diagnostic=normal`, `softmax_diagnostic=normal` and
+  `vdn_temporal_carrier_policy=native_grid_then_map_v1`;
+- `target_band_context=mixed_grid` and
+  `target_band_handoff_state=renoise_clean` (these selectors apply only to the
+  target-band mode). `target_band_tokens` is unused.
+
+Unsupported combinations stop before sampling instead of falling back to a
+different mode.
+
+`capture_boundary_witness=true` or `frame_gauge_residual_mode=measure` saves the
+real reduced-grid source operand and the target-grid stage operands for Local
+Boundary Audit without changing sampler output. The bundle records zero band
+tokens and identifies the source as directly decodable native video. Capture
+adds CPU copies and disk I/O; it is off by default.
+
+### Ownership, audio and overlap semantics
 
 The stored audio width of 16 has zero effective overlap under
 `sampler_mask_exact_timestep`, which aliases coherent `exact_mask`.
 The stored video width of 6 is provenance-only and does not release protected
 video tokens. Both stored overlap widths accept any non-negative integer;
-comparison modes cap effective overlap at the available carried prefix. `main_then_shadow` executes a shadow only when a shadow source
-is selected; the default main sources do not add duplicate sampler lifetimes.
+comparison modes cap effective overlap at the available carried prefix.
+`main_then_shadow` executes a shadow only when a shadow source is selected; the
+default main sources do not add duplicate sampler lifetimes.
 
-`frame_gauge_repair=true` enables paired-prefix handoff checks; the same-grid
-path resolves to identity. `soft_support_v1` records a bounded post-high
-observation while its historical pre-high correction remains disabled. Neither
-selector authorizes a decoded output warp. Diagnostic tensor export requires
+`frame_gauge_repair=true` enables paired-prefix handoff checks; it is off in the
+recommended profile. `soft_support_v1` records a bounded post-high observation
+while its historical pre-high correction remains disabled. Neither selector
+authorizes a decoded output warp. Diagnostic tensor export requires
 `frame_gauge_residual_mode=measure`; it remains off by default.
 
-Audio is never spatially resized. It is jointly predicted with video, so changing
-the video grid can affect generated audio. On the default same-grid path,
-source-carrier and target audio spatial positions coincide. Native masks remain
-coherent throughout sampling and exact carried audio/video values are restored
+Audio is never spatially resized. It is jointly predicted with video, so the
+video grid used in low/probe can affect generated audio. Native masks remain
+coherent throughout sampling, and exact carried audio/video values are restored
 at output.
 
-The learned 3D upscaler input remains required for the first all-generated chunk.
-Keep `handoff_transfer_control=learned_3d` and
-`vdn_temporal_carrier_policy=native_grid_then_map_v1`. Selecting shadow sources
-or heterogeneous controls can change work and output; their results are not
-qualified by the target-grid profile's acceptance. Target-grid low/probe also
-has more spatial work than a reduced-grid stage. Measure continuation timing
-separately from loading and first-chunk work.
+The first all-generated chunk of a Continuum session retains progressive
+learned transfer and is unaffected by `spatial_stage_control`. Measure
+continuation timing separately from loading and first-chunk work.
 
-### Target-band continuation (opt-in)
+### Attention backends
+
+Partitioned continuation without Sol uses VDN partitioned attention provider
+API 1 and the selected ComfyUI attention backend. The protected geometry,
+restricted window K/V unions, key measure and learned VDN branch are preserved.
+Equal-grid calls (uniform-source low/probe and every target-grid high stage)
+use the backend's own sparse selection for every local query group, as in a
+first chunk. Mixed-grid low/probe in the retained comparison modes keeps a
+dense boundary group; non-unit measures there are additive key masks with
+O(K/V rows) storage. Core BSA's chunked H3 producer is bypassed for partitioned
+calls because it cannot consume that mask or VDN's learned branch. Its regular
+attention override remains in the dispatch chain; weighted, mapped, rectangular
+and forced-dense calls use its native dense fallback. Selecting Sol retains its
+request-owned sparse path.
+
+Non-Sol stages publish Flow's own Spectrum attention-history identity, so
+Spectrum forecasting stays active during continuation with any backend. Sol
+stages keep Sol's history provider.
+
+## Other continuation modes (retained)
+
+The following `spatial_stage_control` values remain available for existing
+workflows and controlled comparisons. They are not the recommended path and may
+be retired in a later release after a separate review.
+
+- `same_grid_target_control` (the default of v0.3.9 and v0.3.10): low/probe and
+  high operate at the target video resolution with identity clean/residual
+  handoff. It costs more low/probe time than a reduced-grid stage.
+- `progressive_low_to_high`: low/probe runs a reduced-grid suffix next to the
+  exact target-grid prefix, with learned transfer of the suffix.
+- `progressive_target_band`: described below, with its comparison controls.
+
+### Target-band continuation
 
 `spatial_stage_control=progressive_target_band` is an experimental alternative
 for exact-prefix continuations. The protected prefix and the first
@@ -155,18 +230,6 @@ guidance sources.
 It requires VDN-H3-Plus transport that accepts a target-grid native partition
 carrier. When Sol attention is selected, its history contract must also accept
 that carrier. Unsupported combinations fail before sampling.
-
-Partitioned continuation without Sol uses VDN partitioned attention provider
-API 1 and the selected ComfyUI attention backend. The protected geometry,
-restricted window K/V unions, key measure and learned VDN branch are preserved.
-Non-unit measures are additive key masks with O(K/V rows) storage. Core BSA's
-chunked H3 producer is bypassed for partitioned calls because it cannot consume
-that mask or VDN's learned branch. Its regular attention override remains in the
-dispatch chain; weighted, mapped, rectangular and forced-dense calls use its
-native dense fallback. Sparse eligibility on ordinary first chunks is unchanged.
-These dense calls can cost more time and memory. Spectrum may run actual-only
-when it cannot verify the composed backend's history. GPU quality, timing and
-memory remain empirical. Selecting Sol retains its request-owned sparse path.
 
 With `capture_boundary_witness=true`, target-band continuation saves CPU copies
 of the low/probe carrier, uniform reduced-grid provider input, provider output,
@@ -214,38 +277,7 @@ it for production output. The low/probe saving depends on the reduced-grid size:
 a larger `source_scale` (or larger explicit source size) leaves less to save, and
 the video-row reduction is not a wall-time measurement.
 
-#### One uniform source trajectory (opt-in)
-
-`spatial_stage_control=progressive_uniform_source` evaluates one full-duration
-reduced-grid clip in low/probe. Every generated frame and all conditioning rows
-share that clip's attention context. The learned provider transfers the entire
-generated trajectory to the target grid; there is no separately authored
-target-grid band or band/tail splice. The caller's exact target-grid prefix is
-restored before high refinement and in the returned latent. High refinement
-retains its original target-grid contract.
-
-Low/probe sees the physical-lattice projection of the protected prefix on the
-source grid. This is an explicit context change, not exact target-grid prefix
-attention. Reduced prefix detail and the learned transfer can still affect the
-join. Rendered tone, frame alignment, audio, GPU timing and memory have not been
-qualified. The single stream removes duplicated conditioning and head work;
-fewer hidden rows are not a measured wall-time improvement.
-
-Use `learned_3d` transfer, main handoff/guidance sources, normal VDN/softmax
-diagnostics and `native_grid_then_map_v1`. Unsupported requests stop before
-sampling instead of falling back to the target-grid mode. Keep
-`prefix_transformer_context=exact_target_partitioned` and reset the inapplicable
-band selectors to `target_band_context=mixed_grid` and
-`target_band_handoff_state=renoise_clean`. `target_band_tokens` is unused in this
-mode. Both Sol and the native backend use the equal-grid partition/history
-contract. Existing mode defaults and target-band behavior are unchanged.
-
-`capture_boundary_witness=true` or `frame_gauge_residual_mode=measure` saves the
-real uniform source operand and target-grid stage operands for Local Boundary
-Audit, without changing sampler output. The bundle records zero band tokens
-and identifies the source as directly decodable native video.
-
-#### Target-band comparison controls (opt-in)
+#### Target-band comparison controls
 
 Two selectors apply only to `progressive_target_band`. Both default to the
 behaviour described above and publish no option leaf at their defaults. Either
@@ -343,11 +375,12 @@ their previous execution paths.
 ### Suffix DC bridge
 
 `suffix_dc_bridge` controls the one-token channel-mean bridge on learned-transfer
-continuations. When enabled (the default and historical behaviour), the first
+continuations. It is off in the recommended profile. When enabled, the first
 transferred generated token receives the per-channel spatial-mean offset that the
 learned transfer produced on its carried context. When disabled, that token stays
 exactly as transferred, and transfer receipts report the bridge as disabled.
-Same-grid continuation measures a zero offset either way.
+Same-grid continuation measures a zero offset either way. Workflows saved with
+an older release store `true`, the previous default.
 
 ## Continuum Decode Context
 
@@ -567,7 +600,7 @@ The paths with the strongest real-media support include:
 
 - two-pass flow-aligned guidance with the learned upscale/refine workflow;
 - Progressive Handoff for unprotected calls;
-- Partitioned exact-prefix continuation with the target-grid default profile;
+- Partitioned exact-prefix continuation with the `progressive_uniform_source` default profile;
 - Target Input's conservative exact-prefix target-grid fallback with its separate four-tick audio overlap.
 
 Historical Mixed-Grid validation remains evidence for that retired architecture rather than a current recommendation. The suffix DC bridge removed its brief tone/flash boundary, and its later framing work addressed unequal protected-prefix versus suffix attention sampling measure. The source-space affine/trajectory correction family remains retired because finite corrections only moved the discontinuity to the corrected-to-untouched transition.
@@ -603,10 +636,10 @@ Per-version details are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 | Component | Release | Included PRs |
 | --- | --- | --- |
-| Flow-Aligned Regenerate | [v0.3.10](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.10) | [#96](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/96) |
-| Sol-H3 | [v0.1.9](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.9) | [#39](https://github.com/xmarre/ComfyUI-Sol-H3/pull/39) |
-| VDN-H3-Plus | [v1.5.8](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.8) | [#38](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/38) |
-| H3 Continuum-Plus | [v3.4.6](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.6) | [#39](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/39), [#40](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/40) |
+| Flow-Aligned Regenerate | [v0.3.11](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.11) | [#97](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/97) |
+| Sol-H3 | [v0.1.10](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.10) | [#40](https://github.com/xmarre/ComfyUI-Sol-H3/pull/40) |
+| VDN-H3-Plus | [v1.5.9](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.9) | [#39](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/39), [#40](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/40) |
+| H3 Continuum-Plus | [v3.4.6](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.6) | unchanged |
 | Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | unchanged |
 
 [Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)

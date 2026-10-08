@@ -1,7 +1,7 @@
 {
   "schema_version": 6,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Canonical v0.3.10 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
+  "purpose": "Canonical v0.3.11 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
   "placement": {
     "chain": [
       "DiffAid",
