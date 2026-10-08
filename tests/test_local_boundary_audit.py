@@ -523,6 +523,7 @@ def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path, d
     import sys
 
     directory, _manifest, _video = bundle
+    monkeypatch.setattr(audit, "_AUDIT_MODEL_OWNERS", SimpleNamespace(retain=lambda: None))
     output = tmp_path / "output"
     monkeypatch.setitem(sys.modules, "folder_paths", SimpleNamespace(get_output_directory=lambda: str(output)))
     monkeypatch.setitem(sys.modules, "comfy", SimpleNamespace())
@@ -867,7 +868,7 @@ def test_audit_loads_a_nonresident_vae_only_into_free_memory(monkeypatch, state,
         vae.patcher.current_loaded_device = lambda: torch.device("cuda:0")
     monkeypatch.setattr(management, "minimum_inference_memory", lambda: 2048)
     monkeypatch.setattr(management, "extra_reserved_memory", lambda: 0)
-    monkeypatch.setattr(management, "get_free_memory", lambda device: (1024 + 4096) if fits else 4096)
+    monkeypatch.setattr(management, "get_free_memory", lambda device: (math.ceil(1024 * 1.1) + 4096) if fits else 4096)
     requests = []
     monkeypatch.setattr(
         management,
@@ -885,3 +886,21 @@ def test_audit_loads_a_nonresident_vae_only_into_free_memory(monkeypatch, state,
             audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
         assert requests == []
     assert vae.managed_calls == 0
+
+
+@pytest.mark.parametrize("other_device", [False, True])
+def test_audit_admission_accounts_for_core_weight_reserve_and_device(monkeypatch, other_device):
+    pytest.importorskip("comfy.cli_args").args.cpu = True
+    management = pytest.importorskip("comfy.model_management")
+    vae = ManagedVAE()
+    vae.patcher.loaded_size = lambda: 1024 if other_device else 0
+    if other_device:
+        vae.patcher.current_loaded_device = lambda: torch.device("cuda:0")
+    vae.memory_used_decode = lambda shape, dtype: 4096
+    monkeypatch.setattr(management, "loaded_models", lambda: [])
+    monkeypatch.setattr(management, "minimum_inference_memory", lambda: 2048)
+    monkeypatch.setattr(management, "extra_reserved_memory", lambda: 0)
+    monkeypatch.setattr(management, "get_free_memory", lambda device: 1024 + 4096)
+    monkeypatch.setattr(management, "load_models_gpu", lambda *a, **kw: pytest.fail("insufficient admission budget"))
+    with pytest.raises(RuntimeError, match="without unloading other models"):
+        audit._resident_decode(vae, torch.zeros(1, 24, 7, 2, 3))

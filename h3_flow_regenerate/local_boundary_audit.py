@@ -34,6 +34,51 @@ DETAIL_REGIONS = ("off", "upper_left")
 UNIFORM_SOURCE_STAGE = "progressive_uniform_source"
 
 
+class _AuditModelOwners:
+    """Keep weakly registered patchers alive across diagnostic cache pruning.
+
+    Core evaluates IS_CHANGED before pruning the preceding workflow's owners.
+    Its public cache-provider lifecycle releases our replacement owners after
+    the next non-audit prompt. Explicit unload and memory admission still work.
+    This provider stores no cached outputs and does not change Core functions.
+    """
+
+    def __init__(self):
+        self.models = ()
+        self.claimed = False
+        self.registered = False
+
+    def retain(self):
+        import comfy.model_management as model_management
+        from comfy_execution.cache_provider import register_cache_provider
+
+        # Take new owners before dropping the preceding audit's owners.
+        self.models = tuple(model_management.loaded_models())
+        self.claimed = True
+        if not self.registered:
+            register_cache_provider(self)
+            self.registered = True
+
+    def on_prompt_start(self, prompt_id):
+        self.claimed = False
+
+    def on_prompt_end(self, prompt_id):
+        if not self.claimed:
+            self.models = ()
+
+    def should_cache(self, context, value=None):
+        return False
+
+    async def on_lookup(self, context):
+        return None
+
+    async def on_store(self, context, value):
+        pass
+
+
+_AUDIT_MODEL_OWNERS = _AuditModelOwners()
+
+
 def replay_plan(metadata, join_frame):
     window = metadata["window"]
     prefix, temporal = window["prefix_t"], window["temporal"]
@@ -368,7 +413,7 @@ def geometry_comparison(reference, candidate, frame_labels):
 
 
 def _resident_decode(vae, samples):
-    """Decode with the connected VAE without ever evicting another model.
+    """Reuse the connected VAE and avoid managed decode's workspace admission.
 
     ``VAE.decode`` and even ``load_models_gpu(memory_required=0)`` can unload
     unrelated models to reserve workspace. A VAE already on its decode device is
@@ -383,17 +428,22 @@ def _resident_decode(vae, samples):
         patcher.current_loaded_device() == vae.device
     )
     if not resident:
-        missing = max(0, int(patcher.model_size()) - int(patcher.loaded_size()))
+        missing = int(patcher.model_size())
+        if patcher.current_loaded_device() == vae.device:
+            missing = max(0, missing - int(patcher.loaded_size()))
         workspace = int(vae.memory_used_decode(samples.shape, vae.vae_dtype))
         reserve = max(
             int(model_management.minimum_inference_memory()),
             workspace + int(model_management.extra_reserved_memory()),
         )
+        # Core reserves 110% of missing device weights during admission, not
+        # just their raw size. Off-device weights count as entirely missing.
+        required = math.ceil(missing * 1.1) + reserve
         free = int(model_management.get_free_memory(vae.device))
-        if free < missing + reserve:
+        if free < required:
             raise RuntimeError(
                 "Local Boundary Audit requires the connected VAE to be resident, or enough free memory to load it "
-                f"without unloading other models ({(missing + reserve) / 2**30:.2f} GiB needed, "
+                f"without unloading other models ({required / 2**30:.2f} GiB needed, "
                 f"{free / 2**30:.2f} GiB free)."
             )
         # Free memory already covers the weights and the workspace, so ComfyUI's
@@ -748,7 +798,7 @@ class H3FlowLocalBoundaryAudit:
     DESCRIPTION = (
         "Replay saved continuation operands across native VAE windows at the protected-prefix join. "
         "Supports target-band and uniform-source bundles. Use the resident production video VAE "
-        "and the boundary bundle directory. Resident models are never unloaded for the audit; "
+        "and the boundary bundle directory. Preserves loaded model owners through prompt cleanup; "
         "insufficient decode memory stops the audit. "
         "Linux paths and verified local WSL UNC paths are accepted. "
         "Set the assembled chunk-join frame, or zero for relative frame labels. "
@@ -757,9 +807,12 @@ class H3FlowLocalBoundaryAudit:
 
     @classmethod
     def IS_CHANGED(cls, **_kwargs):
+        _AUDIT_MODEL_OWNERS.retain()
         return float("nan")
 
     def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity", detail_region="off"):
+        # Also cover execution with intermediate caching disabled (no IS_CHANGED).
+        _AUDIT_MODEL_OWNERS.retain()
         import folder_paths
         from comfy.latent_formats import MiniMaxH3Video
 

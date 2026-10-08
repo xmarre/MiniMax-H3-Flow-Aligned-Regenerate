@@ -456,10 +456,14 @@ For Continuum `refine_state`, use **MiniMax H3 Flow-Aligned Refine State**.
 **MiniMax H3 Local Boundary Audit** replays saved target-band or uniform-source
 bundles across native temporal decoder windows spanning the continuation join.
 Connect the same resident video VAE instance and settings used for production.
-The node does not enter ComfyUI's model loader or memory admission path, reload
-the VAE, or retry through the model-unloading decode path after OOM. If the VAE
-is not fully resident on its decode device, or decode memory is insufficient,
-the audit stops with an error and preserves model residency. Set
+The node reuses a VAE already on its decode device, including partially loaded
+weights; it does not reload it or retry managed decode after OOM. It keeps
+strong owners of already loaded model patchers before ComfyUI prunes the previous
+workflow's cache, preserving them through audit completion and idle cleanup.
+Those owners are released after the next non-audit prompt. Explicit unload and
+ComfyUI's normal memory management remain available. A VAE on another device is
+admitted only if free memory covers its weights and decode workspace; insufficient
+decode memory stops the audit. Set
 `bundle_path` to the existing exported directory containing `manifest.json` and
 the full binary operands. Set `chunk_join_frame` to the assembled output's
 first new frame, or leave it at zero for frame labels relative to that join.
