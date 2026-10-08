@@ -841,7 +841,7 @@ def _domain_uniform_forward(
                     stage_view=stream.view,
                     domain_stream=stream.leaf,
                 )
-                block_extra = partitioned_block_extra(extra)
+                block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
                 output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
                 result = output["img"]
                 if result.shape != view.shape:
@@ -1237,7 +1237,7 @@ def partitioned_diffusion_wrapper(
                 runtime=runtime,
                 block_index=layer,
             )
-            block_extra = partitioned_block_extra(extra)
+            block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
             output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:

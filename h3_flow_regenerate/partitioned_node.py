@@ -10,6 +10,7 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
+from .partitioned_attention import sol_attention_selected
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
@@ -82,8 +83,8 @@ class H3PartitionedExactPrefixHandoff:
     DESCRIPTION = (
         "Experimental exact-prefix progressive continuation. The protected prefix stays on its "
         "target spatial grid during low/probe transformer attention while generated suffix rows "
-        "stay on the lower source grid. Requires the matching Sol-H3 partitioned backend and "
-        "VDN-H3-Plus partitioned transport."
+        "stay on the lower source grid. Uses the selected attention backend with "
+        "VDN-H3-Plus partitioned transport; Sol-H3 attention is optional."
     )
 
     def patch(
@@ -110,16 +111,23 @@ class H3PartitionedExactPrefixHandoff:
         # Companion capabilities are imported lazily so ordinary Flow users do
         # not acquire cross-custom-node requirements at Comfy startup.
         try:
-            from sol_h3.partitioned_history import install_partitioned_history_bridge
-            from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
             from vdn_h3.partitioned_runtime import install_partitioned_external_sequence_bridge
             from vdn_h3.partitioned_sequence import VDN_PARTITIONED_SEQUENCE_API as vdn_api
         except ImportError as exc:
             raise RuntimeError(
-                "partitioned exact-prefix continuation requires the matching Sol-H3 and VDN-H3-Plus releases"
+                "partitioned exact-prefix continuation requires matching VDN-H3-Plus partitioned transport"
             ) from exc
-        if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
-            raise RuntimeError("Sol-H3 partitioned backend did not publish a valid ABI identity")
+        sol_abi = None
+        if sol_attention_selected(model.model_options.get("transformer_options", {})):
+            try:
+                from sol_h3.partitioned_history import install_partitioned_history_bridge
+                from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
+            except ImportError as exc:
+                raise RuntimeError("selected Sol-H3 attention requires its partitioned backend") from exc
+            if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
+                raise RuntimeError("Sol-H3 partitioned backend did not publish a valid ABI identity")
+            sol_abi = PARTITIONED_REQUEST_ABI
+            install_partitioned_history_bridge()
         if int(vdn_api) != VDN_PARTITIONED_SEQUENCE_API:
             raise RuntimeError("Flow and VDN partitioned external-sequence APIs do not match")
 
@@ -176,7 +184,6 @@ class H3PartitionedExactPrefixHandoff:
         # Extend only this cloned model's VDN object patches. Ordinary VDN calls
         # still delegate byte-for-byte to the released forward; only the explicit
         # partition contract selects heterogeneous grouped execution.
-        install_partitioned_history_bridge()
         install_partitioned_external_sequence_bridge(patched)
 
         import comfy.patcher_extension
@@ -202,7 +209,7 @@ class H3PartitionedExactPrefixHandoff:
         )
         metrics.event(
             "partitioned_exact_prefix_installed",
-            sol_abi=PARTITIONED_REQUEST_ABI,
+            sol_abi=sol_abi,
             vdn_external_sequence_api=int(vdn_api),
             scheduler_contract="partitioned_exact_prefix_v1",
             deprecated_mixed_grid_contract_active=False,
@@ -462,14 +469,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
                 "tooltip": (
-                    "normal preserves sparse Sol selection for generated-suffix query groups. "
+                    "normal uses the selected attention backend for generated-suffix query groups. "
                     f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX} forces only those same gathered "
-                    "suffix groups through Sol's weighted dense path while preserving the identical "
+                    "suffix groups through the weighted dense path while preserving the identical "
                     "Q/K/V domain, target-prefix bias, grouped ownership and VDN linear setting. "
                     f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK} extends the target-grid query "
                     "key bias over text/reference/audio rows in low/probe. Reduced-grid and global "
                     "queries, gathered keys, linear measure policy and high-stage policy are preserved. "
-                    "Requires paired VDN/Sol support. Diagnostic only."
+                    "Requires paired VDN support and, when selected, Sol support. Diagnostic only."
                 ),
             },
         )
@@ -552,7 +559,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
-        "Sol-H3/VDN-H3-Plus stack. Continuation defaults to target-grid low/probe and identity "
+        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to target-grid "
+        "low/probe and identity "
         "handoff; all-generated first chunks retain learned progressive transfer. Preserves "
         "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."

@@ -1121,6 +1121,7 @@ def _validate_partitioned_vdn_compat(
     required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     required_native_carrier: str = PARTITIONED_NATIVE_CARRIER_SOURCE,
     required_domain_stream: bool = False,
+    required_attention_provider: bool = False,
 ) -> str | None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
@@ -1144,6 +1145,10 @@ def _validate_partitioned_vdn_compat(
         if not getattr(owner, "_vdn_forward", False):
             continue
         matched += 1
+        if required_attention_provider and getattr(owner, "_vdn_partitioned_attention_provider_api", 0) != 1:
+            raise PartitionedPreflightUnsupported(
+                "selected attention backend requires VDN partitioned attention provider API 1; update the VDN overlay"
+            )
         if boundary_witness_requested and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
             raise RuntimeError("requested boundary witness requires paired VDN witness API 1 before sampling")
         if int(getattr(owner, "_vdn_partitioned_boundary_query_api", 0)) != VDN_PARTITIONED_BOUNDARY_QUERY_API:
@@ -1961,6 +1966,7 @@ def _preflight(
         if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
         else PARTITIONED_NATIVE_CARRIER_SOURCE
     )
+    sol_selected = _validate_partitioned_sol_compat(guider)
     _validate_partitioned_vdn_compat(
         guider.model_patcher,
         required_linear_diagnostic=required_vdn_linear_diagnostic,
@@ -1968,9 +1974,12 @@ def _preflight(
         required_softmax_diagnostic=required_softmax_diagnostic,
         required_native_carrier=native_carrier,
         required_domain_stream=target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        required_attention_provider=not sol_selected,
     )
-    sol_selected = _validate_partitioned_sol_compat(guider)
     if sol_selected:
+        from sol_h3.partitioned_history import install_partitioned_history_bridge
+
+        install_partitioned_history_bridge()
         _validate_partitioned_sol_native_carrier(native_carrier)
     else:
         _validate_partitioned_native_provider()
