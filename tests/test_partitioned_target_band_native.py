@@ -166,6 +166,7 @@ def _sol_forward(dm, wrappers, video, audio, context, timestep, options, mask):
     from sol_h3.runtime import _FORWARD, _REQUEST, Request
 
     state = Request(Config(backend="sol"))
+    options = {"sol_h3_runtime_v1": state.config.metadata(), **options}
     request = _REQUEST.set(state)
     execution = _FORWARD.set((dm, state, 0, set(), []))
     try:

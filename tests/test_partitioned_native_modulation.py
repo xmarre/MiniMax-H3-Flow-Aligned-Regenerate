@@ -200,7 +200,14 @@ def test_same_grid_probe_and_high_match_through_real_core_blocks_and_sol(
                     context,
                     # Core writes its layout/block index to its per-call options.
                     # Keep those native writes separate from the stage owner.
-                    transformer_options={} if native else guider.model_options["transformer_options"],
+                    transformer_options=(
+                        {}
+                        if native
+                        else {
+                            "sol_h3_runtime_v1": state.config.metadata(),
+                            **guider.model_options["transformer_options"],
+                        }
+                    ),
                     minimax_payload=payload,
                     denoise_mask=mask,
                 )
