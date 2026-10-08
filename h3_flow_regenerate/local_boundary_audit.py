@@ -352,9 +352,39 @@ def geometry_comparison(reference, candidate, frame_labels):
     }
 
 
-def _decode_owned_pixels(vae, latent, process_out, expected_frames):
+def _resident_decode(vae, samples):
+    """Decode with the connected VAE without reserving a whole-decode workspace.
+
+    ``VAE.decode`` asks ComfyUI to free its full decode estimate, which unloads
+    other resident models such as the diffusion model. The audit only needs the
+    VAE weights resident: ComfyUI keeps an already loaded VAE in place and evicts
+    nothing else unless the weights themselves do not fit. A decode that runs out
+    of memory falls back to the regular managed decode.
+    """
+    import comfy.model_management as model_management
+
+    model_management.load_models_gpu([vae.patcher], memory_required=0, force_full_load=bool(vae.disable_offload))
+    try:
+        with torch.inference_mode():
+            pixels = vae.first_stage_model.decode(samples.to(device=vae.device, dtype=vae.vae_dtype))
+            pixels = pixels.to(device=vae.output_device, dtype=vae.vae_output_dtype(), copy=True)
+            vae.process_output(pixels)
+        return pixels.movedim(1, -1)
+    except getattr(model_management, "OOM_EXCEPTION", torch.cuda.OutOfMemoryError):
+        pass
+    LOG.info("H3 local boundary audit: resident VAE decode ran out of memory; using managed decode")
+    model_management.soft_empty_cache()
     with torch.inference_mode():
-        decoded = vae.decode(process_out(latent.clone()))
+        return vae.decode(samples)
+
+
+def _decode_owned_pixels(vae, latent, process_out, expected_frames):
+    samples = process_out(latent.clone())
+    if all(hasattr(vae, name) for name in ("patcher", "device", "vae_dtype", "output_device", "process_output")):
+        decoded = _resident_decode(vae, samples)
+    else:
+        with torch.inference_mode():
+            decoded = vae.decode(samples)
     expected_shape = (1, expected_frames, latent.shape[-2] * 16, latent.shape[-1] * 16, 3)
     if tuple(decoded.shape) != expected_shape or not bool(torch.isfinite(decoded).all()):
         raise ValueError("connected VAE returned unexpected native temporal-window pixels")

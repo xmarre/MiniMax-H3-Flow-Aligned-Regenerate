@@ -749,3 +749,59 @@ def test_two_window_crop_matches_production_native_temporal_decode_at_band_edge(
     finalized_blend = vae.blend(standalone_left[:, :, 17:22], standalone_right[:, :, :5], 5, dim=2)
     assert bool((native_blend[:, :, 18] == 0).all())
     assert bool((finalized_blend[:, :, 1] == 0.2).all())
+
+
+class ManagedVAE:
+    """ComfyUI VAE surface: managed ``decode`` versus the resident first-stage model."""
+
+    def __init__(self, oom=False):
+        self.patcher = object()
+        self.device = torch.device("cpu")
+        self.output_device = torch.device("cpu")
+        self.vae_dtype = torch.float32
+        self.disable_offload = False
+        self.managed_calls = 0
+        self.oom = oom
+        outer = self
+
+        class FirstStage:
+            def decode(self, z):
+                if outer.oom:
+                    raise torch.cuda.OutOfMemoryError("resident decode")
+                frames = (z.shape[2] - 2) // 5 * 17 + 5
+                return torch.full((1, 3, frames, z.shape[-2] * 16, z.shape[-1] * 16), 0.25)
+
+        self.first_stage_model = FirstStage()
+
+    def vae_output_dtype(self):
+        return torch.float32
+
+    def process_output(self, image):
+        return image
+
+    def decode(self, value):
+        self.managed_calls += 1
+        frames = (value.shape[2] - 2) // 5 * 17 + 5
+        return torch.zeros(1, frames, value.shape[-2] * 16, value.shape[-1] * 16, 3)
+
+
+@pytest.mark.parametrize("oom", [False, True])
+def test_audit_decode_keeps_other_models_resident(monkeypatch, oom):
+    pytest.importorskip("comfy.cli_args").args.cpu = True
+    model_management = pytest.importorskip("comfy.model_management")
+    requests = []
+    monkeypatch.setattr(
+        model_management,
+        "load_models_gpu",
+        lambda models, memory_required=0, **kwargs: requests.append((tuple(models), memory_required)),
+    )
+    monkeypatch.setattr(model_management, "soft_empty_cache", lambda *args, **kwargs: None)
+    vae = ManagedVAE(oom=oom)
+    latent = torch.zeros(1, 24, 7, 2, 3)
+    decoded = audit._decode_owned_pixels(vae, latent, lambda x: x, 22)
+    assert tuple(decoded.shape) == (1, 22, 32, 48, 3)
+    # Only the VAE weights are requested; no whole-decode workspace that would
+    # unload the diffusion model or other resident models.
+    assert requests == [((vae.patcher,), 0)]
+    assert vae.managed_calls == (1 if oom else 0)
+    assert float(decoded.max()) == (0.0 if oom else 0.25)

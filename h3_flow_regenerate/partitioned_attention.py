@@ -153,13 +153,17 @@ class PartitionedNativeHistoryPolicy:
 
 
 def _record_history_receipt(options) -> None:
-    from .partitioned_stage import PARTITIONED_STAGE_KEY
+    from .partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStageStreamView
 
     sink = options.get(ATTENTION_BACKEND_RECEIPTS_KEY)
     policy = (options.get(ATTENTION_BACKEND_HISTORY_KEY) or {}).get(PARTITIONED_NATIVE_HISTORY_NAME)
     if not isinstance(sink, list) or not isinstance(policy, PartitionedNativeHistoryPolicy):
         return
-    if options.get(PARTITIONED_STAGE_KEY) is not policy._runtime:
+    stage = options.get(PARTITIONED_STAGE_KEY)
+    # Domain-uniform streams publish a read-only per-stream view of the stage.
+    if isinstance(stage, PartitionedStageStreamView):
+        stage = object.__getattribute__(stage, "_owner")
+    if stage is not policy._runtime:
         sink.append(("h3_flow_partitioned_native_attention_foreign_stage",))
         return
     receipt = policy.receipt()

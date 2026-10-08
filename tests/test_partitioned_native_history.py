@@ -119,3 +119,32 @@ def test_spectrum_uses_flow_history_instead_of_core_bsa_audit():
         identity, safe = backend_history.preflight(options, _layout(), SimpleNamespace(dtype=torch.bfloat16))
         assert safe is True
         assert dict(identity)[PARTITIONED_NATIVE_HISTORY_NAME] is not None
+
+
+def test_domain_stream_views_report_the_owning_stage_receipt():
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    from h3_flow_regenerate.partitioned_stage import PartitionedStageStreamView
+
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+    options = guider.model_options["transformer_options"]
+    generator = torch.Generator().manual_seed(6)
+    q, k, v = (torch.randn(4, 2, 8, generator=generator) for _ in range(3))
+    with _flow_stage_contract(guider, "low"), _partitioned_stage_contract(guider, _plan(), H3FlowMetrics()):
+        policy = options[ATTENTION_BACKEND_HISTORY_KEY][PARTITIONED_NATIVE_HISTORY_NAME]
+        receipts = []
+        for stream, head in (("target", 1), ("source", 2)):
+            view = PartitionedStageStreamView(options[PARTITIONED_STAGE_KEY], stream=stream, attention_head_t=head)
+            call_partitioned_attention(
+                q,
+                k,
+                v,
+                terminal=None,
+                metrics=H3FlowMetrics(),
+                transformer_options={**options, PARTITIONED_STAGE_KEY: view, ATTENTION_BACKEND_RECEIPTS_KEY: receipts},
+                scale=8**-0.5,
+                prefix_k_range=None,
+                prefix_log_key_measure=0.0,
+            )
+        assert receipts == [policy.receipt()]
+        assert policy.accept_receipts(receipts)

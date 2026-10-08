@@ -7,6 +7,13 @@
   Without this identity Spectrum fell back to its Core BSA source audit, which
   does not recognize Flow's partitioned wrapper, and executed every forecast
   step as an actual model call. Sol stages keep Sol's history provider.
+  Domain-uniform streams report the receipt of their owning stage, so the
+  two-stream low/probe stage is forecastable as well.
+- Local Boundary Audit decodes with the connected VAE's weights only. It no
+  longer requests the whole-decode workspace through `VAE.decode`, which made
+  ComfyUI unload the diffusion model and other resident models; an already
+  loaded VAE stays in place. Running out of memory falls back to the managed
+  decode.
 
 - Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
   streams' independent normalization, AdaLN, residual and MLP operations in
