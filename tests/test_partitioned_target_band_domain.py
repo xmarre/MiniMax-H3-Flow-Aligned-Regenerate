@@ -654,7 +654,6 @@ def test_external_core_block_replacement_retains_independent_stream_invocations(
     assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == len(case.dm.blocks) - 1
 
 
-
 def test_replaced_core_forward_stays_on_independent_block_path(monkeypatch):
     """A model-level forward replacement must not inherit native Core fusion."""
     _sol(monkeypatch)
