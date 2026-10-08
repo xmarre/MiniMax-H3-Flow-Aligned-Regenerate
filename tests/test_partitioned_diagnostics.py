@@ -54,6 +54,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -187,7 +188,9 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["handoff_transfer_control"][0] == list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS)
     assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
     assert diagnostic["spatial_stage_control"][0] == list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS)
-    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["suffix_dc_bridge"][1]["default"] is False
     assert diagnostic["softmax_diagnostic"][0] == list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
     assert diagnostic["softmax_diagnostic"][1]["default"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
     assert diagnostic["video_guided_overlap_tokens"][0] == "INT"
@@ -202,7 +205,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
     )
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
-    assert diagnostic["frame_gauge_repair"][1]["default"] is True
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
     assert diagnostic["frame_gauge_residual_mode"][1]["default"] == "off"
     assert diagnostic["capture_boundary_witness"][1]["default"] is False
     assert diagnostic["vdn_temporal_carrier_policy"][0] == list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
@@ -299,7 +302,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
     transformer = options["transformer_options"]
     assert result is model and returned_metrics is metrics
     assert transformer["existing_owner"] is owner
-    assert captured["frame_gauge_repair"] is (not explicit_legacy)
+    assert captured["frame_gauge_repair"] is False
     assert captured["frame_gauge_residual_mode"] == "off"
     assert options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] == (4 if explicit_legacy else 16)
     assert options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] == (
@@ -314,7 +317,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
         None if explicit_legacy else PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
     )
     assert transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == (
-        None if explicit_legacy else PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        None if explicit_legacy else PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
     )
     assert options.get(PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY, 0) == (0 if explicit_legacy else 6)
 
@@ -603,6 +606,7 @@ def test_vdn_bypass_preflight_requires_boundary_query_capability_and_policy():
         _vdn_external_sequence_api=4,
         _vdn_partitioned_boundary_query_api=1,
         _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
         _vdn_partitioned_linear_diagnostic_api=1,
     )
     patcher.object_patches["diffusion_model.blocks.0.attn.forward"] = current
@@ -1478,6 +1482,7 @@ def test_source_carrier_audio_position_allows_linear_discriminator_arms():
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
         PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
+        PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
     ):
         _validate_audio_position_candidate_configuration(
             PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -1489,7 +1494,7 @@ def test_source_carrier_audio_position_allows_linear_discriminator_arms():
         _validate_audio_position_candidate_configuration(
             PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
             PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
-            PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE,
+            "unsupported_linear_mode",
         )
 
 
@@ -1925,3 +1930,118 @@ def test_dense_suffix_softmax_selector_is_default_absent_and_fail_closed_verifie
 
     with pytest.raises(ValueError, match="partitioned softmax diagnostic"):
         normalize_partitioned_softmax_diagnostic("invalid")
+
+
+def test_target_sink_selector_and_completed_work_verification():
+    mode = "target_query_sink_measure"
+    model = SimpleNamespace(model_options={"transformer_options": {}})
+    metrics = H3FlowMetrics()
+    apply_partitioned_diagnostic_controls(
+        model,
+        metrics,
+        vdn_linear_diagnostic="normal",
+        audio_guided_overlap_ticks=4,
+        softmax_diagnostic=mode,
+    )
+    assert model.model_options["transformer_options"][PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY] == mode
+    with pytest.raises(RuntimeError, match="no completed biased target-query work"):
+        _verify_partitioned_softmax_diagnostic(metrics, mode, calls_before=3, q_rows_before=7, kv_rows_before=9)
+    for suffix, value in [("calls", 4), ("q_rows", 10), ("kv_rows", 20)]:
+        metrics.increment("partitioned_vdn_target_sink_measure_" + suffix, value)
+    _verify_partitioned_softmax_diagnostic(metrics, mode, calls_before=3, q_rows_before=7, kv_rows_before=9)
+    receipt = metrics.events[-1].fields
+    assert receipt["target_query_calls"] == 1 and receipt["target_query_q_rows"] == 3
+    assert receipt["global_query_measure_unchanged"] and receipt["linear_measure_unchanged"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        apply_partitioned_diagnostic_controls(
+            model,
+            metrics,
+            vdn_linear_diagnostic="raw_token_measure",
+            audio_guided_overlap_ticks=4,
+            softmax_diagnostic=mode,
+        )
+
+
+def test_target_sink_requires_advertised_vdn_mode_before_sampling():
+    current = SimpleNamespace(
+        _vdn_forward=True,
+        _vdn_external_sequence_api=4,
+        _vdn_partitioned_boundary_query_api=1,
+        _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
+    )
+    current._vdn_partitioned_softmax_diagnostic_api = 1
+    current._vdn_partitioned_softmax_diagnostic_modes = ("normal", "dense_suffix_same_domain")
+    patcher = SimpleNamespace(object_patches={"diffusion_model.blocks.0.attn.forward": current})
+    with pytest.raises(PartitionedPreflightUnsupported, match="does not advertise that mode"):
+        _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
+    current._vdn_partitioned_softmax_diagnostic_modes += ("target_query_sink_measure",)
+    _validate_partitioned_vdn_compat(patcher, required_softmax_diagnostic="target_query_sink_measure")
+
+
+@pytest.mark.parametrize(
+    "selected",
+    [
+        None,
+        {PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY: "target_query_sink_measure"},
+        {"h3_flow_partitioned_target_band_handoff_state_v1": "carry_raw_band"},
+        {"h3_flow_partitioned_target_band_context_v1": "domain_uniform_v1"},
+        {"h3_flow_partitioned_spatial_stage_control_v1": "progressive_uniform_source"},
+    ],
+)
+def test_target_sink_outer_cannot_silently_fallback_and_clears_ownership(monkeypatch, selected):
+    monkeypatch.setenv(AUDIO_GUIDED_OVERLAP_ENV, "0")
+    video, audio = torch.randn(1, 24, 5, 8, 12), torch.randn(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    video_mask = torch.ones_like(video)
+    video_mask[:, :, :2] = 0
+    mask = pack_streams((video_mask, torch.ones_like(audio)))[0]
+    binding = FlowBinding(metrics=H3FlowMetrics())
+    options = dict(selected or {})
+    guider = SimpleNamespace(
+        model_options={
+            FLOW_BINDING_KEY: binding,
+            PARTITIONED_PROGRESSIVE_KEY: ProgressiveTargetInputConfig(
+                source_latent_h=4,
+                source_latent_w=6,
+                frame_gauge_repair=True,
+            ),
+            "transformer_options": options,
+        }
+    )
+
+    def unsupported(*args, **kwargs):
+        assert binding.frame_gauge_invocation_active
+        raise PartitionedPreflightUnsupported("old attention receiver")
+
+    fallbacks = []
+
+    def fallback(*args, **kwargs):
+        fallbacks.append(True)
+        return packed.clone()
+
+    monkeypatch.setattr("h3_flow_regenerate.partitioned_outer.run_partitioned_progressive", unsupported)
+    monkeypatch.setattr("h3_flow_regenerate.partitioned_outer.flow_outer_wrapper_with_exact_mask", fallback)
+
+    def invoke():
+        return partitioned_outer_wrapper(
+            SimpleNamespace(class_obj=guider),
+            torch.randn_like(packed),
+            packed,
+            SimpleNamespace(),
+            torch.tensor([1.0, 0.0]),
+            mask,
+            None,
+            True,
+            7,
+            latent_shapes=list(shapes),
+        )
+
+    if selected:
+        with pytest.raises(RuntimeError, match=r"refusing target-grid fallback.*old attention receiver"):
+            invoke()
+        assert not fallbacks
+    else:
+        assert torch.equal(invoke(), packed) and fallbacks == [True]
+    assert not binding.frame_gauge_invocation_active
+    assert binding.active_guidance_run is None and binding.registered_guidance_reference is None

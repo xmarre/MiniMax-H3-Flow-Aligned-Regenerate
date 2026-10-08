@@ -68,7 +68,22 @@ def load_bundle(directory: Path) -> tuple[dict, dict[str, torch.Tensor]]:
             raise ValueError("unsupported target-band evidence contract")
         auxiliary = {"source_probe_clean", "low_probe_native_carrier_clean"}
         expected_names = TENSOR_NAMES | auxiliary | {name + "_full" for name in TENSOR_NAMES | auxiliary}
-    if set(entries) != expected_names:
+    # Optional per-call high prediction windows are declared by the bundle's
+    # bounded trace. They are not replayed here, but must be exactly the
+    # declared later-call names; the first call reuses the first_high operands.
+    trace = metadata.get("window", {}).get("high_prediction_trace")
+    traced = set()
+    if trace is not None:
+        if not isinstance(trace, dict) or trace.get("policy") != "bounded_high_prediction_windows_v1":
+            raise ValueError("unsupported high prediction trace")
+        for call in trace.get("calls", ()):
+            for point in ("before_flow", "after_flow"):
+                name = call.get(point)
+                if name not in {f"first_high_{point}", f"high_prediction_{call.get('call_index', -1):02d}_{point}"}:
+                    raise ValueError("high prediction trace names an unexpected operand")
+                traced.add(name)
+        traced -= TENSOR_NAMES
+    if set(entries) != expected_names | traced:
         raise ValueError("native boundary evidence must contain all eight stage operands")
     values = {}
     # Only the eight validated target-grid window operands enter this replay.

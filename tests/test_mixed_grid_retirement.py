@@ -34,9 +34,9 @@ def test_canonical_overlay_uses_partitioned_exact_prefix_and_retains_target_inpu
     assert "H3ProgressiveMixedGridHandoff" not in chain
 
     exact = payload["exact_prefix_contract"]
-    assert exact["mode"] == "same_grid_target_control"
-    assert exact["low_probe_high_video_grid"] == "target"
-    assert exact["clean_and_residual_handoff"] == "identity"
+    assert exact["mode"] == "progressive_uniform_source"
+    assert exact["high_video_grid"] == "target"
+    assert exact["clean_and_residual_handoff"].startswith("learned_3d")
     assert exact["audio"]["stored_overlap_ticks"] == 16
     assert exact["audio"]["effective_overlap_ticks"] == 0
     assert exact["video"]["stored_overlap_tokens"] == 6

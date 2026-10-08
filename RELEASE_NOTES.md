@@ -1,3 +1,277 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.11
+
+Make one uniform source trajectory the default exact-prefix continuation, run
+partitioned continuation with any selected attention backend, keep Spectrum
+forecasting active during continuation, and stop Local Boundary Audit from
+unloading other models.
+
+## Recommended continuation (new default)
+
+New **MiniMax H3 Partitioned Exact-Prefix Handoff** nodes use
+`spatial_stage_control=progressive_uniform_source` with
+`frame_gauge_repair=false` and `suffix_dc_bridge=false`. Continuation low/probe
+evaluates one full-duration clip on the reduced grid, so every generated frame
+shares one attention context and there is no target-band/tail splice. The
+learned 3D upscaler transfers the whole generated trajectory, and the caller's
+exact target-grid prefix is restored before target-grid high refinement.
+
+The accepted reference continuation showed no visible join; final luminance
+changed by less than 0.001 across it. Continuation sampling took 1.23 times the
+first chunk, with Spectrum forecasting in both low and high. See
+[validation: run 01737](docs/validation/CONTINUATION_01737_AUDIT_LIFETIME.md).
+This is one accepted continuation on the native attention backend, not a
+guarantee for every model, scene, seed, backend or hardware.
+
+Saved workflows keep their stored widget values. To adopt the profile, set the
+three widgets above. `same_grid_target_control` (the previous default),
+`progressive_low_to_high` and `progressive_target_band` remain selectable for
+existing workflows and comparisons.
+
+Requires VDN-H3-Plus v1.5.9 (equal-grid native routing and partitioned
+attention provider API 1). Sol-H3 v0.1.10 is required only when Sol attention
+is selected.
+
+## Continuation, attention, history and audit changes
+
+- Add `progressive_uniform_source` (now the default, see above): low/probe
+  evaluates one native reduced-grid full clip, transfers every generated frame
+  together and restores the caller's exact target-grid prefix before high
+  refinement and return. There is no independent target band or band/tail
+  splice. Low/probe prefix attention uses the projected source-grid prefix.
+  Sol and non-Sol backends both keep equal-grid history ownership. Capture
+  exports replayable native source and target stage operands.
+
+- Domain-uniform low/probe conditions the tail on the band. After the first
+  low call, the source stream holds the band as known, prefix-conditioned frames
+  built from the target stream's latest clean band estimate, carried from low
+  into the probe. Previously the source stream only saw the noisy band state and
+  could generate a tail whose tone or content diverged from the band.
+
+- Non-Sol continuation stages publish Flow's own Spectrum attention-history
+  identity (`attention_backend_history_v1`). Every partitioned attention call
+  goes through Flow's provider, which bypasses the outer attention override and
+  Core BSA's block producer, so the stage holds no backend attention state.
+  Without this identity Spectrum fell back to its Core BSA source audit, which
+  does not recognize Flow's partitioned wrapper, and executed every forecast
+  step as an actual model call. Sol stages keep Sol's history provider.
+  Domain-uniform streams report the receipt of their owning stage, so the
+  two-stream low/probe stage is forecastable as well.
+- Local Boundary Audit no longer unloads the models of the previous
+  generation. Preparing an audit-only prompt prunes the previous prompt's
+  output caches, and Core's loaded-model registry holds only weak references to
+  model patchers, so post-prompt cleanup could release every loaded model. The
+  audit now holds strong references to the loaded models from fingerprint
+  evaluation through completion via Core's public cache-provider lifecycle; the
+  next non-audit prompt releases them after it runs. Explicit unload requests
+  and Core's memory management are not overridden.
+- The connected VAE is decoded in place without entering Core's model loader
+  when it is already on its decode device, including partially loaded weights.
+  A VAE that is not on its device is loaded only when free memory covers its
+  off-device weights with Core's 110% weight reserve plus the decode
+  workspace; otherwise, and on decode OOM, the audit stops without loading or
+  unloading models. The managed decode fallback that could evict models is
+  removed.
+
+- Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
+  streams' independent normalization, AdaLN, residual and MLP operations in
+  one block call. VDN attention, RoPE, conditioning, key measure and learned
+  memory stay independent per stream. External block replacements and
+  object-patched block forwards retain the existing two-call execution.
+  Runtime counters identify fused versus separate blocks. GPU speed, memory
+  and rendered parity must be measured; the second stream's arithmetic
+  remains necessary.
+
+- Equal-grid partitioned calls route attention natively. The target-grid high
+  stage and domain-uniform low/probe streams no longer force protected-prefix,
+  target-band and first-generated local groups dense, and no longer pin protected
+  keys in sparse calls. Every local group uses the selected backend's own
+  selection, as in a first chunk. Mixed-grid low/probe keeps its dense boundary
+  group. Requires the paired VDN-H3-Plus equal-grid routing policy. GPU time and
+  rendered effect require validation.
+
+- Partitioned continuation supports the selected ComfyUI attention backend
+  without requiring Sol-H3 runtime ownership or package installation. VDN
+  partitioned attention provider API 1 carries the same restricted Q/K/V unions
+  and additive key measures. Sol remains a supported explicit backend with its
+  existing request lifecycle and sparse dispatch. Core BSA's chunked producer
+  cannot bypass the partition mask or VDN branch; its regular override uses its
+  native dense fallback for weighted, mapped or rectangular requests. First
+  chunks retain their existing attention routing. Full-sequence Q/K/V
+  preprocessing is preserved before VDN gathers, including
+  when Core BSA wraps that preprocessing hook. Dense attention can increase
+  time and memory, and opaque history can make Spectrum actual-only. CPU tests
+  establish arithmetic, scheduling and composition; rendered tone and GPU
+  performance require validation.
+
+- Target-band boundary capture additionally saves bounded native-window pairs
+  before/after Flow for the first 16 high calls, including actual/forecast
+  provenance. Optional pairs share the existing CPU budget and reserve the
+  existing final snapshot; omitted calls are listed. Generation is unchanged.
+  Local Boundary Audit adds `high_prediction_tone`: two VAE decodes per saved
+  pair, regional luminance measurements, immediate Flow changes and changes
+  between captured calls over unblended boundary-window frames. Older bundles
+  lack this evidence. These measurements do not establish a rendered repair
+  or separate sampler evolution from subsequent model/forecast predictions.
+
+- Add two opt-in `progressive_target_band` comparison controls. Defaults publish
+  no option leaf, so existing workflows and numerical identities are unchanged.
+  Requesting either disables the target-grid fallback.
+  - `target_band_handoff_state=carry_raw_band` resumes the band from its actual
+    low/probe sampler state at the handoff sigma. The prefix, re-noised tail,
+    audio and high masks are unchanged.
+  - `target_band_context=domain_uniform_v1` evaluates low/probe as two
+    uniform-grid hidden streams per model call: target-grid prefix and band, and
+    reduced-grid projected prefix, projected band and tail. Each stream has its
+    own conditioning rows and a native layout; no rows or keys are shared within
+    a call. Band velocity comes from the target stream, and tail/audio velocity
+    from the source stream. Requires normal VDN linear/softmax diagnostics, the
+    native temporal-carrier policy, and VDN-H3-Plus domain-stream API 1. Sol
+    attention additionally requires its matching domain-stream history API.
+    Completed execution of both streams through every block is verified, and the
+    runtime evidence gate accepts the per-stream boundary receipts.
+  - The learned band/tail handoff and high stage are unchanged. CPU oracles
+    establish routing, ownership and isolation. Rendered quality, wall time and
+    peak memory require GPU validation.
+
+- Local Boundary Audit adds opt-in `detail_region=upper_left`. It measures
+  tone, temporal changes and affine geometry over the left third of the upper
+  45% of each decoded canvas, including matching-time stage and decoder-context
+  comparisons. Existing full-frame and upper45 measurements are preserved.
+  The region uses already decoded pixels; VAE call counts and numeric-only
+  output are unchanged. The default is off; motion and weak texture can still
+  confound the region's estimates.
+
+- Allow `capture_boundary_witness=true` with target-band continuation. The
+  selector saves the existing scheduler stage snapshots for Local Boundary
+  Audit, including the first actual high prediction before and after Flow,
+  without enabling the VDN feature sink or requiring residual measurement mode.
+  Copies retain the 256 MiB CPU budget and native decoder timing requirements;
+  generation and evaluation counts are unchanged. Capture adds copy and disk
+  I/O time and remains off by default. Other partitioned modes retain their
+  existing feature witness.
+
+- Pass the target band's dense-query extent to VDN during uniform target-grid
+  high refinement. Previously the final band tokens could switch from dense
+  low/probe attention to sparse high attention because only the protected-prefix
+  length was carried. The band's existing local query groups now stay dense;
+  masks, key domains, prefix length and other spatial modes are unchanged.
+  This adds bounded high-stage attention work. Rendered camera continuity and
+  performance remain unverified.
+
+- Target-band continuation now accepts the existing opt-in
+  `vdn_temporal_carrier_policy=destination_grid_stencil_v1`. Cross-grid temporal
+  neighbors are resampled before the checkpoint spatial convolution, retaining
+  coupling with the receiving grid's stencil. Paired VDN capability, completed
+  work and high-stage policy cleanup remain required. Use
+  `vdn_linear_diagnostic=normal`; tap suppression is a separate ablation.
+  Defaults are unchanged. This policy uses the batched linear path; target-band
+  rendered quality and runtime require validation.
+
+- Local Boundary Audit adds opt-in `transfer_and_decoder_context` scope. It
+  validates and decodes the saved uniform reduced-grid handoff view, and compares
+  the same five frame times from standalone decoder windows near the band/tail edge at every
+  stage. It retains production temporal blending, reports native pixel units and
+  saves numerical JSON only. Extended mode uses eighteen VAE calls; the default
+  stage-continuity mode remains at five calls. No sampling or provider inference
+  is added. These measurements do not classify visible defects automatically.
+- The replay preserves the preceding-window crop needed to reproduce the
+  prefix/band blend. Selecting relative frame labels now leaves the measured
+  sample range unchanged. Pre-join frames are marked as discarded chunk context.
+- Audit reports use `local_target_band_native_window_audit_v2` to identify the
+  wider crop and multiple shared-token/blend intervals. Existing v1 reports are
+  unchanged; saved input bundles keep their original evidence schema.
+
+- Local Boundary Audit measures adjacent-frame geometry and RGB/luminance
+  changes for every saved stage, and compares temporal pixel increments across
+  stages. This fills the gap between same-frame stage differences and temporal
+  discontinuities. It uses already decoded pixels, keeps five VAE calls and
+  adds CPU affine fitting. The original final-stage geometry field is retained.
+
+- Local Boundary Audit accepts quoted paths and translates Explorer's
+  `\\wsl.localhost\...` and `\\wsl$\...` paths to Linux when the distribution
+  matches the running WSL environment. Invalid cross-platform paths and missing
+  manifests now report how to select an accessible bundle.
+
+Target-band continuation (`spatial_stage_control=progressive_target_band`) no
+longer resumes the band's raw low-stage sampler state next to a re-noised tail.
+That combination put two kinds of high-stage entry state side by side: the band
+carried its integrated low-stage residual, which the high stage sharpens, while
+the tail started from a clean estimate plus fresh Gaussian noise.
+
+- The band keeps its own target-grid clean prediction, and every generated
+  token, band included, is re-noised with one independent Gaussian noise field.
+  Next to the prefix this matches same-grid control with `frame_gauge_repair=false`.
+- `partitioned_target_band_overlap` compares the band's prediction with the
+  learned provider's rendering of the same frames: total and high-pass energy
+  ratios plus raw, low-pass and channel-mean deltas, per frame. With
+  `frame_gauge_residual_mode=measure`, `partitioned_target_band_same_frame_affine`
+  also reports the fitted same-frame displacement. Neither adds a model,
+  provider or VAE evaluation, and neither changes the output.
+- `partitioned_target_band_tail_trajectory` and `partitioned_target_band_tail_seam`
+  report seam size at the band/tail boundary for the low-stage
+  reduced-grid view, the raw provider output, the pre-high clean operand and the
+  final video. Motion fitting runs only with `frame_gauge_residual_mode=measure`.
+  Seams of the neighbouring token pairs are reported beside it. The
+  prefix-boundary `partitioned_multiframe_trajectory` receipts are unchanged; in
+  target-band mode their `learned_native` stage measures the spliced handoff
+  clean, not the raw provider output.
+- Receipts: `partitioned_target_band_low_state` reports `band_handoff_policy` and
+  `band_raw_state_carried=false` instead of `band_state_identity_handoff`;
+  `partitioned_transfer` reports `target_band_handoff_policy` and
+  `target_band_raw_state_carried` instead of `target_band_identity_state`.
+
+The provider renders the band from a reduced-grid projection of a target-grid
+latent, not from a native reduced-grid latent. On two different scenes that
+round trip moved channel means by about 0.23 to 0.27 latent RMS on the exact
+prefix and band frames, so its rendering of the band is not blended into the
+high-stage operand. Low/probe execution, the attention contract, the suffix DC
+bridge and same-grid or progressive continuation are unchanged. Tests verify the
+handoff state through ComfyUI's Euler, res_multistep and euler_ancestral samplers
+on a small CPU model with a bicubic provider; rendered quality on the trained
+model still requires a matched run.
+
+`vdn_linear_diagnostic=raw_token_measure` is now accepted together with
+`audio_position_domain=source_carrier`, so the attention-measure diagnostic can
+run on the default continuation profile. The audio-position policy changes only
+block-0 RoPE positions; the raw-token measure changes only VDN's target-prefix
+key measure and linear measure scales, and each keeps its own verification.
+
+The review follow-up measures the raw provider boundary inside the clean hook,
+so it no longer retains a full provider video solely for later diagnostics.
+The existing `measure` selector controls the eight additional FFT trajectory
+fits; ordinary runs retain the overlap and neighbouring-seam receipts.
+Sampling, exact-prefix ownership, attention policy and RNG are unchanged.
+
+## Target-query non-video key measure
+
+Adds `target_query_sink_measure` to the diagnostic node's existing
+`softmax_diagnostic` selector. In heterogeneous low/probe it scales conditioning
+keys alongside target-grid video keys for target-grid queries. Reduced-grid and
+global queries, physical gathers, VDN linear measure policy and high refinement
+retain their existing policy. Target-grid row anchors follow the selected
+weighting; anchors on different grids are dispatched separately. The mode
+requires paired VDN/Sol capability and records completed execution. Numerical
+history includes the selector. Normal remains the default; rendered acceptance
+and GPU timing remain empirical. See `docs/USAGE.md` for scope and compatibility.
+
+## Local target-band decoder audit
+
+Add **MiniMax H3 Local Boundary Audit**, an offline ComfyUI node for saved
+target-band evidence. It uses the connected production video VAE to replay
+two adjacent temporal windows and their native blend at the native-band to
+transferred-tail interface. Matching-frame comparisons cover provider output,
+pre-high state, first high prediction before/after Flow and final state.
+
+The node validates saved tensor hashes, exact prefix/mask ownership and native
+band identity before decoding. It saves numerical JSON only, with affine
+translation/scale/shear estimates and RGB/luminance differences. No media or
+latent samples enter the report. It runs independently of sampling and leaves
+production behavior unchanged. Native temporal-source and synthetic geometry
+tests verify replay timing and diagnostic arithmetic; rendered quality and GPU
+execution require evaluation with the connected production VAE.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.10
 
 Add an opt-in target-band continuation arm and a suffix DC bridge selector to

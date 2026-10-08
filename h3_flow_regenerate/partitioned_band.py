@@ -7,6 +7,10 @@ the top-left ``source_h x source_w`` window of its target-sized frame; the rest
 of that frame is masked padding excluded from transformer blocks. Elementwise
 sampler updates preserve the stored values' spatial ownership. Stochastic raw
 padding is masked before model calls and discarded from handoff views.
+
+At the handoff the band keeps its own target-grid clean prediction, and every
+generated token, band included, is re-noised with the same independent noise.
+An opt-in control instead resumes the band's raw low/probe sampler state.
 """
 
 from __future__ import annotations
@@ -15,6 +19,11 @@ import torch
 
 from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_stage import PartitionedTargetBandGeometry
+
+TARGET_BAND_HANDOFF_POLICY = "target_band_native_clean_shared_renoise_v1"
+# Opt-in control: the band resumes its actual low/probe sampler state while the
+# tail keeps the shared independent re-noise of TARGET_BAND_HANDOFF_POLICY.
+TARGET_BAND_RAW_CARRY_HANDOFF_POLICY = "target_band_raw_state_carry_tail_renoise_v1"
 
 
 def _validate_video(video: torch.Tensor, geometry: PartitionedTargetBandGeometry, name: str) -> None:
@@ -83,6 +92,8 @@ def target_band_target_preview(video: torch.Tensor, geometry: PartitionedTargetB
 
 
 __all__ = [
+    "TARGET_BAND_HANDOFF_POLICY",
+    "TARGET_BAND_RAW_CARRY_HANDOFF_POLICY",
     "pack_target_band_video",
     "target_band_padding_max_abs",
     "target_band_source_view",

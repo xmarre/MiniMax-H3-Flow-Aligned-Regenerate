@@ -1,7 +1,7 @@
 {
   "schema_version": 6,
   "kind": "comfyui_workflow_overlay",
-  "purpose": "Canonical v0.3.10 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
+  "purpose": "Canonical v0.3.11 partitioned exact-prefix Continuum topology and defaults, with the generic Target Input path retained as an explicit control. Historical validation records remain preserved separately.",
   "placement": {
     "chain": [
       "DiffAid",
@@ -55,16 +55,16 @@
     "av_handoff_source": "main_partitioned",
     "guidance_trajectory_source": "main_exact_partitioned",
     "low_probe_execution_source": "main_then_shadow",
-    "frame_gauge_repair": true,
+    "frame_gauge_repair": false,
     "frame_gauge_residual_mode": "off",
     "provider_boundary_stabilization": "soft_support_v1",
     "capture_boundary_witness": false,
     "vdn_temporal_carrier_policy": "native_grid_then_map_v1",
     "handoff_transfer_control": "learned_3d",
-    "spatial_stage_control": "same_grid_target_control",
+    "spatial_stage_control": "progressive_uniform_source",
     "softmax_diagnostic": "normal",
     "video_guided_overlap_tokens": 6,
-    "suffix_dc_bridge": true,
+    "suffix_dc_bridge": false,
     "target_band_tokens": 4,
     "weight_semantics": "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values only; apply_guidance does not use them unless the corresponding guidance mode is selected."
   },
@@ -192,9 +192,10 @@
   },
   "exact_prefix_contract": {
     "trigger": "supported exact protected video prefix supplied by Continuum Native Masked continuation",
-    "mode": "same_grid_target_control",
-    "low_probe_high_video_grid": "target",
-    "clean_and_residual_handoff": "identity",
+    "mode": "progressive_uniform_source",
+    "low_probe_video_grid": "configured reduced source grid; one full-duration clip owns every generated frame",
+    "high_video_grid": "target",
+    "clean_and_residual_handoff": "learned_3d transfer of the whole generated trajectory; exact target-grid prefix restored before high refinement",
     "first_all_generated_chunk": "released progressive Target Input behavior with learned_3d transfer",
     "learned_upscaler_required": true,
     "history": "fresh stage/history ownership remains enforced by the partitioned scheduler",
@@ -213,10 +214,11 @@
       "selector": "main_then_shadow",
       "default_main_sources_add_shadow_lifetime": false
     },
-    "frame_gauge_repair": "paired-prefix checks enabled; same-grid path resolves to identity",
+    "frame_gauge_repair": "off",
+    "suffix_dc_bridge": "off",
     "provider_boundary_stabilization": "soft_support_v1 observation only; no decoded output warp",
     "final_exact_restore": true,
-    "heterogeneous_continuation": "opt-in and not qualified by the accepted target-grid profile"
+    "retained_modes": "same_grid_target_control, progressive_low_to_high and progressive_target_band remain selectable for existing workflows and comparisons"
   },
   "deprecated_compatibility": {
     "node_id": "H3ProgressiveMixedGridHandoff",

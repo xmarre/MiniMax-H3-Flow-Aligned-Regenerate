@@ -63,6 +63,7 @@ def test_requested_witness_missing_capability_fails_before_sampling(monkeypatch,
         _vdn_external_sequence_api=4,
         _vdn_partitioned_boundary_query_api=1,
         _vdn_partitioned_boundary_query_policy="boundary_suffix_local_group_dense_v1",
+        _vdn_partitioned_uniform_query_policy="uniform_grid_native_backend_local_routing_v1",
     )
     patcher = SimpleNamespace(
         object_patches={"diffusion_model.blocks.0.attn.forward": owner},
@@ -124,3 +125,37 @@ def test_observation_selection_survives_options_copy_and_has_stage_lifetime(monk
         assert owner.boundary_witness is not None
     with _partitioned_stage_contract(guider, plan, H3FlowMetrics()):
         assert guider.model_options["transformer_options"][PARTITIONED_STAGE_KEY].boundary_witness is None
+
+
+def test_target_band_capture_does_not_install_feature_sink_and_cleans_up_on_failure(tmp_path):
+    from types import SimpleNamespace
+
+    from h3_flow_regenerate.partitioned_scheduler import _partitioned_stage_contract
+    from h3_flow_regenerate.partitioned_stage import (
+        PARTITIONED_STAGE_KEY,
+        PartitionedStagePlan,
+        PartitionedTargetBandGeometry,
+    )
+
+    prefix = torch.zeros(1, 24, 2, 4, 4)
+    plan = PartitionedStagePlan(prefix=prefix, temporal=7, source_h=2, source_w=2, prefix_noise=prefix.clone())
+    band = PartitionedTargetBandGeometry(
+        protected_t=2, band_t=2, temporal=7, source_h=2, source_w=2, target_h=4, target_w=4
+    )
+    guider = SimpleNamespace(
+        model_options={
+            WITNESS_DIRECTORY_OPTION: str(tmp_path),
+            "transformer_options": {"h3_flow_stage": "low"},
+        }
+    )
+    with (
+        pytest.raises(RuntimeError, match="sampler failure"),
+        _partitioned_stage_contract(guider, plan, H3FlowMetrics(), target_band=band),
+    ):
+        owner = guider.model_options["transformer_options"][PARTITIONED_STAGE_KEY]
+        assert owner.boundary_witness is None
+        assert owner.target_band is band
+        raise RuntimeError("sampler failure")
+    assert PARTITIONED_STAGE_KEY not in guider.model_options["transformer_options"]
+    assert guider.model_options[WITNESS_DIRECTORY_OPTION] == str(tmp_path)
+    assert not list(tmp_path.iterdir())

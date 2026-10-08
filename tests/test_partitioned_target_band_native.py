@@ -166,6 +166,7 @@ def _sol_forward(dm, wrappers, video, audio, context, timestep, options, mask):
     from sol_h3.runtime import _FORWARD, _REQUEST, Request
 
     state = Request(Config(backend="sol"))
+    options = {"sol_h3_runtime_v1": state.config.metadata(), **options}
     request = _REQUEST.set(state)
     execution = _FORWARD.set((dm, state, 0, set(), []))
     try:
@@ -197,6 +198,50 @@ def test_band_rope_rows_equal_the_progressive_partition_with_the_same_head():
     band = partitioned_positions(native, geometry, band_layout)
     assert torch.equal(band, legacy)
     assert band.shape[0] - band_layout.segments[-1][0] == geometry.partitioned_rows
+
+
+def test_high_keeps_only_the_original_prefix_protected_and_the_band_mutable():
+    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_PREFIX_KEY
+
+    generator = torch.Generator().manual_seed(25)
+    dm = _core(layers=2, generator=generator)
+    geometry, owner, *_rest = _band_inputs(generator)
+    high_owner = PartitionedStagePlan(owner.prefix, TEMPORAL, *TARGET_HW, owner.prefix_noise)
+    video = torch.randn(1, 24, TEMPORAL, *TARGET_HW, generator=generator)
+    mask = torch.ones_like(video)
+    mask[:, :, :PROTECTED_T] = 0
+    calls = []
+
+    def block(img, _t_emb, segments, _rope, transformer_options, attention=None):
+        contract = transformer_options[PARTITIONED_PREFIX_KEY]
+        assert contract["prefix_t"] == PROTECTED_T
+        assert contract["heterogeneous_spatial_domains"] is False
+        start, stop = contract["video_start"], contract["sequence_rows"]
+        rows = next(row for a, b, row in segments if (a, b) == (start, stop))
+        protected = PROTECTED_T * geometry.target_rows
+        assert bool((rows[:protected] == rows[0]).all())
+        assert bool((rows[protected:] == rows[protected]).all())
+        assert rows[protected] != rows[0]
+        calls.append(contract)
+        return img.clone()
+
+    for layer in dm.blocks:
+        layer.forward = block
+    runtime = PartitionedStageRuntime(plan=high_owner, metrics=H3FlowMetrics())
+    result = _execute(
+        dm,
+        [transform.partitioned_diffusion_wrapper],
+        video,
+        torch.randn(1, 32, 2, 9, generator=generator),
+        torch.randn(1, 3, 8, generator=generator),
+        750.0,
+        {PARTITIONED_STAGE_KEY: runtime},
+        mask,
+    )
+    assert len(calls) == 2
+    assert torch.count_nonzero(result[0][:, :, :PROTECTED_T]) == 0
+    assert torch.count_nonzero(result[0][:, :, PROTECTED_T : geometry.head_t]) > 0
+    assert torch.count_nonzero(result[0][:, :, geometry.head_t :]) > 0
 
 
 def test_band_forward_through_real_blocks_ignores_padding_and_prefix_carrier(monkeypatch):
@@ -262,8 +307,9 @@ def test_band_forward_through_real_blocks_ignores_padding_and_prefix_carrier(mon
     assert not torch.equal(other[0][:, :, PROTECTED_T:head], baseline[0][:, :, PROTECTED_T:head])
 
 
+@pytest.mark.parametrize("softmax_mode", ["normal", "target_query_sink_measure"])
 @pytest.mark.parametrize("carrier", ["band", "source", "same_grid"])
-def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier):
+def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier, softmax_mode):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     interop = pytest.importorskip("sol_h3.interop")
@@ -286,7 +332,10 @@ def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier)
     audio = torch.randn(1, 32, 2, 9, generator=generator)
     context = torch.randn(1, 3, 8, generator=generator)
     runtime = PartitionedStageRuntime(
-        plan=owner, metrics=H3FlowMetrics(), target_band=geometry if carrier == "band" else None
+        plan=owner,
+        metrics=H3FlowMetrics(),
+        target_band=geometry if carrier == "band" else None,
+        softmax_diagnostic=softmax_mode,
     )
     captured = {}
 
@@ -317,3 +366,8 @@ def test_sol_history_recognizes_actual_partitioned_replacement_closures(carrier)
         native_rows = geometry.native_rows if carrier == "band" else TEMPORAL * plan.source_rows
         assert identity[2] - identity[4] == native_rows
         assert identity[3] - identity[4] == plan.partitioned_rows
+
+        signature = interop._closure_values(patch)["partitioned_layout"].signature
+        leaf = ("h3_flow_partitioned_softmax_diagnostic_v1", "target_query_sink_measure")
+        assert (leaf in signature) == (softmax_mode == "target_query_sink_measure")
+        assert repr(signature) in identity

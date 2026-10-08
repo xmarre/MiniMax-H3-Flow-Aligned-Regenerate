@@ -9,6 +9,7 @@ import torch
 
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.partitioned_band import (
+    TARGET_BAND_HANDOFF_POLICY,
     pack_target_band_video,
     target_band_padding_max_abs,
     target_band_source_view,
@@ -244,7 +245,7 @@ def test_low_stage_inputs_place_band_noise_tail_noise_and_protected_padding():
         )
 
 
-def test_source_views_keep_identity_band_tensors_and_reject_padding_writes():
+def test_source_views_keep_the_band_clean_prediction_and_reject_padding_writes():
     g = GEOMETRY
     target_shapes = [(1, 24, g.temporal, g.target_h, g.target_w), (1, 32, 2, 9)]
     source_shapes = [(1, 24, g.temporal, g.source_h, g.source_w), (1, 32, 2, 9)]
@@ -253,15 +254,29 @@ def test_source_views_keep_identity_band_tensors_and_reject_padding_writes():
     raw[:, :, -1, -1, -1] = 0.25  # stochastic samplers may leave noise in protected padding
     clean = pack_target_band_video(head * 0.5, torch.randn(1, 24, 3, 4, 6), g)
     audio = torch.randn(*target_shapes[1])
-    source_raw, source_clean, band_raw, band_clean, receipt = _target_band_source_views(
+    source_raw, source_clean, band_clean, band_raw, receipt = _target_band_source_views(
         _packed(raw, audio)[0],
         _packed(clean, audio)[0],
         g,
         target_shapes=target_shapes,
         source_shapes=source_shapes,
     )
-    assert torch.equal(band_raw, raw[:, :, 2:4])
     assert torch.equal(band_clean, clean[:, :, 2:4])
+    assert band_raw is None
+    assert receipt["band_handoff_policy"] == TARGET_BAND_HANDOFF_POLICY
+    assert receipt["band_raw_state_carried"] is False
+    *_views, carried_clean, carried_raw, carried_receipt = _target_band_source_views(
+        _packed(raw, audio)[0],
+        _packed(clean, audio)[0],
+        g,
+        target_shapes=target_shapes,
+        source_shapes=source_shapes,
+        handoff_state="carry_raw_band",
+    )
+    assert torch.equal(carried_clean, band_clean)
+    assert torch.equal(carried_raw, raw[:, :, 2:4])
+    assert carried_receipt["band_raw_state_carried"] is True
+    assert carried_receipt["band_handoff_state"] == "carry_raw_band"
     raw_view, raw_audio = unpack_streams(source_raw, source_shapes)
     assert torch.equal(raw_audio, audio)
     assert torch.equal(raw_view[:, :, g.head_t :], target_band_tail(raw, g))
@@ -323,12 +338,10 @@ def test_head_dc_bridge_corrects_only_the_first_transferred_tail_token(enabled):
     ("override", "error"),
     [
         ({"handoff_transfer_control": "bicubic_same_source_control"}, "learned_3d"),
-        ({"vdn_temporal_carrier_policy": "destination_grid_stencil_v1"}, "vdn_temporal_carrier_policy"),
         ({"prefix_transformer_context": "source_carrier_uniform"}, "prefix_transformer_context"),
         ({"low_probe_execution_source": "source_carrier_uniform_only"}, "low_probe_execution_source"),
         ({"guidance_trajectory_source": "source_carrier_uniform_shadow"}, "main partitioned sources"),
         ({"residual_mode": "apply"}, "frame_gauge_residual_mode"),
-        ("witness", "capture_boundary_witness"),
     ],
 )
 def test_runtime_configuration_rejects_unimplemented_band_combinations(override, error):
@@ -347,8 +360,8 @@ def test_runtime_configuration_rejects_unimplemented_band_combinations(override,
     )
     _validate_target_band_configuration(**fields)
     _validate_target_band_configuration(**dict(fields, residual_mode="measure"))
-    if override == "witness":
-        override = {"model_options": {WITNESS_DIRECTORY_OPTION: "/tmp/witness"}}
+    _validate_target_band_configuration(**dict(fields, vdn_temporal_carrier_policy="destination_grid_stencil_v1"))
+    _validate_target_band_configuration(**dict(fields, model_options={WITNESS_DIRECTORY_OPTION: "/tmp/witness"}))
     fields.update(override)
     with pytest.raises(PartitionedPreflightUnsupported, match=error):
         _validate_target_band_configuration(**fields)

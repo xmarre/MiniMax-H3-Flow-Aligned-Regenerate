@@ -33,6 +33,33 @@ later prediction calls include solver evolution and subsequent model predictions
 these observations alone do not isolate a solver defect. A forecast label is
 provenance, not evidence that forecasting caused an error.
 
+## Per-call decoded tone replay
+
+Target-band `capture_boundary_witness=true` also records native seven-token
+boundary windows before and after Flow guidance for the first 16 high calls.
+Each pair includes its call index, sigma, and actual/forecast provenance. The
+first actual pair reuses the existing snapshots. Later pairs retain only the
+boundary window and reserve space for the existing final snapshot within the
+256 MiB CPU budget; omitted call indices are explicit. Generation behavior and
+model evaluation counts are unchanged. Capture adds CPU copying and disk I/O.
+
+Select `high_prediction_tone` in Local Boundary Audit's `audit_scope` on a new
+bundle. It performs two native VAE window decodes per captured call and reports
+regional luminance, adjacent-frame luminance changes, immediate before/after
+Flow changes, and changes from one captured call to the next. Use
+`detail_region=upper_left` to include the left third of the upper 45% of the
+decoded canvas alongside full-frame measurements.
+
+The replay restores only the authoritative two-token context. Measurements
+cover join+1 through join+11, whose samples and predecessors lie in the same
+unblended decoder window. The join pair and the following window's overlap are
+excluded. A between-call difference combines sampler evolution with the next
+model or forecast prediction; it does not establish their separate causal
+contributions. Immediate Flow differences measure the output correction for
+that call, and do not measure its effect on later sampler states. Existing
+audit scopes retain their measurements and VAE call counts. Older bundles lack
+these later-call operands and cannot reconstruct them.
+
 
 ## Prediction-domain exact-prefix gauge release
 

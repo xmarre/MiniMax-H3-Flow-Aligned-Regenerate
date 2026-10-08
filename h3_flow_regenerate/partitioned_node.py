@@ -10,6 +10,7 @@ from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
+from .partitioned_attention import sol_attention_selected
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_OPTIONS,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_SAMPLER_EXACT_TIMESTEP,
@@ -32,8 +33,14 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
+    PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
-    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+    PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS,
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS,
+    PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_OPTIONS,
@@ -76,8 +83,8 @@ class H3PartitionedExactPrefixHandoff:
     DESCRIPTION = (
         "Experimental exact-prefix progressive continuation. The protected prefix stays on its "
         "target spatial grid during low/probe transformer attention while generated suffix rows "
-        "stay on the lower source grid. Requires the matching Sol-H3 partitioned backend and "
-        "VDN-H3-Plus partitioned transport."
+        "stay on the lower source grid. Uses the selected attention backend with "
+        "VDN-H3-Plus partitioned transport; Sol-H3 attention is optional."
     )
 
     def patch(
@@ -104,16 +111,23 @@ class H3PartitionedExactPrefixHandoff:
         # Companion capabilities are imported lazily so ordinary Flow users do
         # not acquire cross-custom-node requirements at Comfy startup.
         try:
-            from sol_h3.partitioned_history import install_partitioned_history_bridge
-            from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
             from vdn_h3.partitioned_runtime import install_partitioned_external_sequence_bridge
             from vdn_h3.partitioned_sequence import VDN_PARTITIONED_SEQUENCE_API as vdn_api
         except ImportError as exc:
             raise RuntimeError(
-                "partitioned exact-prefix continuation requires the matching Sol-H3 and VDN-H3-Plus releases"
+                "partitioned exact-prefix continuation requires matching VDN-H3-Plus partitioned transport"
             ) from exc
-        if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
-            raise RuntimeError("Sol-H3 partitioned backend did not publish a valid ABI identity")
+        sol_abi = None
+        if sol_attention_selected(model.model_options.get("transformer_options", {})):
+            try:
+                from sol_h3.partitioned_history import install_partitioned_history_bridge
+                from sol_h3.partitioned_request import PARTITIONED_REQUEST_ABI
+            except ImportError as exc:
+                raise RuntimeError("selected Sol-H3 attention requires its partitioned backend") from exc
+            if not isinstance(PARTITIONED_REQUEST_ABI, str) or not PARTITIONED_REQUEST_ABI:
+                raise RuntimeError("Sol-H3 partitioned backend did not publish a valid ABI identity")
+            sol_abi = PARTITIONED_REQUEST_ABI
+            install_partitioned_history_bridge()
         if int(vdn_api) != VDN_PARTITIONED_SEQUENCE_API:
             raise RuntimeError("Flow and VDN partitioned external-sequence APIs do not match")
 
@@ -170,7 +184,6 @@ class H3PartitionedExactPrefixHandoff:
         # Extend only this cloned model's VDN object patches. Ordinary VDN calls
         # still delegate byte-for-byte to the released forward; only the explicit
         # partition contract selects heterogeneous grouped execution.
-        install_partitioned_history_bridge()
         install_partitioned_external_sequence_bridge(patched)
 
         import comfy.patcher_extension
@@ -196,7 +209,7 @@ class H3PartitionedExactPrefixHandoff:
         )
         metrics.event(
             "partitioned_exact_prefix_installed",
-            sol_abi=PARTITIONED_REQUEST_ABI,
+            sol_abi=sol_abi,
             vdn_external_sequence_api=int(vdn_api),
             scheduler_contract="partitioned_exact_prefix_v1",
             deprecated_mixed_grid_contract_active=False,
@@ -221,7 +234,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
     continue to load. The user-facing node is no longer labeled diagnostic.
     """
 
-    FRAME_GAUGE_REPAIR_DEFAULT = True
+    FRAME_GAUGE_REPAIR_DEFAULT = False
     PRODUCTION_DEFAULT_CHANGED = True
 
     @classmethod
@@ -237,7 +250,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "suppress_cross_grid_temporal_taps keeps the complement active but "
                     "zeros only temporal short-conv taps that cross the target/source grid boundary; "
                     "raw_token_measure keeps both VDN paths active but disables only the matched "
-                    "target-prefix density correction in softmax and learned-linear statistics."
+                    "target-prefix density correction in softmax and learned-linear measure policy."
                 ),
             },
         )
@@ -367,7 +380,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": "off",
                 "tooltip": (
                     "measure exports existing low/high stage tensors without changing sampling. "
-                    "Target-band runs also export full video snapshots within a 256 MiB CPU budget. "
+                    "Target-band runs also fit band/tail trajectories and export full video snapshots "
+                    "within a 256 MiB CPU budget. "
                     "Accepted rigid transactions additionally record bounded regional residual geometry. "
                     "CPU copies and file I/O add diagnostic overhead; off disables these exports."
                 ),
@@ -393,23 +407,27 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": False,
                 "tooltip": (
-                    "Capture the bounded actual-feature VDN boundary witness for this execution. "
-                    "Artifacts are written under ComfyUI's output/h3-flow-boundary-witness directory. "
+                    "Capture boundary evidence for this execution. Target-band and progressive_uniform_source "
+                    "continuation save scheduler-owned stage snapshots under "
+                    "output/h3_flow_regenerate/residual_geometry for Local Boundary Audit; other partitioned "
+                    "modes save VDN feature tensors under output/h3-flow-boundary-witness. "
+                    "Stage copies have a CPU byte budget and add copy and disk-write time. "
                     "This is per-run and does not require an environment variable or ComfyUI restart."
                 ),
             },
         )
         # Append after the witness toggle so every existing serialized widget index
-        # remains stable. The candidate is hardware-gated and never the default.
+        # remains stable. The candidate requires paired capability and is never the default.
         spec["required"]["vdn_temporal_carrier_policy"] = (
             list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS),
             {
                 "default": PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
                 "tooltip": (
                     "native_grid_then_map_v1 preserves the current VDN short-conv arithmetic. "
-                    "destination_grid_stencil_v1 is the hardware-gated candidate C: only cross-grid "
+                    "destination_grid_stencil_v1 supports exact-prefix and target-band continuation: cross-grid "
                     "temporal taps map the raw projected feature to the receiving frame lattice "
-                    "before the checkpoint spatial stencil; same-grid work is unchanged."
+                    "before the checkpoint spatial stencil. Requires vdn_linear_diagnostic=normal "
+                    "and paired VDN capability; same-grid work is unchanged."
                 ),
             },
         )
@@ -432,31 +450,41 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["spatial_stage_control"] = (
             list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS),
             {
-                "default": PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+                "default": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
                 "tooltip": (
+                    "progressive_uniform_source (default) runs continuation low/probe as one full-duration "
+                    "reduced-grid clip for all generated frames, transfers the whole generated trajectory "
+                    "through the learned upscaler, then restores the exact target-grid prefix before high "
+                    "refinement. Use normal attention/VDN diagnostics and the default target-band selectors "
+                    "with this mode. "
                     "same_grid_target_control runs continuation low/probe directly on the target grid, keeps "
                     "the same handoff split and downstream high stage, and uses an identity "
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
                     "progressive_low_to_high selects the configured reduced continuation grid. "
                     "progressive_target_band keeps the first target_band_tokens generated tokens after the "
-                    "protected prefix on the target grid with identity handoff, and runs the remaining "
-                    "continuation tokens on the reduced grid with learned transfer."
+                    "protected prefix on the target grid, keeps their native clean prediction and re-noises "
+                    "all generated tokens. It runs the remaining "
+                    "continuation tokens on the reduced grid with learned transfer. "
+                    "Modes other than progressive_uniform_source are retained for existing workflows and "
+                    "comparisons."
                 ),
             },
         )
         # Append-only after the 00726/00727 spatial selector. This discriminator
-        # changes only suffix local-query Sol selection; grouped domains and
-        # target-prefix measure remain unchanged.
+        # isolates suffix dense dispatch or target-query non-video key measure.
         spec["required"]["softmax_diagnostic"] = (
             list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS),
             {
                 "default": PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
                 "tooltip": (
-                    "normal preserves sparse Sol selection for generated-suffix query groups. "
+                    "normal uses the selected attention backend for generated-suffix query groups. "
                     f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX} forces only those same gathered "
-                    "suffix groups through Sol's weighted dense path while preserving the identical "
+                    "suffix groups through the weighted dense path while preserving the identical "
                     "Q/K/V domain, target-prefix bias, grouped ownership and VDN linear setting. "
-                    "Diagnostic only."
+                    f"{PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK} extends the target-grid query "
+                    "key bias over text/reference/audio rows in low/probe. Reduced-grid and global "
+                    "queries, gathered keys, linear measure policy and high-stage policy are preserved. "
+                    "Requires paired VDN support and, when selected, Sol support. Diagnostic only."
                 ),
             },
         )
@@ -483,7 +511,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": (
                     "Continuation only. When enabled, the first generated token that receives learned spatial "
                     "transfer gets the per-channel spatial-mean offset the transfer produced on the carried "
@@ -505,12 +533,42 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after target_band_tokens so serialized widget positions remain stable.
+        spec["required"]["target_band_handoff_state"] = (
+            list(PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS),
+            {
+                "default": PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+                "tooltip": (
+                    "Used only by progressive_target_band. renoise_clean re-noises the band's clean "
+                    "prediction with the tail's independent handoff noise. carry_raw_band resumes the band "
+                    "from its actual low/probe sampler state at the handoff sigma; the protected prefix, "
+                    "tail and audio entry are unchanged. Experimental comparison control."
+                ),
+            },
+        )
+        spec["required"]["target_band_context"] = (
+            list(PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS),
+            {
+                "default": PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+                "tooltip": (
+                    "Used only by progressive_target_band. mixed_grid runs one transformer "
+                    "sequence containing target-grid prefix/band and reduced-grid tail. domain_uniform_v1 "
+                    "runs two uniform-grid hidden streams per model call: target prefix+band, and reduced "
+                    "projected prefix+band plus tail. The streams share no hidden state or conditioning "
+                    "rows. domain_uniform_all_stages_v1 also keeps the short head stream separate during "
+                    "high refinement, with both streams on the target grid. The learned band/tail handoff "
+                    "is unchanged. Experimental controls with additional compute; rendered tone continuity "
+                    "is unvalidated."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
-        "Sol-H3/VDN-H3-Plus stack. Continuation defaults to target-grid low/probe and identity "
+        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to target-grid "
+        "low/probe and identity "
         "handoff; all-generated first chunks retain learned progressive transfer. Preserves "
         "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
@@ -541,17 +599,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
-        frame_gauge_repair=True,
+        frame_gauge_repair=False,
         frame_gauge_residual_mode="off",
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
         capture_boundary_witness=False,
         vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
-        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
         softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
         video_guided_overlap_tokens=6,
-        suffix_dc_bridge=True,
+        suffix_dc_bridge=False,
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
+        target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
+        target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -581,7 +641,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 import folder_paths
             except ImportError as exc:
                 raise RuntimeError("boundary witness capture requires ComfyUI folder_paths at node execution") from exc
-            witness_directory = str(folder_paths.get_output_directory() + "/h3-flow-boundary-witness")
+            witness_subdirectory = (
+                "/h3_flow_regenerate/residual_geometry"
+                if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
+                else "/h3-flow-boundary-witness"
+            )
+            witness_directory = str(folder_paths.get_output_directory() + witness_subdirectory)
         # Store an explicit per-model value even when disabled so stale process
         # environment cannot silently override the node on subsequent runs.
         patched.model_options[WITNESS_DIRECTORY_OPTION] = witness_directory
@@ -613,6 +678,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             video_guided_overlap_tokens=video_guided_overlap_tokens,
             suffix_dc_bridge=suffix_dc_bridge,
             target_band_tokens=target_band_tokens,
+            target_band_handoff_state=target_band_handoff_state,
+            target_band_context=target_band_context,
         )
 
 

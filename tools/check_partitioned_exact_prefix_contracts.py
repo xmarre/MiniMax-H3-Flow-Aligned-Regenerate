@@ -270,6 +270,50 @@ def _validate_target_band_transport() -> None:
         raise SystemExit("Sol accepted a target-band closure with a reduced-grid native carrier")
 
 
+def _validate_domain_stream_transport() -> None:
+    """Flow's domain-uniform stream leaf must be accepted by VDN and named identically by Sol."""
+    from types import SimpleNamespace
+
+    from sol_h3 import partitioned_history as sol_history
+    from vdn_h3 import partitioned_runtime as vdn_runtime
+
+    from h3_flow_regenerate import partitioned_transformer as flow_transform
+    from h3_flow_regenerate.partitioned_prefix import PARTITIONED_PREFIX_KEY, PartitionedExactPrefixPlan
+    from h3_flow_regenerate.partitioned_stage import (
+        TARGET_BAND_DOMAIN_STREAM_API,
+        TARGET_BAND_DOMAIN_STREAM_KEY,
+        TARGET_BAND_DOMAIN_UNIFORM_POLICY,
+    )
+
+    if (
+        TARGET_BAND_DOMAIN_STREAM_KEY != vdn_runtime.FLOW_DOMAIN_STREAM_KEY
+        or TARGET_BAND_DOMAIN_STREAM_KEY != sol_history.PARTITIONED_DOMAIN_STREAM_KEY
+        or TARGET_BAND_DOMAIN_STREAM_API != vdn_runtime.FLOW_DOMAIN_STREAM_API
+        or TARGET_BAND_DOMAIN_STREAM_API != sol_history.PARTITIONED_DOMAIN_STREAM_API
+        or TARGET_BAND_DOMAIN_UNIFORM_POLICY != vdn_runtime.FLOW_DOMAIN_STREAM_POLICY
+        or TARGET_BAND_DOMAIN_UNIFORM_POLICY != sol_history.PARTITIONED_DOMAIN_UNIFORM_POLICY
+        or flow_transform.DOMAIN_UNIFORM_IDENTITY != sol_history.PARTITIONED_DOMAIN_UNIFORM_IDENTITY
+    ):
+        raise SystemExit("Flow/VDN/Sol domain-stream contract diverged")
+    native_layout = SimpleNamespace(
+        seq_len=7 + 6 * 12, video_start=7, text_start=1, text_len=2, segments=[(7, 7 + 6 * 12, "video")]
+    )
+    for name, plan in (
+        ("target", PartitionedExactPrefixPlan(5, 4, 2, 3, 4, 3, 4, same_grid_control=True)),
+        ("source", PartitionedExactPrefixPlan(7, 6, 2, 2, 3, 2, 3, same_grid_control=True)),
+    ):
+        contract = plan.to_contract()
+        leaf = flow_transform._domain_stream_leaf(
+            name=name, contract=contract, native_layout=native_layout, policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY
+        )
+        options = {PARTITIONED_PREFIX_KEY: contract, TARGET_BAND_DOMAIN_STREAM_KEY: leaf}
+        layout, stream = vdn_runtime.resolve_domain_stream_layout(
+            options, native_layout, {"radius": 1, "chunk": 1, "anchor_frames": "rows"}, plan.sequence_rows
+        )
+        if stream != name or layout.num_frames != plan.temporal or layout.tokens_per_frame != plan.target_rows:
+            raise SystemExit("VDN rejected or misread Flow's domain-stream leaf")
+
+
 def _namespace_package(name: str, package_dir: Path) -> None:
     """Load source-contract modules without executing custom-node __init__.py."""
     if not package_dir.is_dir():
@@ -361,7 +405,7 @@ def _validate_preprocess_transport() -> None:
 def _validate_high_attention_transport() -> None:
     from h3_flow_regenerate.metrics import H3FlowMetrics
     from h3_flow_regenerate.partitioned_scheduler import (
-        VDN_PARTITIONED_BOUNDARY_QUERY_POLICY,
+        VDN_PARTITIONED_UNIFORM_QUERY_POLICY,
         _partitioned_high_stage_contract,
     )
     from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan
@@ -370,6 +414,7 @@ def _validate_high_attention_transport() -> None:
     from sol_h3.contracts import Config
     from sol_h3.interop import dense_evaluation_warmup
     from vdn_h3.partitioned_grouped import build_partitioned_grouped_plan
+    from vdn_h3.partitioned_runtime import VDN_PARTITIONED_UNIFORM_QUERY_POLICY as VDN_UNIFORM_QUERY_POLICY
     from vdn_h3.partitioned_runtime import _partitioned_local_force_dense
     from vdn_h3.partitioned_sequence import validate_flow_partition_contract
     from vdn_h3.window import window_bounds
@@ -397,32 +442,21 @@ def _validate_high_attention_transport() -> None:
         grouped = build_partitioned_grouped_plan(
             vdn, bounds=window_bounds(47, 1, 5), anchor_frames="both", semantic_digest=flow.semantic_digest
         )
-        saw_boundary_suffix = False
-        saw_later_suffix = False
+        uniform = (vdn.source_grid_h, vdn.source_grid_w) == (vdn.target_grid_h, vdn.target_grid_w)
+        if not uniform:
+            raise SystemExit("high attention published a mixed-grid VDN partition")
+        saw_prefix = False
+        saw_generated = False
         for group in grouped.groups:
-            force_dense, diagnostic, boundary_suffix = _partitioned_local_force_dense(
-                group,
-                "normal",
-                prefix_t=vdn.prefix_t,
-            )
-            expected_boundary_suffix = bool(not group.query_prefix_domain and vdn.prefix_t in group.query_frames)
-            if boundary_suffix != expected_boundary_suffix or diagnostic:
-                raise SystemExit("high VDN boundary-query discriminator drifted")
-            if group.query_prefix_domain:
-                if not force_dense:
-                    raise SystemExit("high VDN protected-prefix group lost dense ownership")
-            elif expected_boundary_suffix:
-                saw_boundary_suffix = True
-                if not force_dense:
-                    raise SystemExit("high VDN first generated boundary group lost dense continuity")
-            else:
-                saw_later_suffix = True
-                if force_dense:
-                    raise SystemExit("high VDN later generated group lost native sparse routing")
-        if not saw_boundary_suffix or not saw_later_suffix:
-            raise SystemExit("high VDN contract did not exercise boundary and later suffix groups")
-        if VDN_PARTITIONED_BOUNDARY_QUERY_POLICY != "boundary_suffix_local_group_dense_v1":
-            raise SystemExit("Flow boundary-query policy identity drifted")
+            routing = _partitioned_local_force_dense(group, "normal", prefix_t=vdn.prefix_t, uniform=uniform)
+            if routing != (False, False, False):
+                raise SystemExit("high VDN equal-grid local group left native backend routing")
+            saw_prefix |= bool(group.query_prefix_domain)
+            saw_generated |= not bool(group.query_prefix_domain)
+        if not saw_prefix or not saw_generated:
+            raise SystemExit("high VDN contract did not exercise protected and generated groups")
+        if VDN_PARTITIONED_UNIFORM_QUERY_POLICY != VDN_UNIFORM_QUERY_POLICY:
+            raise SystemExit("Flow/VDN equal-grid query routing policy diverged")
     if options:
         raise SystemExit("high attention left sampler-stage state behind")
 
@@ -451,6 +485,7 @@ def main() -> None:
         PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX as FLOW_SOFTMAX_DENSE_SUFFIX,
         PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY as FLOW_SOFTMAX_DIAGNOSTIC_KEY,
         PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL as FLOW_SOFTMAX_NORMAL,
+        PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK as FLOW_SOFTMAX_TARGET_SINK,
         PARTITIONED_VDN_TEMPORAL_CARRIER_API as FLOW_CARRIER_API,
         PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION as FLOW_CARRIER_DESTINATION,
         PARTITIONED_VDN_TEMPORAL_CARRIER_KEY as FLOW_CARRIER_KEY,
@@ -498,6 +533,7 @@ def main() -> None:
         VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX,
         VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
         VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
+        VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
         _partitioned_local_force_dense,
     )
     from vdn_h3.partitioned_sequence import (
@@ -515,6 +551,11 @@ def main() -> None:
         validate_flow_partition_contract,
         validate_temporal_carrier_contract,
     )
+    from h3_flow_regenerate.partitioned_attention import PARTITIONED_ATTENTION_PROVIDER_KEY
+    from vdn_h3.softmax_provider import PARTITIONED_PROVIDER_API_VERSION, PARTITIONED_PROVIDER_KEY
+
+    if PARTITIONED_PROVIDER_API_VERSION != 1 or PARTITIONED_PROVIDER_KEY != PARTITIONED_ATTENTION_PROVIDER_KEY:
+        raise SystemExit("Flow/VDN partitioned attention provider contract diverged")
 
     keys = {
         FLOW_RUNTIME_KEY,
@@ -552,8 +593,13 @@ def main() -> None:
         or FLOW_SOFTMAX_DIAGNOSTIC_KEY != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY
         or FLOW_SOFTMAX_NORMAL != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
         or FLOW_SOFTMAX_DENSE_SUFFIX != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_DENSE_SUFFIX
+        or FLOW_SOFTMAX_TARGET_SINK != VDN_PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK
     ):
         raise SystemExit("Flow/VDN partitioned softmax diagnostic contract diverged")
+    from sol_h3.partitioned_request import PARTITIONED_SINK_MEASURE_API
+
+    if PARTITIONED_SINK_MEASURE_API != 1:
+        raise SystemExit("target-query sink measure requires Sol sink-measure API 1")
     if (
         FLOW_BOUNDARY_QUERY_API != VDN_PARTITIONED_BOUNDARY_QUERY_API
         or FLOW_BOUNDARY_QUERY_POLICY != VDN_PARTITIONED_BOUNDARY_QUERY_POLICY
@@ -775,12 +821,14 @@ def main() -> None:
     _validate_same_grid_history_transport()
     _validate_high_attention_transport()
     _validate_target_band_transport()
+    _validate_domain_stream_transport()
     print(
         "partitioned exact-prefix contracts: OK ",
         f"abi={PARTITIONED_REQUEST_ABI} groups={len(grouped.groups)} sequence_rows={flow.sequence_rows}",
         "same_grid_history=True",
         "high_prefix_attention=True",
         "target_band_native_carrier=True",
+        "target_band_domain_stream=True",
     )
 
 

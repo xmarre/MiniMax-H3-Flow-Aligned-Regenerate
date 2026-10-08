@@ -49,6 +49,64 @@ def test_full_stage_capture_rejects_a_different_timeline():
     assert set(evidence.tensors) == {"authoritative_prefix", "authoritative_prefix_full"}
 
 
+def test_high_call_windows_keep_forecasts_and_pair_provenance_without_full_copies():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    for index, actual in enumerate((True, False, True)):
+        video[:, :, 12:] = index
+        before = video.clone()
+        evidence.observe_prediction(video, point="before_flow", call_index=index, sigma=0.8, actual=actual)
+        assert torch.equal(video, before)
+        video[:, :, 12:] += 0.1
+        after = video.clone()
+        evidence.observe_prediction(video, point="after_flow", call_index=index, sigma=0.8, actual=actual)
+        assert torch.equal(video, after)
+    calls = evidence.plan["high_prediction_trace"]["calls"]
+    assert [call["actual"] for call in calls] == [True, False, True]
+    assert calls[0]["before_flow"] == "first_high_before_flow"
+    assert calls[0]["after_flow"] == "first_high_after_flow"
+    assert evidence.pending_high_prediction is None
+    before_window = evidence.tensors[calls[1]["before_flow"]]
+    after_window = evidence.tensors[calls[1]["after_flow"]]
+    assert before_window.shape[2] == after_window.shape[2] == 7
+    assert torch.all(before_window[:, :, 2:] == 1)
+    torch.testing.assert_close(after_window[:, :, 2:], torch.full_like(after_window[:, :, 2:], 1.1))
+    video.zero_()
+    assert torch.all(before_window[:, :, 2:] == 1)
+    assert not any(name.startswith("high_prediction_") and name.endswith("_full") for name in evidence.tensors)
+    assert evidence.cpu_tensor_bytes == sum(t.numel() * t.element_size() for t in evidence.tensors.values())
+    evidence.observe_prediction(video, point="before_flow", call_index=16, sigma=0.2, actual=True)
+    assert len(calls) == 3
+
+
+def test_optional_high_windows_reserve_final_snapshot_and_skip_budget_exhaustion():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    for point in ("before_flow", "after_flow"):
+        evidence.observe_prediction(video, point=point, call_index=0, sigma=0.8, actual=True)
+    window_bytes = 7 * 24 * 4 * 4 * 4
+    final_bytes = video.numel() * video.element_size() + window_bytes
+    evidence.max_bytes = evidence.cpu_tensor_bytes + final_bytes
+    names = set(evidence.tensors)
+    for point in ("before_flow", "after_flow"):
+        evidence.observe_prediction(video, point=point, call_index=1, sigma=0.7, actual=False)
+    assert set(evidence.tensors) == names
+    assert evidence.plan["high_prediction_trace"]["omitted_call_indices"] == [1]
+    evidence.capture("final_post_high_internal_clean", video)
+    assert evidence.cpu_tensor_bytes == evidence.max_bytes
+
+
+@pytest.mark.parametrize("change", ["sigma", "actual", "index"])
+def test_high_call_window_pair_rejects_changed_provenance(change):
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    evidence.observe_prediction(video, point="before_flow", call_index=0, sigma=0.8, actual=True)
+    args = {"call_index": 0, "sigma": 0.8, "actual": True}
+    args[change if change != "index" else "call_index"] = {"sigma": 0.7, "actual": False, "index": 1}[change]
+    with pytest.raises(RuntimeError, match="pair changed provenance"):
+        evidence.observe_prediction(video, point="after_flow", **args)
+
+
 @pytest.mark.parametrize("measure", [False, True])
 def test_rejected_registration_captures_first_actual_window_without_changing_predictions(
     tmp_path, monkeypatch, measure
