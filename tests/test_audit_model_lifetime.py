@@ -15,7 +15,7 @@ from h3_flow_regenerate import local_boundary_audit as audit
 @pytest.fixture
 def core(monkeypatch):
     pytest.importorskip("comfy.cli_args").args.cpu = True
-    execution = pytest.importorskip("execution")
+    import execution
     from comfy import model_management, model_patcher
     from comfy_execution import cache_provider
 
