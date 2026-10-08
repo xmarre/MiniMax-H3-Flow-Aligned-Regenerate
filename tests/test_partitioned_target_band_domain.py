@@ -612,3 +612,42 @@ def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch
     cfg["linear_enabled"] = False
     without_linear = case.domain_call()
     assert not torch.equal(output[0][:, :, PROTECTED_T:head], without_linear[0][:, :, PROTECTED_T:head])
+
+@pytest.mark.parametrize("same_grid", [False, True])
+def test_unwrapped_core_blocks_share_nonattention_work_without_merging_domain_attention(monkeypatch, same_grid):
+    """One native Core block performs row-wise work once; attention stays stream-local."""
+    _sol(monkeypatch)
+    case = _Case(same_grid=same_grid)
+    metrics = H3FlowMetrics()
+    output = case.domain_call(metrics=metrics)
+    blocks = len(case.dm.blocks)
+    assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == blocks
+    assert metrics.counters.get("partitioned_domain_uniform_separate_block_calls", 0) == 0
+
+    head = case.geometry.head_t
+    target = case.target_reference(case.video)
+    source = case.source_reference(case.video)
+    torch.testing.assert_close(output[0][:, :, PROTECTED_T:head], target[0][:, :, PROTECTED_T:head], rtol=0, atol=1e-6)
+    torch.testing.assert_close(target_band_tail(output[0], case.geometry), source[0][:, :, head:], rtol=0, atol=1e-6)
+    torch.testing.assert_close(output[1], source[1], rtol=0, atol=1e-6)
+
+
+def test_external_core_block_replacement_retains_independent_stream_invocations(monkeypatch):
+    """Unknown block patches must receive the same per-stream layout as before."""
+    _sol(monkeypatch)
+    case = _Case()
+    seen = []
+
+    def external_block(args, extra):
+        seen.append((args["img"].shape[0], args["layout"].seq_len))
+        return extra["original_block"](args)
+
+    metrics = H3FlowMetrics()
+    case.domain_call(
+        metrics=metrics,
+        extra_options={"patches_replace": {"dit": {("double_block", 0): external_block}}},
+    )
+    assert len(seen) == 2
+    assert all(rows == seq for rows, seq in seen)
+    assert metrics.counters["partitioned_domain_uniform_separate_block_calls"] == 1
+    assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == len(case.dm.blocks) - 1

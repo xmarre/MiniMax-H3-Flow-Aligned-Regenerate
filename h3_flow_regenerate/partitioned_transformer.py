@@ -857,7 +857,7 @@ def _domain_uniform_forward(
                 target_stream.name: img[: target_stream.rows],
                 source_stream.name: img[target_stream.rows :],
             }
-            output = None
+            calls = []
             for stream in streams:
                 view = views[stream.name]
                 forwarded = dict(args)
@@ -880,14 +880,74 @@ def _domain_uniform_forward(
                     stage_view=stream.view,
                     domain_stream=stream.leaf,
                 )
-                block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
-                output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
+                calls.append((stream, forwarded))
+
+            # The two attention domains are independent, but normalization,
+            # AdaLN, residual operations and the MLP are row-wise. An unwrapped
+            # native Core DiT block may process their union once while the
+            # attention callback still executes the independent VDN streams.
+            # Leave external block replacements on the two-call path: they may
+            # inspect a stream's layout or mutate per-stream modulation rows.
+            original = extra["original_block"]
+            native_block = None
+            if previous is None:
+                try:
+                    native_block = inspect.getclosurevars(original).nonlocals.get("block")
+                except (TypeError, ValueError):
+                    pass
+            if native_block is inner.blocks[layer]:
+                offsets = (0, target_stream.rows)
+                combined_mod_segments = [
+                    (first + offset, last + offset, row)
+                    for offset, (_, forwarded) in zip(offsets, calls)
+                    for first, last, row in forwarded["mod_segments"]
+                ]
+
+                def independent_attention(hidden, rope_freqs=None, transformer_options=None):
+                    if hidden.shape != img.shape:
+                        raise RuntimeError("domain-uniform fused block changed the hidden rows")
+                    outputs = [
+                        native_block.attn(
+                            hidden[offset : offset + stream.rows],
+                            rope_freqs=forwarded["rope_freqs"],
+                            transformer_options=forwarded["transformer_options"],
+                        )
+                        for offset, (stream, forwarded) in zip(offsets, calls)
+                    ]
+                    return torch.cat(outputs, dim=0)
+
+                combined_args = dict(args)
+                combined_args.update(
+                    img=img,
+                    mod_segments=combined_mod_segments,
+                    rope_freqs=None,
+                    attention=independent_attention,
+                )
+                output = original(combined_args)
                 result = output["img"]
-                if result.shape != view.shape:
-                    raise RuntimeError("domain-uniform stream block returned incompatible hidden state")
-                if result.data_ptr() != view.data_ptr():
-                    view.copy_(result)
-                metrics.increment(f"partitioned_domain_uniform_{stream.name}_block_calls")
+                if result.shape != img.shape:
+                    raise RuntimeError("domain-uniform fused Core block returned incompatible hidden state")
+                img = result
+                views = {
+                    target_stream.name: img[: target_stream.rows],
+                    source_stream.name: img[target_stream.rows :],
+                }
+                metrics.increment("partitioned_domain_uniform_fused_core_block_calls")
+                for stream in streams:
+                    metrics.increment(f"partitioned_domain_uniform_{stream.name}_block_calls")
+            else:
+                block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
+                output = None
+                for stream, forwarded in calls:
+                    view = views[stream.name]
+                    output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
+                    result = output["img"]
+                    if result.shape != view.shape:
+                        raise RuntimeError("domain-uniform stream block returned incompatible hidden state")
+                    if result.data_ptr() != view.data_ptr():
+                        view.copy_(result)
+                    metrics.increment(f"partitioned_domain_uniform_{stream.name}_block_calls")
+                metrics.increment("partitioned_domain_uniform_separate_block_calls")
             if layer == last_layer:
                 target_view = views[target_stream.name]
                 source_view = views[source_stream.name]
