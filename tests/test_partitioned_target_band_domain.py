@@ -163,7 +163,10 @@ class _Case:
             target_band_domain=self.domain if domain else None,
         )
 
-    def domain_call(self, video=None, audio=None, metrics=None, extra_options=None):
+    def domain_call(self, video=None, audio=None, metrics=None, extra_options=None, keep_band_estimate=False):
+        # Each call models a first low call unless it continues the previous one.
+        if not keep_band_estimate:
+            self.domain.band_estimate.clear()
         options = {PARTITIONED_STAGE_KEY: self.runtime(metrics), **(extra_options or {})}
         if self.geometry.same_grid_control:
             options["h3_flow_stage"] = "high"
@@ -668,3 +671,39 @@ def test_replaced_core_forward_stays_on_independent_block_path(monkeypatch):
     case.domain_call(metrics=metrics)
     assert metrics.counters["partitioned_domain_uniform_separate_block_calls"] == 1
     assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == len(case.dm.blocks) - 1
+
+
+def test_later_calls_condition_the_tail_on_the_band_clean_estimate(monkeypatch):
+    """After the first call the source stream holds the band as known frames.
+
+    The tail then continues the band's clean estimate from the previous call and
+    no longer reads the band's current noisy state; band velocity still comes
+    from the target stream and follows its current state.
+    """
+    _sol(monkeypatch)
+    case = _Case(seed=47)
+    head = case.geometry.head_t
+    first = case.domain_call()
+    estimate = case.domain.band_estimate["x0"]
+    sigma = TIMESTEP / 1000.0
+    expected = case.video[:, :, PROTECTED_T:head].float() - sigma * first[0][:, :, PROTECTED_T:head].float()
+    torch.testing.assert_close(estimate, expected)
+
+    metrics = H3FlowMetrics()
+    conditioned = case.domain_call(metrics=metrics, keep_band_estimate=True)
+    event = next(e for e in metrics.events if e.kind == "partitioned_target_band_domain_transformer")
+    assert event.fields["band_carrier_policy"] == "target_band_clean_estimate_prefix_conditioning_v1"
+    assert event.fields["source_prefix_t"] == head
+
+    perturbed = case.video.clone()
+    perturbed[:, :, PROTECTED_T:head] += 0.5
+    case.domain.band_estimate["x0"] = estimate.clone()
+    moved = case.domain_call(video=perturbed, keep_band_estimate=True)
+    tail = target_band_tail(conditioned[0], case.geometry)
+    assert torch.equal(tail, target_band_tail(moved[0], case.geometry))
+    assert not torch.equal(conditioned[0][:, :, PROTECTED_T:head], moved[0][:, :, PROTECTED_T:head])
+
+    case.domain.band_estimate["x0"] = estimate + 0.5
+    shifted = case.domain_call(keep_band_estimate=True)
+    assert not torch.equal(tail, target_band_tail(shifted[0], case.geometry))
+    torch.testing.assert_close(shifted[0][:, :, PROTECTED_T:head], conditioned[0][:, :, PROTECTED_T:head])

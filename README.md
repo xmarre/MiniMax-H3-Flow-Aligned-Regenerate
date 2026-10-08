@@ -250,10 +250,14 @@ frame is an anchor of that stream. Every local query group in both streams uses
 the selected backend's native selection, as in a non-partitioned clip.
 
 The streams communicate only through the sampler state between model calls.
-The source stream reads the band's current state projected with the H3 physical
-lattice. Projection is a convex resample that lowers Gaussian noise variance,
-so a fixed complementary noise field restores the nominal per-cell variance of
-`sigma * noise_scale`. Both streams read the shared audio state. The band
+On the first low call the source stream reads the band's current state
+projected with the H3 physical lattice; a fixed complementary noise field
+restores the nominal per-cell variance of `sigma * noise_scale` after the convex
+resample. Every later low/probe call holds the band as known frames in the
+source stream: the target stream's latest clean band estimate
+(`x - sigma * v`), projected and conditioned exactly like the protected prefix.
+The tail is therefore generated as a continuation of the band rather than of a
+noisy band it re-interprets independently. Both streams read the shared audio state. The band
 velocity comes from the target stream; tail and audio velocity come from the
 source stream. The protected prefix and padding remain excluded. The band
 cannot see tail hidden states within a call, so band content is produced as the

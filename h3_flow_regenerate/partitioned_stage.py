@@ -222,6 +222,10 @@ TARGET_BAND_DOMAIN_UNIFORM_POLICY = "domain_uniform_v1"
 TARGET_BAND_DOMAIN_STREAM_KEY = "h3_flow_partitioned_domain_stream_v1"
 TARGET_BAND_DOMAIN_STREAM_API = 1
 TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY = "h3_patch_lattice_projection_noise_variance_matched_v1"
+# After the first low/probe call the source stream reads the band as known
+# frames: the latest target-stream clean estimate, projected and conditioned
+# exactly like the protected prefix, so the tail continues the band.
+TARGET_BAND_DOMAIN_BAND_CONDITIONING_POLICY = "target_band_clean_estimate_prefix_conditioning_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +251,9 @@ class TargetBandDomainContext:
     source_band_noise: torch.Tensor
     band_noise_complement: torch.Tensor
     model_noise_scale: float
+    # Mutable stage-crossing state: the band's latest clean estimate on the
+    # target grid, written after each low/probe call and read by the next one.
+    band_estimate: dict = field(default_factory=dict, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.policy != TARGET_BAND_DOMAIN_UNIFORM_POLICY:

@@ -49,6 +49,7 @@ from .partitioned_prefix import (
 from .partitioned_stage import (
     PARTITIONED_STAGE_KEY,
     TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY,
+    TARGET_BAND_DOMAIN_BAND_CONDITIONING_POLICY,
     TARGET_BAND_DOMAIN_STREAM_API,
     TARGET_BAND_DOMAIN_STREAM_KEY,
     PartitionedStagePlan,
@@ -665,10 +666,16 @@ def _domain_uniform_forward(
         target_grid_w=int(band.target_grid[1]),
         same_grid_control=True,
     )
+    # The tail is a continuation of the band: once a clean band estimate exists,
+    # the source stream holds the band as known prefix-conditioned frames.
+    band_estimate = None if band.same_grid_control else domain.band_estimate.get("x0")
+    if band_estimate is not None and tuple(band_estimate.shape) != (1, 24, band.band_t, *owner.target_hw):
+        raise RuntimeError("domain-uniform band estimate does not match the band geometry")
+    source_prefix_t = band.head_t if band_estimate is not None else band.protected_t
     source_plan = PartitionedExactPrefixPlan(
         video_start=int(video_start),
         temporal=int(band.temporal),
-        prefix_t=int(band.protected_t),
+        prefix_t=int(source_prefix_t),
         source_grid_h=int(band.source_grid[0]),
         source_grid_w=int(band.source_grid[1]),
         target_grid_h=int(band.source_grid[0]),
@@ -736,6 +743,12 @@ def _domain_uniform_forward(
         band_state = x[0][:, :, band.protected_t : band.head_t].to(torch.float32)
         if band.same_grid_control:
             carrier = band_state
+        elif band_estimate is not None:
+            estimate = resize_spatial_5d_h3_patch_lattice(
+                band_estimate.to(device=img.device, dtype=torch.float32), band.source_h, band.source_w
+            )
+            band_noise = domain.source_band_noise.to(device=img.device, dtype=torch.float32)
+            carrier = aug * estimate + (1.0 - aug) * band_noise
         else:
             sigma = (timestep.flatten()[0] / 1000.0).float().clamp(min=1e-6)
             projected_band = resize_spatial_5d_h3_patch_lattice(band_state, band.source_h, band.source_w)
@@ -809,8 +822,11 @@ def _domain_uniform_forward(
                     band_carrier_policy=(
                         "native_target_sampler_state_v1"
                         if band.same_grid_control
+                        else TARGET_BAND_DOMAIN_BAND_CONDITIONING_POLICY
+                        if band_estimate is not None
                         else TARGET_BAND_DOMAIN_BAND_CARRIER_POLICY
                     ),
+                    source_prefix_t=int(source_prefix_t),
                     stage=options.get("h3_flow_stage"),
                     native_sequence_rows=int(layout.seq_len),
                     protected_prefix_t=int(band.protected_t),
@@ -969,6 +985,14 @@ def _domain_uniform_forward(
     for layer in range(len(inner.blocks)):
         blocks[("double_block", layer)] = wrap(layer, blocks.get(("double_block", layer)))
     result = executor(x, timestep, context, local, minimax_payload=payload, **kwargs)
+    if not band.same_grid_control:
+        # Flow-matching clean estimate x0 = x - sigma * v of the band from the
+        # target stream, for the next call's source-stream band conditioning.
+        sigma = (timestep.flatten()[0] / 1000.0).float()
+        span = slice(band.protected_t, band.head_t)
+        domain.band_estimate["x0"] = (
+            (x[0][:, :, span].float() - sigma.to(x[0].device) * result[0][:, :, span].float()).detach().clone()
+        )
     video = result[0].clone()
     video[:, :, : owner.prefix_t] = 0
     video[:, :, band.head_t :, band.source_h :] = 0

@@ -1,5 +1,11 @@
 # Unreleased: consistent target-band handoff
 
+- Domain-uniform low/probe conditions the tail on the band. After the first
+  low call, the source stream holds the band as known, prefix-conditioned frames
+  built from the target stream's latest clean band estimate, carried from low
+  into the probe. Previously the source stream only saw the noisy band state and
+  could generate a tail whose tone or content diverged from the band.
+
 - Non-Sol continuation stages publish Flow's own Spectrum attention-history
   identity (`attention_backend_history_v1`). Every partitioned attention call
   goes through Flow's provider, which bypasses the outer attention override and
