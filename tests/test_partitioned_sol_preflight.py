@@ -21,9 +21,10 @@ def test_partitioned_sol_preflight_accepts_coordinated_runtime_contract():
     _validate_partitioned_sol_compat(_guider(dict(PARTITIONED_SOL_REQUIRED_METADATA)))
 
 
-def test_partitioned_sol_preflight_rejects_missing_runtime_before_sampling():
-    with pytest.raises(PartitionedPreflightUnsupported, match="active Sol-H3 native runtime ownership"):
-        _validate_partitioned_sol_compat(_guider(None))
+def test_partitioned_sol_preflight_allows_native_attention_without_sol():
+    assert _validate_partitioned_sol_compat(_guider(None)) is False
+    metadata = dict(PARTITIONED_SOL_REQUIRED_METADATA, backend="inherit", attention_ownership="inherit")
+    assert _validate_partitioned_sol_compat(_guider(metadata)) is False
 
 
 @pytest.mark.parametrize(
@@ -32,7 +33,7 @@ def test_partitioned_sol_preflight_rejects_missing_runtime_before_sampling():
         ("api", 2),
         ("owner", "other"),
         ("exact", False),
-        ("backend", "inherit"),
+        ("backend", "unknown"),
         ("attention_ownership", "inherit"),
         ("kernel_contract", "old-kernel"),
         ("history_policy", "other-history"),

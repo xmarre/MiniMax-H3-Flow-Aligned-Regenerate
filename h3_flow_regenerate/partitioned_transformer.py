@@ -15,6 +15,12 @@ from dataclasses import dataclass
 import torch
 
 from .geometry import resize_spatial_5d_h3_patch_lattice
+from .partitioned_attention import (
+    PARTITIONED_ATTENTION_PROVIDER_KEY,
+    call_partitioned_attention,
+    partitioned_block_extra,
+    sol_attention_selected,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -162,6 +168,10 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
             q, k, v = transform(q, k, v, heads=heads, **kw)
         return q, k, v
 
+    def partition_request(q, k, v, **kwargs):
+        _transforms, terminal = _runtime_provider_state(runtime)
+        return call_partitioned_attention(q, k, v, terminal=terminal, metrics=metrics, **kwargs)
+
     def partition_leaf(original, q, k, v, heads, mask=None, **kw):
         _transforms, terminal = _runtime_provider_state(runtime)
         options = kw.get("transformer_options") or {}
@@ -181,12 +191,10 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
         if type(block_index) is not int or block_index < 0:
             raise RuntimeError("partitioned exact-prefix attention is missing its block identity")
 
-        from sol_h3.partitioned_request import partitioned_request_attention
-
         q_thd = q[0].transpose(0, 1)
         k_thd = k[0].transpose(0, 1)
         v_thd = v[0].transpose(0, 1)
-        output = partitioned_request_attention(
+        output = partition_request(
             q_thd,
             k_thd,
             v_thd,
@@ -200,7 +208,6 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
             semantic_digest=str(raw_contract["semantic_digest"]),
         )
         metrics.increment("partitioned_attention_calls")
-        metrics.increment("partitioned_sol_kernel_calls")
         metrics.increment("partitioned_requested_q_rows", int(q.shape[2]))
         metrics.increment("partitioned_kernel_q_rows", int(q.shape[2]))
         metrics.increment("partitioned_kv_rows", int(k.shape[2]))
@@ -218,6 +225,7 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
         override = partition_leaf
 
     override._h3_flow_partitioned_attention_override = True
+    override.partitioned_attention_v1 = partition_request
     override._h3_flow_partitioned_previous = None
     override._h3_flow_partitioned_provider_identity = runtime.attention_provider_identity
     return override
@@ -300,6 +308,9 @@ def _partitioned_transformer_options(
     block_options["minimax_h3_layout"] = partitioned_layout
     block_options[PARTITIONED_PREFIX_KEY] = partition_contract
     block_options[PARTITIONED_BLOCK_INDEX_KEY] = int(block_index)
+    block_options[PARTITIONED_ATTENTION_PROVIDER_KEY] = block_options[
+        "optimized_attention_override"
+    ].partitioned_attention_v1
     linear_mode = normalize_vdn_linear_diagnostic(runtime.vdn_linear_diagnostic)
     existing_linear_mode = block_options.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY)
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
@@ -830,7 +841,8 @@ def _domain_uniform_forward(
                     stage_view=stream.view,
                     domain_stream=stream.leaf,
                 )
-                output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
+                block_extra = partitioned_block_extra(extra)
+                output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
                 result = output["img"]
                 if result.shape != view.shape:
                     raise RuntimeError("domain-uniform stream block returned incompatible hidden state")
@@ -1149,7 +1161,7 @@ def partitioned_diffusion_wrapper(
                         if runtime.vdn_temporal_carrier_contract is not None
                         else None
                     ),
-                    sol_single_union=True,
+                    sol_single_union=sol_attention_selected(options),
                     deprecated_mixed_grid_contract_active=False,
                     audio_position_domain=str(runtime.audio_position_domain),
                     audio_position_policy_active=(position_policy is not None),
@@ -1225,7 +1237,8 @@ def partitioned_diffusion_wrapper(
                 runtime=runtime,
                 block_index=layer,
             )
-            output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
+            block_extra = partitioned_block_extra(extra)
+            output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
