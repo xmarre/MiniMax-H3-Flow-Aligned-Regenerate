@@ -1236,6 +1236,39 @@ def test_sol_history_recognizes_domain_low_probe_and_uniform_high(monkeypatch):
 
 
 @pytest.mark.usefixtures("native_audio_duration")
+def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch):
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    interop = pytest.importorskip("sol_h3.interop")
+    history = pytest.importorskip("sol_h3.partitioned_history")
+    history.install_partitioned_history_bridge()
+
+    from h3_flow_regenerate import partitioned_transformer as transform
+
+    original = transform.partitioned_diffusion_wrapper
+    recognized = {}
+
+    def recording_wrapper(executor, *args, **kwargs):
+        class Recording:
+            class_obj = executor.class_obj
+
+            def __call__(self, *call_args, **call_kwargs):
+                options = call_kwargs.get("transformer_options", call_args[3] if len(call_args) > 3 else None)
+                patch = options["patches_replace"]["dit"][("double_block", 0)]
+                identity = interop._flow_mixed_grid_replacement_identity(patch, 0)
+                kind = None if identity is None else identity[0][0]
+                recognized.setdefault(options.get("h3_flow_stage"), set()).add(kind)
+                return executor(*call_args, **call_kwargs)
+
+        return original(Recording(), *args, **kwargs)
+
+    monkeypatch.setattr(transform, "partitioned_diffusion_wrapper", recording_wrapper)
+    _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    flow_kind = history.PARTITIONED_FLOW_IDENTITY
+    assert recognized == {"low": {flow_kind}, "probe": {flow_kind}, "high": {flow_kind}}
+
+
+@pytest.mark.usefixtures("native_audio_duration")
 def test_domain_uniform_audio_position_selector_is_inactive(monkeypatch):
     from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_AUDIO_POSITION_DOMAIN_KEY
 
