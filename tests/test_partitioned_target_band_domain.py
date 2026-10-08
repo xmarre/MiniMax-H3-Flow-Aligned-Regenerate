@@ -613,6 +613,7 @@ def test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(monkeypatch
     without_linear = case.domain_call()
     assert not torch.equal(output[0][:, :, PROTECTED_T:head], without_linear[0][:, :, PROTECTED_T:head])
 
+
 @pytest.mark.parametrize("same_grid", [False, True])
 def test_unwrapped_core_blocks_share_nonattention_work_without_merging_domain_attention(monkeypatch, same_grid):
     """One native Core block performs row-wise work once; attention stays stream-local."""
