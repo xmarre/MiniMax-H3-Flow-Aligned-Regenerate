@@ -1,5 +1,15 @@
 # Unreleased: consistent target-band handoff
 
+- Target-band boundary capture additionally saves bounded native-window pairs
+  before/after Flow for the first 16 high calls, including actual/forecast
+  provenance. Optional pairs share the existing CPU budget and reserve the
+  existing final snapshot; omitted calls are listed. Generation is unchanged.
+  Local Boundary Audit adds `high_prediction_tone`: two VAE decodes per saved
+  pair, regional luminance measurements, immediate Flow changes and changes
+  between captured calls over unblended boundary-window frames. Older bundles
+  lack this evidence. These measurements do not establish a rendered repair
+  or separate sampler evolution from subsequent model/forecast predictions.
+
 - Add two opt-in `progressive_target_band` comparison controls. Defaults publish
   no option leaf, so existing workflows and numerical identities are unchanged.
   Requesting either disables the target-grid fallback.
@@ -980,3 +990,4 @@ latent samples enter the report. It runs independently of sampling and leaves
 production behavior unchanged. Native temporal-source and synthetic geometry
 tests verify replay timing and diagnostic arithmetic; rendered quality and GPU
 execution require evaluation with the connected production VAE.
+

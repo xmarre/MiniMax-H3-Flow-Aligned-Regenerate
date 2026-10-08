@@ -29,7 +29,7 @@ STAGES = {
     "first_high_after_flow": "first_high_after_flow_full",
     "final": "final_post_high_internal_clean_full",
 }
-SCOPES = ("stage_continuity", "transfer_and_decoder_context")
+SCOPES = ("stage_continuity", "transfer_and_decoder_context", "high_prediction_tone")
 DETAIL_REGIONS = ("off", "upper_left")
 
 
@@ -117,7 +117,7 @@ def normalize_bundle_path(bundle_path, *, platform, wsl_distro):
     return path
 
 
-def load_replay_operands(bundle_path, join_frame, *, include_source=False):
+def load_replay_operands(bundle_path, join_frame, *, include_source=False, include_high_predictions=False):
     path = normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME"))
     directory = Path(path).expanduser().resolve()
     if directory.name == "manifest.json":
@@ -244,7 +244,66 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False):
         if not torch.allclose(source[:, :, :head], expected_head, atol=1e-4, rtol=1e-5):
             raise ValueError("reduced-grid handoff head differs from the projected native head")
         stages = {"source_grid": source[:, :, crop].clone(), **stages}
-    return plan, stages, {"manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(), "operand_sha256": hashes}
+    identity = {"manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(), "operand_sha256": hashes}
+    if include_high_predictions:
+        trace = metadata["window"].get("high_prediction_trace")
+        if not isinstance(trace, dict) or trace.get("policy") != "bounded_high_prediction_windows_v1":
+            raise ValueError("this bundle predates high-call capture; select a new capture_boundary_witness bundle")
+        calls = trace.get("calls")
+        omitted = trace.get("omitted_call_indices")
+        if (
+            trace.get("max_calls") != 16
+            or not isinstance(calls, list)
+            or not calls
+            or len(calls) > 16
+            or not isinstance(omitted, list)
+            or any(type(i) is not int or not 0 <= i < 16 for i in omitted)
+            or len(set(omitted)) != len(omitted)
+        ):
+            raise ValueError("invalid saved high prediction trace")
+        window = metadata["window"]
+        start, stop = plan["prefix_t"] - 2, plan["prefix_t"] + 5
+        if (window.get("window_start_t"), window.get("window_stop_t"), window.get("window_tokens")) != (start, stop, 7):
+            raise ValueError("saved high prediction windows differ from native boundary timing")
+        indices = []
+        records = []
+        for call in calls:
+            index = call.get("call_index") if isinstance(call, dict) else None
+            sigma = call.get("sigma") if isinstance(call, dict) else None
+            if (
+                type(index) is not int
+                or not 0 <= index < 16
+                or index in omitted
+                or (indices and index <= indices[-1])
+                or type(sigma) not in (int, float)
+                or not math.isfinite(sigma)
+                or not 0 < sigma <= 1
+                or type(call.get("actual")) is not bool
+            ):
+                raise ValueError("invalid high prediction call provenance")
+            record = dict(call)
+            for point in ("before_flow", "after_flow"):
+                expected = (
+                    f"first_high_{point}"
+                    if index == metadata.get("first_high_call_index")
+                    else f"high_prediction_{index:02d}_{point}"
+                )
+                if call.get(point) != expected:
+                    raise ValueError("saved high prediction operand ownership differs")
+                value = read(expected)
+                if tuple(value.shape) != (1, 24, 7, *prefix.shape[-2:]):
+                    raise ValueError("saved high prediction window geometry differs")
+                value[:, :, :2] = prefix[:, :, start : plan["prefix_t"]]
+                key = f"high_call_{index:02d}_{point}"
+                stages[key] = value
+                record["window_" + point] = key
+            indices.append(index)
+            records.append(record)
+        if indices[0] != metadata.get("first_high_call_index") or calls[0]["actual"] is not True:
+            raise ValueError("saved high prediction trace does not begin with the first actual call")
+        identity["high_prediction_calls"] = records
+        identity["omitted_high_call_indices"] = omitted
+    return plan, stages, identity
 
 
 def geometry_comparison(reference, candidate, frame_labels):
@@ -392,7 +451,11 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
     expected = {"tokens_chunk_size": 5, "token_overlap": 2, "frame_pre_padding": 3, "clip_length": 17}
     if native is None or any(getattr(native, key, None) != value for key, value in expected.items()):
         raise ValueError("connect the native MiniMax H3 video VAE used for production decoding")
-    plan, stages, identity = load_replay_operands(bundle_path, join_frame, include_source=extended)
+    plan, stages, identity = load_replay_operands(
+        bundle_path, join_frame, include_source=extended, include_high_predictions=scope == "high_prediction_tone"
+    )
+    if scope == "high_prediction_tone":
+        return _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region)
     begin, end = plan["measured_local_frames"]
     labels = list(range(plan["decoded_origin_frame"] + begin, plan["decoded_origin_frame"] + end))
     report = {
@@ -494,6 +557,77 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
     return report
 
 
+def _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region):
+    # Local frames 5..16 are unblended output of this native seven-token
+    # decoder window. Frame 5 is the predecessor of the first measured pair.
+    # Exclude the join pair itself and the next window's overlap.
+    labels = list(range(plan["join_frame"] + 1, plan["join_frame"] + 12))
+    report = {
+        "policy": "native_high_prediction_tone_audit_v1",
+        "scope": "high_prediction_tone",
+        "fps": 24,
+        "detail_region": detail_region,
+        **identity,
+        "frame_labels": labels,
+        "sampling_rerun": False,
+        "production_output_modified": False,
+        "rendered_acceptance": False,
+        "extra_vae_calls": 0,
+        "native_unblended_window_only": True,
+        "model_forecast_solver_causality_established": False,
+        "calls": [],
+    }
+    previous_after = None
+    for call in identity["high_prediction_calls"]:
+        decoded = {}
+        measurements = {}
+        for point in ("before_flow", "after_flow"):
+            latent = stages[call["window_" + point]]
+            pixels = _decode_owned_pixels(vae, latent, process_out, 22)[0, 5:17].detach().float().cpu().clone()
+            report["extra_vae_calls"] += 1
+            decoded[point] = pixels
+            regions = {"full": pixels}
+            if detail_region != "off":
+                regions[detail_region] = _detail_crop(pixels, detail_region)[0]
+            measurements[point] = {}
+            for name, region in regions.items():
+                luma = region @ torch.tensor([0.2126, 0.7152, 0.0722])
+                measurements[point][name] = {
+                    "luma_mean": luma[1:].mean((1, 2)).tolist(),
+                    "luma_std": luma[1:].std((1, 2), correction=0).tolist(),
+                    "adjacent_luma_mean_change": (luma[1:] - luma[:-1]).mean((1, 2)).tolist(),
+                }
+        row = {
+            "call_index": call["call_index"],
+            "sigma": call["sigma"],
+            "actual": call["actual"],
+            "prediction": measurements,
+            "immediate_flow_change": _tone_pixel_change(decoded["before_flow"], decoded["after_flow"], detail_region),
+        }
+        if previous_after is not None:
+            previous_index, previous_pixels = previous_after
+            row["previous_captured_call_index"] = previous_index
+            row["between_calls_change"] = _tone_pixel_change(previous_pixels, decoded["before_flow"], detail_region)
+        previous_after = call["call_index"], decoded["after_flow"]
+        report["calls"].append(row)
+    return report
+
+
+def _tone_pixel_change(before, after, detail_region):
+    regions = {"full": (before, after)}
+    if detail_region != "off":
+        regions[detail_region] = (_detail_crop(before, detail_region)[0], _detail_crop(after, detail_region)[0])
+    result = {}
+    for name, (a, b) in regions.items():
+        luma_delta = (b - a) @ torch.tensor([0.2126, 0.7152, 0.0722])
+        result[name] = {
+            "same_frame_luma_change": luma_delta[1:].mean((1, 2)).tolist(),
+            "adjacent_luma_increment_change": (luma_delta[1:] - luma_delta[:-1]).mean((1, 2)).tolist(),
+            "same_frame_rgb_change_rms": (b[1:] - a[1:]).square().mean((1, 2, 3)).sqrt().tolist(),
+        }
+    return result
+
+
 class H3FlowLocalBoundaryAudit:
     @classmethod
     def INPUT_TYPES(cls):
@@ -519,7 +653,9 @@ class H3FlowLocalBoundaryAudit:
                         "default": "stage_continuity",
                         "tooltip": (
                             "Stage continuity uses five VAE calls. Transfer and decoder context uses eighteen: "
-                            "adds the saved reduced-grid view and same-time comparisons of both decoder windows."
+                            "adds the saved reduced-grid view and same-time comparisons of both decoder windows. "
+                            "High prediction tone uses two native-window decodes per captured high call, with "
+                            "actual/forecast provenance and paired before/after Flow measurements."
                         ),
                     },
                 ),

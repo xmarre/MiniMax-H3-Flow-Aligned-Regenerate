@@ -57,6 +57,14 @@ class BoundaryWindowEvidence:
         self.first_high_call_index: int | None = None
         self.first_high_sigma: float | None = None
         self.copy_wall_s = 0.0
+        self.pending_high_prediction = None
+        if capture_full_video:
+            self.plan["high_prediction_trace"] = {
+                "policy": "bounded_high_prediction_windows_v1",
+                "max_calls": 16,
+                "calls": [],
+                "omitted_call_indices": [],
+            }
         self.capture("authoritative_prefix", exact_prefix)
 
     def __deepcopy__(self, memo):
@@ -101,10 +109,65 @@ class BoundaryWindowEvidence:
             and "first_high_after_flow" not in self.tensors
         ):
             self.capture("first_high_after_flow", video)
+        if self.capture_full_video and point in {"before_flow", "after_flow"}:
+            self._observe_high_prediction(video, point=point, call_index=call_index, sigma=sigma, actual=actual)
+
+    def _observe_high_prediction(self, video, *, point, call_index, sigma, actual):
+        trace = self.plan["high_prediction_trace"]
+        if self.first_high_call_index is None or not 0 <= call_index < trace["max_calls"]:
+            return
+        if point == "before_flow":
+            if self.pending_high_prediction is not None or any(
+                call["call_index"] == call_index for call in trace["calls"]
+            ):
+                raise RuntimeError("high prediction window capture reused a call")
+            first = call_index == self.first_high_call_index
+            names = (
+                ("first_high_before_flow", "first_high_after_flow")
+                if first
+                else (f"high_prediction_{call_index:02d}_before_flow", f"high_prediction_{call_index:02d}_after_flow")
+            )
+            start, stop = self.plan["window_start_t"], self.plan["window_stop_t"]
+            window = video[:, :, start:stop].detach()
+            window_bytes = window.numel() * window.element_size()
+            # Keep room for the existing final full-video snapshot. Optional
+            # later-call evidence must never make a previously valid capture fail.
+            reserve = video.numel() * video.element_size() + window_bytes
+            needed = 0 if first else 2 * window_bytes
+            if self.cpu_tensor_bytes + needed + reserve > self.max_bytes:
+                trace["omitted_call_indices"].append(int(call_index))
+                return
+            if not first:
+                self._capture_prediction_window(names[0], window)
+            self.pending_high_prediction = {
+                "call_index": int(call_index),
+                "sigma": float(sigma),
+                "actual": bool(actual),
+                "before_flow": names[0],
+                "after_flow": names[1],
+            }
+        elif self.pending_high_prediction is not None:
+            call = self.pending_high_prediction
+            if (int(call_index), float(sigma), bool(actual)) != (call["call_index"], call["sigma"], call["actual"]):
+                raise RuntimeError("high prediction window pair changed provenance")
+            if call["after_flow"] not in self.tensors:
+                start, stop = self.plan["window_start_t"], self.plan["window_stop_t"]
+                self._capture_prediction_window(call["after_flow"], video[:, :, start:stop].detach())
+            trace["calls"].append(call)
+            self.pending_high_prediction = None
+
+    def _capture_prediction_window(self, name, window):
+        if name in self.tensors or window.shape[2] != self.plan["window_tokens"]:
+            raise RuntimeError("high prediction window capture geometry or ownership changed")
+        started = time.perf_counter()
+        self.tensors[name] = window.to(device="cpu", copy=True).contiguous()
+        self.cpu_tensor_bytes += window.numel() * window.element_size()
+        self.copy_wall_s += time.perf_counter() - started
 
     def close(self):
         self.tensors.clear()
         self.cpu_tensor_bytes = 0
+        self.pending_high_prediction = None
 
 
 def _safe_component(value: Any) -> str:
