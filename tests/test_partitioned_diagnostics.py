@@ -54,6 +54,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
@@ -187,7 +188,9 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert diagnostic["handoff_transfer_control"][0] == list(PARTITIONED_HANDOFF_TRANSFER_OPTIONS)
     assert diagnostic["handoff_transfer_control"][1]["default"] == PARTITIONED_HANDOFF_TRANSFER_LEARNED
     assert diagnostic["spatial_stage_control"][0] == list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS)
-    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    assert diagnostic["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
+    assert diagnostic["suffix_dc_bridge"][1]["default"] is False
     assert diagnostic["softmax_diagnostic"][0] == list(PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS)
     assert diagnostic["softmax_diagnostic"][1]["default"] == PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL
     assert diagnostic["video_guided_overlap_tokens"][0] == "INT"
@@ -202,7 +205,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
         == PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW
     )
     assert diagnostic["frame_gauge_repair"][0] == "BOOLEAN"
-    assert diagnostic["frame_gauge_repair"][1]["default"] is True
+    assert diagnostic["frame_gauge_repair"][1]["default"] is False
     assert diagnostic["frame_gauge_residual_mode"][1]["default"] == "off"
     assert diagnostic["capture_boundary_witness"][1]["default"] is False
     assert diagnostic["vdn_temporal_carrier_policy"][0] == list(PARTITIONED_VDN_TEMPORAL_CARRIER_OPTIONS)
@@ -299,7 +302,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
     transformer = options["transformer_options"]
     assert result is model and returned_metrics is metrics
     assert transformer["existing_owner"] is owner
-    assert captured["frame_gauge_repair"] is (not explicit_legacy)
+    assert captured["frame_gauge_repair"] is False
     assert captured["frame_gauge_residual_mode"] == "off"
     assert options[PARTITIONED_AUDIO_GUIDED_OVERLAP_TICKS_KEY] == (4 if explicit_legacy else 16)
     assert options[PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY] == (
@@ -314,7 +317,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
         None if explicit_legacy else PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT
     )
     assert transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == (
-        None if explicit_legacy else PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        None if explicit_legacy else PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
     )
     assert options.get(PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY, 0) == (0 if explicit_legacy else 6)
 

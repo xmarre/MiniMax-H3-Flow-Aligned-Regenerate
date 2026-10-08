@@ -35,8 +35,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_OPTIONS,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS,
-    PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
     PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS,
     PARTITIONED_TARGET_BAND_HANDOFF_STATE_OPTIONS,
@@ -234,7 +234,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
     continue to load. The user-facing node is no longer labeled diagnostic.
     """
 
-    FRAME_GAUGE_REPAIR_DEFAULT = True
+    FRAME_GAUGE_REPAIR_DEFAULT = False
     PRODUCTION_DEFAULT_CHANGED = True
 
     @classmethod
@@ -450,8 +450,13 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["spatial_stage_control"] = (
             list(PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS),
             {
-                "default": PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+                "default": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
                 "tooltip": (
+                    "progressive_uniform_source (default) runs continuation low/probe as one full-duration "
+                    "reduced-grid clip for all generated frames, transfers the whole generated trajectory "
+                    "through the learned upscaler, then restores the exact target-grid prefix before high "
+                    "refinement. Use normal attention/VDN diagnostics and the default target-band selectors "
+                    "with this mode. "
                     "same_grid_target_control runs continuation low/probe directly on the target grid, keeps "
                     "the same handoff split and downstream high stage, and uses an identity "
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
@@ -460,11 +465,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "protected prefix on the target grid, keeps their native clean prediction and re-noises "
                     "all generated tokens. It runs the remaining "
                     "continuation tokens on the reduced grid with learned transfer. "
-                    "progressive_uniform_source runs one full-duration reduced-grid clip for all generated "
-                    "frames, transfers the whole generated trajectory through the learned upscaler, then restores "
-                    "the exact target-grid prefix. It has no independently generated target band. "
-                    "Use normal attention/VDN diagnostics and the default target-band selectors with this mode. "
-                    "Its rendered boundary continuity remains unvalidated."
+                    "Modes other than progressive_uniform_source are retained for existing workflows and "
+                    "comparisons."
                 ),
             },
         )
@@ -509,7 +511,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["suffix_dc_bridge"] = (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": (
                     "Continuation only. When enabled, the first generated token that receives learned spatial "
                     "transfer gets the per-channel spatial-mean offset the transfer produced on the carried "
@@ -597,16 +599,16 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         av_handoff_source=PARTITIONED_AV_HANDOFF_SOURCE_MAIN,
         guidance_trajectory_source=PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN,
         low_probe_execution_source=PARTITIONED_LOW_PROBE_EXECUTION_SOURCE_MAIN_THEN_SHADOW,
-        frame_gauge_repair=True,
+        frame_gauge_repair=False,
         frame_gauge_residual_mode="off",
         provider_boundary_stabilization=PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT,
         capture_boundary_witness=False,
         vdn_temporal_carrier_policy=PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE,
         handoff_transfer_control=PARTITIONED_HANDOFF_TRANSFER_LEARNED,
-        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_SAME_GRID,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
         softmax_diagnostic=PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
         video_guided_overlap_tokens=6,
-        suffix_dc_bridge=True,
+        suffix_dc_bridge=False,
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
         target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,

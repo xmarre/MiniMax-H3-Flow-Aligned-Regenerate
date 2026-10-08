@@ -80,7 +80,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert production["target_band_context"][0][:2] == ["mixed_grid", "domain_uniform_v1"]
     assert production["target_band_context"][1]["default"] == "mixed_grid"
     assert production["suffix_dc_bridge"][0] == "BOOLEAN"
-    assert production["suffix_dc_bridge"][1]["default"] is True
+    assert production["suffix_dc_bridge"][1]["default"] is False
     assert production["target_band_tokens"][0] == "INT"
     assert production["target_band_tokens"][1]["default"] == PARTITIONED_TARGET_BAND_TOKENS_DEFAULT
     assert production["target_band_tokens"][1]["min"] == 1
@@ -92,7 +92,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
         PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     )
-    assert production["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_SAME_GRID
+    assert production["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
 
 
 @pytest.mark.parametrize(

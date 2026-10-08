@@ -64,16 +64,16 @@ def test_progressive_overlay_defines_partitioned_defaults_and_preserves_controls
         "av_handoff_source": "main_partitioned",
         "guidance_trajectory_source": "main_exact_partitioned",
         "low_probe_execution_source": "main_then_shadow",
-        "frame_gauge_repair": True,
+        "frame_gauge_repair": False,
         "frame_gauge_residual_mode": "off",
         "provider_boundary_stabilization": "soft_support_v1",
         "capture_boundary_witness": False,
         "vdn_temporal_carrier_policy": "native_grid_then_map_v1",
         "handoff_transfer_control": "learned_3d",
-        "spatial_stage_control": "same_grid_target_control",
+        "spatial_stage_control": "progressive_uniform_source",
         "softmax_diagnostic": "normal",
         "video_guided_overlap_tokens": 6,
-        "suffix_dc_bridge": True,
+        "suffix_dc_bridge": False,
         "target_band_tokens": 4,
         "weight_semantics": (
             "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values "
@@ -93,13 +93,14 @@ def test_progressive_overlay_defines_partitioned_defaults_and_preserves_controls
     assert control["exact_prefix_fallback"]["audio_guided_overlap_ticks"] == 4
 
     exact = overlay["exact_prefix_contract"]
-    assert exact["mode"] == "same_grid_target_control"
+    assert exact["mode"] == "progressive_uniform_source"
     assert exact["audio"]["stored_overlap_ticks"] == 16
     assert exact["audio"]["effective_overlap_ticks"] == 0
     assert exact["video"]["stored_overlap_tokens"] == 6
     assert exact["video"]["effective_overlap_tokens"] == 0
     assert exact["shadow"]["default_main_sources_add_shadow_lifetime"] is False
-    assert exact["heterogeneous_continuation"].startswith("opt-in")
+    assert exact["high_video_grid"] == "target"
+    assert "same_grid_target_control" in exact["retained_modes"]
 
     assert historical["control_widget"] == {"handoff_transfer": "bicubic"}
     assert historical["treatment_widget"] == {"handoff_transfer": "learned_3d"}
