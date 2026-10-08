@@ -9,6 +9,7 @@ to the Sol/VDN partitioned backend.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import inspect
 from dataclasses import dataclass
@@ -891,15 +892,13 @@ def _domain_uniform_forward(
             original = extra["original_block"]
             native_block = None
             if previous is None:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     native_block = inspect.getclosurevars(original).nonlocals.get("block")
-                except (TypeError, ValueError):
-                    pass
             if native_block is inner.blocks[layer]:
                 offsets = (0, target_stream.rows)
                 combined_mod_segments = [
                     (first + offset, last + offset, row)
-                    for offset, (_, forwarded) in zip(offsets, calls)
+                    for offset, (_, forwarded) in zip(offsets, calls, strict=True)
                     for first, last, row in forwarded["mod_segments"]
                 ]
 
@@ -912,7 +911,7 @@ def _domain_uniform_forward(
                             rope_freqs=forwarded["rope_freqs"],
                             transformer_options=forwarded["transformer_options"],
                         )
-                        for offset, (stream, forwarded) in zip(offsets, calls)
+                        for offset, (stream, forwarded) in zip(offsets, calls, strict=True)
                     ]
                     return torch.cat(outputs, dim=0)
 
