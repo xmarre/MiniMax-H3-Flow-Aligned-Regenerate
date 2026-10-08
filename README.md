@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For Continuum exact-prefix continuation with Sol-H3 and VDN-H3-Plus, the production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
+For Continuum exact-prefix continuation with VDN-H3-Plus, the production path is **MiniMax H3 Partitioned Exact-Prefix Handoff**. It supports the selected ComfyUI attention backend; Sol-H3 attention is optional. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -30,14 +30,15 @@ Loadable examples are under [`workflows/examples/`](workflows/examples/):
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
-The partitioned and generic target-input examples both configure `MinimaxH3LatentUpscaler3DProvider` with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. These compact examples deliberately use stock one-chunk H3 conditioning/sampling so the Flow patch wiring is inspectable in isolation; the partitioned exact-prefix runtime activates when the same patched `MODEL` is consumed by Continuum Native Masked continuation with a protected prefix. That production path requires the coordinated Sol-H3 and VDN-H3-Plus releases listed under [Coordinated H3 release set](#coordinated-h3-release-set).
+The partitioned and generic target-input examples both configure `MinimaxH3LatentUpscaler3DProvider` with `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 precision, and `offload_after_upscale=false`. Matching `.api.json` prompt graphs are included for API execution. These compact examples deliberately use stock one-chunk H3 conditioning/sampling so the Flow patch wiring is inspectable in isolation; the partitioned exact-prefix runtime activates when the same patched `MODEL` is consumed by Continuum Native Masked continuation with a protected prefix. VDN-H3-Plus partitioned transport is required. The examples use the coordinated Sol-H3/VDN-H3-Plus release set listed under [Coordinated H3 release set](#coordinated-h3-release-set).
 
 All three examples use `res_multistep` and no Turbo LoRA. The `workflows/*.overlay.json` files are topology/specification documents rather than loadable ComfyUI workflows; see [`workflows/README.md`](workflows/README.md) for the format distinction.
 
 ## Partitioned exact-prefix Continuum path
 
-Use **MiniMax H3 Partitioned Exact-Prefix Handoff** with the coordinated
-Sol-H3/VDN-H3-Plus/Continuum releases. The historical serialized node ID
+Use **MiniMax H3 Partitioned Exact-Prefix Handoff** with compatible
+VDN-H3-Plus/Continuum releases and the selected attention backend. Sol-H3
+attention remains an optional companion. The historical serialized node ID
 `H3PartitionedExactPrefixDiagnosticHandoff` remains unchanged.
 
 New nodes use these defaults; existing explicit workflow values are retained:
@@ -153,8 +154,21 @@ head. The band must leave at least one generated token on the reduced grid.
 The mode requires `handoff_transfer_control=learned_3d`,
 `prefix_transformer_context=exact_target_partitioned`, the main handoff and
 guidance sources.
-It also requires VDN-H3-Plus and Sol-H3 releases that accept a target-grid
-native partition carrier. Unsupported combinations fail before sampling.
+It requires VDN-H3-Plus transport that accepts a target-grid native partition
+carrier. When Sol attention is selected, its history contract must also accept
+that carrier. Unsupported combinations fail before sampling.
+
+Partitioned continuation without Sol uses VDN partitioned attention provider
+API 1 and the selected ComfyUI attention backend. The protected geometry,
+restricted window K/V unions, key measure and learned VDN branch are preserved.
+Non-unit measures are additive key masks with O(K/V rows) storage. Core BSA's
+chunked H3 producer is bypassed for partitioned calls because it cannot consume
+that mask or VDN's learned branch. Its regular attention override remains in the
+dispatch chain; weighted, mapped, rectangular and forced-dense calls use its
+native dense fallback. Sparse eligibility on ordinary first chunks is unchanged.
+These dense calls can cost more time and memory. Spectrum may run actual-only
+when it cannot verify the composed backend's history. GPU quality, timing and
+memory remain empirical. Selecting Sol retains its request-owned sparse path.
 
 With `capture_boundary_witness=true`, target-band continuation saves CPU copies
 of the low/probe carrier, uniform reduced-grid provider input, provider output,
@@ -261,8 +275,8 @@ output unchanged and does not request mixed-grid execution verification.
 Audio-only references also use each receiving stream's native spatial
 endpoints while preserving reference times. Duration and keyframe restrictions
 are checked before opening the low-stage sampler lifetime.
-Paired VDN-H3-Plus and Sol-H3 releases that
-accept domain-stream API 1 are required. Completed work is verified: every
+VDN-H3-Plus must accept domain-stream API 1. If Sol attention is selected,
+its history contract must also recognize that API. Completed work is verified: every
 low/probe stage must run both streams through every transformer block.
 
 The learned band/tail handoff and the high stage are unchanged. This control

@@ -561,6 +561,11 @@ def main() -> None:
         validate_flow_partition_contract,
         validate_temporal_carrier_contract,
     )
+    from h3_flow_regenerate.partitioned_attention import PARTITIONED_ATTENTION_PROVIDER_KEY
+    from vdn_h3.softmax_provider import PARTITIONED_PROVIDER_API_VERSION, PARTITIONED_PROVIDER_KEY
+
+    if PARTITIONED_PROVIDER_API_VERSION != 1 or PARTITIONED_PROVIDER_KEY != PARTITIONED_ATTENTION_PROVIDER_KEY:
+        raise SystemExit("Flow/VDN partitioned attention provider contract diverged")
 
     keys = {
         FLOW_RUNTIME_KEY,

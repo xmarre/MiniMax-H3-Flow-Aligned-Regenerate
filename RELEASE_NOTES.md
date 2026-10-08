@@ -1,5 +1,19 @@
 # Unreleased: consistent target-band handoff
 
+- Partitioned continuation supports the selected ComfyUI attention backend
+  without requiring Sol-H3 runtime ownership or package installation. VDN
+  partitioned attention provider API 1 carries the same restricted Q/K/V unions
+  and additive key measures. Sol remains a supported explicit backend with its
+  existing request lifecycle and sparse dispatch. Core BSA's chunked producer
+  cannot bypass the partition mask or VDN branch; its regular override uses its
+  native dense fallback for weighted, mapped or rectangular requests. First
+  chunks retain their existing attention routing. Full-sequence Q/K/V
+  preprocessing is preserved before VDN gathers, including
+  when Core BSA wraps that preprocessing hook. Dense attention can increase
+  time and memory, and opaque history can make Spectrum actual-only. CPU tests
+  establish arithmetic, scheduling and composition; rendered tone and GPU
+  performance require validation.
+
 - Target-band boundary capture additionally saves bounded native-window pairs
   before/after Flow for the first 16 high calls, including actual/forecast
   provenance. Optional pairs share the existing CPU budget and reserve the
@@ -22,7 +36,8 @@
     own conditioning rows and a native layout; no rows or keys are shared within
     a call. Band velocity comes from the target stream, and tail/audio velocity
     from the source stream. Requires normal VDN linear/softmax diagnostics, the
-    native temporal-carrier policy, and VDN-H3-Plus/Sol-H3 domain-stream API 1.
+    native temporal-carrier policy, and VDN-H3-Plus domain-stream API 1. Sol
+    attention additionally requires its matching domain-stream history API.
     Completed execution of both streams through every block is verified, and the
     runtime evidence gate accepts the per-stream boundary receipts.
   - The learned band/tail handoff and high stage are unchanged. CPU oracles

@@ -1121,6 +1121,7 @@ def _validate_partitioned_vdn_compat(
     required_softmax_diagnostic: str = PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL,
     required_native_carrier: str = PARTITIONED_NATIVE_CARRIER_SOURCE,
     required_domain_stream: bool = False,
+    required_attention_provider: bool = False,
 ) -> str | None:
     object_patches = getattr(patcher, "object_patches", None)
     if not isinstance(object_patches, dict):
@@ -1144,6 +1145,10 @@ def _validate_partitioned_vdn_compat(
         if not getattr(owner, "_vdn_forward", False):
             continue
         matched += 1
+        if required_attention_provider and getattr(owner, "_vdn_partitioned_attention_provider_api", 0) != 1:
+            raise PartitionedPreflightUnsupported(
+                "selected attention backend requires VDN partitioned attention provider API 1; update the VDN overlay"
+            )
         if boundary_witness_requested and getattr(owner, "_vdn_partitioned_boundary_witness_api", 0) != 1:
             raise RuntimeError("requested boundary witness requires paired VDN witness API 1 before sampling")
         if int(getattr(owner, "_vdn_partitioned_boundary_query_api", 0)) != VDN_PARTITIONED_BOUNDARY_QUERY_API:
@@ -1526,21 +1531,15 @@ def _verify_audio_position_domain_diagnostic(
         )
 
 
-def _validate_partitioned_sol_compat(guider: Any) -> None:
-    """Require the Sol request owner before any partitioned sampler lifetime.
-
-    VDN API-4 delegates partitioned sparse attention to Sol's request-owned
-    backend.  Sol intentionally refuses those calls outside its native
-    OUTER_SAMPLE lifecycle, so missing or stale Sol metadata is a preflight
-    fallback condition rather than a mid-sampler runtime failure.
-    """
+def _validate_partitioned_sol_compat(guider: Any) -> bool:
+    """Validate Sol's request owner only when Sol attention is selected."""
     options = getattr(guider, "model_options", None)
     transformer = options.get("transformer_options") if isinstance(options, dict) else None
     metadata = transformer.get(SOL_RUNTIME_KEY) if isinstance(transformer, dict) else None
+    if metadata is None or (isinstance(metadata, dict) and metadata.get("backend") == "inherit"):
+        return False
     if not isinstance(metadata, dict):
-        raise PartitionedPreflightUnsupported(
-            "partitioned exact-prefix requires active Sol-H3 native runtime ownership"
-        )
+        raise PartitionedPreflightUnsupported("partitioned attention received malformed Sol-H3 runtime metadata")
 
     mismatches = [
         f"{name}={metadata.get(name)!r}"
@@ -1550,6 +1549,19 @@ def _validate_partitioned_sol_compat(guider: Any) -> None:
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: " + ", ".join(mismatches)
+        )
+    return True
+
+
+def _validate_partitioned_native_provider() -> None:
+    """Check that installed VDN can receive the backend-neutral provider hook."""
+    try:
+        from vdn_h3.softmax_provider import PARTITIONED_PROVIDER_API_VERSION
+    except ImportError:
+        PARTITIONED_PROVIDER_API_VERSION = 0
+    if PARTITIONED_PROVIDER_API_VERSION != 1:
+        raise PartitionedPreflightUnsupported(
+            "selected attention backend requires VDN partitioned attention provider API 1; update the VDN overlay"
         )
 
 
@@ -1954,6 +1966,7 @@ def _preflight(
         if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
         else PARTITIONED_NATIVE_CARRIER_SOURCE
     )
+    sol_selected = _validate_partitioned_sol_compat(guider)
     _validate_partitioned_vdn_compat(
         guider.model_patcher,
         required_linear_diagnostic=required_vdn_linear_diagnostic,
@@ -1961,14 +1974,22 @@ def _preflight(
         required_softmax_diagnostic=required_softmax_diagnostic,
         required_native_carrier=native_carrier,
         required_domain_stream=target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        required_attention_provider=not sol_selected,
     )
-    _validate_partitioned_sol_compat(guider)
-    _validate_partitioned_sol_native_carrier(native_carrier)
+    if sol_selected:
+        from sol_h3.partitioned_history import install_partitioned_history_bridge
+
+        install_partitioned_history_bridge()
+        _validate_partitioned_sol_native_carrier(native_carrier)
+    else:
+        _validate_partitioned_native_provider()
     if target_band_context != PARTITIONED_TARGET_BAND_CONTEXT_MIXED:
-        _validate_partitioned_sol_domain_stream()
+        if sol_selected:
+            _validate_partitioned_sol_domain_stream()
         _validate_target_band_domain_inputs(guider, latent_shapes)
     if required_softmax_diagnostic == PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK:
-        _validate_partitioned_sol_sink_measure(required_softmax_diagnostic)
+        if sol_selected:
+            _validate_partitioned_sol_sink_measure(required_softmax_diagnostic)
         if required_vdn_linear_diagnostic == PARTITIONED_VDN_LINEAR_DIAGNOSTIC_RAW_TOKEN_MEASURE:
             raise PartitionedPreflightUnsupported("target-query sink measure cannot be combined with raw_token_measure")
         if spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID:

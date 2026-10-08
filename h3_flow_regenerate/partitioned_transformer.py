@@ -10,11 +10,18 @@ to the Sol/VDN partitioned backend.
 from __future__ import annotations
 
 import copy
+import inspect
 from dataclasses import dataclass
 
 import torch
 
 from .geometry import resize_spatial_5d_h3_patch_lattice
+from .partitioned_attention import (
+    PARTITIONED_ATTENTION_PROVIDER_KEY,
+    call_partitioned_attention,
+    partitioned_block_extra,
+    sol_attention_selected,
+)
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_MODEL_TIMESTEP_CONTEXT_KEY,
     PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
@@ -84,10 +91,10 @@ def _vdn_external_contract(plan: PartitionedExactPrefixPlan) -> dict:
     return contract
 
 
-def _preprocess_chain(previous):
+def _preprocess_chain(previous, *, native_attention=False, seen=None):
     transforms = []
     provider = previous
-    seen = set()
+    seen = set() if seen is None else seen
     while provider is not None and hasattr(provider, _PREPROCESS_ATTR):
         if id(provider) in seen:
             raise RuntimeError("partitioned attention inherited a cyclic preprocessing chain")
@@ -97,6 +104,28 @@ def _preprocess_chain(previous):
             raise RuntimeError("partitioned attention inherited malformed preprocessing metadata")
         transform, provider = entry
         transforms.append(transform)
+    if (
+        native_attention
+        and getattr(provider, "__module__", None) == "comfy_extras.nodes_sparse_attention"
+        and getattr(provider, "__qualname__", None) == "make_attention_override.<locals>.override"
+    ):
+        if id(provider) in seen:
+            raise RuntimeError("partitioned attention inherited a cyclic Core BSA chain")
+        seen.add(id(provider))
+        captured = inspect.getclosurevars(provider).nonlocals
+        factory = provider.__globals__.get("make_attention_override")
+        if "previous" not in captured or "patch" not in captured or not callable(factory):
+            raise RuntimeError("partitioned attention cannot resolve Core BSA preprocessing ownership")
+        inner_transforms, terminal = _preprocess_chain(captured["previous"], native_attention=True, seen=seen)
+        if inner_transforms:
+            # Core's backend wrapper can hide full-domain preprocessing below
+            # it. Move that preprocessing before VDN gathers, then rebuild only
+            # the backend dispatch around the stripped leaf. Numerical identity
+            # remains bound to the original Core owner, not this new closure.
+            original = provider
+            provider = factory(captured["patch"], terminal)
+            provider._h3_flow_native_provider_identity = (_provider_name(original), id(original))
+            transforms.extend(inner_transforms)
     return tuple(transforms), provider
 
 
@@ -115,7 +144,7 @@ def _provider_name(provider):
     return f"{module}.{qualname}"
 
 
-def _inherited_provider_state(previous):
+def _inherited_provider_state(previous, *, native_attention=False):
     """Resolve the numerical identity that Sol history-v1 already considers stable.
 
     Generic attention_preprocess_v1 wrappers are allowed to be rebuilt around
@@ -125,11 +154,11 @@ def _inherited_provider_state(previous):
     visible provider object may remain stable; raw outer-wrapper identity is too
     strict and caused the 00500/00503/00506/00507 provider transitions.
     """
-    transforms, terminal = _preprocess_chain(previous)
+    transforms, terminal = _preprocess_chain(previous, native_attention=native_attention)
+    terminal_identity = getattr(terminal, "_h3_flow_native_provider_identity", (_provider_name(terminal), id(terminal)))
     identity = (
         tuple(_provider_name(transform) for transform in transforms),
-        _provider_name(terminal),
-        id(terminal),
+        *terminal_identity,
     )
     return identity, transforms, terminal
 
@@ -162,6 +191,16 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
             q, k, v = transform(q, k, v, heads=heads, **kw)
         return q, k, v
 
+    def partition_request(q, k, v, **kwargs):
+        _transforms, terminal = _runtime_provider_state(runtime)
+        return call_partitioned_attention(q, k, v, terminal=terminal, metrics=metrics, **kwargs)
+
+    def vdn_preprocess(q, k, v, heads, **kwargs):
+        # Generic Comfy preprocessing uses BHTD; VDN owns THD before gather.
+        tensors = tuple(t.transpose(0, 1).unsqueeze(0) for t in (q, k, v))
+        result = apply_preprocess(*tensors, heads=heads, **kwargs)
+        return tuple(t[0].transpose(0, 1) for t in result)
+
     def partition_leaf(original, q, k, v, heads, mask=None, **kw):
         _transforms, terminal = _runtime_provider_state(runtime)
         options = kw.get("transformer_options") or {}
@@ -181,12 +220,10 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
         if type(block_index) is not int or block_index < 0:
             raise RuntimeError("partitioned exact-prefix attention is missing its block identity")
 
-        from sol_h3.partitioned_request import partitioned_request_attention
-
         q_thd = q[0].transpose(0, 1)
         k_thd = k[0].transpose(0, 1)
         v_thd = v[0].transpose(0, 1)
-        output = partitioned_request_attention(
+        output = partition_request(
             q_thd,
             k_thd,
             v_thd,
@@ -200,7 +237,6 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
             semantic_digest=str(raw_contract["semantic_digest"]),
         )
         metrics.increment("partitioned_attention_calls")
-        metrics.increment("partitioned_sol_kernel_calls")
         metrics.increment("partitioned_requested_q_rows", int(q.shape[2]))
         metrics.increment("partitioned_kernel_q_rows", int(q.shape[2]))
         metrics.increment("partitioned_kv_rows", int(k.shape[2]))
@@ -218,12 +254,16 @@ def make_partitioned_attention_override(runtime: PartitionedStageRuntime, metric
         override = partition_leaf
 
     override._h3_flow_partitioned_attention_override = True
+    override.partitioned_attention_v1 = partition_request
+    override.vdn_attention_preprocess_v1 = vdn_preprocess
     override._h3_flow_partitioned_previous = None
     override._h3_flow_partitioned_provider_identity = runtime.attention_provider_identity
     return override
 
 
-def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, previous, metrics):
+def _stage_partitioned_attention_override(
+    runtime: PartitionedStageRuntime, previous, metrics, *, native_attention=False
+):
     """Return a stable partitioned provider across equivalent outer wrappers.
 
     Sol history-v1 treats generic preprocessing wrappers as part of a semantic
@@ -239,7 +279,7 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
     if not isinstance(cache, dict):
         raise RuntimeError("partitioned exact-prefix attention provider cache is malformed")
 
-    identity, transforms, terminal = _inherited_provider_state(previous)
+    identity, transforms, terminal = _inherited_provider_state(previous, native_attention=native_attention)
     previous_identity = runtime.attention_provider_identity
     runtime.attention_provider_transforms = transforms
     runtime.attention_provider_terminal = terminal
@@ -250,7 +290,7 @@ def _stage_partitioned_attention_override(runtime: PartitionedStageRuntime, prev
 
     carrier_contract = runtime.vdn_temporal_carrier_contract
     carrier_digest = None if carrier_contract is None else carrier_contract.get("numerical_digest")
-    numerical_identity = []
+    numerical_identity = [("partitioned_native_attention_v1",)] if native_attention else []
     if carrier_digest is not None:
         numerical_identity.append(("vdn_temporal_carrier_v1", carrier_digest))
     if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
@@ -300,6 +340,15 @@ def _partitioned_transformer_options(
     block_options["minimax_h3_layout"] = partitioned_layout
     block_options[PARTITIONED_PREFIX_KEY] = partition_contract
     block_options[PARTITIONED_BLOCK_INDEX_KEY] = int(block_index)
+    block_options[PARTITIONED_ATTENTION_PROVIDER_KEY] = block_options[
+        "optimized_attention_override"
+    ].partitioned_attention_v1
+    if not sol_attention_selected(block_options) and "vdn_attention_preprocess_v1" not in block_options:
+        entry = getattr(block_options["optimized_attention_override"], _PREPROCESS_ATTR, None)
+        if entry is not None:
+            block_options["vdn_attention_preprocess_v1"] = block_options[
+                "optimized_attention_override"
+            ].vdn_attention_preprocess_v1
     linear_mode = normalize_vdn_linear_diagnostic(runtime.vdn_linear_diagnostic)
     existing_linear_mode = block_options.get(PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY)
     if existing_linear_mode is not None and existing_linear_mode != linear_mode:
@@ -661,6 +710,7 @@ def _domain_uniform_forward(
         runtime,
         local.get("optimized_attention_override"),
         metrics,
+        native_attention=not sol_attention_selected(options),
     )
     patches = dict(local.get("patches_replace") or {})
     blocks = dict(patches.get("dit") or {})
@@ -830,7 +880,8 @@ def _domain_uniform_forward(
                     stage_view=stream.view,
                     domain_stream=stream.leaf,
                 )
-                output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
+                block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
+                output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
                 result = output["img"]
                 if result.shape != view.shape:
                     raise RuntimeError("domain-uniform stream block returned incompatible hidden state")
@@ -1082,6 +1133,7 @@ def partitioned_diffusion_wrapper(
         runtime,
         local.get("optimized_attention_override"),
         metrics,
+        native_attention=not sol_attention_selected(options),
     )
     patches = dict(local.get("patches_replace") or {})
     blocks = dict(patches.get("dit") or {})
@@ -1149,7 +1201,7 @@ def partitioned_diffusion_wrapper(
                         if runtime.vdn_temporal_carrier_contract is not None
                         else None
                     ),
-                    sol_single_union=True,
+                    sol_single_union=sol_attention_selected(options),
                     deprecated_mixed_grid_contract_active=False,
                     audio_position_domain=str(runtime.audio_position_domain),
                     audio_position_policy_active=(position_policy is not None),
@@ -1225,7 +1277,8 @@ def partitioned_diffusion_wrapper(
                 runtime=runtime,
                 block_index=layer,
             )
-            output = previous(forwarded, extra) if previous else extra["original_block"](forwarded)
+            block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
+            output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
