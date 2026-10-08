@@ -1,5 +1,15 @@
 # Unreleased: consistent target-band handoff
 
+- For domain-uniform low/probe execution, ordinary unmodified Core DiT
+  blocks combine the target/source streams' independent row-wise normalization,
+  modulation, residual and MLP work into one block execution. Each stream still
+  runs its own VDN attention, RoPE, key measure and learned state. External
+  block replacements and model-level forward replacements continue through
+  separate calls. Counters distinguish fused and separate block execution.
+  This reduces launches and may improve GEMM utilization, but does not remove
+  the duplicate stream arithmetic. Peak GPU memory, rendered equivalence and
+  actual latency still require GPU measurements.
+
 - Partitioned continuation supports the selected ComfyUI attention backend
   without requiring Sol-H3 runtime ownership or package installation. VDN
   partitioned attention provider API 1 carries the same restricted Q/K/V unions

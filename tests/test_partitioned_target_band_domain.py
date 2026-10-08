@@ -652,3 +652,20 @@ def test_external_core_block_replacement_retains_independent_stream_invocations(
     assert all(rows == seq for rows, seq in seen)
     assert metrics.counters["partitioned_domain_uniform_separate_block_calls"] == 1
     assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == len(case.dm.blocks) - 1
+
+
+
+def test_replaced_core_forward_stays_on_independent_block_path(monkeypatch):
+    """A model-level forward replacement must not inherit native Core fusion."""
+    _sol(monkeypatch)
+    case = _Case()
+    original_forward = case.dm.blocks[0].forward
+
+    def wrapped_forward(*args, **kwargs):
+        return original_forward(*args, **kwargs)
+
+    monkeypatch.setattr(case.dm.blocks[0], "forward", wrapped_forward)
+    metrics = H3FlowMetrics()
+    case.domain_call(metrics=metrics)
+    assert metrics.counters["partitioned_domain_uniform_separate_block_calls"] == 1
+    assert metrics.counters["partitioned_domain_uniform_fused_core_block_calls"] == len(case.dm.blocks) - 1
