@@ -131,7 +131,8 @@ jobs:
             .contracts/SolPartitioned/tests/test_partitioned_forecast_history.py \
             .contracts/SolPartitioned/tests/test_partitioned_history.py \
             .contracts/SolPartitioned/tests/test_partitioned_domain_history.py \
-            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py
+            .contracts/SolPartitioned/tests/test_partitioned_unit_measure.py \
+            tests/test_partitioned_native_history.py
       - name: Validate upstream Core adapter and MiniMax contracts
         env:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyRuntime

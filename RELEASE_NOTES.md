@@ -1,5 +1,13 @@
 # Unreleased: consistent target-band handoff
 
+- Non-Sol continuation stages publish Flow's own Spectrum attention-history
+  identity (`attention_backend_history_v1`). Every partitioned attention call
+  goes through Flow's provider, which bypasses the outer attention override and
+  Core BSA's block producer, so the stage holds no backend attention state.
+  Without this identity Spectrum fell back to its Core BSA source audit, which
+  does not recognize Flow's partitioned wrapper, and executed every forecast
+  step as an actual model call. Sol stages keep Sol's history provider.
+
 - Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
   streams' independent normalization, AdaLN, residual and MLP operations in
   one block call. VDN attention, RoPE, conditioning, key measure and learned

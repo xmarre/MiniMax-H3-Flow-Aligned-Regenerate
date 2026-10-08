@@ -11,6 +11,11 @@ import math
 
 PARTITIONED_ATTENTION_PROVIDER_KEY = "vdn_partitioned_attention_provider_v1"
 SOL_RUNTIME_KEY = "sol_h3_runtime_v1"
+# Spectrum's generic numerical-attention history contract.
+ATTENTION_BACKEND_HISTORY_KEY = "attention_backend_history_v1"
+ATTENTION_BACKEND_RECEIPTS_KEY = "attention_backend_receipts_v1"
+PARTITIONED_NATIVE_HISTORY_NAME = "h3_flow_partitioned_native_attention"
+PARTITIONED_NATIVE_HISTORY_POLICY = "h3_flow_partitioned_native_attention_history_v1"
 
 
 def sol_attention_selected(options) -> bool:
@@ -91,6 +96,77 @@ def native_partitioned_attention(
     return out.reshape_as(q)
 
 
+class PartitionedNativeHistoryPolicy:
+    """Spectrum history identity for one non-Sol partitioned sampler stage.
+
+    Every attention subcall of the stage goes through Flow's partitioned provider:
+    the outer attention override is bypassed and Core BSA's block producer is
+    removed, so the selected backend only sees stateless dense or sparse calls.
+    The numerical route is therefore fixed by the stage geometry and diagnostics.
+    """
+
+    __slots__ = ("_runtime",)
+
+    def __init__(self, runtime) -> None:
+        self._runtime = runtime
+
+    def identity(self) -> tuple:
+        runtime = self._runtime
+        plan = runtime.plan
+        band = runtime.target_band
+        domain = runtime.target_band_domain
+        return (
+            PARTITIONED_NATIVE_HISTORY_POLICY,
+            int(plan.prefix_t),
+            int(plan.temporal),
+            (int(plan.source_h), int(plan.source_w)),
+            tuple(int(value) for value in plan.target_hw),
+            None if band is None else (int(band.protected_t), int(band.band_t), bool(band.same_grid_control)),
+            None if domain is None else str(domain.policy),
+            runtime.attention_head_t,
+            str(runtime.vdn_linear_diagnostic),
+            str(runtime.softmax_diagnostic),
+            str(runtime.vdn_temporal_carrier_policy),
+            str(runtime.prefix_transformer_context),
+            str(runtime.audio_position_domain),
+        )
+
+    def __call__(self, *, layout, options, model):
+        from .partitioned_stage import PARTITIONED_STAGE_KEY
+
+        if options.get(PARTITIONED_STAGE_KEY) is not self._runtime or sol_attention_selected(options):
+            return None
+        return (
+            *self.identity(),
+            repr(getattr(layout, "signature", None)),
+            getattr(layout, "seq_len", None),
+            tuple(getattr(layout, "segments", ())),
+            str(getattr(model, "dtype", None)),
+        )
+
+    def receipt(self) -> tuple:
+        return (PARTITIONED_NATIVE_HISTORY_POLICY, self.identity())
+
+    def accept_receipts(self, receipts) -> bool:
+        expected = self.receipt()
+        return bool(receipts) and all(item == expected for item in receipts)
+
+
+def _record_history_receipt(options) -> None:
+    from .partitioned_stage import PARTITIONED_STAGE_KEY
+
+    sink = options.get(ATTENTION_BACKEND_RECEIPTS_KEY)
+    policy = (options.get(ATTENTION_BACKEND_HISTORY_KEY) or {}).get(PARTITIONED_NATIVE_HISTORY_NAME)
+    if not isinstance(sink, list) or not isinstance(policy, PartitionedNativeHistoryPolicy):
+        return
+    if options.get(PARTITIONED_STAGE_KEY) is not policy._runtime:
+        sink.append(("h3_flow_partitioned_native_attention_foreign_stage",))
+        return
+    receipt = policy.receipt()
+    if not sink or sink[-1] != receipt:
+        sink.append(receipt)
+
+
 def call_partitioned_attention(q, k, v, *, terminal, metrics, **kwargs):
     options = kwargs["transformer_options"]
     if sol_attention_selected(options):
@@ -112,6 +188,7 @@ def call_partitioned_attention(q, k, v, *, terminal, metrics, **kwargs):
         query_position_map=kwargs.get("query_position_map"),
     )
     metrics.increment("partitioned_native_attention_calls")
+    _record_history_receipt(options)
     return result
 
 

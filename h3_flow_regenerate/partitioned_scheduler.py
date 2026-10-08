@@ -60,6 +60,14 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .partitioned_attention import (
+    ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
+)
+from .partitioned_attention import (
+    PARTITIONED_NATIVE_HISTORY_NAME,
+    PartitionedNativeHistoryPolicy,
+    sol_attention_selected,
+)
 from .partitioned_band import (
     TARGET_BAND_HANDOFF_POLICY,
     TARGET_BAND_RAW_CARRY_HANDOFF_POLICY,
@@ -256,6 +264,7 @@ PARTITIONED_HIGH_VIDEO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_AUDIO_REFERENCE_ENABLED = False
 PARTITIONED_HIGH_ATTENTION_POLICY = "exact_prefix_query_continuity_v1"
 VDN_PARTITIONED_BOUNDARY_QUERY_API = 1
+_MISSING_OPTION = object()
 VDN_PARTITIONED_BOUNDARY_QUERY_POLICY = "boundary_suffix_local_group_dense_v1"
 # Equal-grid partitions route every local query group through the selected
 # backend's native selection, as a non-partitioned call does.
@@ -880,6 +889,16 @@ def _partitioned_stage_contract(
     ):
         transformer.pop(PARTITIONED_STAGE_KEY, None)
         raise RuntimeError("domain-uniform target-band geometry must match the active sampler stage")
+    # Non-Sol stages publish Flow's own attention-history identity so Spectrum
+    # does not fall back to auditing Core BSA, which this stage never routes to
+    # with history. Sol stages keep Sol's history provider.
+    previous_history = transformer.get(PARTITIONED_ATTENTION_HISTORY_KEY, _MISSING_OPTION)
+    if not sol_attention_selected(transformer):
+        history = previous_history if isinstance(previous_history, dict) else {}
+        transformer[PARTITIONED_ATTENTION_HISTORY_KEY] = {
+            **history,
+            PARTITIONED_NATIVE_HISTORY_NAME: PartitionedNativeHistoryPolicy(transformer[PARTITIONED_STAGE_KEY]),
+        }
     try:
         yield
         owner = transformer[PARTITIONED_STAGE_KEY]
@@ -903,6 +922,10 @@ def _partitioned_stage_contract(
             )
     finally:
         transformer.pop(PARTITIONED_STAGE_KEY, None)
+        if previous_history is _MISSING_OPTION:
+            transformer.pop(PARTITIONED_ATTENTION_HISTORY_KEY, None)
+        else:
+            transformer[PARTITIONED_ATTENTION_HISTORY_KEY] = previous_history
 
 
 @contextlib.contextmanager
