@@ -1,5 +1,14 @@
 # Unreleased: consistent target-band handoff
 
+- Compatible unmodified Core DiT blocks now coalesce the two domain-uniform
+  streams' independent normalization, AdaLN, residual and MLP operations in
+  one block call. VDN attention, RoPE, conditioning, key measure and learned
+  memory stay independent per stream. External block replacements and
+  object-patched block forwards retain the existing two-call execution.
+  Runtime counters identify fused versus separate blocks. GPU speed, memory
+  and rendered parity must be measured; the second stream's arithmetic
+  remains necessary.
+
 - Equal-grid partitioned calls route attention natively. The target-grid high
   stage and domain-uniform low/probe streams no longer force protected-prefix,
   target-band and first-generated local groups dense, and no longer pin protected

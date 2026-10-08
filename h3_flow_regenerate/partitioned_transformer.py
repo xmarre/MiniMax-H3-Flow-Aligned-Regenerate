@@ -894,7 +894,11 @@ def _domain_uniform_forward(
             if previous is None:
                 with contextlib.suppress(TypeError, ValueError):
                     native_block = inspect.getclosurevars(original).nonlocals.get("block")
-            if native_block is inner.blocks[layer]:
+            if (
+                native_block is inner.blocks[layer]
+                and type(native_block) is native.DiTBlock
+                and getattr(native_block.forward, "__func__", None) is native.DiTBlock.forward
+            ):
                 offsets = (0, target_stream.rows)
                 combined_mod_segments = [
                     (first + offset, last + offset, row)
