@@ -230,6 +230,98 @@ class FakeVAE:
 
 
 @pytest.fixture
+def high_call_bundle(bundle):
+    directory, manifest, video = bundle
+    window = manifest["metadata"]["window"]
+    window.update(window_start_t=10, window_stop_t=17, window_tokens=7)
+    calls = []
+    for index, actual in enumerate((True, False, True)):
+        call = {"call_index": index, "sigma": 0.8 - index * 0.1, "actual": actual}
+        for point in ("before_flow", "after_flow"):
+            name = f"first_high_{point}" if index == 0 else f"high_prediction_{index:02d}_{point}"
+            value = torch.full_like(video[:, :, 10:17], 0.2 + index * 0.05)
+            value[:, :, :2] = 0.9  # Must be replaced by the actual prefix only for replay.
+            if point == "after_flow":
+                value[:, :, 3] += 0.01
+            write_operand(directory, manifest, name, value)
+            call[point] = name
+        calls.append(call)
+    window["high_prediction_trace"] = {
+        "policy": "bounded_high_prediction_windows_v1",
+        "max_calls": 16,
+        "calls": calls,
+        "omitted_call_indices": [],
+    }
+    manifest["metadata"]["first_high_call_index"] = 0
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return directory, manifest, video
+
+
+def test_high_tone_replay_pairs_actual_and_forecast_calls_and_preserves_saved_files(high_call_bundle):
+    directory, _manifest, video = high_call_bundle
+    originals = {path.name: path.read_bytes() for path in directory.iterdir()}
+
+    class ToneVAE(FakeVAE):
+        def decode(self, value):
+            self.inputs.append(value.clone())
+            pixels = super().decode(value)
+            pixels[:, :] = value[:, :, 2:].mean()
+            # A local temporal drop independent of the global stage bias.
+            pixels[:, 10:, :10, :10] -= value[:, :, 3].mean() * 0.1
+            return pixels
+
+    vae = ToneVAE()
+    result = audit.audit_local_boundary(
+        vae, directory, 175, lambda x: x, scope="high_prediction_tone", detail_region="upper_left"
+    )
+    assert result["extra_vae_calls"] == 6
+    assert result["frame_labels"] == list(range(176, 187))
+    assert [call["actual"] for call in result["calls"]] == [True, False, True]
+    assert "between_calls_change" not in result["calls"][0]
+    assert result["calls"][1]["previous_captured_call_index"] == 0
+    assert result["calls"][1]["between_calls_change"]["full"]["same_frame_luma_change"][0] > 0.04
+    assert result["calls"][1]["immediate_flow_change"]["upper_left"]["adjacent_luma_increment_change"][4] < 0
+    for value in vae.inputs:
+        assert torch.equal(value[:, :, :2], video[:, :, 10:12])
+    assert originals == {path.name: path.read_bytes() for path in directory.iterdir()}
+    assert result["rendered_acceptance"] is False
+
+
+@pytest.mark.parametrize("failure", ["index", "sigma", "actual", "name", "hash", "timing", "omitted"])
+def test_high_tone_replay_rejects_corrupt_call_provenance_before_decoding(high_call_bundle, failure):
+    directory, manifest, _video = high_call_bundle
+    trace = manifest["metadata"]["window"]["high_prediction_trace"]
+    call = trace["calls"][1]
+    if failure == "index":
+        call["call_index"] = 0
+    elif failure == "sigma":
+        call["sigma"] = float("nan")
+    elif failure == "actual":
+        call["actual"] = 1
+    elif failure == "name":
+        call["before_flow"] = "first_high_before_flow"
+    elif failure == "hash":
+        manifest["tensor_bytes"][call["before_flow"]]["sha256"] = "0" * 64
+    elif failure == "timing":
+        manifest["metadata"]["window"]["window_start_t"] = 9
+    else:
+        trace["omitted_call_indices"] = [1]
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    vae = FakeVAE()
+    with pytest.raises(ValueError):
+        audit.audit_local_boundary(vae, directory, 175, lambda x: x, scope="high_prediction_tone")
+    assert vae.inputs == []
+
+
+def test_high_tone_scope_reports_older_bundle_without_attempting_a_decode(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="predates high-call capture"):
+        audit.audit_local_boundary(vae, directory, 175, lambda x: x, scope="high_prediction_tone")
+    assert vae.inputs == []
+
+
+@pytest.fixture
 def source_bundle(bundle):
     directory, manifest, _video = bundle
     # Real H3 projection requires even spatial axes. Enlarge the compact fixture
