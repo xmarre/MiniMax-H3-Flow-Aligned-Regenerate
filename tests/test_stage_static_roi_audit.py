@@ -148,3 +148,25 @@ def test_common_grid_roi_metrics_have_clipped_no_upsampling_semantics():
     )
     assert result["common_canvas_hw"] == [120,150]
     assert all(row["median_post_relative_sharpness"]>=0 for row in result["regions"].values())
+
+
+
+def test_per_frame_trajectory_locates_first_blurred_generated_frame():
+    video = _video(blur_after=True)
+    before = video.clone()
+    rois = {"books":(.02,.1,.31,.71), "curtain":(.67,.08,.97,.66)}
+    result = measure_stage_static_rois(
+        video, list(range(167,181)), join_frame=175, rois=rois
+    )
+    trend = result["trajectory"]
+    assert trend["status"] == "measured"
+    assert trend["join_frame"] == 175
+    assert trend["anchor_frame"] == 174
+    book = trend["per_frame_regions"]["books"]
+    assert book["174"]["native_sobel_ratio_to_prefix"] == pytest.approx(1.)
+    assert book["173"]["native_sobel_ratio_to_prefix"] == pytest.approx(1.)
+    assert book["175"]["native_sobel_ratio_to_prefix"] < .7
+    assert book["180"]["native_sobel_ratio_to_prefix"] < .7
+    assert trend["apparent_scale_by_frame"]["180"]["not_camera_ground_truth"]
+    assert trend["production_modified"] is False
+    assert torch.equal(video, before)
