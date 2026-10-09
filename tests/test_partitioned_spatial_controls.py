@@ -63,13 +63,17 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert "target_band_tokens" not in ordinary
 
     keys = list(production)
-    assert keys[-5:] == [
+    assert keys[-6:] == [
         "video_guided_overlap_tokens",
         "suffix_dc_bridge",
         "target_band_tokens",
         "target_band_handoff_state",
         "target_band_context",
+        "uniform_source_detail_transport",
     ]
+    assert "uniform_source_detail_transport" not in ordinary
+    assert production["uniform_source_detail_transport"][0] == "BOOLEAN"
+    assert production["uniform_source_detail_transport"][1]["default"] is True
     assert "target_band_handoff_state" not in ordinary and "target_band_context" not in ordinary
     assert production["target_band_handoff_state"][0] == ["renoise_clean", "carry_raw_band"]
     assert production["target_band_handoff_state"][1]["default"] == "renoise_clean"

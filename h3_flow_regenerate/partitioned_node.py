@@ -562,6 +562,22 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after target_band_context so serialized widget positions remain stable.
+        spec["required"]["uniform_source_detail_transport"] = (
+            "BOOLEAN",
+            {
+                "default": True,
+                "tooltip": (
+                    "Used only by spatial_stage_control=progressive_uniform_source. The learned upscaler renders "
+                    "fine static detail (text, patterns, texture) differently from the carried target-grid "
+                    "frames, so without this the continuation can redraw such detail at the join. When enabled, "
+                    "the difference between the carried last frame and the upscaler's rendering of it is added "
+                    "to the generated frames before high refinement, weighted per location by how much the "
+                    "content there has changed since that frame. The weighting is calibrated on the carried "
+                    "frames of the same run and is skipped when it does not improve held-out carried frames."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -612,6 +628,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
         target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        uniform_source_detail_transport=True,
         metrics=None,
         temporal_weight=0.20,
     ):
@@ -680,6 +697,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             target_band_tokens=target_band_tokens,
             target_band_handoff_state=target_band_handoff_state,
             target_band_context=target_band_context,
+            uniform_source_detail_transport=uniform_source_detail_transport,
         )
 
 
