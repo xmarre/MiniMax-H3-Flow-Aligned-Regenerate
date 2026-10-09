@@ -52,6 +52,10 @@ noise transport, exact prefix restoration and high stage remain unchanged.
 
 Flow extends the block layout's numerical signature with the policy and exact
 prefix geometry; the native Core/VDN carrier cache signature remains valid.
+The production node already puts Flow's diffusion wrapper first. Conditioning
+therefore reaches VDN before it captures its native layout; reversing that
+wrapper order is invalid for the candidate. Core and VDN must receive the same
+prepared layout, rather than adjusting VDN's layout after attention starts.
 Boundary capture/replay accepts this uniform-source family member and records
 its actual selected mode. `partitioned_exact_visual_prefix` receipts identify
 the added conditioning rows and their grid/time ownership.
@@ -71,6 +75,13 @@ attention, protected output ownership and Sol history recognition. Native
 Euler/Euler ancestral and capture/replay checks cover the new mode too. These
 tests use a small random-weight H3 and a bicubic upscaler fixture; they qualify
 contracts and execution, not trained image quality or GPU performance.
+
+A real VDN learned-branch test also holds generated input, audio and projected
+prefix fixed, changes only exact prefix detail in the resize nullspace, and
+observes a changed suffix prediction through the shared deep context. Repeating
+the original context reproduces its output with retained VDN workspaces. This
+test uses the production Flow-before-VDN wrapper order and native attention;
+it does not substitute VDN's recurrence, short convolution or readout.
 
 The required rendered discriminator is the same 01764 scene, inputs and seed
 with only this spatial-stage selector changed. Inspect the actual assembled

@@ -87,3 +87,77 @@ def test_exact_context_refuses_temporal_ownership_mismatch(native):
     )
     with pytest.raises(RuntimeError, match="temporal ownership"):
         add_exact_prefix_visual_context(native, native.PackedLayout(3, 7, 4, 4, 6), {}, carrier, mismatch)
+
+
+def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypatch):
+    import inspect
+
+    import test_partitioned_native_attention as attention_fixture
+
+    from h3_flow_regenerate import partitioned_transformer as transform
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStageRuntime
+
+    fixture = attention_fixture._without_sol(monkeypatch)
+    cases = []
+    original_case = fixture._Case
+
+    def record_case(*args, **kwargs):
+        case = original_case(*args, **kwargs)
+        cases.append(case)
+        return case
+
+    monkeypatch.setattr(fixture, "_Case", record_case)
+    # Reuse the native Core + real learned VDN branch fixture, including its
+    # ordinary uniform/domain parity checks. No VDN arithmetic is substituted.
+    fixture.test_real_vdn_readout_keeps_uniform_stream_outputs_and_isolation(
+        monkeypatch, retain=True, anchors="rows", same_grid=False
+    )
+    case = cases[0]
+    state = inspect.getclosurevars(case.wrappers[0]).nonlocals["state"]
+    state.cfg["linear_enabled"] = True
+    h, w = case.geometry.target_hw
+    sh, sw = case.geometry.source_h, case.geometry.source_w
+    basis = torch.eye(h * w).reshape(h * w, 1, 1, h, w)
+    projection = resize_spatial_5d_h3_patch_lattice(basis, sh, sw).reshape(h * w, sh * sw).T
+    _, _, vh = torch.linalg.svd(projection, full_matrices=True)
+    detail = vh[-1].reshape(1, 1, 1, h, w).repeat(1, 24, case.owner.prefix_t, 1, 1)
+    changed = PartitionedStagePlan(
+        prefix=case.owner.prefix + detail,
+        prefix_noise=case.owner.prefix_noise,
+        temporal=case.owner.temporal,
+        source_h=sh,
+        source_w=sw,
+    )
+    assert torch.allclose(resize_spatial_5d_h3_patch_lattice(changed.prefix, sh, sw), case.source_prefix, atol=1e-6)
+    source_video = torch.cat(
+        (case.source_prefix, case.carrier(case.video), fixture.target_band_tail(case.video, case.geometry)), 2
+    )
+    plan = PartitionedStagePlan(case.source_prefix, case.owner.temporal, sh, sw, torch.zeros_like(case.source_prefix))
+    mask = torch.ones(1, 1, case.owner.temporal, sh, sw)
+    mask[:, :, : case.owner.prefix_t] = 0
+
+    def execute(exact):
+        metrics = H3FlowMetrics()
+        runtime = PartitionedStageRuntime(plan=plan, metrics=metrics, exact_prefix_visual_context=exact)
+        out = fixture._forward(
+            case.dm,
+            # The production node puts Flow first, before VDN captures the
+            # native layout. Exercise that actual wrapper order here.
+            [transform.partitioned_diffusion_wrapper, *case.wrappers],
+            source_video,
+            case.audio,
+            case.context,
+            {PARTITIONED_STAGE_KEY: runtime, "h3_flow_stage": "low"},
+            mask,
+            case.audio_mask,
+        )
+        assert metrics.counters["partitioned_vdn_uniform_linear_calls"] == len(case.dm.blocks)
+        assert torch.isfinite(out[0]).all() and torch.isfinite(out[1]).all()
+        return out[0][:, :, case.owner.prefix_t :]
+
+    # The generated input, projected prefix and audio are identical. Only exact
+    # detail changes, and it reaches the suffix through the shared deep context.
+    baseline = execute(case.owner)
+    assert not torch.equal(execute(changed), baseline)
+    assert torch.equal(execute(case.owner), baseline)

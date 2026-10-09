@@ -8,7 +8,7 @@ POLICY = "uniform_video_exact_aligned_visual_prefix_v1"
 
 
 def add_exact_prefix_visual_context(native, layout, payload, carrier, exact):
-    """Add native reference rows without moving any existing RoPE time or row.
+    """Add native reference rows without changing existing RoPE positions.
 
     Core accepts independent reference-video H/W. Its ordinary reference layout
     puts references before the target timeline; here the protected prefix is
