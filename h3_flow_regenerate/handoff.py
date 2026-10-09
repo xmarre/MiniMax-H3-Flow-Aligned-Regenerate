@@ -572,6 +572,8 @@ def build_handoff_state(
             sigma
         )
         if noise_mode in {H3_HANDOFF_NOISE_IMAGE_RESIDUAL, H3_HANDOFF_NOISE_IMAGE_DRIFT}:
+            if not math.isfinite(float(model_noise_scale)) or float(model_noise_scale) <= 0.0:
+                raise ValueError("image-grid residual handoff requires a finite positive model noise_scale")
             innovation = deterministic_video_noise(
                 (*source_video.shape[:-2], target_h, target_w),
                 seed=seed,
@@ -586,7 +588,18 @@ def build_handoff_state(
                     noise_scale=model_noise_scale,
                 )
             else:
-                noise, noise_report = refine_image_residual(source_residual, innovation)
+                # The carried residual already includes model_sampling.noise_scale.
+                # The independent fine modes must use the same scale; otherwise
+                # stochastic handoff has different coarse/fine noise variance.
+                noise, noise_report = refine_image_residual(
+                    source_residual, innovation * float(model_noise_scale)
+                )
+                noise_report.pop("gaussian_marginal_if_source_standard")
+                noise_report.update(
+                    gaussian_marginal_if_source_at_model_noise_scale=True,
+                    innovation_noise_scale=float(model_noise_scale),
+                    target_gaussian_variance_if_source_at_model_scale=float(model_noise_scale) ** 2,
+                )
             noise_report.update(
                 policy=noise_mode,
                 innovation_seed=int(seed),
