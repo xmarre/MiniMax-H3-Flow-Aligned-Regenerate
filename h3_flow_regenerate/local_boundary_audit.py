@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
 from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
+from .stage_static_roi_audit import PROFILES as STATIC_ROI_PROFILES, parse_static_rois, measure_stage_static_rois
 
 LOG = logging.getLogger(__name__)
 STAGES = {
@@ -566,11 +567,14 @@ def measure_window_context(vae, latent, process_out, plan, *, detail_region="off
     return result
 
 
-def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity", detail_region="off"):
+def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity", detail_region="off", static_roi_profile="off", static_roi_json=""):
     if scope not in SCOPES:
         raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
     if detail_region not in DETAIL_REGIONS:
         raise ValueError(f"unsupported local boundary detail region: {detail_region!r}")
+    static_rois = parse_static_rois(static_roi_profile, static_roi_json)
+    if static_rois and scope == "high_prediction_tone":
+        raise ValueError("static ROI stage measurements require stage_continuity or transfer_and_decoder_context scope")
     extended = scope == "transfer_and_decoder_context"
     native = getattr(vae, "first_stage_model", None)
     expected = {"tokens_chunk_size": 5, "token_overlap": 2, "frame_pre_padding": 3, "clip_length": 17}
@@ -622,6 +626,10 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
             "adjacent_rgb_difference_rms": (frames[1:] - frames[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
             "adjacent_luma_mean_change": (luma[1:] - luma[:-1]).mean((1, 2)).tolist(),
         }
+        if static_rois:
+            report["stages"][name]["static_background_rois"] = measure_stage_static_rois(
+                frames, [labels[0] - 1, *labels], join_frame=join_frame, rois=static_rois,
+            )
         if detail_region != "off":
             selected, metadata = _detail_crop(frames, detail_region)
             selected_luma = selected @ torch.tensor([0.2126, 0.7152, 0.0722])
@@ -795,6 +803,25 @@ class H3FlowLocalBoundaryAudit:
                         ),
                     },
                 ),
+                "static_roi_profile": (
+                    list(STATIC_ROI_PROFILES),
+                    {
+                        "default": "off",
+                        "tooltip": (
+                            "Read-only static-background sharpness, image shift and small zoom by decoded stage. "
+                            "01784_room uses fixed bookshelf/picture/curtain/wall fractions; custom uses JSON. "
+                            "For source-grid replay choose Transfer and decoder context."
+                        ),
+                    },
+                ),
+                "static_roi_json": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": "For custom profile: {\"books\":[0.0,0.42,0.13,0.60],\"curtain\":[0.83,0.04,0.99,0.36]}. Fractional XYXY; at least two regions.",
+                    },
+                ),
             },
         }
 
@@ -818,7 +845,7 @@ class H3FlowLocalBoundaryAudit:
         _AUDIT_MODEL_OWNERS.retain()
         return float("nan")
 
-    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity", detail_region="off"):
+    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity", detail_region="off", static_roi_profile="off", static_roi_json=""):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
         import folder_paths
@@ -831,6 +858,8 @@ class H3FlowLocalBoundaryAudit:
             MiniMaxH3Video().process_out,
             scope=audit_scope,
             detail_region=detail_region,
+            static_roi_profile=static_roi_profile,
+            static_roi_json=static_roi_json,
         )
         text = json.dumps(report, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
