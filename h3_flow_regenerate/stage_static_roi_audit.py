@@ -110,24 +110,35 @@ def _phase_displacement(ref: torch.Tensor, candidate: torch.Tensor) -> dict:
             "peak_dominance":float(corr.max().item()/corr.abs().mean().clamp_min(1e-8).item())}
 
 
-def _apparent_scale(regions: Mapping[str,dict], width: int) -> dict:
-    pts = [(row["center_x"], row["displacement"]["dx_px"]/width)
-           for row in regions.values()
-           if row.get("verified_pre_join_static")
-           and row["displacement"].get("status")=="measured"
-           and row["displacement"]["peak_dominance"]>=3.]
-    if len(pts)<2:
-        return {"status":"insufficient_landmarks","supported_regions":len(pts)}
-    mx = sum(x for x,y in pts)/len(pts)
-    my = sum(y for x,y in pts)/len(pts)
-    var = sum((x-mx)**2 for x,y in pts)
-    if var<.05:
-        return {"status":"insufficient_spatial_spread","supported_regions":len(pts)}
-    slope = sum((x-mx)*(y-my) for x,y in pts)/var
-    residual = math.sqrt(sum((y-my-slope*(x-mx))**2 for x,y in pts)/len(pts))
-    return {"status":"estimated","scale_change_percent":100*slope,
-            "spatial_residual_fraction":residual,
-            "supported_regions":len(pts),"not_camera_ground_truth":True}
+def _apparent_scale(regions: Mapping[str,dict], width: int, height: int) -> dict:
+    # Fit independent apparent X/Y expansions from spatially separated,
+    # temporally static room landmarks; not a physical camera calibration.
+    eligible = [row for row in regions.values()
+                if row.get("verified_pre_join_static")
+                and row["displacement"].get("status")=="measured"
+                and row["displacement"]["peak_dominance"]>=3.]
+    if len(eligible)<2:
+        return {"status":"insufficient_landmarks","supported_regions":len(eligible)}
+
+    def fit(axis, disp, denom):
+        pts = [(row[axis],row["displacement"][disp]/denom) for row in eligible]
+        mx = sum(x for x,y in pts)/len(pts)
+        my = sum(y for x,y in pts)/len(pts)
+        variance = sum((x-mx)**2 for x,y in pts)
+        if variance<.015:
+            return {"status":"insufficient_spatial_spread"}
+        slope = sum((x-mx)*(y-my) for x,y in pts)/variance
+        residual = math.sqrt(sum((y-my-slope*(x-mx))**2 for x,y in pts)/len(pts))
+        return {"status":"estimated","scale_percent":slope*100,
+                "spatial_residual_fraction":residual}
+
+    horizontal=fit("center_x","dx_px",width)
+    vertical=fit("center_y","dy_px",height)
+    return {"status":horizontal["status"],
+            "scale_change_percent":horizontal.get("scale_percent"),
+            "spatial_residual_fraction":horizontal.get("spatial_residual_fraction"),
+            "vertical":vertical,"supported_regions":len(eligible),
+            "not_camera_ground_truth":True}
 
 
 def measure_stage_static_rois(
@@ -182,6 +193,7 @@ def measure_stage_static_rois(
             disp["status"]="unreliable_correspondence_or_texture_change"
         rows[name] = {
             "bounds_xyxy":list(rect),"center_x":(rect[0]+rect[2])/2,
+            "center_y":(rect[1]+rect[3])/2,
             "native_roi_hw":list(base.shape),
             "sobel_energy_by_frame":{str(start):e0,str(before):e1,str(after):e2},
             "sharpness_post_over_pre":post_ratio,
@@ -202,7 +214,7 @@ def measure_stage_static_rois(
             "native_grid_hw":list(frames.shape[1:3]),
             "intra_stage_comparisons_only":True,"absolute_sharpness_across_grids_comparable":False,
             "production_modified":False,"extra_vae_calls":0,
-            "regions":rows,"background_scale":_apparent_scale(rows,int(frames.shape[2]))}
+            "regions":rows,"background_scale":_apparent_scale(rows,int(frames.shape[2]),int(frames.shape[1]))}
 
 
 def compare_same_frame_stage_rois(
