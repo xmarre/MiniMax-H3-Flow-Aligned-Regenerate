@@ -603,11 +603,28 @@ scale estimate. White-wall texture is useful for shading but can be
 unsuitable for phase correlation. The full report records which landmarks
 were supported.
 
-**Compare each stage's pre/post *ratios*, not absolute sharpness across
-704px reduced-grid and 992px target-grid decodes.** The latter use
-different sampling grids and pixel frequency bandwidths. The
-scale measurement is an apparent background fit, not camera ground
-truth, and does not automatically prove where the model defect arose.
+**Compare each stage's pre/post ratios**; raw 704px reduced-grid and
+992px target-grid gradients have different native pixel bandwidths.
+Each region therefore reports **both native-grid Sobel energy and a
+common-grid (maximum 704px, antialiased-downsampled) energy ratio**, along
+with prefix-baseline stability. Region registration uses diagnostic-only
+subpixel phase correlation; only previously stable, plausible static
+landmarks contribute to separate horizontal and vertical apparent-scale
+fits. Ambiguous backgrounds (including a moving actor or texture-changing
+wall) can still bias the estimate, so the reported scale is **not physical
+camera ground truth**.
+
+The report additionally contains
+`static_background_same_frame_stage_pairs`: co-located ROI sharpness at the
+same decoded times for `source_grid → provider → pre_high →
+first_high_before_flow → first_high_after_flow → final`, resampled to a
+**shared target canvas of no more than 704 pixels on its longest side**.
+A stage's candidate/reference sharpness ratio is normalized to the same
+stage pair on frame 174 before evaluating frames 176–181, which prevents
+stable resolution-induced baseline differences from masquerading as a new
+join defect. These numerical comparisons identify a candidate first
+failure stage for subsequent manual review; they are not a production
+acceptance check.
 These static-ROI measurements only use RGB frames already decoded by
 the audit; no additional VAE calls, sampling steps or production
 adjustments occur, and the analysis does not modify source operands or
