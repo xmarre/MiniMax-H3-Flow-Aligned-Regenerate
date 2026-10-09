@@ -9,6 +9,7 @@ from h3_flow_regenerate.handoff import (
     H3_HANDOFF_NOISE_IMAGE_DRIFT,
     H3_HANDOFF_NOISE_IMAGE_RESIDUAL,
     build_handoff_state,
+    deterministic_video_noise,
 )
 from h3_flow_regenerate.image_residual import refine_image_residual, transport_image_flow_residual
 
@@ -170,4 +171,16 @@ def test_handoff_uses_measured_state_residual_keeps_audio_and_calls_provider_onc
         q = _white_analysis(_image_analysis((4, 6), (6, 8)))
         torch.testing.assert_close(
             effective.double().flatten(-2) @ q.T, residual.double().flatten(-2), atol=2e-6, rtol=0
+        )
+        # Regression: high-frequency innovation uses the model's 1.7 noise
+        # scale even for a stochastic sampler. A unit-scale innovation would
+        # create a split-variance high-stage entry.
+        innovation = deterministic_video_noise(
+            tuple(effective.shape), seed=17, device=effective.device, dtype=torch.float32
+        )
+        expected, _ = refine_image_residual(residual, 1.7 * innovation)
+        torch.testing.assert_close(effective, expected, atol=2e-6, rtol=0)
+        assert receipts["handoff_noise"]["innovation_noise_scale"] == pytest.approx(1.7)
+        assert receipts["handoff_noise"]["target_gaussian_variance_if_source_at_model_scale"] == pytest.approx(
+            1.7**2
         )
