@@ -203,3 +203,84 @@ def measure_stage_static_rois(
             "intra_stage_comparisons_only":True,"absolute_sharpness_across_grids_comparable":False,
             "production_modified":False,"extra_vae_calls":0,
             "regions":rows,"background_scale":_apparent_scale(rows,int(frames.shape[2]))}
+
+
+def compare_same_frame_stage_rois(
+    reference: torch.Tensor,
+    candidate: torch.Tensor,
+    frame_labels: list[int],
+    *,
+    join_frame: int,
+    rois: Mapping[str,tuple[float,float,float,float]],
+) -> dict:
+    """Paired pixel-time texture comparison of two native decoder stages.
+
+    Antialias to a common 704px-or-smaller grid *before* computing gradient
+    energy. Compare relative stage energy at f174 versus f176..181; this
+    cancels stable differences in representation and decoder characteristics.
+    """
+    if reference.ndim != 4 or candidate.ndim != 4 or reference.shape[0] != candidate.shape[0]:
+        raise ValueError("stage comparison needs equally indexed decoded IMAGE videos")
+    if len(frame_labels) != len(reference):
+        raise ValueError("stage comparison frame labels do not match")
+    if reference.shape[-1] < 3 or candidate.shape[-1] < 3:
+        raise ValueError("stage comparison requires RGB")
+    indexed = {frame:i for i,frame in enumerate(frame_labels)}
+    baseline = join_frame-1
+    targets = [frame for frame in range(join_frame+1,join_frame+7) if frame in indexed]
+    if baseline not in indexed or not targets:
+        return {"policy":POLICY,"status":"insufficient_same_frame_timing_window"}
+    max_side = min(704, *reference.shape[1:3], *candidate.shape[1:3])
+    # The min of both H/W values keeps this valid for synthetic non-square
+    # fixtures and never demands any interpolation that invents detail.
+    heights = [reference.shape[1], candidate.shape[1]]
+    widths = [reference.shape[2], candidate.shape[2]]
+    ratio_h = min(h/w for h,w in zip(heights,widths))
+    common_w = min(int(max_side), min(widths))
+    common_hw = (max(8,round(common_w*ratio_h)), common_w)
+
+    def projected(frame):
+        v = frame[...,:3].detach().to(device="cpu",dtype=torch.float32)
+        luma = v @ v.new_tensor(_LUMA)
+        if tuple(luma.shape) != common_hw:
+            luma = F.interpolate(luma[None,None],size=common_hw,mode="area")[0,0]
+        return luma
+
+    comparison = {}
+    for name, rect in rois.items():
+        series = {}
+        for label in [baseline,*targets]:
+            idx = indexed[label]
+            a = _crop(projected(reference[idx]),rect)
+            b = _crop(projected(candidate[idx]),rect)
+            e0,e1 = _gradient_energy(a),_gradient_energy(b)
+            series[label] = {
+                "reference_common_sobel":e0,
+                "candidate_common_sobel":e1,
+                "candidate_over_reference":e1/max(e0,1e-12),
+                "same_time_displacement":_phase_displacement(a,b),
+            }
+        anchor = series[baseline]["candidate_over_reference"]
+        for frame, row in series.items():
+            row["relative_to_same_frame_prefix_energy_ratio"] = (
+                row["candidate_over_reference"]/max(anchor,1e-12)
+            )
+        comparison[name] = {
+            "fractional_bounds_xyxy":list(rect),
+            "same_frame_measurements":{str(frame):row for frame,row in series.items()},
+            "median_post_relative_sharpness":float(torch.tensor(
+                [series[f]["relative_to_same_frame_prefix_energy_ratio"] for f in targets]
+            ).median().item()),
+        }
+    return {
+        "policy":"h3_stage_static_background_same_frame_v1",
+        "status":"measured",
+        "join_frame":join_frame,
+        "baseline_frame":baseline,
+        "post_frames":targets,
+        "common_canvas_hw":list(common_hw),
+        "candidate_vs_reference_normalized_on_prefix":True,
+        "extra_vae_calls":0,
+        "production_modified":False,
+        "regions":comparison,
+    }
