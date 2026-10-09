@@ -250,7 +250,6 @@ def measure_stage_static_rois(
     }
 
 
-
 def _normalized_dot(left: torch.Tensor, right: torch.Tensor) -> float | None:
     """Centered cosine with explicit undefined result for texture-free regions."""
     if left.shape != right.shape:
@@ -270,12 +269,16 @@ def _sobel_structure_cosine(left: torch.Tensor, right: torch.Tensor) -> float | 
     lowers the score, so interpret alongside phase-displacement/ROI reliability.
     """
     kernel = left.new_tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3) / 8
+
     def edges(patch: torch.Tensor) -> torch.Tensor:
         value = patch[None, None].float()
-        return torch.cat((
-            F.conv2d(value, kernel).flatten(),
-            F.conv2d(value, kernel.transpose(-1, -2)).flatten(),
-        ))
+        return torch.cat(
+            (
+                F.conv2d(value, kernel).flatten(),
+                F.conv2d(value, kernel.transpose(-1, -2)).flatten(),
+            )
+        )
+
     return _normalized_dot(edges(left), edges(right))
 
 
@@ -347,9 +350,7 @@ def compare_same_frame_stage_rois(
             row["relative_to_same_frame_prefix_energy_ratio"] = row["candidate_over_reference"] / max(anchor, 1e-12)
             score = row["same_time_sobel_structure_cosine"]
             row["sobel_structure_cosine_change_from_prefix"] = (
-                score - base_gradient_similarity
-                if score is not None and base_gradient_similarity is not None
-                else None
+                score - base_gradient_similarity if score is not None and base_gradient_similarity is not None else None
             )
         comparison[name] = {
             "fractional_bounds_xyxy": list(rect),
