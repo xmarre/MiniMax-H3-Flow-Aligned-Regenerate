@@ -115,7 +115,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
-    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
     PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
@@ -813,6 +814,7 @@ def _partitioned_stage_contract(
     target_band=None,
     attention_head_t=None,
     target_band_domain=None,
+    exact_prefix_visual_context=None,
 ):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
@@ -877,7 +879,7 @@ def _partitioned_stage_contract(
             if (
                 transformer.get(FLOW_STAGE_KEY) == "high"
                 or target_band is not None
-                or transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+                or transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
             )
             else configured_boundary_witness(metrics, directory=witness_directory)
         ),
@@ -886,6 +888,7 @@ def _partitioned_stage_contract(
         target_band=target_band,
         attention_head_t=attention_head_t,
         target_band_domain=target_band_domain,
+        exact_prefix_visual_context=exact_prefix_visual_context,
     )
     if target_band_domain is not None and (
         target_band is None
@@ -1162,7 +1165,7 @@ def _validate_partitioned_vdn_compat(
     scheduler_capture = (
         isinstance(model_options, dict)
         and (model_options.get("transformer_options") or {}).get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY)
-        == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+        in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     )
     boundary_witness_requested = (
         required_native_carrier != PARTITIONED_NATIVE_CARRIER_TARGET
@@ -3566,7 +3569,8 @@ def run_partitioned_progressive(
     )
     suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
-    uniform_source = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
+    exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     if uniform_source and (
         prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -3931,6 +3935,7 @@ def run_partitioned_progressive(
             learned_transfer_scope="all_generated_frames",
             native_band_splice=False,
             authoritative_target_prefix_restore=True,
+            exact_target_visual_context=exact_uniform_context,
         )
     target_band_domain = None
     if domain_context_requested:
@@ -4174,6 +4179,7 @@ def run_partitioned_progressive(
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
+                    exact_prefix_visual_context=stage_plan if exact_uniform_context else None,
                 ),
             ):
                 low_result = executor(
@@ -4221,6 +4227,7 @@ def run_partitioned_progressive(
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
+                    exact_prefix_visual_context=stage_plan if exact_uniform_context else None,
                 ),
             ):
                 source_x0 = executor(
@@ -6959,7 +6966,7 @@ def run_partitioned_progressive(
                         if target_band is not None
                         else (
                             {
-                                "spatial_stage_control": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+                                "spatial_stage_control": spatial_stage_control,
                                 "target_band_tokens": 0,
                                 "target_band_transfer_start_t": int(stage_plan.prefix_t),
                                 "full_video_snapshots": True,

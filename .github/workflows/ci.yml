@@ -209,6 +209,7 @@ jobs:
             tests/test_partitioned_target_band_native.py \
             tests/test_partitioned_target_band_domain.py \
             tests/test_partitioned_target_band_e2e.py \
+            tests/test_uniform_prefix_context.py \
             tests/test_partitioned_native_attention.py \
             .contracts/VDNPartitioned/tests/test_partitioned_attention_provider.py
 

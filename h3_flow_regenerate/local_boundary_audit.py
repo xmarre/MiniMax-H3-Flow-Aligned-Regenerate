@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 
 from .geometry import resize_spatial_5d_h3_patch_lattice
+from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
 from .transfer_lattice import measure_paired_prefix_affine
 
 LOG = logging.getLogger(__name__)
@@ -31,7 +32,6 @@ STAGES = {
 }
 SCOPES = ("stage_continuity", "transfer_and_decoder_context", "high_prediction_tone")
 DETAIL_REGIONS = ("off", "upper_left")
-UNIFORM_SOURCE_STAGE = "progressive_uniform_source"
 
 
 class _AuditModelOwners:
@@ -84,7 +84,7 @@ def replay_plan(metadata, join_frame):
     prefix, temporal = window["prefix_t"], window["temporal"]
     band = metadata.get("target_band_tokens")
     head = metadata.get("target_band_transfer_start_t")
-    uniform_source = metadata.get("spatial_stage_control") == UNIFORM_SOURCE_STAGE
+    uniform_source = metadata.get("spatial_stage_control") in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     if (
         type(prefix) is not int
         or type(temporal) is not int
@@ -186,7 +186,7 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
         ) from exc
     manifest = json.loads(raw_manifest)
     metadata = manifest.get("metadata", {})
-    uniform_source = metadata.get("spatial_stage_control") == UNIFORM_SOURCE_STAGE
+    uniform_source = metadata.get("spatial_stage_control") in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     expected_provenance = (
         "actual_learned_provider_uniform_source"
         if uniform_source

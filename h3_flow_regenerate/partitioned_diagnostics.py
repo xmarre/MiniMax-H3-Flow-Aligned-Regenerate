@@ -113,11 +113,17 @@ PARTITIONED_SPATIAL_STAGE_PROGRESSIVE = "progressive_low_to_high"
 PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
 PARTITIONED_SPATIAL_STAGE_TARGET_BAND = "progressive_target_band"
 PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE = "progressive_uniform_source"
+PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT = "progressive_uniform_source_exact_context"
+PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES = (
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+)
 PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
 )
 
 # Number of generated H3 temporal latent tokens that stay on the target grid
@@ -493,7 +499,7 @@ def apply_partitioned_diagnostic_controls(
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
-    if spatial_stage == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE and (
+    if spatial_stage in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES and (
         prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
         or temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
@@ -723,6 +729,8 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",
     "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE",
+    "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES",
+    "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT",
     "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
     "PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES",
     "PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM",

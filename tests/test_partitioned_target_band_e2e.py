@@ -28,6 +28,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
 )
@@ -560,6 +561,7 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
         PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     ],
 )
 def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, control):
@@ -579,8 +581,11 @@ def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, c
 
 
 @pytest.mark.parametrize("sampler", ["euler", "euler_ancestral"])
-def test_uniform_source_with_native_samplers_preserves_protected_streams(monkeypatch, sampler):
-    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, native_sampler=sampler)
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_with_native_samplers_preserves_protected_streams(monkeypatch, sampler, control):
+    run = _harness(monkeypatch, spatial_stage_control=control, native_sampler=sampler)
     protected = run.calls[-1]["mask"] == 0
     assert torch.equal(run.result[protected], run.latent_image[protected])
     assert bool(torch.isfinite(run.result).all())
@@ -609,7 +614,10 @@ def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch
         assert event["temporal"] == TEMPORAL
 
 
-def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path, mode):
     import sys
 
     folder_paths = pytest.importorskip("folder_paths")
@@ -619,12 +627,10 @@ def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monk
     monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
     monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
     monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
-    control = _harness(
-        monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, witness_directory=""
-    )
+    control = _harness(monkeypatch, spatial_stage_control=mode, witness_directory="")
     captured = _harness(
         monkeypatch,
-        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        spatial_stage_control=mode,
         witness_directory=str(tmp_path / "witness"),
     )
     assert torch.equal(control.result, captured.result)
@@ -634,6 +640,38 @@ def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monk
     plan, stages, _identity = load_replay_operands(tmp_path / receipt["bundle"], 175, include_source=True)
     assert plan["head_t"] == plan["prefix_t"] == 12
     assert torch.equal(stages["source_grid"], captured.upscaler.inputs[0][:, :, 5:22].cpu())
+
+
+@pytest.mark.parametrize("sol", [False, True])
+def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monkeypatch, sol):
+    if not sol:
+        make_owner = _vdn_owner
+
+        def capable_owner():
+            owner = make_owner()
+            owner._vdn_partitioned_attention_provider_api = 1
+            return owner
+
+        monkeypatch.setitem(globals(), "_vdn_owner", capable_owner)
+    extra = None if sol else {SOL_RUNTIME_KEY: None}
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+        extra_transformer_options=extra,
+    )
+    context_calls = _events(run.metrics, "partitioned_exact_visual_prefix")
+    assert {event["stage"] for event in context_calls} == {"low", "probe"}
+    for event in context_calls:
+        assert event["target_hw"] == TARGET_HW
+        assert event["prefix_t"] == PROTECTED_T
+        assert event["exact_prefix_unresampled"] is True
+        assert event["prefix_time_colocated"] is True
+        assert event["video_recurrence_grid"] == SOURCE_HW
+        assert event["generated_video_streams"] == 1
+        assert event["cross_grid_video_temporal_taps"] is False
+    assert len(run.upscaler.inputs) == 1
+    assert not _events(run.metrics, "partitioned_target_band_domain_transformer")
+    assert _events(run.metrics, "partitioned_exact_prefix_complete")[0]["final_prefix_exact"] is True
 
 
 def _record_band_clean(monkeypatch):
@@ -1236,7 +1274,10 @@ def test_sol_history_recognizes_domain_low_probe_and_uniform_high(monkeypatch):
 
 
 @pytest.mark.usefixtures("native_audio_duration")
-def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch):
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     interop = pytest.importorskip("sol_h3.interop")
@@ -1263,7 +1304,7 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch):
         return original(Recording(), *args, **kwargs)
 
     monkeypatch.setattr(transform, "partitioned_diffusion_wrapper", recording_wrapper)
-    _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    _harness(monkeypatch, spatial_stage_control=control)
     flow_kind = history.PARTITIONED_FLOW_IDENTITY
     assert recognized == {"low": {flow_kind}, "probe": {flow_kind}, "high": {flow_kind}}
 
