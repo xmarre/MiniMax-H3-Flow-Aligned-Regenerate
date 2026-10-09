@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from h3_flow_regenerate.stage_static_roi_audit import (
     ROOM_01784, parse_static_rois, measure_stage_static_rois,
-    _phase_displacement,
+    _phase_displacement, compare_same_frame_stage_rois,
 )
 
 
@@ -99,3 +99,50 @@ def test_roi_bounds_follow_native_canvas_grid():
     assert large["regions"]["left"]["native_roi_hw"] == [96,112]
     assert small["absolute_sharpness_across_grids_comparable"] is False
     assert large["absolute_sharpness_across_grids_comparable"] is False
+
+
+
+def test_same_time_stage_comparison_localizes_new_high_stage_texture_loss():
+    reference = _video()
+    candidate = _video(blur_after=True)
+    before = candidate.clone()
+    rects = {"books":(.02,.10,.31,.71),"curtain":(.67,.08,.97,.66)}
+    paired = compare_same_frame_stage_rois(
+        reference, candidate, list(range(167,181)), join_frame=175, rois=rects
+    )
+    assert paired["status"] == "measured"
+    assert paired["baseline_frame"] == 174
+    assert paired["production_modified"] is False
+    assert paired["extra_vae_calls"] == 0
+    for region in paired["regions"].values():
+        anchor = region["same_frame_measurements"]["174"]
+        assert anchor["candidate_over_reference"] == pytest.approx(1.,abs=1e-6)
+        assert region["median_post_relative_sharpness"] < .70
+    assert torch.equal(candidate,before)
+
+
+def test_same_time_comparison_no_change_equals_unit_relative_sharpness():
+    source = _video(stage_change=True)
+    paired = compare_same_frame_stage_rois(
+        source, source, list(range(167,181)), join_frame=175,
+        rois={"left":(.02,.10,.30,.72),"right":(.68,.10,.96,.72)}
+    )
+    assert all(abs(region["median_post_relative_sharpness"]-1.)<1e-5
+               for region in paired["regions"].values())
+
+
+def test_common_grid_roi_metrics_have_clipped_no_upsampling_semantics():
+    movie = _video()
+    roi = {"left":(.02,.10,.30,.70),"right":(.68,.08,.97,.70)}
+    out = measure_stage_static_rois(movie,list(range(167,181)),join_frame=175,rois=roi)
+    assert out["common_grid_max_side_px"] == 704
+    for region in out["regions"].values():
+        assert "common_grid_sobel_energy_by_frame" in region
+        assert "common_grid_sharpness_post_over_pre" in region
+        assert region["verified_pre_join_static"]
+    down = F.interpolate(movie.permute(0,3,1,2),size=(120,150),mode="area").permute(0,2,3,1)
+    result=compare_same_frame_stage_rois(
+        movie,down,list(range(167,181)),join_frame=175,rois=roi
+    )
+    assert result["common_canvas_hw"] == [120,150]
+    assert all(row["median_post_relative_sharpness"]>=0 for row in result["regions"].values())
