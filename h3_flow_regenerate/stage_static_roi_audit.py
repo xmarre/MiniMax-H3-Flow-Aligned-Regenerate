@@ -242,14 +242,15 @@ def compare_same_frame_stage_rois(
     targets = [frame for frame in range(join_frame+1,join_frame+7) if frame in indexed]
     if baseline not in indexed or not targets:
         return {"policy":POLICY,"status":"insufficient_same_frame_timing_window"}
-    max_side = min(704, *reference.shape[1:3], *candidate.shape[1:3])
-    # The min of both H/W values keeps this valid for synthetic non-square
-    # fixtures and never demands any interpolation that invents detail.
-    heights = [reference.shape[1], candidate.shape[1]]
-    widths = [reference.shape[2], candidate.shape[2]]
+    heights = [int(reference.shape[1]), int(candidate.shape[1])]
+    widths = [int(reference.shape[2]), int(candidate.shape[2])]
     ratio_h = min(h/w for h,w in zip(heights,widths))
-    common_w = min(int(max_side), min(widths))
-    common_hw = (max(8,round(common_w*ratio_h)), common_w)
+    common_w = min(704, *widths)
+    common_h = max(8, round(common_w*ratio_h))
+    if common_h > 704:
+        common_w = max(8, round(common_w*704/common_h))
+        common_h = 704
+    common_hw = (common_h, common_w)
 
     def projected(frame):
         v = frame[...,:3].detach().to(device="cpu",dtype=torch.float32)
