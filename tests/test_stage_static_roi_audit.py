@@ -6,8 +6,10 @@ import torch
 import torch.nn.functional as F
 
 from h3_flow_regenerate.stage_static_roi_audit import (
-    ROOM_01784, parse_static_rois, measure_stage_static_rois,
-    _phase_displacement, compare_same_frame_stage_rois,
+    _phase_displacement,
+    compare_same_frame_stage_rois,
+    measure_stage_static_rois,
+    parse_static_rois,
 )
 
 
