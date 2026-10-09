@@ -601,13 +601,19 @@ def audit_local_boundary(
         bundle_path, join_frame, include_source=extended, include_high_predictions=scope == "high_prediction_tone"
     )
     if scope == "high_prediction_tone":
-        return _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region)
+        high_report = _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region)
+        high_report["static_roi_profile"] = static_roi_profile
+        high_report["static_roi_measurement_enabled"] = False
+        return high_report
     begin, end = plan["measured_local_frames"]
     labels = list(range(plan["decoded_origin_frame"] + begin, plan["decoded_origin_frame"] + end))
     report = {
         "policy": "local_target_band_native_window_audit_v2",
         "scope": scope,
         "detail_region": detail_region,
+        "static_roi_profile": static_roi_profile,
+        "static_roi_measurement_enabled": bool(static_rois),
+        "static_roi_bounds_xyxy": {name: list(rect) for name, rect in static_rois.items()},
         "fps": 24,
         **identity,
         "plan": plan,
