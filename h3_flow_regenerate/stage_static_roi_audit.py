@@ -250,6 +250,39 @@ def measure_stage_static_rois(
     }
 
 
+
+def _normalized_dot(left: torch.Tensor, right: torch.Tensor) -> float | None:
+    """Centered cosine with explicit undefined result for texture-free regions."""
+    if left.shape != right.shape:
+        raise ValueError("structural cosine requires matching common-grid shapes")
+    x = left.reshape(-1).float()
+    y = right.reshape(-1).float()
+    denom = x.square().sum().sqrt() * y.square().sum().sqrt()
+    if float(denom.item()) <= 1e-10:
+        return None
+    return float((x * y).sum().div(denom).clamp(-1, 1).item())
+
+
+def _sobel_structure_cosine(left: torch.Tensor, right: torch.Tensor) -> float | None:
+    """Edge-orientation/placement similarity, independent of total edge power.
+
+    This is *co-located*, not motion-compensated. A genuine spatial shift also
+    lowers the score, so interpret alongside phase-displacement/ROI reliability.
+    """
+    kernel = left.new_tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3) / 8
+    def edges(patch: torch.Tensor) -> torch.Tensor:
+        value = patch[None, None].float()
+        return torch.cat((
+            F.conv2d(value, kernel).flatten(),
+            F.conv2d(value, kernel.transpose(-1, -2)).flatten(),
+        ))
+    return _normalized_dot(edges(left), edges(right))
+
+
+def _luma_structure_ncc(left: torch.Tensor, right: torch.Tensor) -> float | None:
+    return _normalized_dot(left - left.mean(), right - right.mean())
+
+
 def compare_same_frame_stage_rois(
     reference: torch.Tensor,
     candidate: torch.Tensor,
@@ -304,11 +337,20 @@ def compare_same_frame_stage_rois(
                 "reference_common_sobel": e0,
                 "candidate_common_sobel": e1,
                 "candidate_over_reference": e1 / max(e0, 1e-12),
+                "same_time_luma_ncc": _luma_structure_ncc(a, b),
+                "same_time_sobel_structure_cosine": _sobel_structure_cosine(a, b),
                 "same_time_displacement": _phase_displacement(a, b),
             }
         anchor = series[baseline]["candidate_over_reference"]
+        base_gradient_similarity = series[baseline]["same_time_sobel_structure_cosine"]
         for row in series.values():
             row["relative_to_same_frame_prefix_energy_ratio"] = row["candidate_over_reference"] / max(anchor, 1e-12)
+            score = row["same_time_sobel_structure_cosine"]
+            row["sobel_structure_cosine_change_from_prefix"] = (
+                score - base_gradient_similarity
+                if score is not None and base_gradient_similarity is not None
+                else None
+            )
         comparison[name] = {
             "fractional_bounds_xyxy": list(rect),
             "same_frame_measurements": {str(frame): row for frame, row in series.items()},
@@ -324,6 +366,7 @@ def compare_same_frame_stage_rois(
         "post_frames": targets,
         "common_canvas_hw": list(common_hw),
         "candidate_vs_reference_normalized_on_prefix": True,
+        "structural_similarity_registration": "none_co_located_pixels",
         "extra_vae_calls": 0,
         "production_modified": False,
         "regions": comparison,
