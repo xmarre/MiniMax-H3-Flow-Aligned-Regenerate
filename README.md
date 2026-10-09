@@ -90,11 +90,13 @@ and `suffix_dc_bridge=false`, and leave the other values above unchanged.
 
 Static fine detail can change at the join despite exact returned prefix bytes.
 The opt-in `progressive_uniform_source_exact_context` candidate supplies the
-unresampled prefix to low/probe through Core's native video-reference layout,
-keeping one reduced-grid generated trajectory. The reference occupies its own
+unresampled prefix to low/probe/high through Core's native video-reference layout,
+keeping one generated trajectory on each stage's native grid. The reference occupies its own
 time span before the targets; target audio, video and keyframes advance together.
 This preserves their relative timing while changing their time relative to text
-and existing references. Rendered continuity and GPU latency remain unvalidated;
+and existing references. The reference and its target A/V timeline placement
+persist through target-grid high refinement. This avoids dropping clean visual
+conditioning at the handoff. Complete rendered tone/continuity and GPU latency remain unvalidated;
 the release default is unchanged. Keep `uniform_source_detail_transport=false`
 when checking this mode. See
 [continuation investigation and acceptance](docs/validation/CONTINUATION_01764_EXACT_VISUAL_CONTEXT.md).

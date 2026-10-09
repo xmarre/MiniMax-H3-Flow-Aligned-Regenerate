@@ -700,7 +700,7 @@ def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monk
 
 
 @pytest.mark.parametrize("sol", [False, True])
-def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monkeypatch, sol):
+def test_uniform_source_exact_context_preserves_reference_through_native_high(monkeypatch, sol):
     if not sol:
         make_owner = _vdn_owner
 
@@ -717,7 +717,7 @@ def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monk
         extra_transformer_options=extra,
     )
     context_calls = _events(run.metrics, "partitioned_exact_visual_prefix")
-    assert {event["stage"] for event in context_calls} == {"low", "probe"}
+    assert {event["stage"] for event in context_calls} == {"low", "probe", "high"}
     for event in context_calls:
         assert event["target_hw"] == TARGET_HW
         assert event["prefix_t"] == PROTECTED_T
@@ -725,12 +725,37 @@ def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monk
         assert event["prefix_time_colocated"] is False
         assert event["native_reference_timeline"] is True
         assert event["target_timeline_shift"] > 0
-        assert event["video_recurrence_grid"] == SOURCE_HW
+        assert event["video_recurrence_grid"] == (TARGET_HW if event["stage"] == "high" else SOURCE_HW)
         assert event["generated_video_streams"] == 1
         assert event["cross_grid_video_temporal_taps"] is False
+    assert len({event["target_timeline_shift"] for event in context_calls}) == 1
     assert len(run.upscaler.inputs) == 1
     assert not _events(run.metrics, "partitioned_target_band_domain_transformer")
     assert _events(run.metrics, "partitioned_exact_prefix_complete")[0]["final_prefix_exact"] is True
+
+
+def test_uniform_source_high_reference_preserves_low_probe_and_handoff(monkeypatch):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+
+    original = scheduler._partitioned_high_stage_contract
+
+    def drop_high_reference(*args, **kwargs):
+        kwargs["retain_exact_visual_context"] = False
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler, "_partitioned_high_stage_contract", drop_high_reference)
+    previous = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT)
+    monkeypatch.setattr(scheduler, "_partitioned_high_stage_contract", original)
+    retained = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT)
+    assert [c["stage"] for c in retained.calls] == ["low", "probe", "high"]
+    for before, after in zip(previous.calls, retained.calls, strict=True):
+        for key in ("noise", "latent", "mask", "sigmas", "entry_state"):
+            assert torch.equal(before[key], after[key])
+        if before["stage"] != "high":
+            assert torch.equal(before["final_state"], after["final_state"])
+    assert torch.equal(previous.upscaler.inputs[0], retained.upscaler.inputs[0])
+    assert previous.metrics.counters["transformer_actual_nfe"] == retained.metrics.counters["transformer_actual_nfe"]
+    assert not torch.equal(previous.result, retained.result)
 
 
 def _record_band_clean(monkeypatch):

@@ -349,7 +349,7 @@ class PartitionedStageRuntime:
     # The two-stream operator is also used by opt-in equal-grid high refinement.
     target_band_domain: TargetBandDomainContext | None = None
     # Exact target-grid visual context for the opt-in uniform-source candidate.
-    # Generated video still has one native source-grid recurrence.
+    # Generated video has one native recurrence on each stage's own grid.
     exact_prefix_visual_context: PartitionedStagePlan | None = None
 
 

@@ -53,6 +53,35 @@ a structural correction and a new rendered hypothesis, not an accepted fix.
 
 ## Candidate architecture
 
+### Native placement follow-up: residual tone transition
+
+Run 01768 executes native reference placement with a 65-unit target timeline
+shift, seven exact-context low/probe calls and residual transport disabled.
+Its three reports identify manifest
+`1ef7cf9003ba598acb234fc4ba717031dec1091aaa12f1a255f745e9094fb873`.
+The owner reports improved boundary geometry/content and residual darkening
+spread over several frames. The source/final 177→178 diagnostic errors are
+0.02850/0.03414, with no comparable outlier in that pair. Runs 01764, 01767 and
+01768 have different authoritative prefix hashes; their numeric differences
+are not a matched measurement of the placement correction's effect or complete
+semantic acceptance.
+
+The source stage already dips at frames 175–177. High adds further darkening:
+at frame 181, decoded mean luma is 0.32553 in source, 0.32315 in provider and
+pre-high, 0.31772 in the first high prediction before Flow, 0.31990 after
+immediate Flow guidance, and 0.31587 finally. Provider and pre-high are identical
+throughout the measured window. High's actual predictions develop the dip as
+well as forecasts. These observations exclude exact restoration and immediate
+Flow guidance as the sole origin of the added high darkening; they do not
+identify a unique model/solver/decoder cause.
+
+The preceding revision supplied the exact video reference only in low/probe.
+High dropped that clean condition and its native target timeline shift. The
+current candidate retains the same reference in high on the uniform target
+grid. This removes a specific conditioning discontinuity while preserving
+low/probe arithmetic and the handoff. It is a testable high-context hypothesis,
+not proof that the source dip or complete rendered darkening is corrected.
+
 Select `spatial_stage_control=progressive_uniform_source_exact_context` in
 **MiniMax H3 Partitioned Exact-Prefix Handoff**. Preserve all other released
 profile values for a matched comparison. New and saved node defaults do not
@@ -75,7 +104,9 @@ block and contribute to the shared attention context; they have no generated
 output ownership. VDN's generated video recurrence remains entirely on the
 source grid, with no cross-grid video short-convolution taps. There is no second
 generated stream, short-band author or band/tail splice. The learned transfer,
-noise transport, exact prefix restoration and high stage remain unchanged.
+noise transport and exact prefix restoration remain unchanged. High keeps the
+same native reference and target timeline shift, with its ordinary target-grid
+generated recurrence and existing mask, guidance and sampler contracts.
 
 Flow extends the block layout's numerical signature with the policy and exact
 prefix geometry; the native Core/VDN carrier cache signature remains valid.
@@ -88,7 +119,8 @@ its actual selected mode. `partitioned_exact_visual_prefix` receipts identify
 the added conditioning rows and their grid/time ownership.
 
 At 01764 geometry this adds 12 x 972 = 11,664 conditioning rows to 29,450 native
-video rows. It adds no H3 evaluations, learned-provider calls, VAE calls, sampler
+video rows during low/probe, and the same reference rows to 60,264 native video
+rows during high. It adds no H3 evaluations, learned-provider calls, VAE calls, sampler
 lifetimes or history boundaries. The extra row count has a real cost; no GPU
 latency claim follows from arithmetic accounting.
 
@@ -110,8 +142,16 @@ the original context reproduces its output with retained VDN workspaces. This
 test uses the production Flow-before-VDN wrapper order and native attention;
 it does not substitute VDN's recurrence, short convolution or readout.
 
-The required rendered discriminator is the failed 01767 scene, inputs and seed
-with only this spatial-stage selector changed and
+The all-stage revision also checks native layout parity for target-grid
+carriers with mixed visual/audio references and keyframes, equal native A/V
+time shifts across stages, and high-stage owner/control restoration on success
+and failure. A matched test that drops only the high reference verifies
+identical low/probe states, provider input and high sampler entry/masks/sigmas,
+with unchanged model-evaluation counts. The learned-VDN context sensitivity
+and retained-workspace repeatability check covers high as well as low.
+
+The next rendered comparison uses the 01768 scene, inputs, settings and seed
+with this revised spatial-stage implementation and
 `uniform_source_detail_transport=false` (the default). Transport is a separate
 experimental intervention whose prefix calibration does not establish suffix
 motion safety; do not combine it with the initial exact-context comparison.

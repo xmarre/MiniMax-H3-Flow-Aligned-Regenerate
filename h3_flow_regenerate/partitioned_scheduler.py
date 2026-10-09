@@ -940,9 +940,18 @@ def _partitioned_stage_contract(
 
 @contextlib.contextmanager
 def _partitioned_high_stage_contract(
-    guider, plan, metrics, *, exact_prefix_attention=True, attention_head_t=None, domain_uniform_band_t=0
+    guider,
+    plan,
+    metrics,
+    *,
+    exact_prefix_attention=True,
+    attention_head_t=None,
+    domain_uniform_band_t=0,
+    retain_exact_visual_context=False,
 ):
     """Keep exact-prefix query policy across the target-grid refinement boundary."""
+    if retain_exact_visual_context and (not exact_prefix_attention or domain_uniform_band_t):
+        raise ValueError("exact visual context requires uniform exact-prefix high refinement")
     if (
         type(domain_uniform_band_t) is not int
         or domain_uniform_band_t < 0
@@ -975,6 +984,7 @@ def _partitioned_high_stage_contract(
             high_linear_diagnostic="normal",
             high_softmax_diagnostic="normal",
             high_audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_LEGACY,
+            exact_visual_reference=bool(retain_exact_visual_context),
             extra_logical_model_calls=0,
             extra_sampler_invocations=0,
         )
@@ -1033,6 +1043,7 @@ def _partitioned_high_stage_contract(
                 target_band=high_band,
                 target_band_domain=high_domain,
                 attention_head_t=None if high_domain is not None else attention_head_t,
+                exact_prefix_visual_context=plan if retain_exact_visual_context else None,
             ):
                 yield
             _verify_domain_uniform_stage(metrics, "high", high_domain, domain_before)
@@ -6361,6 +6372,7 @@ def run_partitioned_progressive(
                 exact_prefix_attention=prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
                 attention_head_t=target_band.head_t if target_band is not None else None,
                 domain_uniform_band_t=target_band.band_t if high_domain_context_requested else 0,
+                retain_exact_visual_context=exact_uniform_context,
             ),
             high_boundary_contract(
                 binding,

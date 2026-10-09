@@ -30,8 +30,9 @@ def _plan(source_hw=(4, 6)):
 @pytest.mark.parametrize("softmax_mode", ["dense_suffix_same_domain", "target_query_sink_measure"])
 @pytest.mark.parametrize("source_hw", [(4, 6), (8, 12)])
 @pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("retain_context", [False, True])
 def test_high_owns_target_grid_context_and_restores_low_controls(
-    source_hw, failure, monkeypatch, tmp_path, softmax_mode
+    source_hw, failure, monkeypatch, tmp_path, softmax_mode, retain_context
 ):
     monkeypatch.setenv("H3_FLOW_BOUNDARY_WITNESS_DIR", str(tmp_path))
     plan = _plan(source_hw)
@@ -51,7 +52,10 @@ def test_high_owns_target_grid_context_and_restores_low_controls(
     metrics = H3FlowMetrics()
 
     def execute():
-        with _flow_stage_contract(guider, "high"), _partitioned_high_stage_contract(guider, plan, metrics):
+        with (
+            _flow_stage_contract(guider, "high"),
+            _partitioned_high_stage_contract(guider, plan, metrics, retain_exact_visual_context=retain_context),
+        ):
             owner = options[PARTITIONED_STAGE_KEY]
             assert owner.plan.source_grid == owner.plan.target_grid == (4, 6)
             assert owner.plan.prefix is plan.prefix
@@ -61,6 +65,7 @@ def test_high_owns_target_grid_context_and_restores_low_controls(
             assert owner.audio_position_domain == "legacy_target"
             assert owner.boundary_witness is None
             assert owner.attention_head_t is None
+            assert owner.exact_prefix_visual_context is (plan if retain_context else None)
             assert options["h3_refinement"]["min_actual_prefix_steps"] == 1
             assert options["h3_refinement"]["source"] == "h3_flow_partitioned_refinement"
             assert options["h3_refinement"]["provider_note"] == "keep"
