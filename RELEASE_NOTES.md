@@ -1,5 +1,16 @@
 # Unreleased: experimental continuation controls
 
+Uniform continuation now keeps the initial chunk's image-grid resize and
+ordinary learned-upscaler path. Previously both uniform modes inherited the
+heterogeneous attention-coordinate projection and forced a different
+encoder-to-decoder interpolation from chunk 1. This changes the source prefix
+seen by low/probe and the learned transfer; at the tested 50x38 -> 72x54 geometry
+the two interpolation conventions differ by about 0.30 source latent cells
+on coordinate ramps. The correction adds no model calls and preserves the
+exact returned prefix, audio ownership and sampling schedule. It is a concrete
+representation correction, with rendered tone/motion acceptance still pending.
+See [image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
+
 `progressive_uniform_source_exact_context` adds unresampled prefix visual
 conditioning to low/probe through Core's native video-reference layout, while
 preserving one source-grid video recurrence. The reference occupies a separate

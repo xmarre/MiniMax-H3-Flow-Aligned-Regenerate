@@ -60,12 +60,17 @@ class _Upscaler:
 
     def __init__(self):
         self.inputs = []
+        self.lattices = []
 
     def upscale_clean_video(self, video, *, target_h, target_w):
+        self.lattices.append("half_pixel_latent_v1")
         self.inputs.append(video.detach().clone())
         return resize_spatial_5d(video, target_h, target_w, mode="bicubic").to(video)
 
-    upscale_clean_video_h3_patch_lattice = upscale_clean_video
+    def upscale_clean_video_h3_patch_lattice(self, video, *, target_h, target_w):
+        self.lattices.append("h3_dense_patch_center_lattice_v2")
+        self.inputs.append(video.detach().clone())
+        return resize_spatial_5d(video, target_h, target_w, mode="bicubic").to(video)
 
 
 def _vdn_owner():
@@ -613,6 +618,36 @@ def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch
         assert event["target_rows_per_frame"] == hw[0] * hw[1] // 4
         assert event["prefix_log_key_measure"] == 0.0
         assert event["temporal"] == TEMPORAL
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+@pytest.mark.parametrize("target_hw,source_hw", [((24, 18), (16, 12)), ((18, 24), (12, 16)), ((24, 18), (16, 14))])
+def test_uniform_source_uses_first_chunk_image_lattice_for_prefix_and_provider(monkeypatch, mode, target_hw, source_hw):
+    monkeypatch.setitem(globals(), "TARGET_HW", target_hw)
+    monkeypatch.setitem(globals(), "SOURCE_HW", source_hw)
+    run = _harness(monkeypatch, spatial_stage_control=mode)
+    exact_video, _ = unpack_streams(run.latent_image, run.shapes)
+    expected = resize_spatial_5d(exact_video[:, :, :PROTECTED_T], *SOURCE_HW, mode="bicubic")
+    # The provider's protected prefix is the low sampler's clean condition, not
+    # an independently shifted RoPE-coordinate interpretation of that image.
+    assert torch.equal(run.upscaler.inputs[0][:, :, :PROTECTED_T], expected)
+    assert run.upscaler.lattices == ["half_pixel_latent_v1"]
+    receipt = _events(run.metrics, "partitioned_prefix_source_resample")[0]
+    assert receipt["policy"] == "half_pixel_latent_v1"
+    assert receipt["generic_half_pixel_prefix_replaced"] is False
+    assert receipt["generic_vs_physical_delta_abs_max"] == 0.0
+    transfer = _events(run.metrics, "partitioned_transfer_lattice")[0]
+    assert transfer["policy"] == transfer["prefix_projection_policy"] == "half_pixel_latent_v1"
+    assert transfer["provider_calls"] == 1
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+
+
+def test_heterogeneous_continuation_keeps_its_explicit_patch_lattice_provider(monkeypatch):
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE)
+    assert run.upscaler.lattices == ["h3_dense_patch_center_lattice_v2"]
+    assert _events(run.metrics, "partitioned_prefix_source_resample")[0]["generic_half_pixel_prefix_replaced"] is True
 
 
 @pytest.mark.parametrize(

@@ -353,7 +353,8 @@ def test_extended_replay_validates_saved_source_view_and_preserves_native_tail_b
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
-def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle):
+@pytest.mark.parametrize("projection_policy", [None, "h3_dense_patch_center_lattice_v2", "half_pixel_latent_v1"])
+def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle, projection_policy):
     directory, manifest, source = source_bundle
     metadata = manifest["metadata"]
     metadata.update(
@@ -365,6 +366,15 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
         low_probe_native_carrier_decodable=True,
     )
     manifest["tensor_bytes"].pop("low_probe_native_carrier_clean_full")
+    if projection_policy is not None:
+        metadata["source_prefix_projection_policy"] = projection_policy
+    if projection_policy == "half_pixel_latent_v1":
+        entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
+        prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+        prefix = prefix.reshape(entry["shape"])
+        source = source.clone()
+        source[:, :, :12] = audit.resize_spatial_5d(prefix, 2, 4, mode="bicubic")
+        write_operand(directory, manifest, "source_probe_clean_full", source)
     (directory / "manifest.json").write_text(json.dumps(manifest))
     plan, stages, _identity = audit.load_replay_operands(directory, 175, include_source=True)
     assert plan["head_t"] == plan["prefix_t"] == 12
@@ -372,6 +382,18 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
     report = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
     assert report["extra_vae_calls"] == 5
     assert report["stages"]["provider"]["frame_labels"] == list(range(171, 196))
+
+
+@pytest.mark.parametrize("policy", ["unknown", "half_pixel_latent_v1"])
+def test_extended_replay_rejects_unsupported_projection_without_decoding(source_bundle, policy):
+    directory, manifest, _source = source_bundle
+    # Half-pixel is valid only for a native uniform clip, not a mixed band view.
+    manifest["metadata"]["source_prefix_projection_policy"] = policy
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="source prefix projection policy"):
+        audit.audit_local_boundary(vae, directory, 175, lambda x: x, scope="transfer_and_decoder_context")
+    assert vae.inputs == []
 
 
 @pytest.mark.parametrize("failure", ["head", "tail", "grid", "shape", "hash"])

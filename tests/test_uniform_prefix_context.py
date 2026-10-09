@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from h3_flow_regenerate.geometry import resize_spatial_5d_h3_patch_lattice
+from h3_flow_regenerate.geometry import resize_spatial_5d
 from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
 from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan, partitioned_positions_with_audio_policy
 from h3_flow_regenerate.uniform_prefix_context import add_exact_prefix_visual_context
@@ -22,7 +22,7 @@ def plans(prefix):
     exact = PartitionedStagePlan(
         prefix=prefix, prefix_noise=torch.zeros_like(prefix), temporal=7, source_h=4, source_w=4
     )
-    projected = resize_spatial_5d_h3_patch_lattice(prefix, 4, 4)
+    projected = resize_spatial_5d(prefix, 4, 4, mode="bicubic")
     carrier = PartitionedStagePlan(
         prefix=projected, prefix_noise=torch.zeros_like(projected), temporal=7, source_h=4, source_w=4
     )
@@ -114,11 +114,11 @@ def test_twelve_token_reference_uses_native_duration_and_target_phase(native):
 
 
 def test_detail_in_projection_nullspace_reaches_native_condition_rows(native):
-    # A real physical resize has a nullspace: these distinct exact prefixes
+    # The actual antialiased uniform image resize has a nullspace: these distinct exact prefixes
     # produce the same reduced carrier to numerical precision. A lossy-only
     # transformer cannot discriminate them; the new native context can.
     basis = torch.eye(64).reshape(64, 1, 1, 8, 8)
-    projection = resize_spatial_5d_h3_patch_lattice(basis, 4, 4).reshape(64, 16).T
+    projection = resize_spatial_5d(basis, 4, 4, mode="bicubic").reshape(64, 16).T
     _, _, vh = torch.linalg.svd(projection, full_matrices=True)
     detail = vh[-1].reshape(1, 1, 1, 8, 8).repeat(1, 24, 2, 1, 1)
     zero = torch.zeros_like(detail)
@@ -174,7 +174,7 @@ def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypa
     h, w = case.geometry.target_hw
     sh, sw = case.geometry.source_h, case.geometry.source_w
     basis = torch.eye(h * w).reshape(h * w, 1, 1, h, w)
-    projection = resize_spatial_5d_h3_patch_lattice(basis, sh, sw).reshape(h * w, sh * sw).T
+    projection = resize_spatial_5d(basis, sh, sw, mode="bicubic").reshape(h * w, sh * sw).T
     _, _, vh = torch.linalg.svd(projection, full_matrices=True)
     detail = vh[-1].reshape(1, 1, 1, h, w).repeat(1, 24, case.owner.prefix_t, 1, 1)
     changed = PartitionedStagePlan(
@@ -184,11 +184,12 @@ def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypa
         source_h=sh,
         source_w=sw,
     )
-    assert torch.allclose(resize_spatial_5d_h3_patch_lattice(changed.prefix, sh, sw), case.source_prefix, atol=1e-6)
+    source_prefix = resize_spatial_5d(case.owner.prefix, sh, sw, mode="bicubic")
+    assert torch.allclose(resize_spatial_5d(changed.prefix, sh, sw, mode="bicubic"), source_prefix, atol=1e-6)
     source_video = torch.cat(
-        (case.source_prefix, case.carrier(case.video), fixture.target_band_tail(case.video, case.geometry)), 2
+        (source_prefix, case.carrier(case.video), fixture.target_band_tail(case.video, case.geometry)), 2
     )
-    plan = PartitionedStagePlan(case.source_prefix, case.owner.temporal, sh, sw, torch.zeros_like(case.source_prefix))
+    plan = PartitionedStagePlan(source_prefix, case.owner.temporal, sh, sw, torch.zeros_like(source_prefix))
     mask = torch.ones(1, 1, case.owner.temporal, sh, sw)
     mask[:, :, : case.owner.prefix_t] = 0
 

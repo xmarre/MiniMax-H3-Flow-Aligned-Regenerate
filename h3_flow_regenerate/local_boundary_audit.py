@@ -18,9 +18,9 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from .geometry import resize_spatial_5d_h3_patch_lattice
+from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
-from .transfer_lattice import measure_paired_prefix_affine
+from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
 
 LOG = logging.getLogger(__name__)
 STAGES = {
@@ -298,7 +298,15 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
             raise ValueError("reduced-grid handoff tail differs from native low/probe storage")
         native_head = prefix.clone() if uniform_source else native[:, :, :head].clone()
         native_head[:, :, : plan["prefix_t"]] = prefix
-        expected_head = resize_spatial_5d_h3_patch_lattice(native_head, h, w)
+        # Older bundles used the physical projection even for uniform clips.
+        # Never reinterpret those bytes under the corrected image-grid contract.
+        projection_policy = metadata.get("source_prefix_projection_policy", H3_TRANSFER_LATTICE)
+        if projection_policy == "half_pixel_latent_v1" and uniform_source:
+            expected_head = resize_spatial_5d(native_head, h, w, mode="bicubic")
+        elif projection_policy == H3_TRANSFER_LATTICE:
+            expected_head = resize_spatial_5d_h3_patch_lattice(native_head, h, w)
+        else:
+            raise ValueError("unsupported saved source prefix projection policy")
         # Saved projection ran on the production device. CPU reconstruction can
         # differ by float32 interpolation roundoff, so this check is numerical.
         if not torch.allclose(source[:, :, :head], expected_head, atol=1e-4, rtol=1e-5):

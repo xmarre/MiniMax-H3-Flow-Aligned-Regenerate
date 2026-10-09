@@ -3869,7 +3869,8 @@ def run_partitioned_progressive(
     source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
     transfer_lattice_provider = None
     if (
-        spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        not uniform_source
+        and spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
     ):
         transfer_lattice_provider = H3PatchLatticeTransferProvider(config.learned_upscaler)
@@ -3883,28 +3884,33 @@ def run_partitioned_progressive(
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
     low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
-    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
-        stage_plan.prefix.to(low_video),
-        source_h,
-        source_w,
-    )
-    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
-        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
     generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
-    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    # A native uniform clip uses image-grid resize, exactly as the initial
+    # progressive chunk does. RoPE coordinates label attention patches; they
+    # do not redefine the pixel centers of the VAE/learned upscaler. Keep the
+    # physical projection only for the explicitly heterogeneous carrier.
+    prefix_projection_policy = "half_pixel_latent_v1" if uniform_source else H3_TRANSFER_LATTICE
+    projected_prefix_source = (
+        generic_prefix_source
+        if uniform_source
+        else resize_spatial_5d_h3_patch_lattice(stage_plan.prefix.to(low_video), source_h, source_w)
+    )
+    if int(projected_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 prefix resample changed temporal ownership")
+    prefix_resample_delta = projected_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
     prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
     prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
     low_video = low_video.clone()
-    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_video[:, :, : stage_plan.prefix_t] = projected_prefix_source
     low_latent_image = pack_streams((low_video, low_audio))[0]
     binding.metrics.event(
         "partitioned_prefix_source_resample",
-        policy=H3_TRANSFER_LATTICE,
+        policy=prefix_projection_policy,
         prefix_source="authoritative_exact_target_prefix",
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
         source_hw=(int(source_h), int(source_w)),
-        generic_half_pixel_prefix_replaced=True,
+        generic_half_pixel_prefix_replaced=not uniform_source,
         generic_vs_physical_delta_rms=prefix_resample_delta_rms,
         generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
         numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
@@ -3919,7 +3925,7 @@ def run_partitioned_progressive(
         # conditioning rows. Equal-grid partition transport preserves backend
         # and Spectrum history ownership without a second hidden stream.
         low_transformer_plan = PartitionedStagePlan(
-            prefix=physical_prefix_source.detach().to(torch.float32).clone(),
+            prefix=projected_prefix_source.detach().to(torch.float32).clone(),
             temporal=stage_plan.temporal,
             source_h=source_h,
             source_w=source_w,
@@ -3948,7 +3954,7 @@ def run_partitioned_progressive(
         weight_square = h3_patch_lattice_weight_square_sum(target_h, target_w, source_h, source_w)
         target_band_domain = TargetBandDomainContext(
             policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY,
-            source_prefix=physical_prefix_source.detach().to(torch.float32).clone(),
+            source_prefix=projected_prefix_source.detach().to(torch.float32).clone(),
             source_prefix_noise=source_video_noise[:, :, : stage_plan.prefix_t].detach().to(torch.float32).clone(),
             source_band_noise=source_video_noise[:, :, stage_plan.prefix_t : head_t].detach().to(torch.float32).clone(),
             band_noise_complement=(1.0 - weight_square).clamp_min(0.0).sqrt(),
@@ -4658,7 +4664,7 @@ def run_partitioned_progressive(
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
             )
-        exact_prefix_source = physical_prefix_source.to(clean_video)
+        exact_prefix_source = projected_prefix_source.to(clean_video)
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
                 raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
@@ -5019,7 +5025,7 @@ def run_partitioned_progressive(
             # the checkpoint transform itself with deterministic spatial bicubic.
             spatial_transfer_control = _BicubicSameSourceTransferProvider(config.learned_upscaler)
             effective_upscaler = spatial_transfer_control
-        else:
+        elif not uniform_source:
             effective_upscaler = transfer_lattice_provider
         if spatial_transfer_control is not None:
             source_clean_control, _source_clean_audio_control = unpack_streams(source_x0, source_shapes)
@@ -5318,6 +5324,20 @@ def run_partitioned_progressive(
                 target_hw=(target_h, target_w),
                 resample_position="encoder_to_decoder",
                 provider_calls=effective_upscaler.calls,
+                transferred_prefix_output_discarded=True,
+                exact_prefix_modified=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+            )
+        elif uniform_source and spatial_transfer_control is None:
+            binding.metrics.event(
+                "partitioned_transfer_lattice",
+                policy="half_pixel_latent_v1",
+                prefix_projection_policy=prefix_projection_policy,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                resample_position="encoder_to_decoder",
+                provider_calls=1,
                 transferred_prefix_output_discarded=True,
                 exact_prefix_modified=False,
                 extra_h3_nfe=0,
@@ -6980,6 +7000,7 @@ def run_partitioned_progressive(
                     "policy": "native_boundary_decoder_window_evidence_v1",
                     "window": boundary_window_evidence.plan,
                     "domain": "model_internal_clean_except_sampler_input_and_mask",
+                    "source_prefix_projection_policy": prefix_projection_policy,
                     "prediction_prefix": "native_model_prediction_not_recanonicalized",
                     "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
                     "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",

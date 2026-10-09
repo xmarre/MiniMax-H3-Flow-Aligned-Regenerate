@@ -108,18 +108,22 @@ generated trajectory to the target grid. The caller's exact target-grid prefix
 is then restored, and high refinement runs on the target grid with the original
 exact-prefix contract. The returned latent carries the exact prefix.
 
-Low/probe sees the physical-lattice projection of the protected prefix on the
-reduced grid, not exact target-grid prefix attention. The handoff re-enters the
-target grid through the same learned transfer as the first chunk, and high
-refinement re-attends to the exact prefix.
+Low/probe sees the ordinary antialiased image-grid resize of the protected
+prefix on the reduced grid. Uniform continuation uses the provider's ordinary
+image-grid learned transfer, matching the first chunk. Attention-coordinate
+resampling remains confined to the heterogeneous modes. High refinement
+re-attends to the exact prefix. The image-grid correction is covered by native
+runtime regression tests but still needs rendered acceptance; see
+[image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
 
-In the accepted reference continuation (default profile, native attention
+In the earlier accepted reference continuation (default profile, native attention
 backend), the join had no visible discontinuity. Measured final luminance
 changed by less than 0.001 across the join. Continuation sampling took 1.23
 times the first chunk's sampling time, and Spectrum forecast both the low and
 the high stage. See [validation: run 01737](docs/validation/CONTINUATION_01737_AUDIT_LIFETIME.md).
 This is acceptance of one continuation, not a guarantee for every model,
-scene, seed or hardware. Sol attention selection uses the same equal-grid
+scene, seed or hardware, and predates the image-grid correction above. Sol
+attention selection uses the same equal-grid
 partition and history contract and is covered by CPU contract tests; it has
 no separate rendered acceptance.
 
