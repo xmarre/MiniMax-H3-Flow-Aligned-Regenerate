@@ -21,7 +21,12 @@ import torch.nn.functional as F
 from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
 from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
-from .stage_static_roi_audit import PROFILES as STATIC_ROI_PROFILES, parse_static_rois, measure_stage_static_rois
+from .stage_static_roi_audit import (
+    PROFILES as STATIC_ROI_PROFILES,
+    parse_static_rois,
+    measure_stage_static_rois,
+    compare_same_frame_stage_rois,
+)
 
 LOG = logging.getLogger(__name__)
 STAGES = {
@@ -685,6 +690,18 @@ def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="st
         report["stages"][name]["adjacent_frame_geometry"] = geometry_comparison(frames[:-1], frames[1:], labels)
         upper = frames[:, : round(frames.shape[1] * 0.45)]
         report["stages"][name]["adjacent_frame_geometry_upper45"] = geometry_comparison(upper[:-1], upper[1:], labels)
+    if static_rois:
+        report["static_background_same_frame_stage_pairs"] = {}
+        roi_pairs = ([("source_grid", "provider")] if "source_grid" in pixels else []) + pairs
+        for left, right in roi_pairs:
+            if left not in pixels or right not in pixels:
+                continue
+            report["static_background_same_frame_stage_pairs"][f"{left}_to_{right}"] = (
+                compare_same_frame_stage_rois(
+                    pixels[left], pixels[right], [labels[0]-1, *labels],
+                    join_frame=join_frame, rois=static_rois,
+                )
+            )
     # Preserve the existing final-stage field for report consumers.
     report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
     return report
