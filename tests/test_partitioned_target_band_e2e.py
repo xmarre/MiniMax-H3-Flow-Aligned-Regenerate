@@ -294,6 +294,7 @@ def _harness(
             denoised = model(inpaint(x, sigma), sigma, shapes, denoise_mask)
             denoised = denoised * denoise_mask + latent_image * (1.0 - denoise_mask)
             record["entry_state"] = x.clone()
+            record["final_state"] = denoised.clone()
             return denoised
         sigma0 = float(sigmas[0])
         x = noise * sigma0 + latent_image * (1.0 - sigma0)
@@ -1369,6 +1370,7 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control)
     history.install_partitioned_history_bridge()
 
     from h3_flow_regenerate import partitioned_transformer as transform
+    from h3_flow_regenerate.uniform_prefix_context import POLICY
 
     original = transform.partitioned_diffusion_wrapper
     recognized = {}
@@ -1383,6 +1385,11 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control)
                 identity = interop._flow_mixed_grid_replacement_identity(patch, 0)
                 kind = None if identity is None else identity[0][0]
                 recognized.setdefault(options.get("h3_flow_stage"), set()).add(kind)
+                values = interop._closure_values(patch)
+                reference_identity = (POLICY, PROTECTED_T, *TARGET_HW)
+                has_reference = control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
+                assert (reference_identity in values["partitioned_layout"].signature) is has_reference
+                assert (repr(reference_identity) in identity[0][-1]) is has_reference
                 return executor(*call_args, **call_kwargs)
 
         return original(Recording(), *args, **kwargs)

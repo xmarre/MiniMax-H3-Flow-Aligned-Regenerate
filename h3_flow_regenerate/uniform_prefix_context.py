@@ -1,4 +1,4 @@
-"""Exact visual context for a single native reduced-grid video trajectory."""
+"""Exact visual reference context shared by native continuation stages."""
 
 from __future__ import annotations
 
