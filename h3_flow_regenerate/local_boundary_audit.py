@@ -22,6 +22,8 @@ from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
 from .stage_static_roi_audit import (
     PROFILES as STATIC_ROI_PROFILES,
+)
+from .stage_static_roi_audit import (
     compare_same_frame_stage_rois,
     measure_stage_static_rois,
     parse_static_rois,
@@ -573,9 +575,15 @@ def measure_window_context(vae, latent, process_out, plan, *, detail_region="off
 
 
 def audit_local_boundary(
-    vae, bundle_path, join_frame, process_out, *,
-    scope="stage_continuity", detail_region="off",
-    static_roi_profile="off", static_roi_json="",
+    vae,
+    bundle_path,
+    join_frame,
+    process_out,
+    *,
+    scope="stage_continuity",
+    detail_region="off",
+    static_roi_profile="off",
+    static_roi_json="",
 ):
     if scope not in SCOPES:
         raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
@@ -637,7 +645,10 @@ def audit_local_boundary(
         }
         if static_rois:
             report["stages"][name]["static_background_rois"] = measure_stage_static_rois(
-                frames, [labels[0] - 1, *labels], join_frame=join_frame, rois=static_rois,
+                frames,
+                [labels[0] - 1, *labels],
+                join_frame=join_frame,
+                rois=static_rois,
             )
         if detail_region != "off":
             selected, metadata = _detail_crop(frames, detail_region)
@@ -700,11 +711,12 @@ def audit_local_boundary(
         for left, right in roi_pairs:
             if left not in pixels or right not in pixels:
                 continue
-            report["static_background_same_frame_stage_pairs"][f"{left}_to_{right}"] = (
-                compare_same_frame_stage_rois(
-                    pixels[left], pixels[right], [labels[0]-1, *labels],
-                    join_frame=join_frame, rois=static_rois,
-                )
+            report["static_background_same_frame_stage_pairs"][f"{left}_to_{right}"] = compare_same_frame_stage_rois(
+                pixels[left],
+                pixels[right],
+                [labels[0] - 1, *labels],
+                join_frame=join_frame,
+                rois=static_rois,
             )
     # Preserve the existing final-stage field for report consumers.
     report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
@@ -841,7 +853,7 @@ class H3FlowLocalBoundaryAudit:
                         "default": "",
                         "multiline": True,
                         "tooltip": (
-                            "Custom: {\"books\":[0,.42,.13,.60],\"curtain\":[.83,.04,.99,.36]}. "
+                            'Custom: {"books":[0,.42,.13,.60],"curtain":[.83,.04,.99,.36]}. '
                             "Fractional XYXY coordinates, at least two ROIs."
                         ),
                     },
@@ -870,9 +882,14 @@ class H3FlowLocalBoundaryAudit:
         return float("nan")
 
     def audit(
-        self, video_vae, bundle_path, chunk_join_frame,
-        audit_scope="stage_continuity", detail_region="off",
-        static_roi_profile="off", static_roi_json="",
+        self,
+        video_vae,
+        bundle_path,
+        chunk_join_frame,
+        audit_scope="stage_continuity",
+        detail_region="off",
+        static_roi_profile="off",
+        static_roi_json="",
     ):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
