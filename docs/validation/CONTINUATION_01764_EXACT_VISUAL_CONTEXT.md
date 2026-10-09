@@ -84,8 +84,11 @@ test uses the production Flow-before-VDN wrapper order and native attention;
 it does not substitute VDN's recurrence, short convolution or readout.
 
 The required rendered discriminator is the same 01764 scene, inputs and seed
-with only this spatial-stage selector changed. Inspect the actual assembled
-join, stars, background and lettering, and compare source/provider/first-high
+with only this spatial-stage selector changed and
+`uniform_source_detail_transport=false` (the default). Transport is a separate
+experimental intervention whose prefix calibration does not establish suffix
+motion safety; do not combine it with the initial exact-context comparison.
+Inspect the actual assembled join, stars, background and lettering, and compare source/provider/first-high
 captures, actual/forecast counts, timing and residency. A matched
 `same_grid_target_control` run remains the control if this candidate fails.
 The candidate does not correct a provider-local temporal defect; that remains

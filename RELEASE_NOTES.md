@@ -1,33 +1,21 @@
-# Unreleased: exact-prefix detail transport for uniform-source continuation
+# Unreleased: experimental continuation controls
 
-`progressive_uniform_source` continuations could change static fine detail at
-the chunk join: lettering was spelled differently, and background patterns were
-redrawn or shifted by a few pixels. The learned upscaler re-synthesizes such
-detail for every generated frame, while the restored prefix keeps the original.
-Target-high refinement started from the re-synthesized layout and kept it.
+`progressive_uniform_source_exact_context` adds unresampled prefix visual
+conditioning to low/probe while preserving one native source-grid video
+recurrence. It is opt-in; the released spatial-stage default is unchanged.
 
-The new `uniform_source_detail_transport` control (default `true`, appended
-after every existing widget) carries the difference between the last exact
-prefix frame and the upscaler's rendering of that frame into the generated
-frames before high refinement. Each location is weighted by calibrated
-persistence:
-- The weight curve is a monotone regression, fitted on the same run's prefix
-  frames, of how much of the upscaler error persists at each level of local
-  learned change.
-- Only locations where most of the error persists are transported. Partial
-  blending of misaligned detail would render as an overlay.
-- The transport is skipped when it does not reduce the error on held-out prefix
-  frames.
+A separate append-only `uniform_source_detail_transport` boolean is **off by
+default**, including saved workflows without it. Explicitly enabling it adds a
+weighted last-prefix exact-minus-learned latent residual before high refinement
+in either uniform-source mode. It adds no model, upscaler or VAE call, and
+supersedes the suffix DC bridge when applied. Calibration still consumes
+compute and memory.
 
-The transport adds no model, upscaler or VAE call. When applied, it replaces the
-one-token suffix DC bridge. Each continuation records a
-`partitioned_uniform_source_detail_transport` receipt. Saved workflows load the
-control with its default. It applies to both uniform-source modes; other
-spatial-stage modes are unchanged.
-
-Synthetic tests cover the core behavior: static detail is recovered (error
-1.31 → 0.07) while a moving object receives less than 10% of that correction.
-Rendered quality on hardware is not yet established.
+Prefix-pair error improvement does not establish suffix motion safety. A
+projection-nullspace motion regression demonstrates that the gate can accept
+while freezing stale fine detail and increasing suffix error. Neither control
+has rendered GPU quality or latency acceptance. Test exact visual context with
+transport off, and treat transport as a separate experimental comparison.
 
 # MiniMax H3 Flow-Aligned Regenerate v0.3.11
 

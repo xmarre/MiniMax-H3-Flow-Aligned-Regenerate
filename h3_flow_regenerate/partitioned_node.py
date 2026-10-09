@@ -569,15 +569,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         spec["required"]["uniform_source_detail_transport"] = (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": (
-                    "Used only by the progressive_uniform_source spatial-stage modes. The learned upscaler renders "
-                    "fine static detail (text, patterns, texture) differently from the carried target-grid "
-                    "frames, so without this the continuation can redraw such detail at the join. When enabled, "
-                    "the difference between the carried last frame and the upscaler's rendering of it is added "
-                    "to the generated frames before high refinement, weighted per location by how much the "
-                    "content there has changed since that frame. The weighting is calibrated on the carried "
-                    "frames of the same run and is skipped when it does not improve held-out carried frames."
+                    "Experimental, off by default; used only by the progressive_uniform_source spatial-stage "
+                    "modes. Adds the last prefix frame's exact-minus-learned residual to the suffix before "
+                    "high refinement, weighted by learned change and prefix residual persistence. Prefix "
+                    "calibration does not establish suffix motion safety: detail lost by projection can move "
+                    "without the gate detecting it, causing stale detail or an overlay. Rendered quality is "
+                    "unvalidated. Keep off when testing exact visual context alone."
                 ),
             },
         )
@@ -631,7 +630,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
         target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
-        uniform_source_detail_transport=True,
+        uniform_source_detail_transport=False,
         metrics=None,
         temporal_weight=0.20,
     ):

@@ -126,14 +126,37 @@ def test_geometry_and_dtype_contract():
     assert receipt["applied"] is True
 
 
-def test_option_defaults_on_and_accepts_only_explicit_false():
-    assert resolve_partitioned_uniform_source_detail_transport({}) is True
+def test_option_defaults_off_and_requires_a_boolean_opt_in():
+    assert resolve_partitioned_uniform_source_detail_transport({}) is False
     assert (
         resolve_partitioned_uniform_source_detail_transport({PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: False})
         is False
     )
-    with pytest.raises(ValueError):
-        resolve_partitioned_uniform_source_detail_transport({PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True})
+    assert resolve_partitioned_uniform_source_detail_transport({PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True})
+    for value in (1, 0, None, "true"):
+        with pytest.raises(ValueError, match="boolean"):
+            resolve_partitioned_uniform_source_detail_transport(
+                {PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: value}
+            )
+
+
+def test_prefix_holdout_does_not_establish_safety_for_motion_lost_by_projection():
+    # A one-pixel translation changes this fine pattern, but neither phase is
+    # visible in a 2x2 projection. The prefix-only calibration cannot detect
+    # this suffix motion; accepting its fit must not imply rendered safety.
+    learned = 0.001 * torch.randn(1, C, T, H, W, generator=torch.Generator().manual_seed(0))
+    y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing="ij")
+    detail = ((x + y) % 2 * 2 - 1).float()[None, None].expand(1, C, -1, -1)
+    shifted = torch.roll(detail, shifts=1, dims=-1)
+    assert torch.count_nonzero(F.avg_pool2d(detail, 2, 2)) == 0
+    assert torch.count_nonzero(F.avg_pool2d(shifted, 2, 2)) == 0
+    exact = learned[:, :, :PREFIX_T] + detail.unsqueeze(2)
+    transported, receipt = apply_uniform_source_detail_transport(learned, exact, prefix_t=PREFIX_T)
+    truth = learned[:, :, PREFIX_T:] + shifted.unsqueeze(2)
+
+    assert receipt["applied"] and receipt["holdout_error_ratio"] < 0.001
+    assert _rms(transported[:, :, PREFIX_T:] - truth) > 1.5 * _rms(learned[:, :, PREFIX_T:] - truth)
+    assert resolve_partitioned_uniform_source_detail_transport({}) is False
 
 
 @pytest.mark.parametrize("prefix_t", [4, 5, 6])

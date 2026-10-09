@@ -283,13 +283,13 @@ def resolve_partitioned_suffix_dc_bridge(transformer_options: dict[str, Any]) ->
 
 
 def resolve_partitioned_uniform_source_detail_transport(transformer_options: dict[str, Any]) -> bool:
-    """Return whether uniform-source continuation transports exact-prefix static detail."""
+    """Require an explicit opt-in to experimental uniform-source detail transport."""
     if PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY not in transformer_options:
-        return True
+        return False
     value = transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY]
-    if value is not False:
-        raise ValueError("the uniform-source detail transport leaf may only carry the explicit value False")
-    return False
+    if type(value) is not bool:
+        raise ValueError("the uniform-source detail transport leaf must carry a boolean")
+    return value
 
 
 def normalize_partitioned_softmax_diagnostic(value: str) -> str:
@@ -486,7 +486,7 @@ def apply_partitioned_diagnostic_controls(
     target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     target_band_handoff_state: str = PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
     target_band_context: str = PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
-    uniform_source_detail_transport: bool = True,
+    uniform_source_detail_transport: bool = False,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -625,9 +625,9 @@ def apply_partitioned_diagnostic_controls(
     else:
         transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY] = False
     if uniform_source_detail_transport:
-        transformer_options.pop(PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY, None)
+        transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] = True
     else:
-        transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] = False
+        transformer_options.pop(PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY, None)
     if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
         transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
     else:
@@ -684,8 +684,8 @@ def apply_partitioned_diagnostic_controls(
             fields["softmax_diagnostic"] = softmax_mode
         if not suffix_dc_bridge:
             fields["suffix_dc_bridge"] = False
-        if not uniform_source_detail_transport:
-            fields["uniform_source_detail_transport"] = False
+        if uniform_source_detail_transport:
+            fields["uniform_source_detail_transport"] = True
         if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
             fields["target_band_tokens"] = band_tokens
         if band_handoff_state != PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE:

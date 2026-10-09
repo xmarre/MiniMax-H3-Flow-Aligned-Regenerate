@@ -628,16 +628,22 @@ def test_uniform_source_detail_transport_changes_only_the_high_entry_suffix(monk
         monkeypatch,
         spatial_stage_control=mode,
         extra_transformer_options={
-            PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: False,
             PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
         },
     )
     enabled = _harness(
         monkeypatch,
         spatial_stage_control=mode,
-        extra_transformer_options={PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
+        extra_transformer_options={
+            PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True,
+            PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
+        },
     )
-    with_bridge = _harness(monkeypatch, spatial_stage_control=mode)
+    with_bridge = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True},
+    )
     bridge_receipt = _events(with_bridge.metrics, "partitioned_uniform_source_detail_transport")[0]
     assert bridge_receipt["suffix_dc_bridge_superseded"] is bridge_receipt["applied"]
 

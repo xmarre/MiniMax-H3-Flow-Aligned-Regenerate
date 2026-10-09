@@ -83,7 +83,7 @@ suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
-uniform_source_detail_transport  = true
+uniform_source_detail_transport  = false
 ```
 
 Continuation low/probe runs one full-duration clip on the reduced grid, the
@@ -272,20 +272,22 @@ Neither control changes the learned band/tail handoff, and neither is qualified
 for rendered quality. Compare each against the unchanged mixed-grid baseline on
 identical inputs.
 
-### Uniform-source detail transport
+### Experimental uniform-source detail transport
 
-`uniform_source_detail_transport=true` (default) is used only by
-`progressive_uniform_source` and `progressive_uniform_source_exact_context`. Before high refinement, it adds the difference
-between the last exact prefix frame and the learned upscaler's rendering of
-that frame to the generated frames, weighted per location by calibrated
-persistence. Static detail (text, patterns, texture) then continues from the
-exact prefix instead of being re-synthesized at the join. Moving content keeps
-the learned suffix. The calibration uses the prefix frames of the same run, and
-the transport is skipped when it does not improve held-out prefix frames. Set it
-to `false` to compare against the learned suffix alone. The
+`uniform_source_detail_transport=false` is the default, including workflows
+that omit the new widget. Leave it off to test exact visual context alone.
+Explicit `true` adds a weighted last-prefix exact-minus-learned latent residual
+before high refinement in either uniform-source mode. Prefix-pair calibration
+can reject a poor fit, but cannot establish safety for suffix motion or
+occlusion. Fine detail lost by projection can move without the learned-change
+gate observing it, so stale detail and overlays remain possible. Rendered
+quality is unvalidated.
+
+For a separate comparison, hold the scene, inputs, seed and spatial-stage mode
+fixed and change only this boolean. The
 `partitioned_uniform_source_detail_transport` receipt reports `applied`,
-`reason`, `holdout_error_ratio`, the calibrated `transport_weights`, and
-`suffix_weight_mean`.
+`reason`, `holdout_error_ratio`, `transport_weights` and `suffix_weight_mean`.
+An improving prefix error ratio does not qualify the rendered boundary.
 
 ### Suffix DC bridge selector
 

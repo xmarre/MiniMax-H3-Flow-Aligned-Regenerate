@@ -1,24 +1,15 @@
-"""Exact-prefix detail transport for uniform-source continuation.
+"""Experimental last-prefix residual transport for uniform-source continuation.
 
-``progressive_uniform_source`` generates every continuation frame on the reduced
-grid against a projection of the exact target-grid prefix, and the learned 3D
-upscaler then renders the whole clip on the target grid.  The upscaler's
-rendering of the prefix (``L_p``) is not the exact prefix (``E``): fine static
-detail such as text, patterns and texture is re-synthesized rather than
-recovered.  The generated suffix inherits the upscaler's synthesis, so restoring
-``E`` before target-high refinement places two different renderings of the
-same static content next to each other.
+The provider's target-grid prefix rendering can differ from the authoritative
+prefix. This opt-in intervention adds the last prefix's exact-minus-learned
+residual to the suffix, weighted by learned change and residual persistence
+fitted on prefix pairs. A separate prefix-pair check must improve before it
+applies. Weights may be fractional.
 
-For content that does not change, the upscaler error ``D = E - L_p`` is a
-function of that content and stays valid in later frames.  This module carries
-the last prefix frame's error into the suffix, weighted per location by how much
-the learned trajectory changes there: since that frame, and at that frame
-itself.  The weights come from a monotone regression of how much of ``D``
-persists between prefix frames as a function of the same change measure, fitted
-on the run's own prefix.  Only locations where most of the error persists are
-transported, because partially blending misaligned detail renders as an
-overlay.  The transport is applied only if it reduces the error on held-out
-prefix frames.  Moving content keeps the learned suffix unchanged.
+Prefix calibration cannot establish suffix motion or occlusion safety. Fine
+detail lost by projection can move while learned change stays small; transport
+can then freeze stale detail or create an overlay. Rendered GPU quality is
+unvalidated. The scheduler leaves this disabled unless explicitly requested.
 """
 
 from __future__ import annotations
@@ -118,10 +109,9 @@ class _PersistenceCurve:
     def __init__(self, centers: torch.Tensor, persistence: torch.Tensor) -> None:
         self.centers = centers
         self.persistence = persistence
-        # The least-squares persistence blends misaligned detail into partly
-        # persistent locations, which renders as a faint overlay of the anchor
-        # frame. Transport only where most of the error persists: full weight at
-        # persistence 1, none at or below one half.
+        # Suppress bins with persistence at or below one half. Intermediate
+        # persistence still produces fractional weights; this cannot guarantee
+        # that stale detail or overlays are absent from the unknown suffix.
         self.weights = (2.0 * persistence - 1.0).clamp(0.0, 1.0)
 
     @classmethod
@@ -228,6 +218,8 @@ def apply_uniform_source_detail_transport(
         "prefix_t": prefix_t,
         "suffix_tokens": temporal - prefix_t,
         "authoritative_prefix_modified": False,
+        "suffix_motion_safety_established": False,
+        "rendered_quality_validated": False,
         "extra_h3_nfe": 0,
         "extra_provider_calls": 0,
         "extra_vae_calls": 0,
