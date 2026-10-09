@@ -163,3 +163,44 @@ def test_per_frame_trajectory_locates_first_blurred_generated_frame():
     assert trend["apparent_scale_by_frame"]["180"]["not_camera_ground_truth"]
     assert trend["production_modified"] is False
     assert torch.equal(video, before)
+
+
+def test_identical_edge_power_does_not_imply_same_background_structure():
+    reference = _video()
+    candidate = reference.clone()
+    # The same static texture, displaced within the suffix only, retains
+    # approximately the same Sobel power while changing actual book locations.
+    candidate[8:] = torch.roll(candidate[8:], shifts=7, dims=2)
+    frozen = candidate.clone()
+    comparison = compare_same_frame_stage_rois(
+        reference,
+        candidate,
+        list(range(167, 181)),
+        join_frame=175,
+        rois={"books": (0.02, 0.1, 0.31, 0.71), "curtain": (0.67, 0.08, 0.97, 0.66)},
+    )
+    row = comparison["regions"]["books"]["same_frame_measurements"]["176"]
+    assert 0.5 < row["candidate_over_reference"] < 2.0
+    assert row["same_time_luma_ncc"] is not None
+    assert row["same_time_sobel_structure_cosine"] is not None
+    assert row["same_time_luma_ncc"] < 0.6
+    assert row["same_time_sobel_structure_cosine"] < 0.6
+    assert comparison["structural_similarity_registration"] == "none_co_located_pixels"
+    assert torch.equal(candidate, frozen)
+
+
+def test_structural_metrics_preserve_photometric_affine_invariance():
+    reference = _video()
+    candidate = reference * 0.93 + 0.017
+    comparison = compare_same_frame_stage_rois(
+        reference,
+        candidate,
+        list(range(167, 181)),
+        join_frame=175,
+        rois={"books": (0.02, 0.1, 0.31, 0.71), "curtain": (0.67, 0.08, 0.97, 0.66)},
+    )
+    for region in comparison["regions"].values():
+        row = region["same_frame_measurements"]["176"]
+        assert row["same_time_luma_ncc"] == pytest.approx(1.0, abs=1e-5)
+        assert row["same_time_sobel_structure_cosine"] == pytest.approx(1.0, abs=1e-5)
+        assert row["sobel_structure_cosine_change_from_prefix"] == pytest.approx(0.0, abs=1e-5)
