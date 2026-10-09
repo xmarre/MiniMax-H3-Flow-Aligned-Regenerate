@@ -1510,7 +1510,8 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
         q = (vec / eig.sqrt()) @ vec.T @ a
         coarse = target_residual[:, :, PROTECTED_T:].double().flatten(-2) @ q.T
         torch.testing.assert_close(coarse, measured[:, :, PROTECTED_T:].double().flatten(-2), atol=3e-6, rtol=0)
-    assert _events(run.metrics, "partitioned_audio_handoff_copy")[0]["exact"] is True
+    # The audio-copy diagnostic event is optional; check the actual carried
+    # audio operands even when diagnostic_audio_control is disabled.
     # Native CONST re-entry divides/multiplies the effective state by sigma and
     # model noise_scale; allow only floating-point reconstruction roundoff.
     torch.testing.assert_close(high_audio, source_audio, rtol=0, atol=5e-7)
