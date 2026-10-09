@@ -196,6 +196,8 @@ class _ProgressiveExactMaskExecutor:
         stage = str(transformer.get(FLOW_STAGE_KEY, ""))
         if stage == "high":
             source = f"{self._progressive.exact_prefix_mode}_high"
+        elif stage == "native_continuation":
+            source = "native_target_single_pass_return"
         elif stage == "" and self._progressive.exact_prefix_mode == "fallback":
             # Conservative exact-prefix fallback is one ordinary target-grid
             # sampler lifetime and therefore has no Flow stage marker.

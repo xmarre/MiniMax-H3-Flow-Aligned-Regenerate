@@ -114,6 +114,7 @@ PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
 PARTITIONED_SPATIAL_STAGE_TARGET_BAND = "progressive_target_band"
 PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE = "progressive_uniform_source"
 PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT = "progressive_uniform_source_exact_context"
+PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE = "native_target_single_pass"
 PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES = (
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
@@ -124,6 +125,7 @@ PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+    PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE,
 )
 
 # Number of generated H3 temporal latent tokens that stay on the target grid
@@ -511,7 +513,7 @@ def apply_partitioned_diagnostic_controls(
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
-    if spatial_stage in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES and (
+    if spatial_stage in (*PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES, PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE) and (
         prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
         or temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
@@ -523,7 +525,7 @@ def apply_partitioned_diagnostic_controls(
         or guidance_source != PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
     ):
         raise ValueError(
-            "progressive_uniform_source requires native uniform attention, normal VDN diagnostics, "
+            f"{spatial_stage} requires native uniform attention, normal VDN diagnostics, "
             "learned_3d transfer and main handoff/guidance sources"
         )
     softmax_mode = normalize_partitioned_softmax_diagnostic(softmax_diagnostic)
@@ -745,6 +747,7 @@ __all__ = [
     "PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK",
     "PARTITIONED_SPATIAL_STAGE_CONTROL_KEY",
     "PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS",
+    "PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE",
     "PARTITIONED_SPATIAL_STAGE_PROGRESSIVE",
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",

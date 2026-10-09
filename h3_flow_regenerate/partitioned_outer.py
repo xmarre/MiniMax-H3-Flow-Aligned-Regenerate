@@ -15,6 +15,7 @@ from .audio_guided_overlap import (
 from .comfy_compat import _ProgressiveExactMaskExecutor, flow_outer_wrapper_with_exact_mask
 from .geometry import unpack_streams
 from .handoff import ProgressiveTargetInputConfig
+from .native_continuation import run_native_continuation
 from .partitioned_diagnostics import (
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_EXACT,
     PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY,
@@ -26,6 +27,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
+    PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
@@ -294,7 +296,12 @@ def partitioned_outer_wrapper(
         binding.guidance_state.reset()
         binding.active_guidance_run = None
         binding.registered_guidance_reference = None
-        result = run_partitioned_progressive(
+        continuation = (
+            run_native_continuation
+            if transformer_options.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE
+            else run_partitioned_progressive
+        )
+        result = continuation(
             adapted,
             guider,
             binding,

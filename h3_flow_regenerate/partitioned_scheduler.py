@@ -1624,7 +1624,11 @@ def _validate_partitioned_sol_sink_measure(mode: str) -> None:
 
 # Spatial-stage controls whose continuation performs a real learned spatial transfer.
 _LEARNED_TRANSFER_SPATIAL_STAGES = frozenset(
-    {PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_TARGET_BAND}
+    {
+        PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        *PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
+    }
 )
 
 

@@ -94,6 +94,9 @@ def _harness(
     native_sampler=None,
     residual_mode="off",
     witness_directory=None,
+    native_single=False,
+    direct_native=False,
+    protected_audio_ticks=0,
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -164,7 +167,9 @@ def _harness(
     )[0]
     video_mask = torch.ones_like(target_video)
     video_mask[:, :, :PROTECTED_T] = 0
-    mask = pack_streams((video_mask, torch.ones_like(target_audio)))[0]
+    audio_mask = torch.ones_like(target_audio)
+    audio_mask[..., :protected_audio_ticks] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
 
     transformer_options = {SOL_RUNTIME_KEY: dict(PARTITIONED_SOL_REQUIRED_METADATA)}
     if spatial_stage_control != PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
@@ -338,7 +343,56 @@ def _harness(
 
         sampler = comfy.samplers.ksampler(native_sampler)
     sigmas = torch.linspace(1.0, 0.0, 9)
-    result = run_partitioned_progressive(
+    runner = run_partitioned_progressive
+    if native_single or direct_native:
+        from dataclasses import replace
+
+        from h3_flow_regenerate.comfy_compat import _ProgressiveExactMaskExecutor
+        from h3_flow_regenerate.native_continuation import run_native_continuation
+
+        config = replace(config, frame_gauge_repair=False)
+        executor.class_obj = guider
+        executor = _ProgressiveExactMaskExecutor(
+            executor,
+            binding=binding,
+            progressive=SimpleNamespace(exact_prefix_mode="fallback" if direct_native else "partitioned_exact_prefix"),
+            latent_image=latent_image,
+            denoise_mask=mask,
+            sampler=sampler,
+            latent_shapes=shapes,
+        )
+        runner = run_native_continuation
+    if direct_native:
+
+        def runner(
+            executor,
+            guider,
+            binding,
+            config,
+            noise,
+            latent_image,
+            sampler,
+            sigmas,
+            denoise_mask,
+            callback,
+            disable_pbar,
+            seed,
+            latent_shapes,
+            exact_denoise_mask=None,
+        ):
+            return executor(
+                noise,
+                latent_image,
+                sampler,
+                sigmas,
+                denoise_mask,
+                callback,
+                disable_pbar,
+                seed,
+                latent_shapes=latent_shapes,
+            )
+
+    result = runner(
         executor,
         guider,
         binding,
@@ -364,6 +418,45 @@ def _harness(
         metrics=binding.metrics,
         guider=guider,
     )
+
+
+@pytest.mark.parametrize("sampler", ["euler", "dpmpp_2m", "euler_ancestral"])
+def test_native_single_pass_matches_unsplit_native_core_sampler(monkeypatch, sampler):
+    from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE
+
+    monkeypatch.setattr(__import__(__name__, fromlist=["TARGET_HW"]), "TARGET_HW", (8, 10))
+    candidate = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE,
+        native_sampler=sampler,
+        native_single=True,
+        protected_audio_ticks=4,
+    )
+    direct = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_NATIVE_SINGLE,
+        native_sampler=sampler,
+        direct_native=True,
+        protected_audio_ticks=4,
+    )
+    assert len(candidate.calls) == len(direct.calls) == 1
+    assert candidate.calls[0]["stage"] == "native_continuation"
+    assert direct.calls[0]["stage"] is None
+    assert torch.equal(candidate.calls[0]["sigmas"], torch.linspace(1.0, 0.0, 9))
+    assert torch.equal(candidate.result, direct.result)
+    assert not candidate.upscaler.inputs
+    assert not _events(candidate.metrics, "partitioned_transfer")
+    video, audio = unpack_streams(candidate.result, candidate.shapes)
+    original, original_audio = unpack_streams(candidate.latent_image, candidate.shapes)
+    assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    assert torch.equal(audio[..., :4], original_audio[..., :4])
+    assert not torch.equal(video[:, :, PROTECTED_T:], original[:, :, PROTECTED_T:])
+    assert torch.isfinite(candidate.result).all()
+    assert candidate.binding.active_capture is None
+    assert candidate.binding.active_guidance_run is None
+    receipt = _events(candidate.metrics, "native_continuation_complete")[0]
+    assert receipt["history_boundary_count"] == 0
+    assert receipt["sampler_invocation_count"] == 1
 
 
 def _events(metrics, kind):

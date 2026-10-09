@@ -452,6 +452,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             {
                 "default": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
                 "tooltip": (
+                    "native_target_single_pass runs protected-prefix continuations with one native target-grid "
+                    "sampler over the complete schedule: no low-grid projection, probe, upscaler, "
+                    "re-noising handoff or internal solver/history restart. First chunks remain progressive. "
+                    "It is a continuity candidate; target-grid compute and rendered quality require GPU testing. "
+                    "Keep frame_gauge_repair and uniform_source_detail_transport off. "
                     "progressive_uniform_source (default) runs continuation low/probe as one full-duration "
                     "reduced-grid clip for all generated frames, transfers the whole generated trajectory "
                     "through the learned upscaler, then restores the exact target-grid prefix before high "
