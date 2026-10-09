@@ -5076,7 +5076,12 @@ def run_partitioned_progressive(
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
             initial_source_noise=source_video_noise if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES else None,
-            model_noise_scale=model_noise_scale if handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES else 1.0,
+            model_noise_scale=(
+                model_noise_scale
+                if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES
+                or handoff_noise_mode == H3_HANDOFF_NOISE_IMAGE_RESIDUAL
+                else 1.0
+            ),
             run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
         if spatial_transfer_control is not None:
