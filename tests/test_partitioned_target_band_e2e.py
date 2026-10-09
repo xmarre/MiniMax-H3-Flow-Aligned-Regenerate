@@ -294,7 +294,6 @@ def _harness(
             denoised = model(inpaint(x, sigma), sigma, shapes, denoise_mask)
             denoised = denoised * denoise_mask + latent_image * (1.0 - denoise_mask)
             record["entry_state"] = x.clone()
-            record["final_state"] = denoised.clone()
             return denoised
         sigma0 = float(sigmas[0])
         x = noise * sigma0 + latent_image * (1.0 - sigma0)
@@ -701,7 +700,7 @@ def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monk
 
 
 @pytest.mark.parametrize("sol", [False, True])
-def test_uniform_source_exact_context_preserves_reference_through_native_high(monkeypatch, sol):
+def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monkeypatch, sol):
     if not sol:
         make_owner = _vdn_owner
 
@@ -718,7 +717,7 @@ def test_uniform_source_exact_context_preserves_reference_through_native_high(mo
         extra_transformer_options=extra,
     )
     context_calls = _events(run.metrics, "partitioned_exact_visual_prefix")
-    assert {event["stage"] for event in context_calls} == {"low", "probe", "high"}
+    assert {event["stage"] for event in context_calls} == {"low", "probe"}
     for event in context_calls:
         assert event["target_hw"] == TARGET_HW
         assert event["prefix_t"] == PROTECTED_T
@@ -726,37 +725,12 @@ def test_uniform_source_exact_context_preserves_reference_through_native_high(mo
         assert event["prefix_time_colocated"] is False
         assert event["native_reference_timeline"] is True
         assert event["target_timeline_shift"] > 0
-        assert event["video_recurrence_grid"] == (TARGET_HW if event["stage"] == "high" else SOURCE_HW)
+        assert event["video_recurrence_grid"] == SOURCE_HW
         assert event["generated_video_streams"] == 1
         assert event["cross_grid_video_temporal_taps"] is False
-    assert len({event["target_timeline_shift"] for event in context_calls}) == 1
     assert len(run.upscaler.inputs) == 1
     assert not _events(run.metrics, "partitioned_target_band_domain_transformer")
     assert _events(run.metrics, "partitioned_exact_prefix_complete")[0]["final_prefix_exact"] is True
-
-
-def test_uniform_source_high_reference_preserves_low_probe_and_handoff(monkeypatch):
-    from h3_flow_regenerate import partitioned_scheduler as scheduler
-
-    original = scheduler._partitioned_high_stage_contract
-
-    def drop_high_reference(*args, **kwargs):
-        kwargs["retain_exact_visual_context"] = False
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(scheduler, "_partitioned_high_stage_contract", drop_high_reference)
-    previous = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT)
-    monkeypatch.setattr(scheduler, "_partitioned_high_stage_contract", original)
-    retained = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT)
-    assert [c["stage"] for c in retained.calls] == ["low", "probe", "high"]
-    for before, after in zip(previous.calls, retained.calls, strict=True):
-        for key in ("noise", "latent", "mask", "sigmas", "entry_state"):
-            assert torch.equal(before[key], after[key])
-        if before["stage"] != "high":
-            assert torch.equal(before["final_state"], after["final_state"])
-    assert torch.equal(previous.upscaler.inputs[0], retained.upscaler.inputs[0])
-    assert previous.metrics.counters["transformer_actual_nfe"] == retained.metrics.counters["transformer_actual_nfe"]
-    assert not torch.equal(previous.result, retained.result)
 
 
 def _record_band_clean(monkeypatch):
@@ -1370,7 +1344,6 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control)
     history.install_partitioned_history_bridge()
 
     from h3_flow_regenerate import partitioned_transformer as transform
-    from h3_flow_regenerate.uniform_prefix_context import POLICY
 
     original = transform.partitioned_diffusion_wrapper
     recognized = {}
@@ -1385,11 +1358,6 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control)
                 identity = interop._flow_mixed_grid_replacement_identity(patch, 0)
                 kind = None if identity is None else identity[0][0]
                 recognized.setdefault(options.get("h3_flow_stage"), set()).add(kind)
-                values = interop._closure_values(patch)
-                reference_identity = (POLICY, PROTECTED_T, *TARGET_HW)
-                has_reference = control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
-                assert (reference_identity in values["partitioned_layout"].signature) is has_reference
-                assert (repr(reference_identity) in identity[0][-1]) is has_reference
                 return executor(*call_args, **call_kwargs)
 
         return original(Recording(), *args, **kwargs)

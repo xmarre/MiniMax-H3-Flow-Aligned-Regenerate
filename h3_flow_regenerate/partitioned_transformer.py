@@ -1122,8 +1122,8 @@ def partitioned_diffusion_wrapper(
     exact_context_timeline_shift = 0.0
     exact_context = runtime.exact_prefix_visual_context
     if exact_context is not None:
-        if band is not None or options.get("h3_flow_stage") not in ("low", "probe", "high"):
-            raise RuntimeError("exact visual context requires a uniform low/probe/high stage without a target band")
+        if band is not None or options.get("h3_flow_stage") not in ("low", "probe"):
+            raise RuntimeError("exact uniform-source visual context is restricted to low/probe without a target band")
         original_video_origin = float(layout.position_ids[layout.segments[-1][0], 0])
         layout, payload, exact_context_range = add_exact_prefix_visual_context(
             native, layout, payload, owner, exact_context

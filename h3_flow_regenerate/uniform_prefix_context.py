@@ -1,8 +1,8 @@
-"""Exact visual reference context shared by native continuation stages."""
+"""Exact visual context for a single native reduced-grid video trajectory."""
 
 from __future__ import annotations
 
-POLICY = "uniform_video_exact_native_reference_all_stages_v3"
+POLICY = "uniform_video_exact_native_reference_v2"
 
 
 def add_exact_prefix_visual_context(native, layout, payload, carrier, exact):
@@ -18,12 +18,11 @@ def add_exact_prefix_visual_context(native, layout, payload, carrier, exact):
     if (
         exact.prefix_t != carrier.prefix_t
         or exact.temporal != carrier.temporal
-        or (carrier.source_h, carrier.source_w) not in ((exact.source_h, exact.source_w), exact.target_hw)
+        or (exact.source_h, exact.source_w) != (carrier.source_h, carrier.source_w)
         or carrier.target_hw != (carrier.source_h, carrier.source_w)
+        or exact.target_hw == carrier.target_hw
     ):
-        raise RuntimeError(
-            "exact visual prefix requires matching temporal ownership and a uniform source or target carrier"
-        )
+        raise RuntimeError("exact visual prefix requires matching temporal ownership and a uniform reduced carrier")
     audio_start, _, _ = next(segment for segment in layout.segments if segment[2] == "audio")
     text_len = layout.segments[0][1]
     audio_t = (layout.segments[-2][1] - audio_start) // 2

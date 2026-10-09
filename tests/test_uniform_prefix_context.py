@@ -18,25 +18,20 @@ def native():
     return pytest.importorskip("comfy.ldm.minimax.model")
 
 
-def plans(prefix, *, high=False):
+def plans(prefix):
     exact = PartitionedStagePlan(
         prefix=prefix, prefix_noise=torch.zeros_like(prefix), temporal=7, source_h=4, source_w=4
     )
     projected = resize_spatial_5d_h3_patch_lattice(prefix, 4, 4)
     carrier = PartitionedStagePlan(
-        prefix=prefix if high else projected,
-        prefix_noise=torch.zeros_like(prefix if high else projected),
-        temporal=7,
-        source_h=8 if high else 4,
-        source_w=8 if high else 4,
+        prefix=projected, prefix_noise=torch.zeros_like(projected), temporal=7, source_h=4, source_w=4
     )
     return carrier, exact
 
 
 @pytest.mark.parametrize("conditioning", [False, True])
-@pytest.mark.parametrize("high", [False, True])
-def test_exact_context_uses_native_reference_timeline_and_preserves_relative_av_time(native, conditioning, high):
-    carrier, exact = plans(torch.randn(1, 24, 2, 8, 8), high=high)
+def test_exact_context_uses_native_reference_timeline_and_preserves_relative_av_time(native, conditioning):
+    carrier, exact = plans(torch.randn(1, 24, 2, 8, 8))
     payload = {"seed": 13, "text_token_tags": torch.tensor([0, 1, 2])}
     if conditioning:
         keyframe = {
@@ -59,16 +54,12 @@ def test_exact_context_uses_native_reference_timeline_and_preserves_relative_av_
             cond_video_latents=[keyframe["latent"], ref["latent"], av_ref["latent"]],
             cond_audio_latents=[keyframe["audio_latent"], torch.randn(1, 128, 3)],
         )
-    layout = native.PackedLayout(
-        3, 7, *carrier.target_hw, 6, keyframes=payload.get("keyframes"), refs=payload.get("refs")
-    )
+    layout = native.PackedLayout(3, 7, 4, 4, 6, keyframes=payload.get("keyframes"), refs=payload.get("refs"))
     original_positions = layout.position_ids.clone()
     original_segments = list(layout.segments)
     prefix_before = exact.prefix.clone()
     extended, augmented, (first, last) = add_exact_prefix_visual_context(native, layout, payload, carrier, exact)
-    expected = native.PackedLayout(
-        3, 7, *carrier.target_hw, 6, keyframes=payload.get("keyframes"), refs=augmented["refs"]
-    )
+    expected = native.PackedLayout(3, 7, 4, 4, 6, keyframes=payload.get("keyframes"), refs=augmented["refs"])
     assert extended.segments == expected.segments
     assert torch.equal(extended.position_ids, expected.position_ids)
     assert last - first == 2 * 8 * 8 // 4
@@ -153,8 +144,7 @@ def test_exact_context_refuses_temporal_ownership_mismatch(native):
         add_exact_prefix_visual_context(native, native.PackedLayout(3, 7, 4, 4, 6), {}, carrier, mismatch)
 
 
-@pytest.mark.parametrize("stage", ["low", "high"])
-def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypatch, stage):
+def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypatch):
     import inspect
 
     import test_partitioned_native_attention as attention_fixture
@@ -201,11 +191,6 @@ def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypa
     plan = PartitionedStagePlan(case.source_prefix, case.owner.temporal, sh, sw, torch.zeros_like(case.source_prefix))
     mask = torch.ones(1, 1, case.owner.temporal, sh, sw)
     mask[:, :, : case.owner.prefix_t] = 0
-    if stage == "high":
-        source_video = case.video
-        plan = PartitionedStagePlan(case.owner.prefix, case.owner.temporal, h, w, torch.zeros_like(case.owner.prefix))
-        mask = torch.ones(1, 1, case.owner.temporal, h, w)
-        mask[:, :, : case.owner.prefix_t] = 0
 
     def execute(exact):
         metrics = H3FlowMetrics()
@@ -218,7 +203,7 @@ def test_exact_visual_detail_influences_suffix_through_real_vdn(native, monkeypa
             source_video,
             case.audio,
             case.context,
-            {PARTITIONED_STAGE_KEY: runtime, "h3_flow_stage": stage},
+            {PARTITIONED_STAGE_KEY: runtime, "h3_flow_stage": "low"},
             mask,
             case.audio_mask,
         )
