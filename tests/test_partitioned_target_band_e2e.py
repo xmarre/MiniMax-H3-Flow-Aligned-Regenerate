@@ -722,7 +722,9 @@ def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monk
         assert event["target_hw"] == TARGET_HW
         assert event["prefix_t"] == PROTECTED_T
         assert event["exact_prefix_unresampled"] is True
-        assert event["prefix_time_colocated"] is True
+        assert event["prefix_time_colocated"] is False
+        assert event["native_reference_timeline"] is True
+        assert event["target_timeline_shift"] > 0
         assert event["video_recurrence_grid"] == SOURCE_HW
         assert event["generated_video_streams"] == 1
         assert event["cross_grid_video_temporal_taps"] is False

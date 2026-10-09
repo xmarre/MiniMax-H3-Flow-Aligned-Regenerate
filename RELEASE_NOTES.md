@@ -1,8 +1,12 @@
 # Unreleased: experimental continuation controls
 
 `progressive_uniform_source_exact_context` adds unresampled prefix visual
-conditioning to low/probe while preserving one native source-grid video
-recurrence. It is opt-in; the released spatial-stage default is unchanged.
+conditioning to low/probe through Core's native video-reference layout, while
+preserving one source-grid video recurrence. The reference occupies a separate
+time span; target audio, video and keyframes advance together. This changes their
+time relative to text and existing references. It is opt-in and remains
+unqualified for rendered continuity; the released spatial-stage default is
+unchanged.
 
 A separate append-only `uniform_source_detail_transport` boolean is **off by
 default**, including saved workflows without it. Explicitly enabling it adds a

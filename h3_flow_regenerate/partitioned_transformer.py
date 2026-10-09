@@ -1119,13 +1119,16 @@ def partitioned_diffusion_wrapper(
         )
     payload["layout"] = layout
     exact_context_range = None
+    exact_context_timeline_shift = 0.0
     exact_context = runtime.exact_prefix_visual_context
     if exact_context is not None:
         if band is not None or options.get("h3_flow_stage") not in ("low", "probe"):
             raise RuntimeError("exact uniform-source visual context is restricted to low/probe without a target band")
+        original_video_origin = float(layout.position_ids[layout.segments[-1][0], 0])
         layout, payload, exact_context_range = add_exact_prefix_visual_context(
             native, layout, payload, owner, exact_context
         )
+        exact_context_timeline_shift = float(layout.position_ids[layout.segments[-1][0], 0]) - original_video_origin
     video_start, video_end, _ = layout.segments[-1]
     carrier_prefix_rows = plan.prefix_t * (plan.target_rows if band is not None else plan.source_rows)
     # Bound on every path: Sol reads every closure cell of the block replacement
@@ -1278,7 +1281,9 @@ def partitioned_diffusion_wrapper(
                         target_hw=exact_context.target_hw,
                         prefix_t=exact_context.prefix_t,
                         exact_prefix_unresampled=True,
-                        prefix_time_colocated=True,
+                        prefix_time_colocated=False,
+                        native_reference_timeline=True,
+                        target_timeline_shift=exact_context_timeline_shift,
                         native_visual_condition_augmentation=True,
                         generated_video_streams=1,
                         video_recurrence_grid=owner.target_hw,

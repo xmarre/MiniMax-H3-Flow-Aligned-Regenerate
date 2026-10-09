@@ -6,7 +6,8 @@ import pytest
 import torch
 
 from h3_flow_regenerate.geometry import resize_spatial_5d_h3_patch_lattice
-from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan
+from h3_flow_regenerate.partitioned_diagnostics import PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE
+from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan, partitioned_positions_with_audio_policy
 from h3_flow_regenerate.uniform_prefix_context import add_exact_prefix_visual_context
 
 
@@ -29,33 +30,87 @@ def plans(prefix):
 
 
 @pytest.mark.parametrize("conditioning", [False, True])
-def test_exact_context_preserves_native_conditioning_audio_and_video_positions(native, conditioning):
+def test_exact_context_uses_native_reference_timeline_and_preserves_relative_av_time(native, conditioning):
     carrier, exact = plans(torch.randn(1, 24, 2, 8, 8))
     payload = {"seed": 13, "text_token_tags": torch.tensor([0, 1, 2])}
     if conditioning:
-        keyframe = {"latent": torch.randn(1, 24, 1, 4, 4), "resolved_frame_index": 9}
+        keyframe = {
+            "latent": torch.randn(1, 24, 1, 4, 4),
+            "audio_latent": torch.randn(1, 128, 2),
+            "resolved_frame_index": 9,
+        }
         ref = {"kind": "image", "latent": torch.randn(1, 24, 1, 6, 8), "latent_h": 6, "latent_w": 8}
-        payload.update(keyframes=[keyframe], refs=[ref], cond_video_latents=[keyframe["latent"], ref["latent"]])
+        av_ref = {
+            "kind": "video_audio",
+            "latent": torch.randn(1, 24, 2, 6, 8),
+            "latent_h": 6,
+            "latent_w": 8,
+            "latent_t": 2,
+            "ref_audio_t": 3,
+        }
+        payload.update(
+            keyframes=[keyframe],
+            refs=[ref, av_ref],
+            cond_video_latents=[keyframe["latent"], ref["latent"], av_ref["latent"]],
+            cond_audio_latents=[keyframe["audio_latent"], torch.randn(1, 128, 3)],
+        )
     layout = native.PackedLayout(3, 7, 4, 4, 6, keyframes=payload.get("keyframes"), refs=payload.get("refs"))
     original_positions = layout.position_ids.clone()
     original_segments = list(layout.segments)
     prefix_before = exact.prefix.clone()
     extended, augmented, (first, last) = add_exact_prefix_visual_context(native, layout, payload, carrier, exact)
-    assert torch.equal(torch.cat((extended.position_ids[:first], extended.position_ids[last:])), original_positions)
+    expected = native.PackedLayout(3, 7, 4, 4, 6, keyframes=payload.get("keyframes"), refs=augmented["refs"])
+    assert extended.segments == expected.segments
+    assert torch.equal(extended.position_ids, expected.position_ids)
     assert last - first == 2 * 8 * 8 // 4
-    # Native target-grid prefix positions, including the existing reference timeline origin.
-    target_layout = native.PackedLayout(3, 7, 8, 8, 6, refs=payload.get("refs"))
-    video_start = target_layout.segments[-1][0]
-    assert torch.equal(
-        extended.position_ids[first:last], target_layout.position_ids[video_start : video_start + last - first]
+    # Audio/video and existing keyframes advance by the same native ref span.
+    shift = native._ref_t_span(augmented["refs"][-1])
+    assert shift > 0
+    old_segments = [s for s in extended.segments if s[:2] != (first, last)]
+    for before, after in zip(layout.segments, old_segments, strict=True):
+        old = layout.position_ids[before[0] : before[1]]
+        new = extended.position_ids[after[0] : after[1]]
+        assert torch.equal(new[:, 1:], old[:, 1:])
+        delta = shift if before[2] in ("audio", "video", "cond", "cond_audio") else 0.0
+        torch.testing.assert_close(new[:, 0], old[:, 0] + delta, rtol=0, atol=1e-12)
+    audio_first = next(s[0] for s in extended.segments if s[2] == "audio")
+    video_first = extended.segments[-1][0]
+    assert extended.position_ids[last - 1, 0] < extended.position_ids[video_first, 0]
+    assert extended.position_ids[audio_first, 0] == extended.position_ids[video_first, 0]
+    positions, policy = partitioned_positions_with_audio_policy(
+        native,
+        carrier,
+        extended,
+        audio_position_domain=PARTITIONED_AUDIO_POSITION_DOMAIN_SOURCE,
+        stage_owner_generation=1,
     )
+    assert policy.audio_temporal_equal
+    assert torch.equal(positions[:, 0], extended.position_ids[:, 0])
     assert not bool(extended.img_update[(extended.img_pos >= first) & (extended.img_pos < last)].any())
     assert augmented["cond_video_latents"][-1] is exact.prefix
     assert augmented["text_token_tags"] is payload["text_token_tags"]
+    assert augmented.get("cond_audio_latents") is payload.get("cond_audio_latents")
     assert payload.get("refs", []) == augmented["refs"][:-1]
     assert layout.segments == original_segments
     assert torch.equal(layout.position_ids, original_positions)
     assert torch.equal(exact.prefix, prefix_before)
+
+
+def test_twelve_token_reference_uses_native_duration_and_target_phase(native):
+    prefix = torch.zeros(1, 24, 12, 72, 54)
+    exact = PartitionedStagePlan(
+        prefix=prefix, prefix_noise=torch.zeros_like(prefix), temporal=62, source_h=50, source_w=38
+    )
+    projected = torch.zeros(1, 24, 12, 50, 38)
+    carrier = PartitionedStagePlan(
+        prefix=projected, prefix_noise=torch.zeros_like(projected), temporal=62, source_h=50, source_w=38
+    )
+    layout = native.PackedLayout(3, 62, 50, 38, 6)
+    extended, payload, _ = add_exact_prefix_visual_context(native, layout, {}, carrier, exact)
+    expected = native.PackedLayout(3, 62, 50, 38, 6, refs=payload["refs"])
+    assert torch.equal(extended.position_ids, expected.position_ids)
+    assert native._ref_t_span(payload["refs"][-1]) == 65.0
+    assert extended.position_ids[extended.segments[-1][0], 0] - layout.position_ids[layout.segments[-1][0], 0] == 65.0
 
 
 def test_detail_in_projection_nullspace_reaches_native_condition_rows(native):

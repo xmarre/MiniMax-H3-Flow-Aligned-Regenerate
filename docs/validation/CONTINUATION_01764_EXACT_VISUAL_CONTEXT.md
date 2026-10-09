@@ -29,6 +29,28 @@ the historical heterogeneous path alone therefore does not establish a fix for
 all symptoms. The suspected double video normalization was ruled out: pinned
 Core's MiniMaxH3Video conversion is identity; additional H3 scaling is audio-only.
 
+## Follow-up: colocated candidate rejected by rendered evidence
+
+Run 01767 used `progressive_uniform_source_exact_context` with residual transport,
+DC bridge and frame-gauge repair disabled. The transfer/decode report includes
+a native reduced-grid source stage; the separate stage-continuity report omits
+that stage. All three reports identify manifest
+`ef1e7b05575bdb067aceb092620d2749c3298d96f3c0a53975a05b15c6e2f54f`.
+
+The 177→178 adjacent pair has full-frame diagnostic `zero_huber` 0.12622 in
+source-grid decoding, 0.13512 after transfer and 0.15037 in final decoding.
+It is already present before learned transfer and high refinement. Source
+and target displacements use different native decoder pixel grids and cannot
+be compared as equal pixel units. The earlier first-high redraw also persists;
+it does not independently explain the new source-grid hitch. Adjacent report
+row labels identify the later frame, so row 178 means 177→178.
+
+This rejects the original time-colocated conditioning candidate's rendered
+acceptance. It does not establish a unique trained-model cause. The original
+candidate manually replaced Core's reference timeline with overlapping prefix
+times; the revised candidate below removes that override. Native placement is
+a structural correction and a new rendered hypothesis, not an accepted fix.
+
 ## Candidate architecture
 
 Select `spatial_stage_control=progressive_uniform_source_exact_context` in
@@ -39,8 +61,13 @@ change in this candidate.
 Low/probe retain the complete native reduced-grid video trajectory, including
 its projected protected prefix. Additionally, the authoritative unresampled
 target-grid prefix enters H3's native visual-conditioning embedding through a
-reference-video segment. Its physical times match the prefix's existing times.
-All original conditioning, audio and video RoPE positions stay unchanged.
+reference-video segment. Keep Core's native reference positions without manual
+RoPE rewriting. The new reference follows existing references and precedes the
+target timeline. Core advances target audio, video and keyframes by the same
+reference duration: 65 time units for a 12-token prefix. Existing reference/text
+positions stay fixed. Target A/V relative time is unchanged, but target↔text
+and target↔existing-reference relative time changes. Prompt, motion, tone and
+audio behavior therefore still need trained-model validation.
 
 Core's native reference API handles the independent H/W, visual noise
 augmentation and condition timestep. These hidden rows evolve through every
@@ -83,7 +110,7 @@ the original context reproduces its output with retained VDN workspaces. This
 test uses the production Flow-before-VDN wrapper order and native attention;
 it does not substitute VDN's recurrence, short convolution or readout.
 
-The required rendered discriminator is the same 01764 scene, inputs and seed
+The required rendered discriminator is the failed 01767 scene, inputs and seed
 with only this spatial-stage selector changed and
 `uniform_source_detail_transport=false` (the default). Transport is a separate
 experimental intervention whose prefix calibration does not establish suffix

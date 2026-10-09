@@ -88,13 +88,16 @@ and `suffix_dc_bridge=false`, and leave the other values above unchanged.
 
 ### Recommended continuation: one uniform source trajectory
 
-**Run 01764 exposes a limit of this released profile:** static fine detail can
-change at the join despite exact returned prefix bytes. The opt-in
-`progressive_uniform_source_exact_context` candidate supplies the unresampled
-prefix to low/probe as aligned visual-conditioning rows while keeping one
-reduced-grid generated trajectory. It has no trained-GPU or rendered acceptance;
-the release default is unchanged. See
-[01764 investigation and candidate](docs/validation/CONTINUATION_01764_EXACT_VISUAL_CONTEXT.md).
+Static fine detail can change at the join despite exact returned prefix bytes.
+The opt-in `progressive_uniform_source_exact_context` candidate supplies the
+unresampled prefix to low/probe through Core's native video-reference layout,
+keeping one reduced-grid generated trajectory. The reference occupies its own
+time span before the targets; target audio, video and keyframes advance together.
+This preserves their relative timing while changing their time relative to text
+and existing references. Rendered continuity and GPU latency remain unvalidated;
+the release default is unchanged. Keep `uniform_source_detail_transport=false`
+when checking this mode. See
+[continuation investigation and acceptance](docs/validation/CONTINUATION_01764_EXACT_VISUAL_CONTEXT.md).
 
 `spatial_stage_control=progressive_uniform_source` is the recommended
 continuation mode. Low/probe evaluates one full-duration clip on the configured
