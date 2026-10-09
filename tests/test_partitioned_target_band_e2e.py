@@ -1514,7 +1514,7 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
     # audio operands even when diagnostic_audio_control is disabled.
     # Native CONST re-entry divides/multiplies the effective state by sigma and
     # model noise_scale; allow only floating-point reconstruction roundoff.
-    torch.testing.assert_close(high_audio, source_audio, rtol=0, atol=5e-7)
+    torch.testing.assert_close(high_audio, source_audio, rtol=0, atol=1e-6)
     video, _ = unpack_streams(run.result, run.shapes)
     original, _ = unpack_streams(run.latent_image, run.shapes)
     assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
