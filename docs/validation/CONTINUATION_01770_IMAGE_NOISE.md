@@ -46,7 +46,11 @@ Only initial Gaussian noise uses Q. Drift uses a separate image right inverse
 preserves constants. It transfers each frame's own measured drift, not a static
 residual copied from old prefix frames. Stochastic samplers cannot classify
 new stochastic increments as model drift and therefore refine the complete
-measured residual through Q. A measured residual is not claimed to be Gaussian.
+measured residual through Q. Their independently generated high-grid innovation
+is multiplied by `model_sampling.noise_scale`, matching the carried source
+noise scale rather than creating an under-variance fine component. A measured
+residual is not claimed to be Gaussian. Unit Gaussian covariance statements
+apply only to inputs with the stated independent Gaussian distribution.
 
 This differs from the earlier physical patch-phase owner bins and physical
 coordinate drift mapping. It also differs from simply enabling frame-gauge
@@ -86,8 +90,8 @@ projection residuals. Trained GPU acceptance and timing remain pending.
 
 ## Validation
 
-Initial18 operator/distribution/handoff tests pass, including independent full
+Initial 18 operator/distribution/handoff tests passed on the first checkpoint, including independent full
 2D resize-based whitened analysis, exact coarse-noise retention across innovation
 seeds, empirical spatial/temporal covariance, constant/moving/random drift at
 50x38→72x54 and other rounded-aspect grids, byte-exact identity, and provider/audio
-ownership. Native Core and full regression validation are pending.
+ownership. Native Core and full regression validation are pending after the stochastic noise-scale correction.
