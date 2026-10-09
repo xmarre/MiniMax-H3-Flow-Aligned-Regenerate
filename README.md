@@ -653,6 +653,25 @@ JSON only and perform no diffusion generation or provider inference. Geometry
 estimates and context disagreement still require comparison with visually
 accepted output; they are not automatic defect classifications.
 
+**Decoder-context equivalence check (optional, expensive):**
+Set `validate_full_video_decoder=true` on the **MiniMax H3 Local Boundary Audit**
+to decode the *entire* saved final target-grid clean latent through the same
+connected native H3 VAE, in addition to the existing cropped-window stage
+replay. It compares identical global frames (e.g. 170–195 for join 175)
+by per-frame RGB RMS/luma, full-frame diagnostic geometry and—when a static
+ROI profile is enabled—same-time ROI sharpness and static-landmark
+motion. Receipts appear at
+`full_video_decoder_context_validation`, including the full-decoder global
+origin, cropped origin, pixel-time labels and extra VAE call count.
+The option defaults to **false**. It adds **one full-timeline VAE decode**
+with potentially significant GPU/CPU memory cost, and may stop with OOM
+rather than evicting other resident models. It does not change the
+production video, sampling state, prompt or audio; it does **not**
+automatically prove that the two assembled chunk decodes match the final
+MP4. Differences would isolate context sensitivity of the native
+decoder (crop vs full); matching pixels would redirect investigation
+toward the external assembly/stitching path or rendered-image registration.
+
 Only numerical JSON is saved in `output/h3_flow_regenerate/boundary_audits` and
 returned by the node. Images, prompts and binary operands are not included in
 the report. Original media and saved operands remain local and unmodified.
