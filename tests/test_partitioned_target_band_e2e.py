@@ -1502,9 +1502,7 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
             dtype=torch.float32,
         )
         expected, _ = refine_image_residual(measured, innovation * 1.7)
-        torch.testing.assert_close(
-            target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0
-        )
+        torch.testing.assert_close(target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0)
         # Independent whole-image projection, rather than reusing the transfer.
         basis = torch.eye(TARGET_HW[0] * TARGET_HW[1], dtype=torch.float64).reshape(-1, 1, *TARGET_HW)
         a = F.interpolate(basis, size=SOURCE_HW, mode="bicubic", align_corners=False, antialias=True).flatten(1).T

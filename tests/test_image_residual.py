@@ -181,6 +181,4 @@ def test_handoff_uses_measured_state_residual_keeps_audio_and_calls_provider_onc
         expected, _ = refine_image_residual(residual, 1.7 * innovation)
         torch.testing.assert_close(effective, expected, atol=2e-6, rtol=0)
         assert receipts["handoff_noise"]["innovation_noise_scale"] == pytest.approx(1.7)
-        assert receipts["handoff_noise"]["target_gaussian_variance_if_source_at_model_scale"] == pytest.approx(
-            1.7**2
-        )
+        assert receipts["handoff_noise"]["target_gaussian_variance_if_source_at_model_scale"] == pytest.approx(1.7**2)

@@ -591,9 +591,7 @@ def build_handoff_state(
                 # The carried residual already includes model_sampling.noise_scale.
                 # The independent fine modes must use the same scale; otherwise
                 # stochastic handoff has different coarse/fine noise variance.
-                noise, noise_report = refine_image_residual(
-                    source_residual, innovation * float(model_noise_scale)
-                )
+                noise, noise_report = refine_image_residual(source_residual, innovation * float(model_noise_scale))
                 noise_report.pop("gaussian_marginal_if_source_standard")
                 noise_report.update(
                     gaussian_marginal_if_source_at_model_noise_scale=True,
