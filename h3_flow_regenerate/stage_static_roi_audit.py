@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Mapping
+from collections.abc import Mapping
 
 import torch
 import torch.nn.functional as F
