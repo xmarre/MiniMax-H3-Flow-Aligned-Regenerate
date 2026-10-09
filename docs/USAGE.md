@@ -83,6 +83,7 @@ suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
+uniform_source_detail_transport  = true
 ```
 
 Continuation low/probe runs one full-duration clip on the reduced grid, the
@@ -270,6 +271,21 @@ fallback, so unsupported combinations fail before sampling.
 Neither control changes the learned band/tail handoff, and neither is qualified
 for rendered quality. Compare each against the unchanged mixed-grid baseline on
 identical inputs.
+
+### Uniform-source detail transport
+
+`uniform_source_detail_transport=true` (default) is used only by
+`progressive_uniform_source` and `progressive_uniform_source_exact_context`. Before high refinement, it adds the difference
+between the last exact prefix frame and the learned upscaler's rendering of
+that frame to the generated frames, weighted per location by calibrated
+persistence. Static detail (text, patterns, texture) then continues from the
+exact prefix instead of being re-synthesized at the join. Moving content keeps
+the learned suffix. The calibration uses the prefix frames of the same run, and
+the transport is skipped when it does not improve held-out prefix frames. Set it
+to `false` to compare against the learned suffix alone. The
+`partitioned_uniform_source_detail_transport` receipt reports `applied`,
+`reason`, `holdout_error_ratio`, the calibrated `transport_weights`, and
+`suffix_weight_mean`.
 
 ### Suffix DC bridge selector
 

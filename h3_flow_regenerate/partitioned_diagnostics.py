@@ -161,6 +161,7 @@ PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS = (
 # Absence is the historical contract: the one-token suffix DC bridge is active.
 # The leaf is published only when a node explicitly disables the bridge.
 PARTITIONED_SUFFIX_DC_BRIDGE_KEY = "h3_flow_partitioned_suffix_dc_bridge_v1"
+PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY = "h3_flow_partitioned_uniform_source_detail_transport_v1"
 
 PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY = "h3_flow_partitioned_softmax_diagnostic_v1"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_API = 1
@@ -278,6 +279,16 @@ def resolve_partitioned_suffix_dc_bridge(transformer_options: dict[str, Any]) ->
     value = transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY]
     if value is not False:
         raise ValueError("the partitioned suffix DC bridge leaf may only carry the explicit value False")
+    return False
+
+
+def resolve_partitioned_uniform_source_detail_transport(transformer_options: dict[str, Any]) -> bool:
+    """Return whether uniform-source continuation transports exact-prefix static detail."""
+    if PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY not in transformer_options:
+        return True
+    value = transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY]
+    if value is not False:
+        raise ValueError("the uniform-source detail transport leaf may only carry the explicit value False")
     return False
 
 
@@ -475,6 +486,7 @@ def apply_partitioned_diagnostic_controls(
     target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     target_band_handoff_state: str = PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
     target_band_context: str = PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+    uniform_source_detail_transport: bool = True,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -526,6 +538,8 @@ def apply_partitioned_diagnostic_controls(
     )
     if type(suffix_dc_bridge) is not bool:
         raise TypeError("suffix_dc_bridge must be a boolean")
+    if type(uniform_source_detail_transport) is not bool:
+        raise TypeError("uniform_source_detail_transport must be a boolean")
     band_tokens = validate_target_band_tokens(target_band_tokens, source="target_band_tokens")
     band_handoff_state = normalize_target_band_handoff_state(target_band_handoff_state)
     band_context = normalize_target_band_context(target_band_context)
@@ -610,6 +624,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_SUFFIX_DC_BRIDGE_KEY, None)
     else:
         transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY] = False
+    if uniform_source_detail_transport:
+        transformer_options.pop(PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY, None)
+    else:
+        transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] = False
     if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
         transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
     else:
@@ -666,6 +684,8 @@ def apply_partitioned_diagnostic_controls(
             fields["softmax_diagnostic"] = softmax_mode
         if not suffix_dc_bridge:
             fields["suffix_dc_bridge"] = False
+        if not uniform_source_detail_transport:
+            fields["uniform_source_detail_transport"] = False
         if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
             fields["target_band_tokens"] = band_tokens
         if band_handoff_state != PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE:
@@ -743,6 +763,7 @@ __all__ = [
     "PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE",
     "PARTITIONED_TARGET_BAND_TOKENS_DEFAULT",
     "PARTITIONED_TARGET_BAND_TOKENS_KEY",
+    "PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -781,6 +802,7 @@ __all__ = [
     "resolve_partitioned_target_band_context",
     "resolve_partitioned_target_band_handoff_state",
     "resolve_partitioned_target_band_tokens",
+    "resolve_partitioned_uniform_source_detail_transport",
     "resolve_partitioned_video_guided_overlap_tokens",
     "validate_target_band_tokens",
 ]

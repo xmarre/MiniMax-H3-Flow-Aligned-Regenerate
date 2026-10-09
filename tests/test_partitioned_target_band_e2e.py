@@ -31,6 +31,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_SOL_REQUIRED_METADATA,
@@ -612,6 +613,56 @@ def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch
         assert event["target_rows_per_frame"] == hw[0] * hw[1] // 4
         assert event["prefix_log_key_measure"] == 0.0
         assert event["temporal"] == TEMPORAL
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_detail_transport_changes_only_the_high_entry_suffix(monkeypatch, mode):
+    import sys
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    # The suffix DC bridge is off in both runs so the comparison isolates the transport.
+    disabled = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={
+            PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: False,
+            PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
+        },
+    )
+    enabled = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
+    )
+    with_bridge = _harness(monkeypatch, spatial_stage_control=mode)
+    bridge_receipt = _events(with_bridge.metrics, "partitioned_uniform_source_detail_transport")[0]
+    assert bridge_receipt["suffix_dc_bridge_superseded"] is bridge_receipt["applied"]
+
+    off = _events(disabled.metrics, "partitioned_uniform_source_detail_transport")
+    assert len(off) == 1 and off[0]["applied"] is False and off[0]["reason"] == "disabled"
+    receipt = _events(enabled.metrics, "partitioned_uniform_source_detail_transport")
+    assert len(receipt) == 1
+    assert receipt[0]["authoritative_prefix_modified"] is False
+    assert receipt[0]["extra_h3_nfe"] == 0 and receipt[0]["extra_provider_calls"] == 0
+
+    # Low/probe are untouched; only the target-high entry state can change.
+    for before, after in zip(disabled.calls[:2], enabled.calls[:2], strict=True):
+        assert torch.equal(before["latent"], after["latent"])
+        assert torch.equal(before["noise"], after["noise"])
+    # The high entry state reaches the sampler through its noise argument.
+    assert torch.equal(disabled.calls[-1]["latent"], enabled.calls[-1]["latent"])
+    off_video, off_audio = unpack_streams(disabled.calls[-1]["noise"], disabled.shapes)
+    on_video, on_audio = unpack_streams(enabled.calls[-1]["noise"], enabled.shapes)
+    assert torch.equal(off_audio, on_audio)
+    assert torch.equal(off_video[:, :, :PROTECTED_T], on_video[:, :, :PROTECTED_T])
+    suffix_changed = not torch.equal(off_video[:, :, PROTECTED_T:], on_video[:, :, PROTECTED_T:])
+    assert suffix_changed is bool(receipt[0]["applied"] and receipt[0]["delta_rms"] > 0.0)
+    video, _audio = unpack_streams(enabled.result, enabled.shapes)
+    exact_video, _exact_audio = unpack_streams(enabled.latent_image, enabled.shapes)
+    assert torch.equal(video[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
 
 
 @pytest.mark.parametrize(

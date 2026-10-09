@@ -152,6 +152,7 @@ from .partitioned_diagnostics import (
     resolve_partitioned_target_band_context,
     resolve_partitioned_target_band_handoff_state,
     resolve_partitioned_target_band_tokens,
+    resolve_partitioned_uniform_source_detail_transport,
     resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_prefix import PARTITIONED_NATIVE_CARRIER_SOURCE, PARTITIONED_NATIVE_CARRIER_TARGET
@@ -212,6 +213,7 @@ from .tone_bridge import (
     map_clean_bridge_to_conditional_state,
 )
 from .transfer_lattice import H3_TRANSFER_LATTICE, H3PatchLatticeTransferProvider, measure_paired_prefix_affine
+from .uniform_source_detail import UNIFORM_SOURCE_DETAIL_TRANSPORT_POLICY, apply_uniform_source_detail_transport
 from .vae_boundary_video import (
     VAE_WINDOW_VIDEO_POLICY,
     apply_vae_window_vertical_translation,
@@ -3571,6 +3573,9 @@ def run_partitioned_progressive(
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
+    uniform_source_detail_transport = uniform_source and resolve_partitioned_uniform_source_detail_transport(
+        initial_transformer
+    )
     if uniform_source and (
         prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -5246,12 +5251,46 @@ def run_partitioned_progressive(
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
                     provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
+                bridge_clean = learned_clean
+                if uniform_source:
+                    if uniform_source_detail_transport:
+                        bridge_clean, detail_receipt = apply_uniform_source_detail_transport(
+                            learned_clean,
+                            exact_prefix,
+                            prefix_t=stage_plan.prefix_t,
+                        )
+                        if detail_receipt["applied"]:
+                            # Clean-space change mapped exactly onto the already
+                            # re-noised suffix; the noise and prefix are untouched.
+                            target_video = map_clean_bridge_to_conditional_state(
+                                target_video,
+                                learned_clean,
+                                bridge_clean,
+                                sigma=sigma,
+                                prefix_t=stage_plan.prefix_t,
+                                corrected_tokens=int(learned_clean.shape[2]) - int(stage_plan.prefix_t),
+                            )
+                    else:
+                        detail_receipt = {
+                            "policy": UNIFORM_SOURCE_DETAIL_TRANSPORT_POLICY,
+                            "applied": False,
+                            "reason": "disabled",
+                        }
+                    # The suffix DC bridge moves the first suffix token by the same
+                    # prefix offset the transport already carried; never apply both.
+                    detail_receipt["suffix_dc_bridge_superseded"] = bool(
+                        detail_receipt["applied"] and suffix_dc_bridge_enabled
+                    )
+                    binding.metrics.event("partitioned_uniform_source_detail_transport", **detail_receipt)
+                    dc_bridge_enabled = suffix_dc_bridge_enabled and not detail_receipt["applied"]
+                else:
+                    dc_bridge_enabled = suffix_dc_bridge_enabled
                 target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
                     target_video,
-                    learned_clean,
+                    bridge_clean,
                     exact_prefix,
                     sigma=sigma,
-                    enabled=suffix_dc_bridge_enabled,
+                    enabled=dc_bridge_enabled,
                 )
             if exact_overlap_fallback_requested:
                 if splice_clean_source == "inverse_recovered":

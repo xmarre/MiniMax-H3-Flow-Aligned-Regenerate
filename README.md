@@ -78,6 +78,7 @@ suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
+uniform_source_detail_transport  = true
 ```
 
 **Workflows saved with an older release keep their stored widget values.** To
@@ -379,6 +380,35 @@ splice remains. High now processes the extra short head and duplicated
 conditioning rows, and streamed VDN weights may be fetched twice per block.
 Wall time and peak memory need measurement. Existing modes and defaults retain
 their previous execution paths.
+
+### Uniform-source detail transport
+
+The learned upscaler re-synthesizes fine static detail, such as text, patterns
+and texture, instead of recovering it from the reduced grid. In
+`progressive_uniform_source`, every generated frame carries the upscaler's
+version of that detail, while the restored prefix carries the original. Without
+a correction, static detail can change at the join: lettering is spelled
+differently, and a background pattern is redrawn or shifted.
+
+`uniform_source_detail_transport=true` (default) carries the difference between
+the last exact prefix frame and the upscaler's rendering of that frame into the
+generated frames before high refinement. Each location is weighted by how much
+the learned trajectory changes there, both since that frame and at that frame.
+Static content receives the exact prefix detail. Moving content keeps the
+learned suffix. The weighting is calibrated on the prefix frames of the same
+run: it measures how much of the upscaler's error persists between prefix
+frames at each level of change, and transports only where most of it persists.
+The transport is skipped when it does not reduce the error on held-out prefix
+frames.
+
+It adds no model, upscaler or VAE call. When it applies, it replaces the
+one-token suffix DC bridge, which would otherwise move the first generated
+token by the same offset a second time. Each continuation records a
+`partitioned_uniform_source_detail_transport` receipt with the held-out error
+ratio, the calibrated weights and the mean suffix weight. The control applies
+only to `progressive_uniform_source` and
+`progressive_uniform_source_exact_context`. Workflows saved before this control
+existed load it with its default, `true`.
 
 ### Suffix DC bridge
 
