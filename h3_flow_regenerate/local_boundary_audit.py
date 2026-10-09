@@ -176,7 +176,11 @@ def normalize_bundle_path(bundle_path, *, platform, wsl_distro):
 
 
 def load_replay_operands(
-    bundle_path, join_frame, *, include_source=False, include_high_predictions=False,
+    bundle_path,
+    join_frame,
+    *,
+    include_source=False,
+    include_high_predictions=False,
     include_full_final=False,
 ):
     path = normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME"))
@@ -611,7 +615,9 @@ def audit_local_boundary(
     if native is None or any(getattr(native, key, None) != value for key, value in expected.items()):
         raise ValueError("connect the native MiniMax H3 video VAE used for production decoding")
     plan, stages, identity = load_replay_operands(
-        bundle_path, join_frame, include_source=extended,
+        bundle_path,
+        join_frame,
+        include_source=extended,
         include_high_predictions=scope == "high_prediction_tone",
         include_full_final=validate_full_video_decoder,
     )
@@ -743,14 +749,18 @@ def audit_local_boundary(
             )
     if validate_full_video_decoder:
         report["full_video_decoder_context_validation"] = _audit_full_video_decoder_context(
-            vae, full_final, process_out, plan, pixels["final"],
-            [labels[0] - 1, *labels], rois=static_rois,
+            vae,
+            full_final,
+            process_out,
+            plan,
+            pixels["final"],
+            [labels[0] - 1, *labels],
+            rois=static_rois,
         )
         report["extra_vae_calls"] += 1
     # Preserve the existing final-stage field for report consumers.
     report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
     return report
-
 
 
 def _audit_full_video_decoder_context(vae, full_latent, process_out, plan, cropped_pixels, labels, *, rois):
@@ -761,9 +771,7 @@ def _audit_full_video_decoder_context(vae, full_latent, process_out, plan, cropp
     context, origin and blend behaviour are therefore part of the comparison.
     Returns numerical data only; no rendered frames, blobs or latent tensors.
     """
-    if full_latent is None or tuple(full_latent.shape[:3]) != (
-        1, 24, int(plan["temporal"])
-    ):
+    if full_latent is None or tuple(full_latent.shape[:3]) != (1, 24, int(plan["temporal"])):
         raise ValueError("full decoded context requires saved full final target-grid latents")
     total_tokens = int(full_latent.shape[2])
     if (total_tokens - 2) % 5:
@@ -811,7 +819,6 @@ def _audit_full_video_decoder_context(vae, full_latent, process_out, plan, cropp
             full_pixels, labels, join_frame=plan["join_frame"], rois=rois
         )
     return result
-
 
 
 def _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region):

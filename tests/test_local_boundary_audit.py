@@ -936,7 +936,10 @@ def test_full_video_decoder_context_validates_same_saved_pixels_without_producti
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     vae = FakeVAE()
     report = audit.audit_local_boundary(
-        vae, directory, 175, lambda latent: latent,
+        vae,
+        directory,
+        175,
+        lambda latent: latent,
         validate_full_video_decoder=True,
     )
     comparison = report["full_video_decoder_context_validation"]
@@ -976,11 +979,19 @@ def test_full_video_decoder_validation_rejects_non_boolean_and_high_tone_scope(b
     vae = FakeVAE()
     with pytest.raises(TypeError, match="boolean"):
         audit.audit_local_boundary(
-            vae, directory, 175, lambda v: v, validate_full_video_decoder=1,
+            vae,
+            directory,
+            175,
+            lambda v: v,
+            validate_full_video_decoder=1,
         )
     with pytest.raises(ValueError, match="requires stage_continuity"):
         audit.audit_local_boundary(
-            vae, directory, 175, lambda v: v,
-            scope="high_prediction_tone", validate_full_video_decoder=True,
+            vae,
+            directory,
+            175,
+            lambda v: v,
+            scope="high_prediction_tone",
+            validate_full_video_decoder=True,
         )
     assert vae.inputs == []
