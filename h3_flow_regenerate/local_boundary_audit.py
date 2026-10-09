@@ -20,13 +20,13 @@ import torch.nn.functional as F
 
 from .geometry import resize_spatial_5d, resize_spatial_5d_h3_patch_lattice
 from .partitioned_diagnostics import PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
-from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
 from .stage_static_roi_audit import (
     PROFILES as STATIC_ROI_PROFILES,
-    parse_static_rois,
-    measure_stage_static_rois,
     compare_same_frame_stage_rois,
+    measure_stage_static_rois,
+    parse_static_rois,
 )
+from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
 
 LOG = logging.getLogger(__name__)
 STAGES = {
@@ -572,7 +572,11 @@ def measure_window_context(vae, latent, process_out, plan, *, detail_region="off
     return result
 
 
-def audit_local_boundary(vae, bundle_path, join_frame, process_out, *, scope="stage_continuity", detail_region="off", static_roi_profile="off", static_roi_json=""):
+def audit_local_boundary(
+    vae, bundle_path, join_frame, process_out, *,
+    scope="stage_continuity", detail_region="off",
+    static_roi_profile="off", static_roi_json="",
+):
     if scope not in SCOPES:
         raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
     if detail_region not in DETAIL_REGIONS:
@@ -836,7 +840,10 @@ class H3FlowLocalBoundaryAudit:
                     {
                         "default": "",
                         "multiline": True,
-                        "tooltip": "For custom profile: {\"books\":[0.0,0.42,0.13,0.60],\"curtain\":[0.83,0.04,0.99,0.36]}. Fractional XYXY; at least two regions.",
+                        "tooltip": (
+                            "Custom: {\"books\":[0,.42,.13,.60],\"curtain\":[.83,.04,.99,.36]}. "
+                            "Fractional XYXY coordinates, at least two ROIs."
+                        ),
                     },
                 ),
             },
@@ -862,7 +869,11 @@ class H3FlowLocalBoundaryAudit:
         _AUDIT_MODEL_OWNERS.retain()
         return float("nan")
 
-    def audit(self, video_vae, bundle_path, chunk_join_frame, audit_scope="stage_continuity", detail_region="off", static_roi_profile="off", static_roi_json=""):
+    def audit(
+        self, video_vae, bundle_path, chunk_join_frame,
+        audit_scope="stage_continuity", detail_region="off",
+        static_roi_profile="off", static_roi_json="",
+    ):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
         import folder_paths
