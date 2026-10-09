@@ -929,3 +929,57 @@ def test_audit_admission_accounts_for_core_weight_reserve_and_device(monkeypatch
     monkeypatch.setattr(management, "load_models_gpu", lambda *a, **kw: pytest.fail("insufficient admission budget"))
     with pytest.raises(RuntimeError, match="without unloading other models"):
         audit._resident_decode(vae, torch.zeros(1, 24, 7, 2, 3))
+
+
+def test_full_video_decoder_context_validates_same_saved_pixels_without_production_mutation(bundle):
+    directory, _manifest, _video = bundle
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    vae = FakeVAE()
+    report = audit.audit_local_boundary(
+        vae, directory, 175, lambda latent: latent,
+        validate_full_video_decoder=True,
+    )
+    comparison = report["full_video_decoder_context_validation"]
+    assert report["full_video_decoder_comparison_requested"] is True
+    assert report["extra_vae_calls"] == 6
+    assert len(vae.inputs) == 6
+    assert tuple(vae.inputs[-1].shape) == (1, 24, 22, 4, 6)
+    assert comparison["policy"] == "h3_native_full_vs_crop_decoder_window_v1"
+    assert comparison["full_decoded_global_origin"] == 136
+    assert comparison["cropped_replay_global_origin"] == 153
+    assert comparison["frame_labels"] == list(range(170, 196))
+    assert comparison["full_decoded_frames"] == 73
+    assert comparison["same_saved_final_clean_state"] is True
+    assert comparison["same_connected_native_video_vae"] is True
+    assert comparison["extra_h3_nfe"] == 0
+    assert comparison["extra_vae_calls"] == 1
+    assert comparison["per_frame_rgb_difference_rms"] == [0.0] * 26
+    assert comparison["per_frame_luma_mean_change"] == [0.0] * 26
+    assert not comparison["production_output_modified"]
+    assert before == {path.name: path.read_bytes() for path in directory.iterdir()}
+    json.dumps(report, allow_nan=False)
+
+
+def test_full_video_decoder_context_defaults_off_with_no_extra_decode(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    report = audit.audit_local_boundary(vae, directory, 175, lambda latent: latent)
+    assert report["full_video_decoder_comparison_requested"] is False
+    assert "full_video_decoder_context_validation" not in report
+    assert report["extra_vae_calls"] == 5
+    assert len(vae.inputs) == 5
+
+
+def test_full_video_decoder_validation_rejects_non_boolean_and_high_tone_scope(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    with pytest.raises(TypeError, match="boolean"):
+        audit.audit_local_boundary(
+            vae, directory, 175, lambda v: v, validate_full_video_decoder=1,
+        )
+    with pytest.raises(ValueError, match="requires stage_continuity"):
+        audit.audit_local_boundary(
+            vae, directory, 175, lambda v: v,
+            scope="high_prediction_tone", validate_full_video_decoder=True,
+        )
+    assert vae.inputs == []
