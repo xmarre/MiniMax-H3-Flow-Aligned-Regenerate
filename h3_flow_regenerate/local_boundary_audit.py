@@ -175,7 +175,10 @@ def normalize_bundle_path(bundle_path, *, platform, wsl_distro):
     return path
 
 
-def load_replay_operands(bundle_path, join_frame, *, include_source=False, include_high_predictions=False):
+def load_replay_operands(
+    bundle_path, join_frame, *, include_source=False, include_high_predictions=False,
+    include_full_final=False,
+):
     path = normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME"))
     directory = Path(path).expanduser().resolve()
     if directory.name == "manifest.json":
@@ -255,6 +258,7 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
         raise ValueError("saved high mask must leave every generated token editable")
     del mask
     stages = {}
+    full_final = None
     crop = slice(plan["token_start"], plan["token_stop"])
     for stage, name in STAGES.items():
         value = read(name)
@@ -268,6 +272,8 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
         # Restore only carried context for a fair decoded stage comparison.
         # The native band and transferred tail remain each stage's saved bytes.
         value[:, :, : plan["prefix_t"]] = prefix
+        if stage == "final" and include_full_final:
+            full_final = value.clone()
         stages[stage] = value[:, :, crop].clone()
         del value
     native = None
@@ -379,6 +385,8 @@ def load_replay_operands(bundle_path, join_frame, *, include_source=False, inclu
             raise ValueError("saved high prediction trace does not begin with the first actual call")
         identity["high_prediction_calls"] = records
         identity["omitted_high_call_indices"] = omitted
+    if include_full_final:
+        stages["_full_final_decode_validation"] = full_final
     return plan, stages, identity
 
 
@@ -584,12 +592,17 @@ def audit_local_boundary(
     detail_region="off",
     static_roi_profile="off",
     static_roi_json="",
+    validate_full_video_decoder=False,
 ):
+    if not isinstance(validate_full_video_decoder, bool):
+        raise TypeError("full-video decode validation must be boolean")
     if scope not in SCOPES:
         raise ValueError(f"unsupported local boundary audit scope: {scope!r}")
     if detail_region not in DETAIL_REGIONS:
         raise ValueError(f"unsupported local boundary detail region: {detail_region!r}")
     static_rois = parse_static_rois(static_roi_profile, static_roi_json)
+    if validate_full_video_decoder and scope == "high_prediction_tone":
+        raise ValueError("full-video decode validation requires stage_continuity or transfer_and_decoder_context")
     if static_rois and scope == "high_prediction_tone":
         raise ValueError("static ROI stage measurements require stage_continuity or transfer_and_decoder_context scope")
     extended = scope == "transfer_and_decoder_context"
@@ -598,8 +611,11 @@ def audit_local_boundary(
     if native is None or any(getattr(native, key, None) != value for key, value in expected.items()):
         raise ValueError("connect the native MiniMax H3 video VAE used for production decoding")
     plan, stages, identity = load_replay_operands(
-        bundle_path, join_frame, include_source=extended, include_high_predictions=scope == "high_prediction_tone"
+        bundle_path, join_frame, include_source=extended,
+        include_high_predictions=scope == "high_prediction_tone",
+        include_full_final=validate_full_video_decoder,
     )
+    full_final = stages.pop("_full_final_decode_validation", None)
     if scope == "high_prediction_tone":
         high_report = _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region)
         high_report["static_roi_profile"] = static_roi_profile
@@ -614,6 +630,7 @@ def audit_local_boundary(
         "static_roi_profile": static_roi_profile,
         "static_roi_measurement_enabled": bool(static_rois),
         "static_roi_bounds_xyxy": {name: list(rect) for name, rect in static_rois.items()},
+        "full_video_decoder_comparison_requested": validate_full_video_decoder,
         "fps": 24,
         **identity,
         "plan": plan,
@@ -724,9 +741,77 @@ def audit_local_boundary(
                 join_frame=join_frame,
                 rois=static_rois,
             )
+    if validate_full_video_decoder:
+        report["full_video_decoder_context_validation"] = _audit_full_video_decoder_context(
+            vae, full_final, process_out, plan, pixels["final"],
+            [labels[0] - 1, *labels], rois=static_rois,
+        )
+        report["extra_vae_calls"] += 1
     # Preserve the existing final-stage field for report consumers.
     report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
     return report
+
+
+
+def _audit_full_video_decoder_context(vae, full_latent, process_out, plan, cropped_pixels, labels, *, rois):
+    """Compare full native decode with the identical saved-state cropped replay.
+
+    Decodes the *complete* final target-grid latent (potentially expensive),
+    then takes exactly the matching global pixel times. Native VAE temporal
+    context, origin and blend behaviour are therefore part of the comparison.
+    Returns numerical data only; no rendered frames, blobs or latent tensors.
+    """
+    if full_latent is None or tuple(full_latent.shape[:3]) != (
+        1, 24, int(plan["temporal"])
+    ):
+        raise ValueError("full decoded context requires saved full final target-grid latents")
+    total_tokens = int(full_latent.shape[2])
+    if (total_tokens - 2) % 5:
+        raise ValueError("full decoded context requires a native 5-token temporal stride")
+    total_frames = (total_tokens - 2) // 5 * 17 + 5
+    decoded = _decode_owned_pixels(vae, full_latent, process_out, total_frames)
+    # Chunk two starts with already retained context. In native H3 timing,
+    # these are the prefix decoded frames trimmed from the new chunk.
+    trim = 17 * ((int(plan["prefix_t"]) - 2) // 5) + 5
+    global_origin = int(plan["join_frame"]) - trim
+    first = int(labels[0]) - global_origin
+    last = int(labels[-1]) - global_origin + 1
+    if first < 0 or last > total_frames or last - first != len(cropped_pixels):
+        raise ValueError("full and cropped decoder frame/time ownership differs")
+    full_pixels = decoded[0, first:last].detach().float().cpu().clone()
+    del decoded
+    if full_pixels.shape != cropped_pixels.shape or not torch.isfinite(full_pixels).all():
+        raise ValueError("full native decoder returned mismatched comparison pixels")
+    delta = full_pixels - cropped_pixels
+    per_frame_rms = delta.square().mean(dim=(1, 2, 3)).sqrt()
+    luma_weights = delta.new_tensor([0.2126, 0.7152, 0.0722])
+    luma_change = (delta @ luma_weights).mean(dim=(1, 2))
+    result = {
+        "policy": "h3_native_full_vs_crop_decoder_window_v1",
+        "full_latent_tokens": total_tokens,
+        "full_decoded_frames": total_frames,
+        "full_decoded_global_origin": global_origin,
+        "cropped_replay_global_origin": int(plan["decoded_origin_frame"]),
+        "frame_labels": list(labels),
+        "same_saved_final_clean_state": True,
+        "same_connected_native_video_vae": True,
+        "generated_frames_altered": False,
+        "production_output_modified": False,
+        "extra_vae_calls": 1,
+        "extra_h3_nfe": 0,
+        "per_frame_rgb_difference_rms": per_frame_rms.tolist(),
+        "per_frame_luma_mean_change": luma_change.tolist(),
+        "geometry": geometry_comparison(cropped_pixels, full_pixels, labels),
+    }
+    if rois:
+        result["static_roi_same_frame"] = compare_same_frame_stage_rois(
+            cropped_pixels, full_pixels, labels, join_frame=plan["join_frame"], rois=rois
+        )
+        result["full_decoder_static_rois"] = measure_stage_static_rois(
+            full_pixels, labels, join_frame=plan["join_frame"], rois=rois
+        )
+    return result
+
 
 
 def _audit_high_prediction_tone(vae, process_out, plan, stages, identity, detail_region):
@@ -853,6 +938,17 @@ class H3FlowLocalBoundaryAudit:
                         ),
                     },
                 ),
+                "validate_full_video_decoder": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Extra expensive VAE decode of the full saved target-grid clean video. "
+                            "Numerically compares its join pixels with the shorter native replay; "
+                            "may require substantial extra VRAM and CPU RAM. Never changes generation."
+                        ),
+                    },
+                ),
                 "static_roi_json": (
                     "STRING",
                     {
@@ -896,6 +992,7 @@ class H3FlowLocalBoundaryAudit:
         detail_region="off",
         static_roi_profile="off",
         static_roi_json="",
+        validate_full_video_decoder=False,
     ):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
@@ -911,6 +1008,7 @@ class H3FlowLocalBoundaryAudit:
             detail_region=detail_region,
             static_roi_profile=static_roi_profile,
             static_roi_json=static_roi_json,
+            validate_full_video_decoder=validate_full_video_decoder,
         )
         text = json.dumps(report, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
