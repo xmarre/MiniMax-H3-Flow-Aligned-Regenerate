@@ -579,6 +579,42 @@ pixel units. The region can still contain motion or insufficient texture, so
 these measurements are not automatic defect classifications. The default is
 `off`. Region analysis adds CPU work without extra decoding or image export.
 
+**Static-room zoom and background detail localization (01784/00040):**
+The Local Boundary Audit also supports `static_roi_profile=01784_room`
+for four named fractional-image regions: left bookshelf, framed picture,
+right curtain and white wall. For a different scene, select
+`static_roi_profile=custom` and provide `static_roi_json` such as
+`{"books":[0.0,0.42,0.13,0.60],"curtain":[0.83,0.04,0.99,0.36]}`.
+Names are arbitrary; the values are `[x0,y0,x1,y1]` fractions in
+`[0,1]`, not pixel coordinates. The default is `off`, adding no work.
+
+Set `chunk_join_frame=175` and
+`audit_scope=transfer_and_decoder_context` for a complete 01784
+boundary bundle. Within **each decoded stage independently**
+(`source_grid`, `provider`, `pre_high`,
+`first_high_before_flow`, `first_high_after_flow`, `final`),
+`stages.<stage>.static_background_rois` reports stationary-region Sobel
+gradient-energy ratios between the last prefix frame (174) and frame 180,
+pre-join trend, local luma difference, phase-correlated position changes,
+and an approximate horizontal background-scale slope from spatially
+separated room landmarks. Texture-unstable or implausibly large
+correspondences are marked unreliable rather than allowed to distort the
+scale estimate. White-wall texture is useful for shading but can be
+unsuitable for phase correlation. The full report records which landmarks
+were supported.
+
+**Compare each stage's pre/post *ratios*, not absolute sharpness across
+704px reduced-grid and 992px target-grid decodes.** The latter use
+different sampling grids and pixel frequency bandwidths. The
+scale measurement is an apparent background fit, not camera ground
+truth, and does not automatically prove where the model defect arose.
+These static-ROI measurements only use RGB frames already decoded by
+the audit; no additional VAE calls, sampling steps or production
+adjustments occur, and the analysis does not modify source operands or
+rendered frames. Combine the stage receipts with the saved capture
+provenance before proposing a correction to the Flow path. The tone
+correction remains owned by Continuum PR #42 and is separate.
+
 Set `audit_scope=transfer_and_decoder_context` for the extended replay. It adds
 the saved uniform reduced-grid handoff view and compares identical pixel times
 from two independently decoded seven-token contexts near the band/tail edge for
