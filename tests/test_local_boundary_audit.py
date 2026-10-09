@@ -943,7 +943,8 @@ def test_full_video_decoder_context_validates_same_saved_pixels_without_producti
     assert report["full_video_decoder_comparison_requested"] is True
     assert report["extra_vae_calls"] == 6
     assert len(vae.inputs) == 6
-    assert tuple(vae.inputs[-1].shape) == (1, 24, 22, 4, 6)
+    assert tuple(vae.inputs[-1].shape) == tuple(_video.shape)
+    assert torch.equal(vae.inputs[-1], _video)
     assert comparison["policy"] == "h3_native_full_vs_crop_decoder_window_v1"
     assert comparison["full_decoded_global_origin"] == 136
     assert comparison["cropped_replay_global_origin"] == 153
