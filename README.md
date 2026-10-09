@@ -88,6 +88,16 @@ and `suffix_dc_bridge=false`, and leave the other values above unchanged.
 
 ### Recommended continuation: one uniform source trajectory
 
+Run 01770 rejected the image-resize change as a complete boundary fix. The
+current PR99 candidate instead preserves the low stage's measured flow residual
+when entering high. Its Gaussian component is coupled on the ordinary image
+grid; newly added noise has zero projection onto those retained modes. For a
+deterministic sampler, model drift uses a separate image-consistent lift; a
+stochastic sampler transfers the complete residual. Both uniform modes use this
+without enabling frame-gauge or static detail correction. The reduced low grid,
+model-call budget and exact prefix remain. Rendered continuity and GPU timing
+are pending; see [01770 investigation](docs/validation/CONTINUATION_01770_IMAGE_NOISE.md).
+
 Static fine detail can change at the join despite exact returned prefix bytes.
 The opt-in `progressive_uniform_source_exact_context` candidate supplies the
 unresampled prefix to low/probe through Core's native video-reference layout,
@@ -113,7 +123,7 @@ prefix on the reduced grid. Uniform continuation uses the provider's ordinary
 image-grid learned transfer, matching the first chunk. Attention-coordinate
 resampling remains confined to the heterogeneous modes. High refinement
 re-attends to the exact prefix. The image-grid correction is covered by native
-runtime regression tests but still needs rendered acceptance; see
+runtime regression tests but was insufficient in 01770; see
 [image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
 
 In the earlier accepted reference continuation (default profile, native attention

@@ -167,6 +167,7 @@ jobs:
             tests/test_transfer_lattice.py \
             tests/test_transfer_lattice_source_contract.py \
             tests/test_flow_residual_lattice.py \
+            tests/test_image_residual.py \
             tests/test_partitioned_seam_diagnostics.py \
             tests/test_residual_evidence_replay.py \
             .contracts/Upscaler/tests/test_h3_patch_lattice.py

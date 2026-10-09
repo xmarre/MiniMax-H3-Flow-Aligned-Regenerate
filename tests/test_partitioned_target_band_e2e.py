@@ -94,6 +94,7 @@ def _harness(
     native_sampler=None,
     residual_mode="off",
     witness_directory=None,
+    frame_gauge_repair=True,
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -329,7 +330,7 @@ def _harness(
         transfer_mode="learned_3d",
         learned_upscaler=upscaler,
         exact_prefix_mode="fallback",
-        frame_gauge_repair=True,
+        frame_gauge_repair=frame_gauge_repair,
         frame_gauge_residual_mode=residual_mode,
     )
     sampler = SimpleNamespace(sampler_function=SimpleNamespace(__name__="sample_euler"), extra_options={})
@@ -1434,3 +1435,75 @@ def test_domain_invalid_audio_fails_before_sampler_lifetime(monkeypatch):
             spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
             extra_transformer_options=_domain_extra(),
         )
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+@pytest.mark.parametrize(
+    "sampler,policy",
+    [
+        ("euler", "source_residual_image_drift_v1"),
+        ("dpmpp_2m", "source_residual_image_drift_v1"),
+        ("euler_ancestral", "source_residual_image_refinement_v1"),
+    ],
+)
+def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(monkeypatch, control, sampler, policy):
+    import torch.nn.functional as F
+
+    from h3_flow_regenerate.handoff import deterministic_video_noise
+    from h3_flow_regenerate.image_residual import transport_image_flow_residual
+
+    monkeypatch.setattr(__import__(__name__, fromlist=["TARGET_HW"]), "TARGET_HW", (8, 10))
+    monkeypatch.setattr(__import__(__name__, fromlist=["SOURCE_HW"]), "SOURCE_HW", (4, 6))
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=control,
+        native_sampler=sampler,
+        frame_gauge_repair=False,
+        extra_transformer_options={PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
+    )
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+    assert len(run.upscaler.inputs) == 1
+    assert run.upscaler.lattices == ["half_pixel_latent_v1"]
+    receipt = _events(run.metrics, "partitioned_transfer")[0]
+    assert receipt["actual_learned_checkpoint_provider_invoked"] is True
+    assert receipt["learned_transfer_performed"] is True
+    assert receipt["clean_video_postprocess"]["output_modified"] is False
+    assert receipt["handoff_noise"]["policy"] == policy
+    assert _events(run.metrics, "partitioned_handoff_noise")[0]["frame_gauge_repair_enabled"] is False
+    low, _, high = run.calls
+    source_raw, source_audio = unpack_streams(low["final_state"], low["shapes"])
+    high_entry, high_audio = unpack_streams(high["entry_state"], high["shapes"])
+    source_clean = run.upscaler.inputs[0]
+    sigma = float(high["sigmas"][0])
+    measured = (source_raw - (1 - sigma) * source_clean) / sigma
+    learned = resize_spatial_5d(source_clean, *TARGET_HW, mode="bicubic")
+    target_residual = (high_entry - (1 - sigma) * learned) / sigma
+    if policy == "source_residual_image_drift_v1":
+        initial, _ = unpack_streams(low["noise"], low["shapes"])
+        innovation = deterministic_video_noise(
+            tuple(high_entry.shape),
+            seed=receipt["handoff_noise"]["innovation_seed"],
+            device=initial.device,
+            dtype=torch.float32,
+        )
+        expected, _ = transport_image_flow_residual(measured, initial, innovation, noise_scale=1.7)
+        torch.testing.assert_close(target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0)
+    else:
+        # Independent whole-image projection, rather than reusing the transfer.
+        basis = torch.eye(TARGET_HW[0] * TARGET_HW[1], dtype=torch.float64).reshape(-1, 1, *TARGET_HW)
+        a = F.interpolate(basis, size=SOURCE_HW, mode="bicubic", align_corners=False, antialias=True).flatten(1).T
+        eig, vec = torch.linalg.eigh(a @ a.T)
+        q = (vec / eig.sqrt()) @ vec.T @ a
+        coarse = target_residual[:, :, PROTECTED_T:].double().flatten(-2) @ q.T
+        torch.testing.assert_close(coarse, measured[:, :, PROTECTED_T:].double().flatten(-2), atol=3e-6, rtol=0)
+    assert _events(run.metrics, "partitioned_audio_handoff_copy")[0]["exact"] is True
+    # Native CONST re-entry divides/multiplies the effective state by sigma and
+    # model noise_scale; allow only floating-point reconstruction roundoff.
+    torch.testing.assert_close(high_audio, source_audio, rtol=0, atol=5e-7)
+    video, _ = unpack_streams(run.result, run.shapes)
+    original, _ = unpack_streams(run.latent_image, run.shapes)
+    assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    assert run.binding.active_capture is None

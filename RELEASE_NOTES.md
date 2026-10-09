@@ -1,5 +1,17 @@
 # Unreleased: experimental continuation controls
 
+Run 01770 still showed frame shift and darkening. Uniform continuation now
+retains the low trajectory's measured residual instead of replacing it with
+unrelated high-grid noise. Gaussian refinement uses the ordinary antialiased
+half-pixel image grid and constrains new innovation to its coarse nullspace.
+Deterministic model drift uses a separate constant-preserving image lift;
+stochastic samplers retain the complete measured residual. This adds no model
+calls and leaves the reduced-grid low stage, exact protected AV ownership and
+sampler schedule intact. Rendered acceptance and GPU timing are pending.
+Uniform learned-provider receipts now correctly report the checkpoint call.
+See [01770 evidence and candidate](docs/validation/CONTINUATION_01770_IMAGE_NOISE.md).
+
+
 Uniform continuation now keeps the initial chunk's image-grid resize and
 ordinary learned-upscaler path. Previously both uniform modes inherited the
 heterogeneous attention-coordinate projection and forced a different
@@ -8,7 +20,7 @@ seen by low/probe and the learned transfer; at the tested 50x38 -> 72x54 geometr
 the two interpolation conventions differ by about 0.30 source latent cells
 on coordinate ramps. The correction adds no model calls and preserves the
 exact returned prefix, audio ownership and sampling schedule. It is a concrete
-representation correction, with rendered tone/motion acceptance still pending.
+representation correction, rejected as a sufficient tone/motion fix in 01770.
 See [image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
 
 `progressive_uniform_source_exact_context` adds unresampled prefix visual

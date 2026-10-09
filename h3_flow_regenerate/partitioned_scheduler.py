@@ -44,9 +44,13 @@ from .geometry import (
 )
 from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
+    H3_HANDOFF_DRIFT_NOISE_MODES,
     H3_HANDOFF_NOISE_DENSE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_RESIDUAL,
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    H3_HANDOFF_RESIDUAL_NOISE_MODES,
     H3_LATENT_UPSCALER_API_VERSION,
     H3_LATENT_UPSCALER_KIND,
     CleanVideoPostprocessResult,
@@ -1624,7 +1628,11 @@ def _validate_partitioned_sol_sink_measure(mode: str) -> None:
 
 # Spatial-stage controls whose continuation performs a real learned spatial transfer.
 _LEARNED_TRANSFER_SPATIAL_STAGES = frozenset(
-    {PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_TARGET_BAND}
+    {
+        PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        *PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
+    }
 )
 
 
@@ -2125,7 +2133,7 @@ def _resolve_partitioned_transfer_clean(
             raise RuntimeError("captured handoff clean tensor is not finite floating-point video")
         return actual_handoff_clean, "actual_clean_postprocess", "actual_clean_postprocess_no_inverse"
 
-    if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
+    if handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES:
         raise RuntimeError(
             "source-residual handoff lost the actual clean postprocess tensor; "
             "refusing deterministic-noise inverse recovery"
@@ -3573,6 +3581,12 @@ def run_partitioned_progressive(
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
+    if uniform_source and (int(config.source_noise_offset) & ((1 << 63) - 1)) == (
+        int(config.seed_offset) & ((1 << 63) - 1)
+    ):
+        raise PartitionedPreflightUnsupported(
+            "image-grid residual coupling requires distinct source and innovation seeds"
+        )
     uniform_source_detail_transport = uniform_source and resolve_partitioned_uniform_source_detail_transport(
         initial_transformer
     )
@@ -4949,21 +4963,37 @@ def run_partitioned_progressive(
                 actual_handoff_clean = result.clean_video.detach().clone()
                 return result
 
+        elif uniform_source:
+
+            def clean_video_postprocess(learned_clean):
+                nonlocal actual_handoff_clean
+                # Residual-coupled entry cannot be inverted using an independent
+                # seeded noise field. Keep the actual provider clean operand for
+                # guidance and audit; this callback changes no tensor values.
+                actual_handoff_clean = learned_clean.detach().clone()
+                return CleanVideoPostprocessResult(
+                    clean_video=learned_clean,
+                    protected_prefix_t=int(stage_plan.prefix_t),
+                    metadata={"enabled": False, "result": "capture_only", "output_modified": False},
+                )
+
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         deterministic_handoff_sampler, handoff_sampler = _dense_drift_sampler_contract(sampler)
-        # Target-band continuation re-noises its learned tail with independent
-        # Gaussian noise, as the uniform progressive handoff does. Transporting the
-        # low-stage residual into the tail carries content-correlated structure
-        # into the high-stage entry noise, which the high stage sharpens.
+        # Uniform continuation retains its measured source trajectory on the
+        # ordinary image grid. Gaussian modes and deterministic model drift have
+        # distinct transfer laws; stochastic samplers retain the complete residual.
+        # The target-band and heterogeneous controls keep their existing policies.
         handoff_noise_mode = (
-            (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
+            (H3_HANDOFF_NOISE_IMAGE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_IMAGE_RESIDUAL)
+            if uniform_source
+            else (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
             if config.frame_gauge_repair
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and target_band is None
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
-        if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
+        if handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES:
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
@@ -5045,8 +5075,8 @@ def run_partitioned_progressive(
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
-            initial_source_noise=source_video_noise if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None,
-            model_noise_scale=model_noise_scale if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0,
+            initial_source_noise=source_video_noise if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES else None,
+            model_noise_scale=model_noise_scale if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES else 1.0,
             run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
         if spatial_transfer_control is not None:
@@ -5590,7 +5620,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
+            and handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled
@@ -5627,7 +5657,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
+            and handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled

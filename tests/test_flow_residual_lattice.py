@@ -293,6 +293,7 @@ def test_actual_scheduler_routing_passes_original_noise_and_model_scale(
 
     env = dict(vars(scheduler))
     env.update(
+        uniform_source=False,
         config=SimpleNamespace(frame_gauge_repair=enabled, seed_offset=7),
         av_handoff_source=scheduler.PARTITIONED_AV_HANDOFF_SOURCE_MAIN if source == "main" else "shadow",
         sampler=SimpleNamespace(sampler_function=sampler_function, extra_options=extra_options),
