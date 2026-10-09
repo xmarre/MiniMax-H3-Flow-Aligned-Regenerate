@@ -126,7 +126,11 @@ def _apparent_scale(regions: Mapping[str, dict], width: int, height: int) -> dic
         and row["displacement"]["peak_dominance"] >= 3.0
     ]
     if len(eligible) < 2:
-        return {"status": "insufficient_landmarks", "supported_regions": len(eligible)}
+        return {
+            "status": "insufficient_landmarks",
+            "supported_regions": len(eligible),
+            "not_camera_ground_truth": True,
+        }
 
     def fit(axis, disp, denom):
         pts = [(row[axis], row["displacement"][disp] / denom) for row in eligible]
