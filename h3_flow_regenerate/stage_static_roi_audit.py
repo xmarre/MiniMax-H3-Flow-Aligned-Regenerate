@@ -61,6 +61,20 @@ def _crop(frame: torch.Tensor, rect: tuple[float, float, float, float]) -> torch
     return frame[ay:by, ax:bx]
 
 
+def _common_grid_luma(luma: torch.Tensor, long_side: int = 704) -> torch.Tensor:
+    """Antialiased downsample for fair 704-vs-992 stage texture comparison.
+
+    Never upsample: hallucinating details in the 704px native carrier would
+    bias the cross-stage gradient metric.
+    """
+    h, w = map(int, luma.shape)
+    if max(h, w) <= long_side:
+        return luma
+    scale = long_side / max(h, w)
+    shape = (max(8, round(h*scale)), max(8, round(w*scale)))
+    return F.interpolate(luma[None,None].float(), size=shape, mode="area")[0,0]
+
+
 def _gradient_energy(luma: torch.Tensor) -> float:
     v = luma[None, None].float()
     wx = v.new_tensor([[-1,0,1],[-2,0,2],[-1,0,1]]).view(1,1,3,3)/8
@@ -99,7 +113,8 @@ def _phase_displacement(ref: torch.Tensor, candidate: torch.Tensor) -> dict:
 def _apparent_scale(regions: Mapping[str,dict], width: int) -> dict:
     pts = [(row["center_x"], row["displacement"]["dx_px"]/width)
            for row in regions.values()
-           if row["displacement"].get("status")=="measured"
+           if row.get("verified_pre_join_static")
+           and row["displacement"].get("status")=="measured"
            and row["displacement"]["peak_dominance"]>=3.]
     if len(pts)<2:
         return {"status":"insufficient_landmarks","supported_regions":len(pts)}
@@ -144,12 +159,23 @@ def measure_stage_static_rois(
     for f in samples:
         rgb = f[..., :3].detach().to(device="cpu",dtype=torch.float32)
         lumas.append(rgb@rgb.new_tensor(_LUMA))
+    common_lumas = [_common_grid_luma(frame) for frame in lumas]
     rows = {}
     for name,rect in rois.items():
         prev,base,post = (_crop(f,rect) for f in lumas)
         e0,e1,e2 = (_gradient_energy(f) for f in (prev,base,post))
         post_ratio = e2/max(e1,1e-12)
+        common_prev, common_base, common_post = (_crop(f,rect) for f in common_lumas)
+        ce0,ce1,ce2 = (_gradient_energy(f) for f in (common_prev,common_base,common_post))
         disp = _phase_displacement(base,post)
+        prior_shift = _phase_displacement(prev,base)
+        pretrend_ratio = e1/max(e0,1e-12)
+        verified_pre = bool(
+            prior_shift.get("status")=="measured"
+            and max(abs(prior_shift["dx_px"]),abs(prior_shift["dy_px"]))<=.75
+            and prior_shift["peak_dominance"]>=3
+            and .70<=pretrend_ratio<=1.35
+        )
         if disp.get("status")=="measured" and (
             abs(disp["dx_px"])>12 or abs(disp["dy_px"])>12 or not .25<=post_ratio<=4.
         ):
@@ -159,13 +185,19 @@ def measure_stage_static_rois(
             "native_roi_hw":list(base.shape),
             "sobel_energy_by_frame":{str(start):e0,str(before):e1,str(after):e2},
             "sharpness_post_over_pre":post_ratio,
-            "sharpness_pretrend_ratio":e1/max(e0,1e-12),
-            "sharpness_excess_over_pretrend":post_ratio/(e1/max(e0,1e-12)),
+            "sharpness_pretrend_ratio":pretrend_ratio,
+            "sharpness_excess_over_pretrend":post_ratio/pretrend_ratio,
+            "common_grid_hw":list(common_base.shape),
+            "common_grid_sobel_energy_by_frame":{str(start):ce0,str(before):ce1,str(after):ce2},
+            "common_grid_sharpness_post_over_pre":ce2/max(ce1,1e-12),
+            "common_grid_sharpness_excess_over_pretrend":(ce2/max(ce1,1e-12))/(ce1/max(ce0,1e-12)),
+            "verified_pre_join_static":verified_pre,
             "mean_luma_delta":float((post-base).mean().item()),
             "displacement":disp,
-            "preceding_displacement":_phase_displacement(prev,base),
+            "preceding_displacement":prior_shift,
         }
     return {"policy":POLICY,"status":"measured","join_frame":join_frame,
+            "common_grid_max_side_px":704,
             "pre_frame":before,"post_frame":after,"pretrend_frame":start,
             "native_grid_hw":list(frames.shape[1:3]),
             "intra_stage_comparisons_only":True,"absolute_sharpness_across_grids_comparable":False,
