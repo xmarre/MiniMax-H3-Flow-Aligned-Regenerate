@@ -214,7 +214,8 @@ def measure_stage_static_rois(
             "native_grid_hw":list(frames.shape[1:3]),
             "intra_stage_comparisons_only":True,"absolute_sharpness_across_grids_comparable":False,
             "production_modified":False,"extra_vae_calls":0,
-            "regions":rows,"background_scale":_apparent_scale(rows,int(frames.shape[2]),int(frames.shape[1]))}
+            "regions":rows,"background_scale":_apparent_scale(rows,int(frames.shape[2]),int(frames.shape[1])),
+            "trajectory":_per_frame_trajectory(frames,frame_labels,join_frame,rois,rows)}
 
 
 def compare_same_frame_stage_rois(
@@ -296,4 +297,81 @@ def compare_same_frame_stage_rois(
         "extra_vae_calls":0,
         "production_modified":False,
         "regions":comparison,
+    }
+
+
+
+def _per_frame_trajectory(
+    frames: torch.Tensor,
+    frame_labels: list[int],
+    join_frame: int,
+    rois: Mapping[str,tuple[float,float,float,float]],
+    baseline: Mapping[str,dict],
+) -> dict:
+    """Read-only native/common-grid static ROI profile across entire join shot.
+
+    Output begins at the earliest decoded prefix frame still available in
+    this replay and stops 15 frames into suffix, before any later scene cut.
+    The renderer MP4 may cover a longer prefix than native bundle replay.
+    """
+    indexed = {label:i for i,label in enumerate(frame_labels)}
+    selected = sorted(label for label in indexed if join_frame-16<=label<=join_frame+15)
+    anchor_frame = join_frame-1
+    if anchor_frame not in indexed:
+        return {"status":"insufficient_pre_join_frame"}
+    native_hw = tuple(map(int,frames.shape[1:3]))
+    luma_by_frame = {}
+    for label in selected:
+        frame = frames[indexed[label]][...,:3].detach().to("cpu",dtype=torch.float32)
+        native = frame @ frame.new_tensor(_LUMA)
+        luma_by_frame[label] = (native,_common_grid_luma(native))
+    regions = {}
+    scale_trajectory = {}
+    anchor = luma_by_frame[anchor_frame][0]
+    for name,rect in rois.items():
+        ref_native = _crop(anchor,rect)
+        values = {}
+        for label,(native,common) in luma_by_frame.items():
+            patch = _crop(native,rect)
+            common_patch = _crop(common,rect)
+            e = _gradient_energy(patch)
+            ce = _gradient_energy(common_patch)
+            shift = _phase_displacement(ref_native,patch)
+            energy_anchor = baseline[name]["sobel_energy_by_frame"][str(anchor_frame)]
+            common_anchor = baseline[name]["common_grid_sobel_energy_by_frame"][str(anchor_frame)]
+            ratio = e/max(energy_anchor,1e-12)
+            if shift.get("status")=="measured" and (
+                abs(shift["dx_px"])>12 or abs(shift["dy_px"])>12
+                or not .25<=ratio<=4.
+            ):
+                shift["status"]="unreliable_correspondence_or_texture_change"
+            values[str(label)] = {
+                "native_sobel_ratio_to_prefix":ratio,
+                "common_sobel_ratio_to_prefix":ce/max(common_anchor,1e-12),
+                "mean_luma":float(patch.mean().item()),
+                "relative_to_prefix_displacement":shift,
+            }
+            if label >= anchor_frame:
+                scale_trajectory.setdefault(label,{})[name] = {
+                    "center_x":baseline[name]["center_x"],
+                    "center_y":baseline[name]["center_y"],
+                    "verified_pre_join_static":baseline[name]["verified_pre_join_static"],
+                    "displacement":shift,
+                }
+        regions[name]=values
+    scale_by_frame={
+        str(label):_apparent_scale(values,native_hw[1],native_hw[0])
+        for label,values in scale_trajectory.items()
+    }
+    return {
+        "status":"measured",
+        "frame_range":[min(selected),max(selected)],
+        "join_frame":join_frame,
+        "anchor_frame":anchor_frame,
+        "pixel_metrics_normalized_to_anchor":True,
+        "native_stage_canvas_hw":list(native_hw),
+        "per_frame_regions":regions,
+        "apparent_scale_by_frame":scale_by_frame,
+        "production_modified":False,
+        "extra_vae_calls":0,
     }
