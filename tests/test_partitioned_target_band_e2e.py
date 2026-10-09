@@ -1492,6 +1492,19 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
         expected, _ = transport_image_flow_residual(measured, initial, innovation, noise_scale=1.7)
         torch.testing.assert_close(target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0)
     else:
+        assert receipt["handoff_noise"]["innovation_noise_scale"] == pytest.approx(1.7)
+        from h3_flow_regenerate.image_residual import refine_image_residual
+
+        innovation = deterministic_video_noise(
+            tuple(high_entry.shape),
+            seed=receipt["handoff_noise"]["innovation_seed"],
+            device=measured.device,
+            dtype=torch.float32,
+        )
+        expected, _ = refine_image_residual(measured, innovation * 1.7)
+        torch.testing.assert_close(
+            target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0
+        )
         # Independent whole-image projection, rather than reusing the transfer.
         basis = torch.eye(TARGET_HW[0] * TARGET_HW[1], dtype=torch.float64).reshape(-1, 1, *TARGET_HW)
         a = F.interpolate(basis, size=SOURCE_HW, mode="bicubic", align_corners=False, antialias=True).flatten(1).T
