@@ -1,10 +1,10 @@
 # 01770: high-stage redraw and image-grid residual coupling
 
-The owner reports continued frame shift and multi-frame darkening on6dd02eb.
+The owner reports continued frame shift and multi-frame darkening on 6dd02eb.
 The three audit reports share manifest
 `97673df5b3d604c5563d867bc24a024f1d3268487e4f260ce77ac9503e27dd20`.
 The half-pixel prefix/provider routing did execute; its sufficiency is rejected.
-Different prefix hashes between01768–01770 preclude matched causal conclusions.
+Different prefix hashes between 01768–01770 preclude matched causal conclusions.
 
 | Same-run measurement | Pre-high | First actual high before Flow | Final |
 | --- | ---: | ---: | ---: |
@@ -12,10 +12,10 @@ Different prefix hashes between01768–01770 preclude matched causal conclusions
 | Adjacent 175→176 RGB RMS | 0.03768 | 0.06786 | 0.06958 |
 | Frame181 mean luma | 0.32486 | 0.32159 | 0.32012 |
 
-Immediate Flow guidance raises frame181 luma to0.32303 and slightly reduces
+Immediate Flow guidance raises frame181 luma to 0.32303 and slightly reduces
 motion. The first actual native prediction already changes both; forecasts are
 not their sole origin. PT227 reports zero duplicate-overlap sampled pixel
-difference and unit gains for both the17-frame interior and five-frame context
+difference and unit gains for both the 17-frame interior and five-frame context
 tail. PT212 confirms assembled motion. Small same-frame provider/prefix fits
 (<0.08 target latent cells) weaken a pure uncompensated translation explanation.
 Source-grid decoded tone already varies; fixing high entry may not remove all
@@ -23,7 +23,7 @@ source-stage changes. These diagnostics locate onset, not a unique trained cause
 
 ## What changes
 
-The old uniform handoff takes the low clean prediction at sigma0.878 and builds
+The old uniform handoff takes the low clean prediction at sigma 0.878 and builds
 `(1-sigma)*provider(clean) + sigma*unrelated_noise`, discarding the measured
 low-state residual. The proposed correction retains the actual residual
 `r = (state - (1-sigma)*clean)/sigma`. It keeps reduced-grid low/probe, the
@@ -66,7 +66,7 @@ the selector set is corrected without changing provider invocation counts.
 
 ## Counterevidence and limits
 
-Earlier01150 residual transport still shifted with heterogeneous geometry and
+Earlier 01150 residual transport still shifted with heterogeneous geometry and
 frame gauge enabled. Residual consistency is not sufficient proof of visual
 continuity. Matching image coordinates, separating noise from deterministic
 content drift and retaining coarse modes remove specific defects; they do not
@@ -77,7 +77,7 @@ posterior. Source/target denoisers differ and the learned provider is nonlinear.
 The full-target single-pass comparison is preserved only on
 `checkpoint/pr99-native-single-pass-01770-20261009`; it is not the chosen fix or
 recommended workflow. It avoids the handoff but does not meet the progressive
-speed objective. All changes taken toPR99 keep reduced-grid low/probe.
+speed objective. All changes taken to PR99 keep reduced-grid low/probe.
 
 Refresh PR99 through ComfyUI Patcher and restart ComfyUI. Keep the existing
 uniform selector (including exact_context if already selected),
