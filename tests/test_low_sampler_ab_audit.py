@@ -202,6 +202,9 @@ def test_unqualified_aba_can_be_inspected_only_with_explicit_opt_in(source_pair,
     assert report["unqualified_diagnostic_only"] is True
     assert report["reproduction_errors"]["first_actual_prediction"]["exact"] is True
     assert report["reproduction_errors"]["clean_source_full"]["abs_max"] > 0.079
+    assert report["replay_A"] is not None
+    assert report["temporal_increment_delta_A_to_A_replay"] is not None
+    assert "upper45_full" not in report["replay_A"]["static_background_rois"]["regions"]
     assert report["same_frame_A_to_A_replay"] is not None
     assert report["same_frame_geometry_A_to_A_replay"] is not None
     assert report["decode"]["full_source_vae_calls"] == 3

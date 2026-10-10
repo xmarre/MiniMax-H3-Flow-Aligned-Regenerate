@@ -179,6 +179,11 @@ def audit_saved_low_aba(
         "reproduction_errors": replay_errors,
         "baseline_A": _variant_pixels(pixels_a, labels, join_frame, rois, feature_tracking_enabled),
         "candidate_B": _variant_pixels(pixels_b, labels, join_frame, rois, feature_tracking_enabled),
+        "replay_A": (
+            _variant_pixels(pixels_a_replay, labels, join_frame, rois, feature_tracking_enabled)
+            if pixels_a_replay is not None
+            else None
+        ),
         "same_frame_A_to_B": same,
         "same_frame_A_to_A_replay": replay_same,
         "same_frame_geometry": geometry_comparison(pixels_a, pixels_b, labels),
@@ -186,6 +191,9 @@ def audit_saved_low_aba(
             geometry_comparison(pixels_a, pixels_a_replay, labels) if pixels_a_replay is not None else None
         ),
         "temporal_increment_delta": _temporal_increment(pixels_a, pixels_b, labels),
+        "temporal_increment_delta_A_to_A_replay": (
+            _temporal_increment(pixels_a, pixels_a_replay, labels) if pixels_a_replay is not None else None
+        ),
         "decode": {
             "vae_class": f"{type(native).__module__}.{type(native).__qualname__}",
             "full_source_vae_calls": 2 + int(pixels_a_replay is not None),

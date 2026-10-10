@@ -134,3 +134,7 @@ reports an absent first actual prediction instead of treating a forecast
 as ground truth. A replay nondeterminism result is a diagnostic rejection,
 not an automatic geometry repair. Set `low_sampler_aba=false` and restart
 ComfyUI to return to the preceding production-shape path.
+
+
+For full AV first-divergence boundaries, bounded storage and replay limitations,
+see [Frozen low/probe replay trace](LOW_SAMPLER_FIRST_DIVERGENCE.md).

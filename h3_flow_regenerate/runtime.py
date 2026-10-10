@@ -29,6 +29,7 @@ from .handoff import (
     deterministic_video_noise,
     select_handoff_index,
 )
+from .low_sampler_trace import active_trace, backend_receipt
 from .metrics import H3FlowMetrics
 from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
 from .representation_bridge import (
@@ -425,6 +426,9 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
+    trace = active_trace()
+    if trace is not None:
+        trace.begin_prediction(guider, x, timestep, (model_options or {}).get("transformer_options", {}))
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
     if binding is None:
@@ -671,6 +675,21 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         )
     if boundary_trace is not None:
         boundary_trace.observe(result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+    if trace is not None:
+        if active is not None:
+            trace_phase, trace_outer = phase, outer
+        elif spectrum_active_step is not None:
+            _, trace_phase, trace_outer = spectrum_active_step
+        else:
+            trace_phase = str(transformer.get(SPECTRUM_PHASE_KEY, "model"))
+            trace_outer = int(transformer.get(SPECTRUM_OUTER_STEP_KEY, trace.evaluation))
+        trace.end_prediction(
+            result,
+            actual=actual,
+            phase=trace_phase,
+            outer=trace_outer,
+            backend=backend_receipt(guider, transformer),
+        )
     return result
 
 

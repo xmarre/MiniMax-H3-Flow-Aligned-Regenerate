@@ -67,6 +67,7 @@ from .high_stage_boundary import (
 )
 from .low_input_pairing import compare_low_input_pairing_receipts, make_low_input_pairing_receipt
 from .low_sampler_ab import LOW_SAMPLER_AB_KEY, capture_rng, compare_aba, counterfactual_low_inputs, frozen_rng
+from .low_sampler_trace import current_trace_owner, record_terminal, trace_stage, traced_partitioned
 from .metrics import H3FlowMetrics
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
@@ -3578,6 +3579,7 @@ def _run_frozen_source_low_aba(
         prefix_noise=low_plan.prefix_noise.detach().clone(),
     )
     outputs = {}
+    replay_trace = current_trace_owner()
     binding.metrics = diagnostic_metrics
     try:
         for label, latent, plan in (
@@ -3590,6 +3592,7 @@ def _run_frozen_source_low_aba(
                 ) as capture:
                     _reset_guider_conds(guider, template=conditioning_template)
                     with (
+                        trace_stage(replay_trace, label, "low", sampler, guider),
                         _flow_stage_contract(guider, "low"),
                         _partitioned_stage_contract(guider, plan, diagnostic_metrics),
                     ):
@@ -3599,19 +3602,23 @@ def _run_frozen_source_low_aba(
                             sampler,
                             low_sigmas,
                             low_mask,
-                            None,
+                            replay_trace.callback if replay_trace is not None else None,
                             disable_pbar,
                             seed,
                             latent_shapes=low_shapes,
                         )
+                    record_terminal(replay_trace, label, "low", "outer_return", shadow_low)
                     shadow_raw = _raw_sampler_state(base_model, shadow_low, low_shapes, sigma)
+                    record_terminal(replay_trace, label, "low", "raw_reconstruction", shadow_raw)
                     shadow_internal = _process_latent_in(base_model, latent, low_shapes)
                     shadow_probe_noise = _noise_argument(base_model, shadow_raw, sigma, shadow_internal)
+                    record_terminal(replay_trace, label, "low", "probe_noise", shadow_probe_noise)
                     previous_context = transformer.get(PROBE_CONTEXT_KEY)
                     transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
                     try:
                         _reset_guider_conds(guider, template=conditioning_template)
                         with (
+                            trace_stage(replay_trace, label, "probe", _make_probe_sampler(sampler), guider),
                             _flow_stage_contract(guider, "probe"),
                             _high_stage_contract(guider),
                             _partitioned_stage_contract(guider, plan, diagnostic_metrics),
@@ -3633,6 +3640,7 @@ def _run_frozen_source_low_aba(
                         else:
                             transformer[PROBE_CONTEXT_KEY] = previous_context
                     clean_internal = _process_latent_in(base_model, shadow_probe, low_shapes)
+                    record_terminal(replay_trace, label, "probe", "probe_clean", clean_internal)
                 run = capture.get("run")
                 actuals = (
                     [sample for sample in run.exact_samples() if sample.phase != "handoff_probe"]
@@ -3680,6 +3688,14 @@ def _run_frozen_source_low_aba(
     report["model_backend_selection_mutated"] = False
     report["sampler_A2_resumes_no_production_output"] = True
     report["physical_model_cache_isolation_unproven"] = True
+    if replay_trace is not None:
+        report["first_divergence_trace"] = replay_trace.summary()
+        trace_replay = report["first_divergence_trace"]["comparisons"]["A_replay"]
+        report["video_endpoint_reproduction_verified"] = report["reproduction_verified"]
+        report["reproduction_verified"] = bool(
+            report["reproduction_verified"] and trace_replay["reproduction_within_tolerance"]
+        )
+        report["causal_low_input_effect_qualified"] = report["reproduction_verified"]
     session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
     export = export_residual_geometry_evidence(
         {
@@ -3690,6 +3706,7 @@ def _run_frozen_source_low_aba(
             "first_actual_A": first_reference,
             "first_actual_B": b_first,
             "first_actual_A_replay": a_replay_first,
+            **(replay_trace.divergent_operands() if replay_trace is not None else {}),
         },
         session_id=session_id,
         chunk_id=chunk_id,
@@ -3707,6 +3724,7 @@ def _run_frozen_source_low_aba(
             "model_domain": "model_internal_clean",
             "decoded_media_required": True,
             "high_refinement_executed_inside_pair": False,
+            "first_divergence_trace": report.get("first_divergence_trace"),
         },
     )
     report["evidence"] = export
@@ -3715,6 +3733,7 @@ def _run_frozen_source_low_aba(
 
 
 @source_carry_scope()
+@traced_partitioned
 def run_partitioned_progressive(
     executor,
     guider,
@@ -4487,7 +4506,11 @@ def run_partitioned_progressive(
         or PARTITIONED_AUDIO_GUIDED_OVERLAP_MODE_KEY in model_options
     )
 
+    replay_trace = current_trace_owner()
+
     def low_callback(step, x0, x, _total):
+        if replay_trace is not None:
+            replay_trace.callback(step, x0, x, _total)
         if callback is None:
             return None
         if target_band is not None:
@@ -4521,6 +4544,7 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                trace_stage(replay_trace, "A", "low", sampler, guider),
                 _flow_stage_contract(guider, "low"),
                 _partitioned_stage_contract(
                     guider,
@@ -4551,13 +4575,16 @@ def run_partitioned_progressive(
             )
 
         base_model = guider.model_patcher.model
+        record_terminal(replay_trace, "A", "low", "outer_return", low_result)
         source_raw = _raw_sampler_state(base_model, low_result, low_shapes, sigma)
+        record_terminal(replay_trace, "A", "low", "raw_reconstruction", source_raw)
         source_latent_internal = _process_latent_in(base_model, low_latent_image, low_shapes)
         active = binding.active_capture
         if active is not None:
             active.phases = (*active.phases, (index, "handoff_probe"))
         probe_started = time.perf_counter()
         probe_noise = _noise_argument(base_model, source_raw, sigma, source_latent_internal)
+        record_terminal(replay_trace, "A", "low", "probe_noise", probe_noise)
         previous_probe = transformer.get(PROBE_CONTEXT_KEY)
         transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
         try:
@@ -4568,6 +4595,7 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_history_boundaries")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                trace_stage(replay_trace, "A", "probe", _make_probe_sampler(sampler), guider),
                 _flow_stage_contract(guider, "probe"),
                 _high_stage_contract(guider),
                 _partitioned_stage_contract(
@@ -4926,6 +4954,7 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        record_terminal(replay_trace, "A", "probe", "probe_clean", source_x0)
         if low_aba_enabled:
             if frozen_low_rng is None or committed_low_run is None:
                 raise RuntimeError("frozen low experiment lost its original low-stage RNG or captured trajectory")
