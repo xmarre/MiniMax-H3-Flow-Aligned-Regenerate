@@ -3,6 +3,7 @@
 Both arms use the *same saved generated source suffix*. The intervention replaces
 only the protected source-grid prefix; it never invokes a denoiser or a sampler.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -65,8 +66,10 @@ def make_prefix_counterfactual(source, target_prefix, prefix_t):
     if projected.shape != b[:, :, :prefix_t].shape or not bool(torch.isfinite(projected).all()):
         raise ValueError("bicubic authoritative prefix projection has invalid geometry or values")
     b[:, :, :prefix_t] = projected
+
     def bits(t):
         return t.contiguous().view(torch.int32)
+
     if not torch.equal(bits(a[:, :, prefix_t:]), bits(b[:, :, prefix_t:])):
         raise RuntimeError("generated source suffix changed during prefix counterfactual")
     if not torch.equal(bits(a), bits(source)) or not torch.equal(bits(target_prefix), bits(target_prefix.clone())):
@@ -106,13 +109,11 @@ def _temporal_increment(a, b, labels):
 
 def _variant_pixels(pixels, labels, join_frame, rois, feature_tracking):
     result = {
-        "static_background_rois": measure_stage_static_rois(
-            pixels, labels, join_frame=join_frame, rois=rois
-        ),
+        "static_background_rois": measure_stage_static_rois(pixels, labels, join_frame=join_frame, rois=rois),
         "adjacent_frame_geometry": geometry_comparison(pixels[:-1], pixels[1:], labels[1:]),
         "adjacent_frame_geometry_upper45": geometry_comparison(
-            pixels[:-1, :round(pixels.shape[1] * .45)],
-            pixels[1:, :round(pixels.shape[1] * .45)],
+            pixels[:-1, : round(pixels.shape[1] * 0.45)],
+            pixels[1:, : round(pixels.shape[1] * 0.45)],
             labels[1:],
         ),
     }
@@ -162,15 +163,17 @@ def audit_native_prefix_counterfactual(
     if (
         plan["head_t"] != plan["prefix_t"]
         or identity["source_prefix_projection_policy"] != "native_source_carry_v1"
-        or (expected_manifest_sha256 is not None
-            and identity["manifest_sha256"] != expected_manifest_sha256)
+        or (expected_manifest_sha256 is not None and identity["manifest_sha256"] != expected_manifest_sha256)
     ):
         raise ValueError("counterfactual requires a hash-matched uniform native_source_carry_v1 bundle")
 
     import os
-    directory = Path(normalize_bundle_path(
-        bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME")
-    )).expanduser().resolve()
+
+    directory = (
+        Path(normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME")))
+        .expanduser()
+        .resolve()
+    )
     if directory.name == "manifest.json":
         directory = directory.parent
     raw_manifest = (directory / "manifest.json").read_bytes()
@@ -189,15 +192,14 @@ def audit_native_prefix_counterfactual(
     if tuple(source.shape) != (1, 24, plan["temporal"], *manifest["metadata"]["source_probe_clean_grid"]):
         raise ValueError("captured source timeline or spatial shape changed")
     if not torch.equal(
-        source[:, :, plan["token_start"]:plan["token_stop"]].contiguous().view(torch.int32),
+        source[:, :, plan["token_start"] : plan["token_stop"]].contiguous().view(torch.int32),
         stages["source_grid"].contiguous().view(torch.int32),
     ):
         raise ValueError("source replay baseline does not match verified Local Boundary Audit bytes")
     prefix_t = plan["prefix_t"]
-    if (
-        target.shape[2] != prefix_t
-        or (expected_manifest_sha256 == CAPTURE_01795_MANIFEST_SHA256
-            and video_latent_fingerprint(target)["sha256_float32"] != CAPTURE_01795_PREFIX_SHA256)
+    if target.shape[2] != prefix_t or (
+        expected_manifest_sha256 == CAPTURE_01795_MANIFEST_SHA256
+        and video_latent_fingerprint(target)["sha256_float32"] != CAPTURE_01795_PREFIX_SHA256
     ):
         raise ValueError("authoritative target prefix does not match the selected capture")
     original_source = video_latent_fingerprint(source)
@@ -211,8 +213,9 @@ def audit_native_prefix_counterfactual(
     if not suffix_bitwise:
         raise RuntimeError("source suffix differs before VAE decoding")
     changed_prefix_elements = int(
-        (a[:, :, :prefix_t].contiguous().view(torch.int32)
-         != b[:, :, :prefix_t].contiguous().view(torch.int32)).sum().item()
+        (a[:, :, :prefix_t].contiguous().view(torch.int32) != b[:, :, :prefix_t].contiguous().view(torch.int32))
+        .sum()
+        .item()
     )
     start, end = plan["measured_local_frames"]
     labels = list(range(plan["decoded_origin_frame"] + start - 1, plan["decoded_origin_frame"] + end))
@@ -222,25 +225,28 @@ def audit_native_prefix_counterfactual(
     baseline, t_a = _native_pixels(vae, a, process_out, full_origin, labels)
     counterfactual, t_b = _native_pixels(vae, b, process_out, full_origin, labels)
     cropped, t_crop = _native_pixels(
-        vae, source[:, :, plan["token_start"]:plan["token_stop"]],
-        process_out, plan["decoded_origin_frame"], labels
+        vae, source[:, :, plan["token_start"] : plan["token_stop"]], process_out, plan["decoded_origin_frame"], labels
     )
     if (
         video_latent_fingerprint(source) != original_source
         or video_latent_fingerprint(target) != original_target
-        or not torch.equal(a[:, :, prefix_t:].contiguous().view(torch.int32),
-                            b[:, :, prefix_t:].contiguous().view(torch.int32))
+        or not torch.equal(
+            a[:, :, prefix_t:].contiguous().view(torch.int32), b[:, :, prefix_t:].contiguous().view(torch.int32)
+        )
     ):
         raise RuntimeError("captured source, target or generated suffix mutated during decoding")
     full_rois = {**rois, "upper45_full": (0.0, 0.0, 1.0, 0.45)}
     same_frame = compare_same_frame_prefix_rois(baseline, counterfactual, labels, rois=full_rois)
     cropped_control = compare_same_frame_prefix_rois(cropped, baseline, labels, rois=full_rois)
     results = {
-        "policy": POLICY, "schema": 1,
+        "policy": POLICY,
+        "schema": 1,
         "identity": {
-            **identity, "source_latent_fingerprint": original_source,
+            **identity,
+            "source_latent_fingerprint": original_source,
             "authoritative_prefix_fingerprint": original_target,
-            "source_shape": list(source.shape), "target_prefix_shape": list(target.shape),
+            "source_shape": list(source.shape),
+            "target_prefix_shape": list(target.shape),
             "source_model_domain": "model_internal_clean",
             "target_model_domain": "model_internal_clean",
             "projection": "source_grid_half_pixel_bicubic_align_corners_false",
@@ -268,8 +274,8 @@ def audit_native_prefix_counterfactual(
         "same_frame_A_to_B": same_frame,
         "same_frame_geometry": geometry_comparison(baseline, counterfactual, labels),
         "same_frame_geometry_upper45": geometry_comparison(
-            baseline[:, :round(baseline.shape[1] * .45)],
-            counterfactual[:, :round(counterfactual.shape[1] * .45)],
+            baseline[:, : round(baseline.shape[1] * 0.45)],
+            counterfactual[:, : round(counterfactual.shape[1] * 0.45)],
             labels,
         ),
         "temporal_increment_delta": _temporal_increment(baseline, counterfactual, labels),
@@ -278,12 +284,17 @@ def audit_native_prefix_counterfactual(
             "dtype": str(getattr(vae, "vae_dtype", "unknown")),
             "device": str(getattr(vae, "device", "unknown")),
             "weights": "connected production VAE; record the checkpoint name separately",
-            "full_native_decode_calls": 2, "cropped_native_decode_controls": 1,
-            "extra_vae_calls": 3, "extra_vae_encode_calls": 0, "extra_h3_nfe": 0,
+            "full_native_decode_calls": 2,
+            "cropped_native_decode_controls": 1,
+            "extra_vae_calls": 3,
+            "extra_vae_encode_calls": 0,
+            "extra_h3_nfe": 0,
             "decode_elapsed_ms": {"baseline_full": t_a, "counterfactual_full": t_b, "baseline_cropped": t_crop},
         },
-        "production_sampling_rerun": False, "production_output_modified": False,
-        "decoder_only": True, "audio_state_supplied": False,
+        "production_sampling_rerun": False,
+        "production_output_modified": False,
+        "decoder_only": True,
+        "audio_state_supplied": False,
         "rendered_acceptance": False,
         "limitations": [
             "Replacing the prefix changes the f174 anchor; f174-relative scale is confounded.",
@@ -310,10 +321,13 @@ class H3NativePrefixCounterfactual:
                 "static_roi_profile": (list(PROFILES), {"default": "01784_room"}),
                 "static_roi_json": ("STRING", {"default": "", "multiline": True}),
                 "feature_tracking_enabled": ("BOOLEAN", {"default": True}),
-                "expected_manifest_sha256": ("STRING", {
-                    "default": CAPTURE_01795_MANIFEST_SHA256,
-                    "tooltip": "Exact 01795 capture hash. Clear to explicitly inspect another native carry capture.",
-                }),
+                "expected_manifest_sha256": (
+                    "STRING",
+                    {
+                        "default": CAPTURE_01795_MANIFEST_SHA256,
+                        "tooltip": "Exact 01795 capture hash. Clear to explicitly inspect another native carry capture.",
+                    },
+                ),
             },
         }
 
@@ -330,8 +344,13 @@ class H3NativePrefixCounterfactual:
         return float("nan")
 
     def audit(
-        self, video_vae, bundle_path, chunk_join_frame, static_roi_profile="01784_room",
-        static_roi_json="", feature_tracking_enabled=True,
+        self,
+        video_vae,
+        bundle_path,
+        chunk_join_frame,
+        static_roi_profile="01784_room",
+        static_roi_json="",
+        feature_tracking_enabled=True,
         expected_manifest_sha256=CAPTURE_01795_MANIFEST_SHA256,
     ):
         _AUDIT_MODEL_OWNERS.retain()
@@ -339,8 +358,12 @@ class H3NativePrefixCounterfactual:
         from comfy.latent_formats import MiniMaxH3Video
 
         report = audit_native_prefix_counterfactual(
-            video_vae, bundle_path, chunk_join_frame, MiniMaxH3Video().process_out,
-            static_roi_profile=static_roi_profile, static_roi_json=static_roi_json,
+            video_vae,
+            bundle_path,
+            chunk_join_frame,
+            MiniMaxH3Video().process_out,
+            static_roi_profile=static_roi_profile,
+            static_roi_json=static_roi_json,
             feature_tracking_enabled=feature_tracking_enabled,
             expected_manifest_sha256=expected_manifest_sha256 or None,
         )
@@ -348,14 +371,16 @@ class H3NativePrefixCounterfactual:
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
         directory.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", prefix="native-prefix-counterfactual-",
-            suffix=".json", dir=directory, delete=False
+            mode="w",
+            encoding="utf-8",
+            prefix="native-prefix-counterfactual-",
+            suffix=".json",
+            dir=directory,
+            delete=False,
         ) as stream:
             stream.write(output + "\n")
         return {"ui": {"text": [output, f"Numerical report: {Path(stream.name).name}"]}, "result": (output,)}
 
 
 NODE_CLASS_MAPPINGS = {"H3NativePrefixCounterfactual": H3NativePrefixCounterfactual}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3NativePrefixCounterfactual": "MiniMax H3 Native Prefix Counterfactual"
-}
+NODE_DISPLAY_NAME_MAPPINGS = {"H3NativePrefixCounterfactual": "MiniMax H3 Native Prefix Counterfactual"}
