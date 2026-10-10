@@ -203,6 +203,13 @@ def measure_stage_static_rois(
         disp = _phase_displacement(base, post)
         prior_shift = _phase_displacement(prev, base)
         pretrend_ratio = e1 / max(e0, 1e-12)
+        # Excess-over-pretrend has no meaningful denominator if either
+        # preceding Sobel energy vanishes. Do not fabricate a large or zero
+        # sharpness ratio from the epsilon used for display-only ratios.
+        excess_over_pretrend = post_ratio / pretrend_ratio if min(e0, e1) > 1e-12 else None
+        common_pretrend_ratio = ce1 / max(ce0, 1e-12)
+        common_post_ratio = ce2 / max(ce1, 1e-12)
+        common_excess = common_post_ratio / common_pretrend_ratio if min(ce0, ce1) > 1e-12 else None
         verified_pre = bool(
             prior_shift.get("status") == "measured"
             and max(abs(prior_shift["dx_px"]), abs(prior_shift["dy_px"])) <= 0.75
@@ -221,11 +228,11 @@ def measure_stage_static_rois(
             "sobel_energy_by_frame": {str(start): e0, str(before): e1, str(after): e2},
             "sharpness_post_over_pre": post_ratio,
             "sharpness_pretrend_ratio": pretrend_ratio,
-            "sharpness_excess_over_pretrend": post_ratio / pretrend_ratio,
+            "sharpness_excess_over_pretrend": excess_over_pretrend,
             "common_grid_hw": list(common_base.shape),
             "common_grid_sobel_energy_by_frame": {str(start): ce0, str(before): ce1, str(after): ce2},
-            "common_grid_sharpness_post_over_pre": ce2 / max(ce1, 1e-12),
-            "common_grid_sharpness_excess_over_pretrend": (ce2 / max(ce1, 1e-12)) / (ce1 / max(ce0, 1e-12)),
+            "common_grid_sharpness_post_over_pre": common_post_ratio,
+            "common_grid_sharpness_excess_over_pretrend": common_excess,
             "verified_pre_join_static": verified_pre,
             "mean_luma_delta": float((post - base).mean().item()),
             "displacement": disp,
