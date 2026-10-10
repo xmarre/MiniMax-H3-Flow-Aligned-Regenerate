@@ -409,11 +409,91 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
         state = extended["stages"]["source_grid"]
         assert state["state_role"] == "uniform_source_with_previous_native_clean_prediction_head"
         assert state["native_reduced_grid_generation_for_head"] is True
+        paired = extended["source_target_prefix_context"]
+        assert extended["extra_vae_calls"] == 18
+        assert paired["frame_labels"] == list(range(170, 175))
+        assert paired["token_contexts"] == [[5, 12], [10, 17]]
+        assert paired["preceding_window_contains_generated_suffix"] is False
+        assert paired["following_window_contains_generated_suffix"] is True
+        assert paired["extra_vae_calls"] == 0
+        assert paired["reuses_existing_window_decodes"] is True
     if projection_policy in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1"):
         metadata["source_prefix_projection"]["projected_prefix"]["sha256_float32"] = "0" * 64
         (directory / "manifest.json").write_text(json.dumps(manifest))
         with pytest.raises(ValueError, match="projection receipt"):
             audit.load_replay_operands(directory, 175, include_source=True)
+
+
+@pytest.mark.parametrize("prefix_t", [2, 12])
+def test_native_prefix_pair_separates_owned_state_from_future_decoder_context(source_bundle, monkeypatch, prefix_t):
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+    directory, manifest, source = source_bundle
+    entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
+    prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+    prefix = prefix.reshape(entry["shape"])[:, :, :prefix_t]
+    write_operand(directory, manifest, "authoritative_prefix_full", prefix)
+    mask = torch.ones(1, 24, 22, *prefix.shape[-2:])
+    mask[:, :, :prefix_t] = 0
+    write_operand(directory, manifest, "initial_high_video_mask_full", mask)
+    source = source.clone()
+    source[:, :, :prefix_t] = audit.resize_spatial_5d(prefix, 2, 4, mode="bicubic") + 0.04
+    metadata = manifest["metadata"]
+    metadata.update(
+        spatial_stage_control="progressive_uniform_source",
+        provider_clean_provenance="actual_learned_provider_uniform_source",
+        target_band_tokens=0,
+        target_band_transfer_start_t=prefix_t,
+        low_probe_native_carrier_layout="uniform_source",
+        low_probe_native_carrier_decodable=True,
+        source_prefix_projection_policy="native_source_carry_v1",
+        source_prefix_projection={
+            "policy": "native_source_carry_v1",
+            "prefix_t": prefix_t,
+            "authoritative_prefix": video_latent_fingerprint(prefix),
+            "projected_prefix": video_latent_fingerprint(source[:, :, :prefix_t]),
+        },
+    )
+    metadata["window"].update(prefix_t=prefix_t, decoded_trim_frames=5 if prefix_t == 2 else 39)
+    write_operand(directory, manifest, "source_probe_clean_full", source)
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class ContextVAE(FakeVAE):
+        def decode(self, value):
+            # Future tokens affect decoded past pixels, independently of whether
+            # the two owned prefix states agree. No learned-quality claim.
+            return super().decode(value) + value.mean()
+
+    originals = {p.name: p.read_bytes() for p in directory.iterdir()}
+    rng = torch.random.get_rng_state().clone()
+    vae = ContextVAE()
+    baseline = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="transfer_and_decoder_context")
+    assert baseline["extra_vae_calls"] == len(vae.inputs) == 18
+    assert originals == {p.name: p.read_bytes() for p in directory.iterdir()}
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    if prefix_t == 2:
+        # A two-token prefix has no standalone seven-token preceding window.
+        assert "source_target_prefix_context" not in baseline
+        return
+    pairs = baseline["source_target_prefix_context"]["comparisons"]
+    expected_bias = float(prefix[:, :, 5:12].mean() - source[:, :, 5:12].mean())
+    assert expected_bias < -0.03
+    assert pairs["source_to_target_without_future"]["luma_mean_change"] == pytest.approx([expected_bias] * 5, abs=1e-6)
+    source[:, :, prefix_t:] += 0.07
+    write_operand(directory, manifest, "source_probe_clean_full", source)
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    vae = ContextVAE()
+    changed = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="transfer_and_decoder_context")
+    assert changed["extra_vae_calls"] == len(vae.inputs) == 18
+    later = changed["source_target_prefix_context"]["comparisons"]
+    assert later["source_to_target_without_future"] == pairs["source_to_target_without_future"]
+    assert (
+        later["source_future_context_change"]["rgb_difference_rms"]
+        != pairs["source_future_context_change"]["rgb_difference_rms"]
+    )
+    assert later["target_future_context_change"] == pairs["target_future_context_change"]
+    assert torch.equal(torch.random.get_rng_state(), rng)
 
 
 @pytest.mark.parametrize("policy", ["unknown", "half_pixel_latent_v1"])

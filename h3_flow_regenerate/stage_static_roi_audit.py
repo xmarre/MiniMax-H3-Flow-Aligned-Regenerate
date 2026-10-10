@@ -374,6 +374,75 @@ def compare_same_frame_stage_rois(
     }
 
 
+def compare_same_frame_prefix_rois(reference, candidate, frame_labels, *, rois):
+    """Absolute paired context residuals on common normalized image coordinates.
+
+    Unlike stage sharpness trends, these measurements do not normalize away a
+    pre-existing source/target prefix mismatch. Area reduction never upsamples
+    either context. No registration, correction or quality threshold is applied.
+    """
+    if (
+        reference.ndim != 4
+        or candidate.ndim != 4
+        or reference.shape[0] != candidate.shape[0]
+        or len(frame_labels) != len(reference)
+        or not frame_labels
+        or len(set(frame_labels)) != len(frame_labels)
+        or min(*reference.shape[1:3], *candidate.shape[1:3]) < 8
+        or reference.shape[-1] < 3
+        or candidate.shape[-1] < 3
+    ):
+        raise ValueError("prefix comparison requires equally indexed RGB contexts and unique frame labels")
+    common_hw = [min(reference.shape[i], candidate.shape[i]) for i in (1, 2)]
+    reduction = min(1.0, 704 / max(common_hw))
+    common_hw = tuple(max(8, round(n * reduction)) for n in common_hw)
+
+    def projected(frames):
+        rgb = frames[..., :3].detach().to(device="cpu", dtype=torch.float32)
+        if not bool(torch.isfinite(rgb).all()):
+            raise ValueError("prefix comparison requires finite decoded pixels")
+        if tuple(rgb.shape[1:3]) != common_hw:
+            rgb = F.interpolate(rgb.permute(0, 3, 1, 2), size=common_hw, mode="area").permute(0, 2, 3, 1)
+        return rgb
+
+    a, b = projected(reference), projected(candidate)
+    delta = b - a
+    a_luma, b_luma = (rgb @ rgb.new_tensor(_LUMA) for rgb in (a, b))
+    regions = {}
+    for name, rect in rois.items():
+        series = {}
+        for i, label in enumerate(frame_labels):
+            left, right = _crop(a_luma[i], rect), _crop(b_luma[i], rect)
+            residual = right - left
+            bias = residual.mean()
+            e0, e1 = _gradient_energy(left), _gradient_energy(right)
+            series[str(label)] = {
+                "luma_difference_rms": float(residual.square().mean().sqrt().item()),
+                "luma_mean_change": float(bias.item()),
+                "centered_luma_difference_rms": float((residual - bias).square().mean().sqrt().item()),
+                "same_time_luma_ncc": _luma_structure_ncc(left, right),
+                "same_time_sobel_structure_cosine": _sobel_structure_cosine(left, right),
+                "candidate_over_reference_sobel": e1 / max(e0, 1e-12),
+                "same_time_displacement": _phase_displacement(left, right),
+            }
+        regions[name] = {"fractional_bounds_xyxy": list(rect), "same_frame_measurements": series}
+    return {
+        "policy": "h3_same_frame_prefix_context_v1",
+        "frame_labels": list(frame_labels),
+        "common_canvas_hw": list(common_hw),
+        "coordinate_domain": "normalized_image_coordinates",
+        "resampling": "area_reduction_without_upsampling",
+        "registration": "none_co_located_pixels",
+        "normalized_on_prefix": False,
+        "fit_is_diagnostic_not_causal_proof": True,
+        "rgb_difference_rms": delta.square().mean((1, 2, 3)).sqrt().tolist(),
+        "luma_mean_change": (b_luma - a_luma).mean((1, 2)).tolist(),
+        "regions": regions,
+        "extra_vae_calls": 0,
+        "production_modified": False,
+    }
+
+
 def _per_frame_trajectory(
     frames: torch.Tensor,
     frame_labels: list[int],

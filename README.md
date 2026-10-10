@@ -27,7 +27,7 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
 - [`prefix-projection-ab.workflow.json`](workflows/examples/prefix-projection-ab.workflow.json) — VAE-only paired source-prefix reconstruction on an existing uniform-source witness, with three aligned PNG frame sequences saved under `output/h3_flow_regenerate/prefix_projection_audits/`; see [exact setup, context controls and acceptance](docs/PREFIX_PROJECTION_AB.md). No H3 sampling or production setting changes;
-- **Source-prefix continuation experiment:** the Partitioned Exact-Prefix Handoff has `source_prefix_projection=latent_bicubic|vae_rgb_roundtrip` and an optional `video_vae` input. Default is latent bicubic. The roundtrip mode processes only the carried prefix once before low sampling; use the generation's native video VAE and a uniform-source spatial stage. [Controlled continuation A/B and limitations](docs/PREFIX_PROJECTION_AB.md#controlled-continuation-ab).
+- **Source-prefix continuation experiment:** the Partitioned Exact-Prefix Handoff has `source_prefix_projection=latent_bicubic|vae_rgb_roundtrip|native_source_carry` and an optional `video_vae` input. Default is latent bicubic. The roundtrip mode processes only the carried prefix once before low sampling; use the generation's native video VAE and a uniform-source spatial stage. [Controlled continuation A/B and limitations](docs/PREFIX_PROJECTION_AB.md#controlled-continuation-ab).
 - **Native source carry experiment:** select `source_prefix_projection=native_source_carry` to reuse the preceding chunk's actual low/probe clean prediction as protected source context. Requires a full sequence with the same patched MODEL and exact target-suffix pairing; adds no H3/VAE calls. [Setup, ownership and limitations](docs/NATIVE_SOURCE_PREFIX_CARRY.md).
 
 - [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget recommended profile (`progressive_uniform_source`, exact audio/video ownership, `main_then_shadow`, `frame_gauge_repair=false`, `suffix_dc_bridge=false`, the unused target-band width, and the current overlap/provenance values);
@@ -668,9 +668,10 @@ correction remains owned by Continuum PR #42 and is separate.
 Set `audit_scope=transfer_and_decoder_context` for the extended replay. It adds
 the saved uniform reduced-grid handoff view and compares identical pixel times
 from two independently decoded seven-token contexts near the band/tail edge for
-each stage. The reduced view contains a projected target-grid head and a native
-reduced-grid tail; it
-does not represent uniform reduced-grid generation of the head. Its geometry
+each stage. The reduced view contains the saved source prefix and native
+reduced-grid tail. Bicubic and VAE roundtrip prefixes reconstruct target context;
+`native_source_carry` uses the preceding chunk's actual source clean prediction.
+Its geometry
 uses its own decoded pixel units, reported alongside the canvas dimensions.
 The loader verifies its hash, exact tail ownership and the head projection
 within float32 interpolation tolerance (`atol=1e-4`, `rtol=1e-5`).
@@ -685,6 +686,11 @@ the default `stage_continuity` mode uses five calls. Both modes save numerical
 JSON only and perform no diffusion generation or provider inference. Geometry
 estimates and context disagreement still require comparison with visually
 accepted output; they are not automatic defect classifications.
+
+Uniform-source prefixes of at least seven tokens also receive an absolute
+source/target prefix comparison, separating the preceding standalone window
+from the following window with generated future context. This reuses existing
+decodes and adds no VAE calls. See [paired prefix replay and interpretation](docs/NATIVE_SOURCE_PREFIX_CARRY.md#compare-paired-prefix-states-without-regenerating).
 
 **Decoder-context equivalence check (optional, expensive):**
 Set `validate_full_video_decoder=true` on the **MiniMax H3 Local Boundary Audit**

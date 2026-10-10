@@ -6,6 +6,11 @@ its refined target output. It tests whether changing representations between
 chunks contributes to background drift and detail loss. It is an experimental
 input policy, not an established quality fix.
 
+The first trained-GPU continuation evaluation executed the carry contract but
+retained background expansion and detail loss. Carry mode has not passed rendered
+acceptance. Exact ownership pairing does not establish that the source prediction
+and refined target depict the same conditioning context.
+
 ## Patcher workflow
 
 1. Refresh Flow PR #99 through ComfyUI Patcher and restart ComfyUI.
@@ -99,6 +104,42 @@ receipt and uses the actual captured source state. Its geometry fits are
 stage-specific image measurements, not additive causal transforms. Compare
 source, provider, pre-high, first-high and final results with their fit support,
 then inspect the rendered outputs.
+
+### Compare paired prefix states without regenerating
+
+Refresh the PR overlay and replay the saved carry bundle through **MiniMax H3
+Local Boundary Audit**, using the production video VAE and
+`audit_scope=transfer_and_decoder_context`. Keep the original `join_frame` and
+select the applicable static ROI profile. Sampling is unnecessary.
+
+For a uniform-source prefix of at least seven tokens, the report adds
+`source_target_prefix_context`. It reuses the two standalone decoder windows
+already evaluated for source and final stages, so the audit's VAE call count is
+unchanged. The preceding window ends at the protected prefix; the following
+window includes generated suffix tokens. Both describe the same last five
+prefix pixel times. A two-token prefix cannot supply a complete preceding
+seven-token window, so this comparison is omitted.
+
+The four comparisons measure:
+
+- `source_to_target_without_future`: preceding source-clean and returned-target
+  suffix contexts, excluding the new generated suffix;
+- `source_to_target_with_future`: those same pixel times in following contexts;
+- `source_future_context_change`: source pixels changing between the two windows;
+- `target_future_context_change`: target pixels changing between the two windows.
+
+RGB residuals and ROI luminance bias, centered residuals, structure correlations,
+gradient ratios and displacement estimates use a common image canvas of at most
+704 pixels per side. Area reduction never upsamples either context. These are
+absolute paired measurements: prefix normalization and registration do not hide
+an existing mismatch. Coordinates are normalized image coordinates, not a
+calibrated camera transform. ROI occlusion, texture changes and near-constant
+patches can make correlations or displacement estimates unreliable.
+
+This separates a measured state discrepancy from decoder sensitivity to future
+context. It does not prove which caused the generated-suffix drift. Standalone
+pixels are finalized and clamped; production blends before clamping. The audit
+does not reassemble or correct production frames.
 
 CPU tests cover initial capture, exact suffix pairing, native phase, sequence
 lineage, bounded replacement, failure rollback and concurrent-owner rejection.

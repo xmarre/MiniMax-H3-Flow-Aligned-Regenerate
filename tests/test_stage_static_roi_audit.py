@@ -8,10 +8,48 @@ import torch.nn.functional as F
 
 from h3_flow_regenerate.stage_static_roi_audit import (
     _phase_displacement,
+    compare_same_frame_prefix_rois,
     compare_same_frame_stage_rois,
     measure_stage_static_rois,
     parse_static_rois,
 )
+
+
+def test_absolute_prefix_residual_does_not_normalize_away_existing_tone_mismatch():
+    reference = _video()[:5]
+    candidate = reference + 0.04
+    before = candidate.clone()
+    labels = list(range(170, 175))
+    result = compare_same_frame_prefix_rois(reference, candidate, labels, rois={"books": (0.02, 0.10, 0.31, 0.71)})
+    assert result["normalized_on_prefix"] is False
+    assert result["rgb_difference_rms"] == pytest.approx([0.04] * 5, abs=1e-6)
+    for row in result["regions"]["books"]["same_frame_measurements"].values():
+        assert row["luma_mean_change"] == pytest.approx(0.04, abs=1e-6)
+        assert row["centered_luma_difference_rms"] < 1e-6
+        assert row["same_time_luma_ncc"] == pytest.approx(1.0, abs=1e-6)
+    assert torch.equal(candidate, before)
+
+
+def test_absolute_prefix_residual_separates_structure_change_from_tone():
+    reference = _video()[:5]
+    candidate = torch.roll(reference, shifts=7, dims=2)
+    result = compare_same_frame_prefix_rois(
+        reference, candidate, list(range(170, 175)), rois={"texture": (0.0, 0.0, 1.0, 1.0)}
+    )
+    assert max(abs(v) for v in result["luma_mean_change"]) < 1e-6
+    row = result["regions"]["texture"]["same_frame_measurements"]["174"]
+    assert row["centered_luma_difference_rms"] > 0.05
+    assert row["same_time_luma_ncc"] < 0.5
+
+
+def test_prefix_pair_downsamples_to_shared_canvas_without_upsampling():
+    reference = _video(height=100, width=120)[:5]
+    candidate = reference.repeat_interleave(2, 1).repeat_interleave(2, 2)
+    result = compare_same_frame_prefix_rois(reference, candidate, list(range(5)), rois={})
+    assert result["common_canvas_hw"] == [100, 120]
+    assert result["rgb_difference_rms"] == [0.0] * 5
+    with pytest.raises(ValueError, match="unique frame labels"):
+        compare_same_frame_prefix_rois(reference, candidate, [0] * 5, rois={})
 
 
 def _video(*, blur_after=False, stage_change=False, height=160, width=200):

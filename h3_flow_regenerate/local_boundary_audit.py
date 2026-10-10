@@ -24,6 +24,7 @@ from .stage_static_roi_audit import (
     PROFILES as STATIC_ROI_PROFILES,
 )
 from .stage_static_roi_audit import (
+    compare_same_frame_prefix_rois,
     compare_same_frame_stage_rois,
     measure_stage_static_rois,
     parse_static_rois,
@@ -584,6 +585,11 @@ def _detail_pair(reference, candidate, labels, region, *, previous=None):
 
 
 def measure_window_context(vae, latent, process_out, plan, *, detail_region="off"):
+    """Compare identical pixel times from two standalone seven-token contexts."""
+    return _measure_window_context(vae, latent, process_out, plan, detail_region=detail_region)[0]
+
+
+def _measure_window_context(vae, latent, process_out, plan, *, detail_region="off"):
     """Compare identical pixel times from two standalone seven-token contexts.
 
     These are finalized/clamped standalone pixels. Native production blending
@@ -618,7 +624,7 @@ def measure_window_context(vae, latent, process_out, plan, *, detail_region="off
     }
     if detail_region != "off":
         result["detail_region"] = _detail_pair(left, right, labels, detail_region)
-    return result
+    return result, (left, right)
 
 
 def audit_local_boundary(
@@ -696,6 +702,7 @@ def audit_local_boundary(
         "comparisons": {},
     }
     pixels = {}
+    prefix_windows = {}
     for name, latent in stages.items():
         LOG.info("H3 local boundary audit: decoding %s through the native temporal windows", name)
         decoded = _decode_owned_pixels(vae, latent, process_out, plan["decoded_frames"])
@@ -749,10 +756,51 @@ def audit_local_boundary(
             report["stages"][name]["native_reduced_grid_generation_for_head"] = carried
         if extended:
             LOG.info("H3 local boundary audit: comparing decoder contexts of %s", name)
-            report["stages"][name]["window_context"] = measure_window_context(
+            window_report, window_pixels = _measure_window_context(
                 vae, latent, process_out, plan, detail_region=detail_region
             )
+            report["stages"][name]["window_context"] = window_report
+            # In uniform-source replay this preceding window ends at the
+            # protected-prefix boundary. Reuse its standalone pixels to separate
+            # source/target state mismatch from newly generated future context.
+            if plan["head_t"] == plan["prefix_t"] and plan["prefix_t"] >= 7 and name in ("source_grid", "final"):
+                prefix_windows[name] = window_pixels
+            del window_pixels
             report["extra_vae_calls"] += 2
+    if prefix_windows:
+        source_left, source_right = prefix_windows["source_grid"]
+        target_left, target_right = prefix_windows["final"]
+        source_context = report["stages"]["source_grid"]["window_context"]
+        target_context = report["stages"]["final"]["window_context"]
+        if source_context["frame_labels"] != target_context["frame_labels"]:
+            raise ValueError("source and target prefix decoder windows have different pixel times")
+        context_labels = source_context["frame_labels"]
+        report["source_target_prefix_context"] = {
+            "policy": "h3_source_target_prefix_context_v1",
+            "source_prefix_projection_policy": identity["source_prefix_projection_policy"],
+            "source_role": report["stages"]["source_grid"]["state_role"],
+            "target_role": "authoritative_returned_target_suffix",
+            "token_contexts": source_context["token_contexts"],
+            "frame_labels": context_labels,
+            "preceding_window_contains_generated_suffix": False,
+            "following_window_contains_generated_suffix": True,
+            "standalone_pixels_used_to_reassemble_output": False,
+            "production_blends_before_pixel_clamp": True,
+            "reuses_existing_window_decodes": True,
+            "extra_vae_calls": 0,
+            "production_modified": False,
+            "comparisons": {
+                name: compare_same_frame_prefix_rois(a, b, context_labels, rois=static_rois)
+                for name, a, b in (
+                    ("source_to_target_without_future", source_left, target_left),
+                    ("source_to_target_with_future", source_right, target_right),
+                    ("source_future_context_change", source_left, source_right),
+                    ("target_future_context_change", target_left, target_right),
+                )
+            },
+        }
+        del source_left, source_right, target_left, target_right
+        prefix_windows.clear()
     pairs = [
         ("provider", "pre_high"),
         ("pre_high", "first_high_before_flow"),
