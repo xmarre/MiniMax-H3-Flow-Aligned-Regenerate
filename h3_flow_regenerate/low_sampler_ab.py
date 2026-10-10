@@ -32,7 +32,12 @@ def capture_rng() -> FrozenRNG:
     import numpy as np
 
     cuda = tuple(t.clone() for t in torch.cuda.get_rng_state_all()) if torch.cuda.is_initialized() else None
-    return FrozenRNG(copy.deepcopy(random.getstate()), copy.deepcopy(np.random.get_state()), torch.get_rng_state().clone(), cuda)
+    return FrozenRNG(
+        copy.deepcopy(random.getstate()),
+        copy.deepcopy(np.random.get_state()),
+        torch.get_rng_state().clone(),
+        cuda,
+    )
 
 
 def restore_rng(saved: FrozenRNG) -> None:
