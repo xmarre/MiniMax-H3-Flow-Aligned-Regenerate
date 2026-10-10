@@ -109,7 +109,7 @@ then inspect the rendered outputs.
 
 Refresh the PR overlay and replay the saved carry bundle through **MiniMax H3
 Local Boundary Audit**, using the production video VAE and
-`audit_scope=transfer_and_decoder_context`. Keep the original `join_frame` and
+`audit_scope=transfer_and_decoder_context`. Keep the original `chunk_join_frame` and
 select the applicable static ROI profile. Sampling is unnecessary.
 
 For a uniform-source prefix of at least seven tokens, the report adds
