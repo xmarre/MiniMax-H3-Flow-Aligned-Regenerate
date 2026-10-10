@@ -15,7 +15,7 @@ accepted continuation correction.
    separate small workflow.
 3. Connect the **same native H3 video VAE** used for the captured generation to
    `video_vae`. The example selects `minimax_h3_video_vae_int8_convrot.safetensors`
-   from the reported run; select your actual checkpoint if different.
+   as an example; select the checkpoint used for your generation.
    A preview VAE, audio VAE or decoder-only replacement cannot run
    this encode/decode experiment.
 4. Set `bundle_path` to the existing uniform-source boundary bundle directory
@@ -127,14 +127,64 @@ highpass correspondence, changed structures/pose, new motion, increased end-fram
 error or temporal instability rejects the roundtrip as a continuation input.
 Report tradeoffs rather than averaging a damaged region into full-frame gains.
 
-There is deliberately no automatic numerical threshold that enables production
-sampling. **No `source_prefix_projection` sampler setting is added by this
-stage.** Only a supported GPU result justifies integrating a once-per-chunk
-roundtrip candidate; the authoritative target prefix, audio, masks, schedule,
-backend and generated suffix must retain their existing contracts. A successful
-VAE-only result still does not prove that continuation expansion or speech is
-fixed. A later continuation A/B must retain the first chunk, seed, prefix hash,
-checkpoint set, geometry and schedule, changing only source-prefix projection.
+There is no automatic numerical threshold that selects a projection mode.
+The **MiniMax H3 Partitioned Exact-Prefix Handoff** now exposes
+`source_prefix_projection=latent_bicubic|vae_rgb_roundtrip`; the default remains
+`latent_bicubic`. The optional `video_vae` input is required for the roundtrip.
+A successful VAE-only result justifies testing this continuation input; it does
+not establish that continuation expansion, tone or speech is fixed.
+
+## Controlled continuation A/B
+
+1. Refresh Flow PR #99 through ComfyUI Patcher and restart ComfyUI. In your
+   generation workflow, use **MiniMax H3 Partitioned Exact-Prefix Handoff**
+   (`H3PartitionedExactPrefixDiagnosticHandoff`).
+2. Connect the generation's native H3 video VAE to the handoff's new optional
+   `video_vae` input. Use the same loader/checkpoint used for decoding and the
+   offline prefix experiment. The audio VAE is not connected here.
+3. Keep `spatial_stage_control=progressive_uniform_source` and the existing
+   source/target geometry, sampler, seed, schedule, checkpoint set, guidance
+   settings and Continuum seam mode. Keep independent experimental controls
+   fixed; test the projection alone. Preserve the first chunk and compare
+   captures with the same authoritative-prefix hash.
+4. A is `source_prefix_projection=latent_bicubic`; B is
+   `source_prefix_projection=vae_rgb_roundtrip`. Set
+   `capture_boundary_witness=true` and save Flow metrics for the continuation.
+   A prior matching baseline can be reused. B requires continuation sampling;
+   the standalone VAE audit does not generate a suffix. The runtime needs the
+   actual carried latent prefix, not a saved diagnostic bundle.
+5. Return the candidate render, Flow metrics and its boundary capture/report.
+   Compare bookshelf/picture/curtain detail, tone and feature-tracked background
+   motion at matching frames, including the first generated frames and later
+   continuation. Check face/clothing/pose, new flicker, end-of-chunk behavior
+   and speech as well. Inspect the wall separately: improved texture can coexist
+   with worse brightness bias. Accept only a useful rendered improvement without
+   unacceptable regressions.
+
+The roundtrip runs **one target-prefix decode and one source encode**, once per
+protected continuation invocation before low sampling. No source decode is
+needed for generation. Only the protected prefix is decoded and encoded;
+generated suffix latents remain sampler/provider outputs. Initial chunks use
+the existing generation path. Target-grid carried bytes are restored exactly;
+video/audio masks, sigma schedule, sampler lifetimes and selected attention
+backend retain their existing contracts. Generated audio can change through
+joint AV conditioning and must be listened to; only protected audio is exact.
+Continuum assembly and its selected tone correction retain their own behavior.
+
+The candidate requires a native prefix length of `5k+2` temporal tokens and
+source dimensions smaller than the target. A missing/wrong VAE, changed native
+timing, invalid output shape or VAE memory failure stops the experiment; it does
+not silently retry with latent bicubic. Resident model handling follows the
+offline native-VAE helper. No cross-chunk RGB/latent cache is retained.
+
+Flow metrics contain `partitioned_source_prefix_projection`: target and source
+prefix fingerprints, dimensions, VAE class/dtype/device, synchronized per-call
+timing, total projection time and allocated/reserved/cumulative peak memory.
+`partitioned_prefix_source_resample.policy` and the boundary manifest record
+`native_vae_rgb_roundtrip_v1`. Extended Local Boundary Audit accepts these
+captures and verifies the saved source prefix against its recorded fingerprint.
+The standalone prefix A/B intentionally requires an original latent-bicubic
+capture, so A remains the actual verified baseline.
 
 Return the report JSON, the selected video-VAE checkpoint name and the three
 saved PNG sequences (or native-scale corresponding

@@ -56,6 +56,7 @@ from .partitioned_transformer import (
     partitioned_diffusion_wrapper,
 )
 from .runtime import OUTER_WRAPPER_KEY
+from .source_prefix_projection import SOURCE_PREFIX_PROJECTION_OPTIONS, configure_source_prefix_projection
 
 
 class H3PartitionedExactPrefixHandoff:
@@ -581,6 +582,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append after all historical widgets; old workflows keep latent bicubic.
+        spec["required"]["source_prefix_projection"] = (
+            list(SOURCE_PREFIX_PROJECTION_OPTIONS),
+            {
+                "default": "latent_bicubic",
+                "tooltip": (
+                    "Source-prefix construction for progressive_uniform_source modes. vae_rgb_roundtrip "
+                    "decodes the carried target prefix, resizes RGB and encodes it once before low sampling. "
+                    "Connect the generation's native video_vae. Experimental continuation input; final target "
+                    "prefix remains exact. Adds one VAE decode and one encode per continuation chunk."
+                ),
+            },
+        )
+        spec["optional"]["video_vae"] = ("VAE",)
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -634,6 +649,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         uniform_source_detail_transport=False,
         metrics=None,
         temporal_weight=0.20,
+        source_prefix_projection="latent_bicubic",
+        video_vae=None,
     ):
         patched, metrics = super().patch(
             model=model,
@@ -655,6 +672,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
+        configure_source_prefix_projection(patched, source_prefix_projection, video_vae, spatial_stage_control)
         witness_directory = ""
         if capture_boundary_witness:
             try:
