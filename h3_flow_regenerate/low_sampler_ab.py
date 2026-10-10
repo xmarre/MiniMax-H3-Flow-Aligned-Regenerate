@@ -4,6 +4,7 @@ The normal A output remains the production handoff. B and A' are shadow
 low/probe lifetimes with independent Flow trajectory/metrics owners. An A-A'
 reproducibility test is required before interpreting the A-B difference.
 """
+
 from __future__ import annotations
 
 import copy
@@ -129,10 +130,7 @@ def compare_aba(
     first_a_b = difference(baseline_first, changed_first)
     # A reproduction must match both first actual prediction and final
     # low/probe clean suffix; one small scalar is not sufficient.
-    invariant = (
-        clean_a_repeat["abs_max"] <= tolerance
-        and first_a_repeat["abs_max"] <= tolerance
-    )
+    invariant = clean_a_repeat["abs_max"] <= tolerance and first_a_repeat["abs_max"] <= tolerance
     return {
         "policy": POLICY,
         "repeat_a_clean_suffix": clean_a_repeat,
