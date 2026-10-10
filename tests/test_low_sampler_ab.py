@@ -108,9 +108,7 @@ def test_later_model_state_leakage_rejects_a2(inputs):
 def test_real_scheduler_aba_shadow_uses_two_independent_low_probe_lifetimes(inputs, monkeypatch):
     video, audio, packed, shapes = inputs
     noise, _ = pack_streams((torch.zeros_like(video), torch.zeros_like(audio)))
-    video_mask = torch.cat(
-        (torch.zeros_like(video[:, :, :7]), torch.ones_like(video[:, :, 7:])), dim=2
-    )
+    video_mask = torch.cat((torch.zeros_like(video[:, :, :7]), torch.ones_like(video[:, :, 7:])), dim=2)
     mask, _ = pack_streams((video_mask, torch.ones_like(audio)))
     original_prefix = video[:, :, :7].clone()
     alternate_prefix = original_prefix + 0.125
