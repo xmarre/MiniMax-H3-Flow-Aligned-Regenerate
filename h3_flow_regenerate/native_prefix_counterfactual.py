@@ -325,7 +325,7 @@ class H3NativePrefixCounterfactual:
                     "STRING",
                     {
                         "default": CAPTURE_01795_MANIFEST_SHA256,
-                        "tooltip": "Exact 01795 capture hash. Clear to explicitly inspect another native carry capture.",
+                        "tooltip": "Exact 01795 manifest hash. Clear to select a different native-carry bundle.",
                     },
                 ),
             },
