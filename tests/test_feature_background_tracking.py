@@ -1,4 +1,5 @@
 """Independent geometry tracker tests: actual landmarks, false stability and ownership."""
+
 import json
 
 import pytest
@@ -52,15 +53,17 @@ def test_feature_tracking_detects_cumulative_background_expansion_with_blur(zoom
     if zoom:
         assert f190["left_median_dx_px"] < 0
         assert f190["right_median_dx_px"] > 0
-        assert result["frame_trajectories"]["170"]["cumulative_apparent_scale_percent"] == pytest.approx(0, abs=.05)
+        assert result["frame_trajectories"]["170"]["cumulative_apparent_scale_percent"] == pytest.approx(0, abs=0.05)
     json.dumps(result, allow_nan=False)
 
 
 def test_feature_tracking_never_reports_missing_support_as_zero_scale():
     images = torch.full((12, 128, 128, 3), 0.5)
     result = track_background_features(
-        images, list(range(169, 181)), join_frame=175,
-        rois={"left": (0.0, 0.1, 0.35, 0.8), "right": (0.65, 0.1, 1, 0.8)}
+        images,
+        list(range(169, 181)),
+        join_frame=175,
+        rois={"left": (0.0, 0.1, 0.35, 0.8), "right": (0.65, 0.1, 1, 0.8)},
     )
     assert result["status"] in ("opencv_unavailable", "insufficient_initial_landmarks")
     assert "cumulative_apparent_scale_percent" not in result
