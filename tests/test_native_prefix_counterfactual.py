@@ -164,9 +164,7 @@ def test_full_native_replay_preserves_saved_bytes_and_makes_three_vae_calls(nati
     assert saved == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
-def test_background_tracker_receives_only_named_static_rois_for_both_anchors_and_arms(
-    native_capture, monkeypatch
-):
+def test_background_tracker_receives_only_named_static_rois_for_both_anchors_and_arms(native_capture, monkeypatch):
     from h3_flow_regenerate import native_prefix_counterfactual as counterfactual
 
     seen = []
@@ -185,9 +183,7 @@ def test_background_tracker_receives_only_named_static_rois_for_both_anchors_and
     }
 
     assert seen == [(175, expected), (179, expected), (175, expected), (179, expected)]
-    assert report["background_tracking_support"] == (
-        "independently_detected_per_variant_and_anchor; static_rois_only"
-    )
+    assert report["background_tracking_support"] == "independently_detected_per_variant_and_anchor; static_rois_only"
     for arm in ("baseline", "counterfactual"):
         variant = report[arm]
         assert set(variant["static_background_rois"]["regions"]) == set(expected)
