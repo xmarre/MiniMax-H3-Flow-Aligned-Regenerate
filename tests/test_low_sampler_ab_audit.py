@@ -122,7 +122,6 @@ def test_invalid_pair_fails_before_any_vae_decode(source_pair, monkeypatch, faul
     assert calls == []
 
 
-
 @pytest.mark.parametrize(
     "fault",
     ["same_prefix", "a_replay_prefix", "nonfinite_replay_delta"],
@@ -135,15 +134,19 @@ def test_audit_rejects_false_prefix_or_replay_evidence_before_decode(source_pair
         original = torch.frombuffer(
             bytearray((folder / "source_A_full.bin").read_bytes()), dtype=torch.float32
         ).reshape(1, 24, 22, 4, 4)
-        alternate = torch.frombuffer(
-            bytearray((folder / "source_B_full.bin").read_bytes()), dtype=torch.float32
-        ).reshape(1, 24, 22, 4, 4).clone()
+        alternate = (
+            torch.frombuffer(bytearray((folder / "source_B_full.bin").read_bytes()), dtype=torch.float32)
+            .reshape(1, 24, 22, 4, 4)
+            .clone()
+        )
         alternate[:, :, :7] = original[:, :, :7]
         _save(folder, manifest["tensor_bytes"], "source_B_full", alternate)
     elif fault == "a_replay_prefix":
-        original = torch.frombuffer(
-            bytearray((folder / "source_A_replay_full.bin").read_bytes()), dtype=torch.float32
-        ).reshape(1, 24, 22, 4, 4).clone()
+        original = (
+            torch.frombuffer(bytearray((folder / "source_A_replay_full.bin").read_bytes()), dtype=torch.float32)
+            .reshape(1, 24, 22, 4, 4)
+            .clone()
+        )
         original[:, :, :7] += 0.2
         _save(folder, manifest["tensor_bytes"], "source_A_replay_full", original)
     else:
