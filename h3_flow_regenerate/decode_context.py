@@ -7,6 +7,7 @@ frames. No sampler input, saved chunk, or audio tensor is changed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import torch
@@ -15,6 +16,20 @@ LOG = logging.getLogger(__name__)
 _CYCLE = 5
 _CYCLE_FRAMES = 17
 _PREFIX_REMAINDER = 2
+
+
+def video_latent_fingerprint(video: torch.Tensor) -> dict:
+    """Dtype-independent identity of a caller-domain video latent.
+
+    Values are hashed as contiguous CPU float32 so the same latent compares equal
+    whether it is held as float32 or was stored in a wider type on another device.
+    """
+    values = video.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    return {
+        "sha256_float32": hashlib.sha256(values.numpy().tobytes()).hexdigest(),
+        "shape": list(values.shape),
+        "dtype": str(video.dtype).removeprefix("torch."),
+    }
 
 
 def _frames(tokens: int) -> int:
@@ -58,6 +73,7 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
             raise ValueError(f"decode group {index + 1} has stale assembly metadata")
         videos.append(video)
 
+    fingerprints = [video_latent_fingerprint(video) for video in videos]
     output = list(latents)
     reports = []
     joined = 0
@@ -87,7 +103,14 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         reports.append(f"boundary {index + 1}: supplied 5 real future latents (17 decode-only frames)")
     report = (
         f"H3 Continuum decode context: {joined}/{max(0, len(videos) - 1)} exact boundaries. "
-        "Use the original assembly plan; added frames are trimmed by Assemble.\n" + "\n".join(reports)
+        "Use the original assembly plan; added frames are trimmed by Assemble.\n"
+        + "\n".join(reports)
+        + "\n"
+        + "\n".join(
+            f"input group {index + 1}: sha256_float32={fingerprint['sha256_float32']} "
+            f"shape={fingerprint['shape']} dtype={fingerprint['dtype']}"
+            for index, fingerprint in enumerate(fingerprints)
+        )
     )
     LOG.info(
         "H3 Flow video decode-context receipt exact_boundaries=%d total_boundaries=%d "
@@ -97,6 +120,14 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         _CYCLE,
         reports,
     )
+    for index, fingerprint in enumerate(fingerprints):
+        LOG.info(
+            "H3 Flow video decode-input fingerprint group=%d sha256_float32=%s shape=%s dtype=%s",
+            index + 1,
+            fingerprint["sha256_float32"],
+            fingerprint["shape"],
+            fingerprint["dtype"],
+        )
     return output, report
 
 

@@ -28,6 +28,7 @@ from .boundary_content_diagnostics import (
     measure_provider_boundary_temporal_predictor,
 )
 from .contracts import H3FlowTrajectory
+from .decode_context import video_latent_fingerprint
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
     GUIDANCE_REFERENCE_POLICY,
@@ -7209,6 +7210,13 @@ def run_partitioned_progressive(
                 history_boundary_count=history_boundary_count,
                 diagnostic_only=True,
             )
+        returned_video, _returned_audio = unpack_streams(result, target_shapes)
+        binding.metrics.event(
+            "partitioned_returned_video_latent_fingerprint",
+            domain="caller_output_latent",
+            comparable_to="H3 Flow video decode-input fingerprint",
+            **video_latent_fingerprint(returned_video),
+        )
         return result
     except BaseException as exc:
         if committed_low_run is not None and binding.trajectory is not None:
