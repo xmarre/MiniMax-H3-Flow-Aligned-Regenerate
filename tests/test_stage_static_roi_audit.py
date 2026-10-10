@@ -95,6 +95,30 @@ def test_integer_motion_correspondence_sign_and_no_mutation():
     assert torch.equal(original, before)
 
 
+@pytest.mark.parametrize("flat_frames", [(171, 174), (171,), (174,)])
+def test_zero_pretrend_sobel_energy_is_undefined_not_a_division_error(flat_frames):
+    movie = _video()
+    labels = list(range(167, 181))
+    for frame in flat_frames:
+        movie[frame - labels[0]] = 0.35
+    original = movie.clone()
+    result = measure_stage_static_rois(
+        movie,
+        labels,
+        join_frame=175,
+        rois={"static": (0.05, 0.1, 0.45, 0.8)},
+    )
+    region = result["regions"]["static"]
+    if any(frame in flat_frames for frame in (171, 174)):
+        assert region["sharpness_excess_over_pretrend"] is None
+        assert region["common_grid_sharpness_excess_over_pretrend"] is None
+    assert result["status"] == "measured"
+    # Missing observations serialize explicitly as JSON null, not Infinity/NaN.
+    serialized = json.dumps(result, allow_nan=False)
+    assert '"sharpness_excess_over_pretrend": null' in serialized
+    assert torch.equal(movie, original)
+
+
 def test_stage_texture_loss_localized_in_time_without_changing_pixels():
     movie = _video(blur_after=True)
     frozen = movie.clone()
