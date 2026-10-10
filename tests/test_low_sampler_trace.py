@@ -79,6 +79,28 @@ def test_changed_forecast_identity_prevents_false_alignment(trace):
     assert report["first_observed_divergence"] is None
     assert report["alignment_failure"]["reason"] == "actual_forecast_phase_or_outer_step"
     assert not report["fully_observed_records_exact"]
+    assert not trace.divergent_operands()
+
+
+@pytest.mark.parametrize("field", ["cfg", "conditioning"])
+def test_later_semantic_change_rejects_replay_after_tolerated_tensor_difference(trace, field):
+    emit(trace, "A")
+    emit(trace, "A_replay", changed=(0, "predict_input"), delta=1e-6)
+    row = next(r for r in trace.arms["A_replay"] if r["evaluation"] == 1 and r["boundary"] == "predict_input")
+    row["metadata"][field] = 2.0 if field == "cfg" else {"sha256": "changed"}
+    report = trace.summary()["comparisons"]["A_replay"]
+    assert report["first_observed_divergence"]["evaluation"] == 0
+    assert not report["reproduction_within_tolerance"]
+
+
+def test_conditioning_difference_prevents_mislabeling_later_tensor_export(trace):
+    emit(trace, "A")
+    emit(trace, "A_replay", changed=(1, "predict_output"))
+    trace.arms["A_replay"][1]["metadata"]["conditioning"] = {"sha256": "changed"}
+    report = trace.summary()["comparisons"]["A_replay"]
+    assert report["first_observed_divergence"]["boundary"] == "native_conditioning"
+    assert not report["reproduction_within_tolerance"]
+    assert not trace.divergent_operands()
 
 
 def test_timestep_order_and_missing_records_reject_alignment(trace):
@@ -215,3 +237,51 @@ def test_native_core_euler_is_observed_without_callable_replacement(trace):
             assert torch.equal(actual, expected)
             assert sampler.sampler_function is sample_euler
     assert trace.summary()["comparisons"]["A_replay"]["fully_observed_records_exact"]
+
+
+def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(trace):
+    cli = pytest.importorskip("comfy.cli_args")
+    cli.args.cpu = True
+    from comfy.patcher_extension import WrapperExecutor, get_all_wrappers
+
+    from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding, flow_predict_wrapper
+
+    options = {"transformer_options": {"h3_flow_stage": "low"}}
+    binding = FlowBinding()
+    options[FLOW_BINDING_KEY] = binding
+    guider = SimpleNamespace(model_options=options)
+    sampler = SimpleNamespace(sampler_function=lambda: None)
+    control = {"step": 0}
+    actuals = [True, False, True]
+
+    def predictor(x, timestep, model_options=None, seed=None):
+        transformer = model_options["transformer_options"]
+        step = control["step"]
+        transformer["spectrum_h3_actual"] = actuals[step]
+        transformer["spectrum_h3_outer_step_id"] = step
+        transformer["spectrum_h3_solver_phase"] = "model"
+        if actuals[step]:
+            executor = WrapperExecutor.new_executor(
+                lambda values, *a, **kw: [values[0] * 0.25, values[1] * 0.5],
+                get_all_wrappers("diffusion_model", transformer),
+            )
+            values = executor.execute([x[:, :2], x[:, 2:]], timestep, x, transformer)
+            return torch.cat(values, dim=1)
+        return x * 0.125
+
+    observed = []
+    for arm in ("A", "A_replay"):
+        values = []
+        with trace_stage(trace, arm, "low", sampler, guider):
+            for step in range(3):
+                control["step"] = step
+                call = WrapperExecutor.new_class_executor(predictor, guider, [flow_predict_wrapper])
+                values.append(call.execute(torch.ones(1, 4), torch.tensor([1.0 - step * 0.25]), options, 42))
+        observed.append(values)
+    assert all(torch.equal(a, b) for a, b in zip(*observed, strict=True))
+    calls = [r for r in trace.arms["A"] if r["boundary"] == "predict_output"]
+    assert [r["metadata"]["actual"] for r in calls] == actuals
+    assert [r["metadata"]["outer_step"] for r in calls] == [0, 1, 2]
+    assert len([r for r in trace.arms["A"] if r["boundary"] == "native_output_audio"]) == 2
+    assert binding.metrics.counters["spectrum_forecast_calls"] == 2
+    assert active_trace() is None

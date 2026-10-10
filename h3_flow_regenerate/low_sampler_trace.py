@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import hashlib
+import inspect
 import json
 import math
 import pickle
@@ -302,6 +303,7 @@ class LowReplayTrace:
             rows = self.arms.get(arm, [])
             topology = None
             first = None
+            semantic_match = True
             backend_comparisons = []
             # Validate whole evaluation identities before comparing native rows.
             # A changed forecast decision can remove native calls entirely.
@@ -330,12 +332,10 @@ class LowReplayTrace:
                             "rng_equal": a["metadata"].get("rng") == b["metadata"].get("rng"),
                         }
                     )
-                if (
-                    first is None
-                    and a["boundary"] == "predict_input"
-                    and a["metadata"].get("cfg") != b["metadata"].get("cfg")
-                ):
-                    first = {
+                cfg_changed = a["boundary"] == "predict_input" and a["metadata"].get("cfg") != b["metadata"].get("cfg")
+                if cfg_changed:
+                    semantic_match = False
+                    first = first or {
                         "record": i,
                         "stage": b["stage"],
                         "evaluation": b["evaluation"],
@@ -344,8 +344,9 @@ class LowReplayTrace:
                     }
                 condition_a = a["metadata"].get("conditioning")
                 condition_b = b["metadata"].get("conditioning")
-                if first is None and condition_a != condition_b:
-                    first = {
+                if condition_a != condition_b:
+                    semantic_match = False
+                    first = first or {
                         "record": i,
                         "stage": b["stage"],
                         "evaluation": b["evaluation"],
@@ -363,6 +364,7 @@ class LowReplayTrace:
                         "boundary": b["boundary"],
                         "difference": d,
                         "classification": self.classify(b),
+                        "key": b["key"],
                         "a_sha256": a["sha256"],
                         "b_sha256": b["sha256"],
                     }
@@ -371,6 +373,7 @@ class LowReplayTrace:
             within_tolerance = (
                 bool(baseline)
                 and topology is None
+                and semantic_match
                 and not self.truncated
                 and all(
                     r.get("difference", {}).get("finite", False) and r["difference"]["abs_max"] <= 1e-5 for r in rows
@@ -446,7 +449,8 @@ class LowReplayTrace:
 
     def divergent_operands(self):
         saved = self._first_operands.get("A_replay")
-        if saved is None:
+        first = self.summary()["comparisons"]["A_replay"]["first_observed_divergence"]
+        if saved is None or first is None or first.get("key") != saved[0]:
             return {}
         return {
             "first_divergence_A": torch.load(saved[1], map_location="cpu", weights_only=True),
@@ -465,7 +469,7 @@ def trace_stage(trace, arm, stage, sampler, guider):
     trace.native_call = 0
     trace._native_count = 0
     function = getattr(sampler, "sampler_function", None)
-    trace.sampler_code = getattr(function, "__code__", None)
+    trace.sampler_code = getattr(inspect.unwrap(function), "__code__", None) if callable(function) else None
     trace.arms.setdefault(arm, [])
     options = guider.model_options["transformer_options"]
     missing = object()
