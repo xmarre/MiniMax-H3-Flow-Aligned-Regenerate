@@ -214,7 +214,7 @@ def test_wrong_manifest_names_actual_kind_and_selected_path(source_pair, monkeyp
     manifest["kind"] = "h3_flow_exact_prefix_residual_geometry_evidence"
     (folder / "manifest.json").write_text(json.dumps(manifest))
     monkeypatch.setattr(audit, "_native_pixels", lambda *_args: pytest.fail("wrong manifest entered native VAE"))
-    with pytest.raises(ValueError, match="partitioned_frozen_low_source_aba.fields.evidence.bundle") as exc:
+    with pytest.raises(ValueError, match=r"partitioned_frozen_low_source_aba\.fields\.evidence\.bundle") as exc:
         audit.audit_saved_low_aba(model, str(folder), 175, lambda x: x)
     assert "h3_flow_exact_prefix_residual_geometry_evidence" in str(exc.value)
     assert str(folder / "manifest.json") in str(exc.value)
