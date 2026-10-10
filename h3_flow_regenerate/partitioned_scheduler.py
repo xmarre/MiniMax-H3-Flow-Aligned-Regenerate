@@ -3469,6 +3469,233 @@ def _measure_partitioned_transfer_splice(
 
 
 @source_carry_scope()
+def _run_frozen_source_low_aba(
+    executor,
+    guider,
+    binding,
+    *,
+    frozen_pre_rng,
+    conditioning_template,
+    sampler,
+    low_sigmas,
+    probe_sigmas,
+    low_shapes,
+    low_noise,
+    original_latent,
+    low_mask,
+    seed,
+    disable_pbar,
+    low_plan,
+    original_prefix,
+    candidate_prefix,
+    authoritative_prefix,
+    baseline_probe_internal,
+    baseline_first_actual,
+    sigma,
+    index,
+    source_h,
+    source_w,
+    target_h,
+    target_w,
+):
+    """One original A plus B/A' low/probe lifetimes, before any high refinement.
+
+    No model/backend is switched off. The existing A controls downstream
+    production handoff. B and A' use distinct temporary Flow captures and
+    metrics, leaving original trajectory identity and counters untouched.
+    """
+    if binding.active_capture is not None or binding.active_guidance_run is not None:
+        raise RuntimeError("frozen A/B requires a quiescent low/probe capture boundary")
+    if binding.trajectory is None or not binding.capture_enabled or baseline_first_actual is None:
+        raise RuntimeError("frozen A/B requires actual low-stage Flow trajectory capture")
+    from .low_sampler_ab import POLICY as LOW_AB_POLICY
+
+    candidate_latent = counterfactual_low_inputs(
+        original_latent,
+        low_shapes,
+        original_prefix,
+        candidate_prefix,
+        low_plan.prefix_t,
+    )
+    before_pair = make_low_input_pairing_receipt(
+        authoritative_target_prefix=authoritative_prefix,
+        source_prefix=original_prefix,
+        low_noise=low_noise,
+        low_latent_image=original_latent,
+        low_mask=low_mask,
+        low_shapes=low_shapes,
+        low_sigmas=low_sigmas,
+        prefix_t=low_plan.prefix_t,
+        source_policy=SOURCE_PREFIX_CARRY_POLICY,
+        sampler=sampler_name(sampler),
+        seed=int(seed or 0),
+        conditioning_signature=_conditioning_signature(guider),
+    )
+    alternate_pair = make_low_input_pairing_receipt(
+        authoritative_target_prefix=authoritative_prefix,
+        source_prefix=candidate_prefix,
+        low_noise=low_noise,
+        low_latent_image=candidate_latent,
+        low_mask=low_mask,
+        low_shapes=low_shapes,
+        low_sigmas=low_sigmas,
+        prefix_t=low_plan.prefix_t,
+        source_policy="half_pixel_latent_v1",
+        sampler=sampler_name(sampler),
+        seed=int(seed or 0),
+        conditioning_signature=_conditioning_signature(guider),
+    )
+    pairing = compare_low_input_pairing_receipts(before_pair, alternate_pair)
+    if not pairing["input_pair_eligible"]:
+        raise RuntimeError(f"frozen low A/B initial inputs are not paired: {pairing['mismatched_fields']}")
+    source_reference = baseline_probe_internal.detach().clone()
+    first_reference = baseline_first_actual.detach().clone()
+    if source_reference.ndim != 3 or first_reference.ndim != 5:
+        raise RuntimeError("frozen low A/B source and first-prediction domains are malformed")
+
+    prior_metrics, prior_conds = binding.metrics, guider.conds
+    diagnostic_metrics = H3FlowMetrics()
+    binding.metrics = diagnostic_metrics
+    base_model = guider.model_patcher.model
+    transformer = guider.model_options["transformer_options"]
+    alt_plan = PartitionedStagePlan(
+        prefix=candidate_prefix.detach().to(torch.float32).clone(),
+        temporal=low_plan.temporal,
+        source_h=low_plan.source_h,
+        source_w=low_plan.source_w,
+        prefix_noise=low_plan.prefix_noise.detach().clone(),
+    )
+    outputs = {}
+    try:
+        for label, latent, plan in (
+            ("B_target_projection", candidate_latent, alt_plan),
+            ("A_replay", original_latent, low_plan),
+        ):
+            with frozen_rng(frozen_pre_rng):
+                with _isolated_shadow_trajectory_capture(
+                    binding, guider, sampler, low_sigmas, low_shapes, enabled=True
+                ) as capture:
+                    _reset_guider_conds(guider, template=conditioning_template)
+                    with (
+                        _flow_stage_contract(guider, "low"),
+                        _partitioned_stage_contract(guider, plan, diagnostic_metrics),
+                    ):
+                        shadow_low = executor(
+                            low_noise,
+                            latent,
+                            sampler,
+                            low_sigmas,
+                            low_mask,
+                            None,
+                            disable_pbar,
+                            seed,
+                            latent_shapes=low_shapes,
+                        )
+                    shadow_raw = _raw_sampler_state(base_model, shadow_low, low_shapes, sigma)
+                    shadow_internal = _process_latent_in(base_model, latent, low_shapes)
+                    shadow_probe_noise = _noise_argument(base_model, shadow_raw, sigma, shadow_internal)
+                    previous_context = transformer.get(PROBE_CONTEXT_KEY)
+                    transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
+                    try:
+                        _reset_guider_conds(guider, template=conditioning_template)
+                        with (
+                            _flow_stage_contract(guider, "probe"),
+                            _high_stage_contract(guider),
+                            _partitioned_stage_contract(guider, plan, diagnostic_metrics),
+                        ):
+                            shadow_probe = executor(
+                                shadow_probe_noise,
+                                latent,
+                                _make_probe_sampler(sampler),
+                                probe_sigmas,
+                                low_mask,
+                                None,
+                                disable_pbar,
+                                seed,
+                                latent_shapes=low_shapes,
+                            )
+                    finally:
+                        if previous_context is None:
+                            transformer.pop(PROBE_CONTEXT_KEY, None)
+                        else:
+                            transformer[PROBE_CONTEXT_KEY] = previous_context
+                    clean_internal = _process_latent_in(base_model, shadow_probe, low_shapes)
+                run = capture.get("run")
+                actuals = (
+                    [sample for sample in run.exact_samples() if sample.phase != "handoff_probe"]
+                    if run is not None
+                    else []
+                )
+                if not actuals:
+                    raise RuntimeError("frozen source A/B did not capture a real low prediction")
+                first = actuals[0].video_x0.detach().clone()
+                video, _audio = unpack_streams(clean_internal, low_shapes)
+                outputs[label] = (video.detach().clone(), first)
+    finally:
+        binding.metrics = prior_metrics
+        guider.conds = prior_conds
+
+    original_video, original_audio = unpack_streams(source_reference, low_shapes)
+    b_video, b_first = outputs["B_target_projection"]
+    a_replay_video, a_replay_first = outputs["A_replay"]
+    report = compare_aba(
+        original_video,
+        b_video,
+        a_replay_video,
+        first_reference,
+        b_first,
+        a_replay_first,
+        prefix_t=low_plan.prefix_t,
+    )
+    report["known_input_pairing"] = pairing
+    report["authoritative_target_prefix_sha256"] = before_pair["authoritative_target_prefix_sha256"]
+    report["carried_source_prefix_sha256"] = before_pair["source_prefix_sha256"]
+    report["counterfactual_prefix_sha256"] = alternate_pair["source_prefix_sha256"]
+    report["shadow_model_actual_nfe"] = int(diagnostic_metrics.counters.get("transformer_actual_nfe", 0))
+    report["shadow_model_forecast_calls"] = int(diagnostic_metrics.counters.get("spectrum_forecast_calls", 0))
+    report["extra_low_sampler_lifetimes"] = 2
+    report["extra_probe_sampler_lifetimes"] = 2
+    report["extra_high_sampler_lifetimes"] = 0
+    report["rng_restore_scopes"] = 2
+    report["production_main_source_selected"] = True
+    report["source_carry_snapshot_mutated"] = False
+    report["model_backend_selection_mutated"] = False
+    report["sampler_A2_resumes_no_production_output"] = True
+    report["physical_model_cache_isolation_unproven"] = True
+    session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+    export = export_residual_geometry_evidence(
+        {
+            "source_A_full": original_video,
+            "source_B_full": b_video,
+            "source_A_replay_full": a_replay_video,
+            "authoritative_target_prefix": authoritative_prefix,
+            "first_actual_A": first_reference,
+            "first_actual_B": b_first,
+            "first_actual_A_replay": a_replay_first,
+        },
+        session_id=session_id,
+        chunk_id=chunk_id,
+        seed=int(seed or 0),
+        sigma=float(sigma),
+        evidence_kind="h3_flow_frozen_low_source_aba_v1",
+        metadata={
+            "policy": LOW_AB_POLICY,
+            "source_hw": [int(source_h), int(source_w)],
+            "target_hw": [int(target_h), int(target_w)],
+            "prefix_t": int(low_plan.prefix_t),
+            "temporal": int(low_plan.temporal),
+            "low_input_pairing": pairing,
+            "reproduction_verified": bool(report["reproduction_verified"]),
+            "model_domain": "model_internal_clean",
+            "decoded_media_required": True,
+            "high_refinement_executed_inside_pair": False,
+        },
+    )
+    report["evidence"] = export
+    prior_metrics.event("partitioned_frozen_low_source_aba", **report)
+    return report
+
+
 def run_partitioned_progressive(
     executor,
     guider,
