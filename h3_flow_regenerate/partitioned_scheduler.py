@@ -123,6 +123,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
     PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
@@ -3635,7 +3636,7 @@ def _run_frozen_source_low_aba(
         binding.metrics = prior_metrics
         guider.conds = prior_conds
 
-    original_video, original_audio = unpack_streams(source_reference, low_shapes)
+    original_video, _original_audio = unpack_streams(source_reference, low_shapes)
     b_video, b_first = outputs["B_target_projection"]
     a_replay_video, a_replay_first = outputs["A_replay"]
     report = compare_aba(
