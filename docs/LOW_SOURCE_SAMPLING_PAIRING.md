@@ -86,6 +86,25 @@ with manifest kind `h3_flow_frozen_low_source_aba_v1` and byte SHA hashes:
 `authoritative_target_prefix`, `first_actual_A`,
 `first_actual_B` and `first_actual_A_replay`.
 
+**If the native A/B Audit rejects the selected manifest:** use the exact
+`partitioned_frozen_low_source_aba.fields.evidence.bundle` directory in
+the Flow metrics JSON and select its `manifest.json`. A prior
+`h3_flow_exact_prefix_residual_geometry_evidence` or native
+decoder-counterfactual manifest is a different experiment; do not rename
+the `kind` field. The error now prints the actual kind and selected path.
+
+**If A' did not reproduce A:** the ordinary audit fails closed and must not
+report a qualified A/B result. To investigate an existing **saved**
+unqualified bundle without another H3 generation, enable
+`diagnose_failed_replay=true` on `MiniMax H3 Frozen Low A/B Audit`.
+This explicitly diagnostic-only path verifies each tensor hash, decodes
+A, B **and A'**, and compares both A→B and A→A' at identical native
+frames. Its output always sets `causal_low_input_effect_qualified=false`,
+`a_replay_verified=false`, `unqualified_diagnostic_only=true` and
+`rendered_accepted=false`. The third native VAE decode adds no H3
+sampling. Analyze replay instability separately; do not promote B based on
+this read-only comparison.
+
 **Qualification:** `causal_low_input_effect_qualified=true` requires
 matching known initial inputs and a maximum absolute A-to-A' replay error
 no greater than `1e-5` in both first actual low prediction and final
