@@ -353,7 +353,10 @@ def test_extended_replay_validates_saved_source_view_and_preserves_native_tail_b
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
-@pytest.mark.parametrize("projection_policy", [None, "h3_dense_patch_center_lattice_v2", "half_pixel_latent_v1"])
+@pytest.mark.parametrize(
+    "projection_policy",
+    [None, "h3_dense_patch_center_lattice_v2", "half_pixel_latent_v1", "native_vae_rgb_roundtrip_v1"],
+)
 def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle, projection_policy):
     directory, manifest, source = source_bundle
     metadata = manifest["metadata"]
@@ -368,12 +371,23 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
     manifest["tensor_bytes"].pop("low_probe_native_carrier_clean_full")
     if projection_policy is not None:
         metadata["source_prefix_projection_policy"] = projection_policy
-    if projection_policy == "half_pixel_latent_v1":
+    if projection_policy in ("half_pixel_latent_v1", "native_vae_rgb_roundtrip_v1"):
         entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
         prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
         prefix = prefix.reshape(entry["shape"])
         source = source.clone()
         source[:, :, :12] = audit.resize_spatial_5d(prefix, 2, 4, mode="bicubic")
+        if projection_policy == "native_vae_rgb_roundtrip_v1":
+            from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+            # Native reconstruction cannot be reproduced with latent resize.
+            source[:, :, :12] += 0.04
+            metadata["source_prefix_projection"] = {
+                "policy": projection_policy,
+                "prefix_t": 12,
+                "authoritative_prefix": video_latent_fingerprint(prefix),
+                "projected_prefix": video_latent_fingerprint(source[:, :, :12]),
+            }
         write_operand(directory, manifest, "source_probe_clean_full", source)
     (directory / "manifest.json").write_text(json.dumps(manifest))
     plan, stages, _identity = audit.load_replay_operands(directory, 175, include_source=True)
@@ -382,6 +396,11 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
     report = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
     assert report["extra_vae_calls"] == 5
     assert report["stages"]["provider"]["frame_labels"] == list(range(171, 196))
+    if projection_policy == "native_vae_rgb_roundtrip_v1":
+        metadata["source_prefix_projection"]["projected_prefix"]["sha256_float32"] = "0" * 64
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="projection receipt"):
+            audit.load_replay_operands(directory, 175, include_source=True)
 
 
 @pytest.mark.parametrize("policy", ["unknown", "half_pixel_latent_v1"])

@@ -212,6 +212,12 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+from .source_prefix_projection import (
+    SOURCE_PREFIX_PROJECTION_KEY,
+    SOURCE_PREFIX_ROUNDTRIP_POLICY,
+    SourcePrefixProjection,
+    project_source_prefix,
+)
 from .tone_bridge import (
     apply_suffix_dc_bridge,
     disabled_suffix_dc_bridge_metrics,
@@ -3582,6 +3588,11 @@ def run_partitioned_progressive(
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
+    prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
+    if prefix_projection is not None and (
+        not uniform_source or not isinstance(prefix_projection, SourcePrefixProjection)
+    ):
+        raise ValueError("VAE source-prefix projection requires a uniform-source continuation configuration")
     if uniform_source and (int(config.source_noise_offset) & ((1 << 63) - 1)) == (
         int(config.seed_offset) & ((1 << 63) - 1)
     ):
@@ -3910,6 +3921,17 @@ def run_partitioned_progressive(
         if uniform_source
         else resize_spatial_5d_h3_patch_lattice(stage_plan.prefix.to(low_video), source_h, source_w)
     )
+    prefix_projection_receipt = None
+    if prefix_projection is not None:
+        # Only the carried prefix enters the VAE. This runs before the first
+        # sampler lifetime; low/probe and provider reuse these same source bytes.
+        projected_prefix_source, prefix_projection_receipt = project_source_prefix(
+            prefix_projection.vae, stage_plan.prefix, int(source_h), int(source_w)
+        )
+        projected_prefix_source = projected_prefix_source.to(low_video)
+        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
+        prefix_projection_policy = SOURCE_PREFIX_ROUNDTRIP_POLICY
+        binding.metrics.event("partitioned_source_prefix_projection", **prefix_projection_receipt)
     if int(projected_prefix_source.shape[2]) != int(stage_plan.prefix_t):
         raise RuntimeError("H3 prefix resample changed temporal ownership")
     prefix_resample_delta = projected_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
@@ -3925,7 +3947,7 @@ def run_partitioned_progressive(
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
         source_hw=(int(source_h), int(source_w)),
-        generic_half_pixel_prefix_replaced=not uniform_source,
+        generic_half_pixel_prefix_replaced=not uniform_source or prefix_projection is not None,
         generic_vs_physical_delta_rms=prefix_resample_delta_rms,
         generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
         numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
@@ -7037,6 +7059,7 @@ def run_partitioned_progressive(
                     "window": boundary_window_evidence.plan,
                     "domain": "model_internal_clean_except_sampler_input_and_mask",
                     "source_prefix_projection_policy": prefix_projection_policy,
+                    **({"source_prefix_projection": prefix_projection_receipt} if prefix_projection_receipt else {}),
                     "prediction_prefix": "native_model_prediction_not_recanonicalized",
                     "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
                     "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
@@ -7086,7 +7109,7 @@ def run_partitioned_progressive(
                     "capture_boundary_witness_requested": bool(band_witness_requested),
                     "extra_h3_nfe": 0,
                     "extra_provider_calls": 0,
-                    "extra_vae_calls": 0,
+                    "extra_vae_calls": 2 if prefix_projection_receipt else 0,
                 },
             )
             binding.metrics.event(

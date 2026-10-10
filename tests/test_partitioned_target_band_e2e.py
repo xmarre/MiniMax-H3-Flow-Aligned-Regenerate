@@ -90,6 +90,8 @@ def _harness(
     *,
     spatial_stage_control,
     extra_transformer_options=None,
+    extra_model_options=None,
+    protected_audio_ticks=0,
     guidance_mode="off",
     native_sampler=None,
     residual_mode="off",
@@ -165,7 +167,9 @@ def _harness(
     )[0]
     video_mask = torch.ones_like(target_video)
     video_mask[:, :, :PROTECTED_T] = 0
-    mask = pack_streams((video_mask, torch.ones_like(target_audio)))[0]
+    audio_mask = torch.ones_like(target_audio)
+    audio_mask[:, :, :, :protected_audio_ticks] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
 
     transformer_options = {SOL_RUNTIME_KEY: dict(PARTITIONED_SOL_REQUIRED_METADATA)}
     if spatial_stage_control != PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
@@ -187,6 +191,7 @@ def _harness(
         ),
     )
     guider.model_patcher.model_options = guider.model_options
+    guider.model_options.update(extra_model_options or {})
     if witness_directory is not None:
         from h3_flow_regenerate.boundary_witness import WITNESS_DIRECTORY_OPTION
 
@@ -624,6 +629,76 @@ def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch
 @pytest.mark.parametrize(
     "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
 )
+def test_vae_projection_reaches_low_probe_once_and_preserves_target_audio_masks(monkeypatch, mode):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
+
+    calls = []
+
+    def project(vae, prefix, h, w):
+        calls.append((vae, prefix.clone(), h, w))
+        out = resize_spatial_5d(prefix, h, w) + 0.125
+        return out, {"policy": "native_vae_rgb_roundtrip_v1", "extra_vae_decode_calls": 1, "extra_vae_encode_calls": 1}
+
+    monkeypatch.setattr(scheduler, "project_source_prefix", project)
+    default = _harness(monkeypatch, spatial_stage_control=mode, protected_audio_ticks=4)
+    assert calls == []
+    vae = object()
+    selected = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_model_options={SOURCE_PREFIX_PROJECTION_KEY: SourcePrefixProjection(vae)},
+        protected_audio_ticks=4,
+    )
+    assert len(calls) == 1
+    assert calls[0][0] is vae and calls[0][2:] == SOURCE_HW
+    exact_video, exact_audio = unpack_streams(selected.latent_image, selected.shapes)
+    assert torch.equal(calls[0][1], exact_video[:, :, :PROTECTED_T])
+    for before, after in zip(default.calls, selected.calls, strict=True):
+        assert before["stage"] == after["stage"]
+        assert torch.equal(before["mask"], after["mask"])
+        assert torch.equal(before["sigmas"], after["sigmas"])
+    low = selected.calls[0]
+    a_low, a_audio = unpack_streams(default.calls[0]["latent"], default.calls[0]["shapes"])
+    b_low, b_audio = unpack_streams(low["latent"], low["shapes"])
+    assert torch.equal(a_audio, b_audio)
+    assert torch.equal(a_low[:, :, PROTECTED_T:], b_low[:, :, PROTECTED_T:])
+    assert torch.allclose(b_low[:, :, :PROTECTED_T], a_low[:, :, :PROTECTED_T] + 0.125)
+    source = selected.upscaler.inputs[0]
+    assert torch.equal(source[:, :, :PROTECTED_T], b_low[:, :, :PROTECTED_T])
+    high_video, _ = unpack_streams(selected.calls[-1]["latent"], selected.shapes)
+    assert torch.equal(high_video[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
+    final, final_audio = unpack_streams(selected.result, selected.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
+    assert torch.equal(final_audio[:, :, :, :4], exact_audio[:, :, :, :4])
+    assert len(_events(selected.metrics, "partitioned_source_prefix_projection")) == 1
+    assert _events(selected.metrics, "partitioned_prefix_source_resample")[0]["policy"] == "native_vae_rgb_roundtrip_v1"
+    assert [call["stage"] for call in selected.calls] == ["low", "probe", "high"]
+
+
+def test_vae_projection_failure_stops_before_sampler_and_is_not_retried(monkeypatch):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("projection failure")
+
+    def no_sampler(*_args, **_kwargs):
+        pytest.fail("failed projection entered a sampler lifetime")
+
+    monkeypatch.setattr(scheduler, "project_source_prefix", fail)
+    monkeypatch.setattr(scheduler, "_begin_capture", no_sampler)
+    with pytest.raises(RuntimeError, match="projection failure"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            extra_model_options={SOURCE_PREFIX_PROJECTION_KEY: SourcePrefixProjection(object())},
+        )
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
 @pytest.mark.parametrize("target_hw,source_hw", [((24, 18), (16, 12)), ((18, 24), (12, 16)), ((24, 18), (16, 14))])
 def test_uniform_source_uses_first_chunk_image_lattice_for_prefix_and_provider(monkeypatch, mode, target_hw, source_hw):
     monkeypatch.setitem(globals(), "TARGET_HW", target_hw)
@@ -710,21 +785,38 @@ def test_uniform_source_detail_transport_changes_only_the_high_entry_suffix(monk
 @pytest.mark.parametrize(
     "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
 )
-def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path, mode, roundtrip):
     import sys
 
     folder_paths = pytest.importorskip("folder_paths")
 
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
     from h3_flow_regenerate.local_boundary_audit import load_replay_operands
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
 
     monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
     monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
     monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
-    control = _harness(monkeypatch, spatial_stage_control=mode, witness_directory="")
+    options = {}
+    if roundtrip:
+        from h3_flow_regenerate import partitioned_scheduler as scheduler
+
+        def project(_vae, prefix, h, w):
+            return resize_spatial_5d(prefix, h, w) + 0.125, {
+                "policy": "native_vae_rgb_roundtrip_v1",
+                "prefix_t": int(prefix.shape[2]),
+                "authoritative_prefix": video_latent_fingerprint(prefix),
+            }
+
+        monkeypatch.setattr(scheduler, "project_source_prefix", project)
+        options[SOURCE_PREFIX_PROJECTION_KEY] = SourcePrefixProjection(object())
+    control = _harness(monkeypatch, spatial_stage_control=mode, witness_directory="", extra_model_options=options)
     captured = _harness(
         monkeypatch,
         spatial_stage_control=mode,
         witness_directory=str(tmp_path / "witness"),
+        extra_model_options=options,
     )
     assert torch.equal(control.result, captured.result)
     assert control.metrics.counters["transformer_actual_nfe"] == captured.metrics.counters["transformer_actual_nfe"]

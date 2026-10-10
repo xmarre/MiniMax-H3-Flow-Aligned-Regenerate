@@ -66,14 +66,18 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert "target_band_tokens" not in ordinary
 
     keys = list(production)
-    assert keys[-6:] == [
+    assert keys[-7:] == [
         "video_guided_overlap_tokens",
         "suffix_dc_bridge",
         "target_band_tokens",
         "target_band_handoff_state",
         "target_band_context",
         "uniform_source_detail_transport",
+        "source_prefix_projection",
     ]
+    assert production["source_prefix_projection"][0] == ["latent_bicubic", "vae_rgb_roundtrip"]
+    assert production["source_prefix_projection"][1]["default"] == "latent_bicubic"
+    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["optional"]["video_vae"] == ("VAE",)
     assert "uniform_source_detail_transport" not in ordinary
     assert production["uniform_source_detail_transport"][0] == "BOOLEAN"
     assert production["uniform_source_detail_transport"][1]["default"] is False
