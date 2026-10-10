@@ -724,6 +724,9 @@ def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monke
         spatial_stage_control=mode,
         protected_audio_ticks=4,
         extra_model_options={SOURCE_PREFIX_CARRY_KEY: owner},
+        extra_transformer_options={
+            "h3_continuum": {"active": True, "session_id": "continuum", "chunk_index": 2},
+        },
         residual_mode="measure" if capture else "off",
         witness_directory=str(tmp_path) if capture else None,
         frame_gauge_repair=False,
@@ -746,7 +749,14 @@ def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monke
     assert len(projection) == 1
     assert projection[0]["extra_vae_decode_calls"] == projection[0]["extra_vae_encode_calls"] == 0
     assert len(_events(selected.metrics, "source_prefix_carry_prepared")) == 1
-    with owner.transaction(object()):
+    next_guider = SimpleNamespace(
+        model_options={
+            "transformer_options": {
+                "h3_continuum": {"active": True, "session_id": "continuum", "chunk_index": 3},
+            }
+        }
+    )
+    with owner.transaction(next_guider):
         carried, receipt = owner.project(final[:, :, -12:], *SOURCE_HW)
     assert receipt["generation"] == 2
     assert torch.equal(carried, selected.upscaler.inputs[0][:, :, -12:])

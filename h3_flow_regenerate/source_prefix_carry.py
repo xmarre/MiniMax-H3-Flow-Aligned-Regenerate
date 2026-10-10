@@ -38,6 +38,7 @@ class _Snapshot:
     target_suffix_hashes: dict[int, str]
     generation: int
     sequence: tuple[str, int] | None
+    initial: bool
 
 
 class SourcePrefixCarry:
@@ -56,6 +57,7 @@ class SourcePrefixCarry:
         self._source = None
         self._pending = None
         self._generation = 0
+        self._initial = False
 
     @contextmanager
     def transaction(self, guider):
@@ -67,6 +69,7 @@ class SourcePrefixCarry:
             raise RuntimeError("native source carry is already sampling another chunk")
         self._thread, self._guider = thread, guider
         self._source = self._pending = None
+        self._initial = False
         try:
             yield
             if self._pending is not None:
@@ -74,6 +77,7 @@ class SourcePrefixCarry:
                 self._generation = self._pending.generation
         finally:
             self._source = self._pending = None
+            self._initial = False
             self._thread = self._guider = None
             self._lock.release()
 
@@ -95,6 +99,7 @@ class SourcePrefixCarry:
     def begin_initial(self):
         self._require_transaction()
         self._snapshot = None
+        self._initial = True
 
     def stage_source(self, video):
         self._require_transaction()
@@ -117,7 +122,9 @@ class SourcePrefixCarry:
             n: hashlib.sha256(target[:, :, -n:].contiguous().numpy().tobytes()).hexdigest()
             for n in range(2, target.shape[2] + 1, 5)
         }
-        self._pending = _Snapshot(source, tuple(target.shape[-2:]), hashes, self._generation + 1, self._sequence())
+        self._pending = _Snapshot(
+            source, tuple(target.shape[-2:]), hashes, self._generation + 1, self._sequence(), self._initial
+        )
         return {
             "policy": SOURCE_PREFIX_CARRY_POLICY,
             "generation": self._pending.generation,
@@ -127,6 +134,7 @@ class SourcePrefixCarry:
             "retained_cuda_bytes": 0,
             "source_role": "low_probe_clean_prediction_at_handoff_sigma",
             "sequence": self._pending.sequence,
+            "initial_chunk": self._pending.initial,
             "publication": "after_successful_outer_sampling_transaction",
             "elapsed_ms": (time.perf_counter() - started) * 1000,
             "extra_h3_nfe": 0,
@@ -143,11 +151,22 @@ class SourcePrefixCarry:
         n = int(exact.shape[2])
         fingerprint = video_latent_fingerprint(exact)
         sequence = self._sequence()
-        if (sequence is not None or snapshot.sequence is not None) and (
-            sequence is None
-            or snapshot.sequence is None
-            or sequence[0] != snapshot.sequence[0]
-            or sequence[1] != snapshot.sequence[1] + 1
+        # Continuum labels continuation chunks only: its initial Flow pass is
+        # standalone, then the first labeled request is chunk 2. Bind that one
+        # transition by the exact target hash below, never a previous unlabeled
+        # continuation. Later requests must advance the labeled session.
+        initial_transition = (
+            snapshot.initial and snapshot.sequence is None and sequence is not None and sequence[1] == 2
+        )
+        if (
+            not initial_transition
+            and (sequence is not None or snapshot.sequence is not None)
+            and (
+                sequence is None
+                or snapshot.sequence is None
+                or sequence[0] != snapshot.sequence[0]
+                or sequence[1] != snapshot.sequence[1] + 1
+            )
         ):
             raise RuntimeError("native_source_carry requires the immediately preceding chunk in the same sequence")
         if (
@@ -165,6 +184,7 @@ class SourcePrefixCarry:
             "generation": snapshot.generation,
             "previous_sequence": snapshot.sequence,
             "current_sequence": sequence,
+            "initial_unlabeled_to_chunk_2": initial_transition,
             "prefix_t": n,
             "authoritative_prefix": fingerprint,
             "authoritative_prefix_preserved_bitwise": True,

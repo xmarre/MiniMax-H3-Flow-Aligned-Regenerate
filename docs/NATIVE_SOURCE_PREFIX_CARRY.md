@@ -40,7 +40,10 @@ match between its authoritative target prefix and the preceding returned target
 suffix. Target and source grids must match the recorded grids, both clips must
 use native `5k+2` temporal lengths, and the prefix must end on the same native
 phase. When Continuum sequence metadata is present, session identity and the
-immediately preceding chunk index must also match.
+immediately preceding chunk index must also match. Continuum's initial Flow
+pass is unlabeled; the first labeled request (chunk 2) can bind that initial
+pair by its exact target-suffix hash. An unlabeled continuation or skipped chunk
+cannot use this exception. Later requests must advance the labeled session.
 
 The matching tail of that source clean prediction replaces only the protected
 source prefix before low sampling. Low/probe and learned transfer reuse those
