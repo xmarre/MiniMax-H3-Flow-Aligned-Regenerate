@@ -14,7 +14,12 @@ from pathlib import Path
 
 import torch
 
-from .local_boundary_audit import _AUDIT_MODEL_OWNERS, geometry_comparison, normalize_bundle_path, read_verified_operand
+from .local_boundary_audit import (
+    _AUDIT_MODEL_OWNERS,
+    geometry_comparison,
+    normalize_bundle_path,
+    read_verified_operand,
+)
 from .native_prefix_counterfactual import _native_pixels, _temporal_increment, _variant_pixels
 from .partitioned_stage import tensor_sha256
 from .stage_static_roi_audit import PROFILES, compare_same_frame_prefix_rois, parse_static_rois
@@ -65,7 +70,10 @@ def audit_saved_low_aba(
     if manifest.get("schema") != 1 or manifest.get("kind") != KIND:
         raise ValueError("expected the exact frozen low-source A/B/A export manifest")
     metadata = manifest.get("metadata", {})
-    if metadata.get("policy") != "h3_frozen_low_source_aba_v1" or metadata.get("model_domain") != "model_internal_clean":
+    if (
+        metadata.get("policy") != "h3_frozen_low_source_aba_v1"
+        or metadata.get("model_domain") != "model_internal_clean"
+    ):
         raise ValueError("frozen source A/B operands have an unknown model domain or policy")
     if not isinstance(metadata.get("low_input_pairing"), dict) or not metadata["low_input_pairing"].get(
         "input_pair_eligible"
