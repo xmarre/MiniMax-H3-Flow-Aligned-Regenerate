@@ -597,7 +597,10 @@ def audit_local_boundary(
     static_roi_profile="off",
     static_roi_json="",
     validate_full_video_decoder=False,
+    feature_tracking_enabled=False,
 ):
+    if not isinstance(feature_tracking_enabled, bool):
+        raise TypeError("feature tracking enabled must be boolean")
     if not isinstance(validate_full_video_decoder, bool):
         raise TypeError("full-video decode validation must be boolean")
     if scope not in SCOPES:
@@ -605,6 +608,8 @@ def audit_local_boundary(
     if detail_region not in DETAIL_REGIONS:
         raise ValueError(f"unsupported local boundary detail region: {detail_region!r}")
     static_rois = parse_static_rois(static_roi_profile, static_roi_json)
+    if feature_tracking_enabled and not static_rois:
+        raise ValueError("feature tracking requires static_roi_profile != off")
     if validate_full_video_decoder and scope == "high_prediction_tone":
         raise ValueError("full-video decode validation requires stage_continuity or transfer_and_decoder_context")
     if static_rois and scope == "high_prediction_tone":
@@ -637,6 +642,7 @@ def audit_local_boundary(
         "static_roi_measurement_enabled": bool(static_rois),
         "static_roi_bounds_xyxy": {name: list(rect) for name, rect in static_rois.items()},
         "full_video_decoder_comparison_requested": validate_full_video_decoder,
+        "feature_tracking_enabled": feature_tracking_enabled,
         "fps": 24,
         **identity,
         "plan": plan,
@@ -692,6 +698,12 @@ def audit_local_boundary(
                 "adjacent_luma_mean_change": (selected_luma[1:] - selected_luma[:-1]).mean((1, 2)).tolist(),
                 "adjacent_frame_geometry": geometry_comparison(selected[:-1], selected[1:], labels),
             }
+        if feature_tracking_enabled and name == "final":
+            from .feature_background_tracking import track_background_features
+
+            report["stages"][name]["tracked_background_features"] = track_background_features(
+                frames, [labels[0] - 1, *labels], join_frame=join_frame, rois=static_rois
+            )
         if name == "source_grid":
             report["stages"][name]["state_role"] = "uniform_reduced_view_with_projected_target_grid_head"
             report["stages"][name]["native_reduced_grid_generation_for_head"] = False
@@ -945,6 +957,16 @@ class H3FlowLocalBoundaryAudit:
                         ),
                     },
                 ),
+                "feature_tracking_enabled": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Optional OpenCV forward/backward feature tracking on final decoded replay. "
+                            "Measures cumulative background movement using RANSAC; read-only and slower."
+                        ),
+                    },
+                ),
                 "validate_full_video_decoder": (
                     "BOOLEAN",
                     {
@@ -1000,6 +1022,7 @@ class H3FlowLocalBoundaryAudit:
         static_roi_profile="off",
         static_roi_json="",
         validate_full_video_decoder=False,
+        feature_tracking_enabled=False,
     ):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
@@ -1016,6 +1039,7 @@ class H3FlowLocalBoundaryAudit:
             static_roi_profile=static_roi_profile,
             static_roi_json=static_roi_json,
             validate_full_video_decoder=validate_full_video_decoder,
+            feature_tracking_enabled=feature_tracking_enabled,
         )
         text = json.dumps(report, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
