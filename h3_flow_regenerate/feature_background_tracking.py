@@ -148,7 +148,7 @@ def track_background_features(
                 "support_left": left,
                 "support_right": right,
                 "horizontal_support_fraction": round(spread, 4),
-                "median_inlier_residual_px": round(median_error, 4),
+                "median_inlier_residual_px": round(median_error, 4) if n else None,
             }
             if valid:
                 scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
