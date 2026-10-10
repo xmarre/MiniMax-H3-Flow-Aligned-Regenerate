@@ -3553,6 +3553,17 @@ def _run_frozen_source_low_aba(
     # full source trajectories on the H3-loaded GPU through later high stages.
     source_reference = baseline_probe_internal.detach().to(device="cpu", copy=True)
     first_reference = baseline_first_actual.detach().to(device="cpu", copy=True)
+    protected_inputs = {
+        "low_noise": low_noise,
+        "original_latent": original_latent,
+        "low_mask": low_mask,
+        "low_sigmas": low_sigmas,
+        "original_prefix": original_prefix,
+        "candidate_prefix": candidate_prefix,
+        "authoritative_prefix": authoritative_prefix,
+        "baseline_probe_internal": baseline_probe_internal,
+    }
+    input_hashes_before = {name: tensor_sha256(value) for name, value in protected_inputs.items()}
     if source_reference.ndim != 3 or first_reference.ndim != 5:
         raise RuntimeError("frozen low A/B source and first-prediction domains are malformed")
 
@@ -3638,6 +3649,9 @@ def _run_frozen_source_low_aba(
         binding.metrics = prior_metrics
         guider.conds = prior_conds
 
+    input_hashes_after = {name: tensor_sha256(value) for name, value in protected_inputs.items()}
+    if input_hashes_after != input_hashes_before:
+        raise RuntimeError("frozen low B/A' replay mutated caller-owned sampler inputs or original A")
     original_video, _original_audio = unpack_streams(source_reference, low_shapes)
     b_video, b_first = outputs["B_target_projection"]
     a_replay_video, a_replay_first = outputs["A_replay"]
@@ -3661,6 +3675,8 @@ def _run_frozen_source_low_aba(
     report["extra_high_sampler_lifetimes"] = 0
     report["rng_restore_scopes"] = 2
     report["production_main_source_selected"] = True
+    report["caller_owned_low_inputs_unchanged"] = True
+    report["caller_owned_low_input_sha256"] = input_hashes_before
     report["source_carry_snapshot_mutated"] = False
     report["model_backend_selection_mutated"] = False
     report["sampler_A2_resumes_no_production_output"] = True
