@@ -1,89 +1,117 @@
-# Low-source sampling input-pairing witness
+# Frozen source low-sampler A/B/A experiment
 
-This diagnostic records the inputs actually entering MiniMax-H3's uniform-source
-low sampler. It supports the next investigation after the **01795 trained-VAE
-decoder-only counterfactual** established that changing the protected decoder
-prefix alters only a bounded number of decoded frames and does not remove the
-sustained apparent background expansion/softening in the fixed source suffix.
+This is an **opt-in real low/probe sampling experiment** for MiniMax-H3's
+`progressive_uniform_source` continuation. It follows run 01795's native-VAE
+decoder-only test: changing the decoded protected prefix did not remove
+sustained expansion/softening in the identical generated latent suffix.
 
-**Status:** input-provenance instrumentation, not a paired-run executor or a
-production geometry fix. The native-source-carry continuation remains
-unaccepted for rendered seam quality. Existing sampler, prefix, mask,
-attention, audio, and VAE behavior is unchanged.
+The experiment compares **two alternative inputs** to the actual low sampler
+using the same authoritative previous-chunk target prefix, source-carried
+prefix snapshot, seeded source-grid suffix noise, audio, masks, sigma schedule,
+guider conditioning and selected attention/Spectrum/VDN implementation.
+Unlike the preceding decoder-only diagnostic, the model **generates a new B
+source suffix**.
 
-## Enable and interpret
+## Configuration
 
-On **Flow PR #99**, connect the existing Partitioned Exact-Prefix Handoff node
-with `spatial_stage_control=progressive_uniform_source` and
-`capture_boundary_witness=true`. The node already enables the saved
-boundary evidence for this mode. The Flow metrics JSON now also contains three
-additional read-only events for each observed continuation:
+Refresh **Flow PR #99** with ComfyUI Patcher and restart ComfyUI. On the
+existing **MiniMax H3 Partitioned Exact-Prefix Handoff** node set:
 
-- `partitioned_low_input_pairing`: version
-  `h3_uniform_source_low_input_pairing_v1`. Hashes the exact preceding
-  authoritative target prefix, chosen source protected prefix, entire
-  source-grid initial video noise and generated suffix noise, audio noise,
-  generated suffix initial latent, audio initial latent, video/audio masks
-  and low sigma sequence. Also includes seed, sampler, source/target grids,
-  temporal length, selected source projection, and Flow's conditioning
-  signature. These are computed **after** constructing the actual low-stage
-  tensors but **before** its first sampler call.
-- `partitioned_low_first_actual_prediction`: SHA-256, sigma, outer-step and
-  provenance of the earliest low-stage *actual* model prediction, taken from
-  the completed Flow trajectory. If trajectory capture was not active,
-  `status=unavailable_without_trajectory`; there is no fake substitute
-  using a forecast or a sampler preview callback.
-- `partitioned_low_probe_clean_pairing`: source-grid protected-prefix and
-  generated-suffix hashes of the actual model-internal low/probe clean result,
-  before learned 3D transfer or high refinement.
+| Control | Value |
+|---|---|
+| `spatial_stage_control` | `progressive_uniform_source` |
+| `source_prefix_projection` | `native_source_carry` |
+| `capture_boundary_witness` | `true` |
+| `low_sampler_aba` | `true` |
+| Flow trajectory/capture input | Connected and enabled |
+| All other sampler/seed/geometry/backend settings | Keep existing tested configuration |
 
-The events are emitted only while **uniform-source boundary witness capture**
-is explicitly enabled. The baseline without that witness performs no extra
-input hashing, no additional low/high H3 calls, and no VAE encode/decode.
-Captured byte hashes are evidence of data identity, not evidence of rendered
-geometry correctness.
+**Run from the initial chunk through the first continuation with the SAME
+patched MODEL**, since native source carry relies on the preceding successful
+chunk's actual source low/probe prediction and its hash-paired final target.
+Do not start at chunk 2 with a different model clone or compare unmatched
+renderings. A missing/incorrect snapshot fails *before* the low sampler.
+The opt-in toggle defaults to **false** and adds no work otherwise.
 
-The pure helper
-`h3_flow_regenerate.low_input_pairing.compare_low_input_pairing_receipts(A, B)`
-compares two extracted `partitioned_low_input_pairing.fields` dictionaries.
-It rejects mismatched authoritative target prefix, initial video/audio noise,
-latent suffix, masks, low sigmas, conditioning signature, sampler, seed,
-shape/dtype and temporal phase. It expects the **chosen source protected
-prefix and source projection policy to differ** between the two candidates.
-It reports `input_pair_eligible` only when these known controls match.
+## What runs
 
-## Required controlled experiment
+The ordinary continuation low+probe runs first (arm **A**) using the
+hash-verified native source carry. At the low/probe boundary, before learned
+transfer or high refinement, the diagnostic freezes the already resolved
+low-stage initial video/audio state and then performs:
 
-Do **not** treat simply running 01794 and 01795 again with the same nominal
-seed as a paired experiment: their saved authoritative prefixes differed in
-SHA-256, so they did not have the same denoising starting context.
+- **B:** a new, actual low+probe sampling lifetime, changing **only**
+  the protected video prefix to the source-grid half-pixel-bicubic
+  projection of the *same* authoritative target prefix. Its generated
+  video suffix, audio, noise, masks, sigmas, model and seed are unchanged.
+- **A'**: a second new low+probe sampling lifetime restoring exactly
+  the original native source-carried protected prefix. This repeat checks
+  reproducibility after B has executed; only an A→A' match on both the
+  first actual model prediction and final generated clean suffix qualifies
+  A→B as a low-input effect.
 
-A meaningful next GPU experiment needs one frozen preceding-chunk state whose
-**same authoritative target prefix and same previous source carry snapshot**
-can be supplied to both low-sampler arms. Vary only the selected low-source
-protected prefix (actual native carry versus projected authoritative target).
-Both arms must use exactly the same source-grid suffix initial noise, target
-audio noise, low latent suffix/audio inputs, video/audio mask, sigmas,
-conditioning tensors and model, while preserving their own isolated
-Spectrum/VDN/model histories and execution order. Capture the first real
-low prediction, the final source low/probe clean suffix, and decoded
-same-time static-ROI motion and Sobel/detail before comparing downstream
-stages. A safe replay mechanism for this frozen state **is not implemented
-by the receipt alone**. Do not run a claimed paired comparison without it.
+Python, NumPy, CPU torch and initialized CUDA RNG state are restored to
+their position before the original A low sampler **at each shadow arm**.
+On leaving an arm, all those RNGs are restored to the state they had after
+A; the normal production high stage uses the **original A** low/probe
+result and handoff state, never B or A'. Both shadow arms get independent
+Flow trajectory/metrics owners and reset guider conditioning. No existing
+attention backend is disabled, Sol is not gated, and no VAE runs inside
+the shadow sampling experiment.
 
-The pairing receipt cannot hash the H3 model weights, replay the complete
-runtime RNG/caches, prove equality of internal attention state or guarantee
-the Flow conditioning signature covers all semantics. The report explicitly
-sets `checkpoint_identity_verified=false`,
-`rng_state_verified=false`, `runtime_model_cache_state_verified=false`
-and `causal_pair_qualified=false`. The comparator also returns
-`causal_pair_qualified=false` even when all known input hashes match.
-Record the exact H3 checkpoint identity, backend/overlay versions and
-state isolation separately. A difference in source suffix output after a
-properly isolated paired run would support a **low-conditioning effect**,
-not automatically identify the root cause of camera motion or detail loss.
+The diagnostic costs **two extra low and two extra probe sampler lifetimes**;
+there are **zero extra high passes**, no implicit hidden transfer, and
+no extra VAE calls. It may take substantial GPU time, particularly with
+spectrum forecast acceleration. The extra operations are experimental:
+A' reproducibility verifies the observed low output, but does **not**
+prove all hidden CUDA/attention-model cache state or future-chunk residency
+was restored. Do not treat a run with the diagnostic enabled as a routine
+production/throughput benchmark.
 
-This patch does not change low-stage random number generation, masks,
-sampler iterations, VAE, source-carry ownership, Sol, VDN, Spectrum
-forecast policy, Continuum Auto3, or runtime model options. Keep PR #99
-draft until controlled GPU evidence demonstrates an actual quality fix.
+## Outputs and interpretation
+
+The existing Flow metrics JSON contains:
+
+- `partitioned_low_input_pairing`: frozen exact-input SHA receipts.
+- `partitioned_frozen_low_source_aba`: full `known_input_pairing` validation,
+  changed protected-prefix hashes, A-vs-A' reproducibility
+  (`repeat_a_clean_suffix` and `repeat_a_first_actual_prediction`),
+  A-vs-B differences for the same stages, and actual/forecast counter totals.
+- `partitioned_low_probe_clean_pairing`: original selected A source hashes.
+
+The paired native source-grid tensors are exported under
+`ComfyUI/output/h3_flow_regenerate/residual_geometry/session-.../`
+with manifest kind `h3_flow_frozen_low_source_aba_v1` and byte SHA hashes:
+`source_A_full`, `source_B_full`, `source_A_replay_full`,
+`authoritative_target_prefix`, `first_actual_A`,
+`first_actual_B` and `first_actual_A_replay`.
+
+**Qualification:** `causal_low_input_effect_qualified=true` requires
+matching known initial inputs and a maximum absolute A-to-A' replay error
+no greater than `1e-5` in both first actual low prediction and final
+model-internal clean source suffix. If the replay fails, the B results are
+**not qualified** and must not be interpreted as a prefix-causation test.
+This is an operational replayability check; internal state isolation remains
+unproven and GPU execution must be inspected independently.
+
+A valid, reproducible A–B difference establishes that changing the source
+protected prefix changes the **low model trajectory** under these frozen
+inputs. It does **not** prove that either arm prevents background zoom,
+preserves texture, fixes tone, or improves speech. To score those outcomes,
+decode the saved **A and B source clean tensors with the same native production
+video VAE**, measure frame-matched static bookshelf/picture/curtain regions
+with equal decoder/ROI conditions, and examine later generated frames as
+well as the changed f174 anchor. The authoritative target prefix remains
+unchanged between arms; the B source prefix is intentionally changed.
+
+PR #99 remains draft. Do not merge or change default source-prefix policy
+without same-prefix GPU visual acceptance.
+
+## Failure and rollback
+
+The diagnostic refuses incompatible stage, missing source carry,
+missing witness/trajectory or mismatched initial inputs. It explicitly
+reports an absent first actual prediction instead of treating a forecast
+as ground truth. A replay nondeterminism result is a diagnostic rejection,
+not an automatic geometry repair. Set `low_sampler_aba=false` and restart
+ComfyUI to return to the preceding production-shape path.
