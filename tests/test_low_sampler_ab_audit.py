@@ -172,3 +172,45 @@ def test_audit_rejects_false_prefix_or_replay_evidence_before_decode(source_pair
             feature_tracking_enabled=False,
         )
     assert calls == []
+
+
+def test_unqualified_aba_can_be_inspected_only_with_explicit_opt_in(source_pair, monkeypatch):
+    folder, model, manifest = source_pair
+    a2 = (
+        torch.frombuffer(bytearray((folder / "source_A_replay_full.bin").read_bytes()), dtype=torch.float32)
+        .reshape(1, 24, 22, 4, 4)
+        .clone()
+    )
+    a2[:, :, 9] += 0.08
+    _save(folder, manifest["tensor_bytes"], "source_A_replay_full", a2)
+    manifest["metadata"]["reproduction_verified"] = False
+    (folder / "manifest.json").write_text(json.dumps(manifest))
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    _no_decode_implementation(monkeypatch)
+    with pytest.raises(ValueError, match="diagnose_failed_replay"):
+        audit.audit_saved_low_aba(model, str(folder), 175, lambda x: x, feature_tracking_enabled=False)
+    report = audit.audit_saved_low_aba(
+        model, str(folder), 175, lambda x: x,
+        feature_tracking_enabled=False, diagnose_failed_replay=True,
+    )
+    assert report["a_replay_verified"] is False
+    assert report["causal_low_input_effect_qualified"] is False
+    assert report["unqualified_diagnostic_only"] is True
+    assert report["reproduction_errors"]["first_actual_prediction"]["exact"] is True
+    assert report["reproduction_errors"]["clean_source_full"]["abs_max"] > 0.079
+    assert report["same_frame_A_to_A_replay"] is not None
+    assert report["same_frame_geometry_A_to_A_replay"] is not None
+    assert report["decode"]["full_source_vae_calls"] == 3
+    assert report["decode"]["extra_h3_nfe"] == 0
+    assert before == {p.name: p.read_bytes() for p in folder.iterdir()}
+
+
+def test_wrong_manifest_names_actual_kind_and_selected_path(source_pair, monkeypatch):
+    folder, model, manifest = source_pair
+    manifest["kind"] = "h3_flow_exact_prefix_residual_geometry_evidence"
+    (folder / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(audit, "_native_pixels", lambda *_args: pytest.fail("wrong manifest entered native VAE"))
+    with pytest.raises(ValueError, match="partitioned_frozen_low_source_aba.fields.evidence.bundle") as exc:
+        audit.audit_saved_low_aba(model, str(folder), 175, lambda x: x)
+    assert "h3_flow_exact_prefix_residual_geometry_evidence" in str(exc.value)
+    assert str(folder / "manifest.json") in str(exc.value)
