@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import random
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
+from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan
+from h3_flow_regenerate import partitioned_scheduler as scheduler
 from h3_flow_regenerate.low_sampler_ab import (
     capture_rng,
     compare_aba,
@@ -98,3 +103,141 @@ def test_later_model_state_leakage_rejects_a2(inputs):
     report = compare_aba(video, candidate, replay, first, candidate, first, prefix_t=7)
     assert report["reproduction_verified"] is False
     assert report["model_execution_history_strictly_isolated"] is False
+
+
+def test_real_scheduler_aba_shadow_uses_two_independent_low_probe_lifetimes(inputs, monkeypatch):
+    video, audio, packed, shapes = inputs
+    noise, _ = pack_streams((torch.zeros_like(video), torch.zeros_like(audio)))
+    mask, _ = pack_streams((torch.cat((torch.zeros_like(video[:, :, :7]), torch.ones_like(video[:, :, 7:])), dim=2), torch.ones_like(audio)))
+    original_prefix = video[:, :, :7].clone()
+    alternate_prefix = original_prefix + 0.125
+    low_plan = PartitionedStagePlan(
+        prefix=original_prefix.clone().float(),
+        temporal=17,
+        source_h=4,
+        source_w=4,
+        prefix_noise=torch.zeros_like(original_prefix),
+    )
+    low_stage_calls = []
+    capture_stack = []
+    binding = SimpleNamespace(
+        metrics=H3FlowMetrics(),
+        trajectory=object(),
+        capture_enabled=True,
+        active_capture=None,
+        active_guidance_run=None,
+        captured_run_id="main-trajectory",
+    )
+    main_metrics = binding.metrics
+    original_trajectory = binding.trajectory
+    base = SimpleNamespace()
+    guider = SimpleNamespace(
+        model_options={"transformer_options": {}},
+        model_patcher=SimpleNamespace(model=base),
+        conds={"positive": [{"original": True}]},
+    )
+    original_conds = guider.conds
+    state = {"stage": None}
+
+    @contextmanager
+    def stage(_guider, name):
+        previous = state["stage"]
+        state["stage"] = name
+        try:
+            yield
+        finally:
+            state["stage"] = previous
+
+    @contextmanager
+    def passthrough(*_args, **_kwargs):
+        yield
+
+    @contextmanager
+    def recorder(_binding, _guider, _sampler, _sigmas, _shapes, *, enabled):
+        assert enabled and _binding is binding
+        holder = {}
+        record = {}
+        capture_stack.append(record)
+        yield holder
+        holder["run"] = SimpleNamespace(
+            exact_samples=lambda: [
+                SimpleNamespace(
+                    phase="predicted",
+                    video_x0=record["first"],
+                )
+            ]
+        )
+
+    def fake_executor(_noise, latents, _sampler, _sigmas, _mask, _callback, _pbar, _seed, *, latent_shapes):
+        latent_video, latent_audio = unpack_streams(latents, latent_shapes)
+        if state["stage"] == "low":
+            low_stage_calls.append(latent_video[:, :, :7].clone())
+            capture_stack[-1]["first"] = latent_video.clone()
+            return latents.clone()
+        assert state["stage"] == "probe"
+        changed_video = latent_video.clone()
+        changed_video[:, :, 7:] += latent_video[:, :, :7].mean() * 0.02
+        return pack_streams((changed_video, latent_audio))[0]
+
+    monkeypatch.setattr(scheduler, "_isolated_shadow_trajectory_capture", recorder)
+    monkeypatch.setattr(scheduler, "_flow_stage_contract", stage)
+    monkeypatch.setattr(scheduler, "_high_stage_contract", passthrough)
+    monkeypatch.setattr(scheduler, "_partitioned_stage_contract", passthrough)
+    monkeypatch.setattr(scheduler, "_reset_guider_conds", lambda g, *, template: setattr(g, "conds", template))
+    monkeypatch.setattr(scheduler, "_raw_sampler_state", lambda _base, result, _shapes, _sigma: result)
+    monkeypatch.setattr(scheduler, "_process_latent_in", lambda _base, value, _shapes: value)
+    monkeypatch.setattr(scheduler, "_noise_argument", lambda _base, raw, _sigma, _latent: raw)
+    monkeypatch.setattr(scheduler, "_make_probe_sampler", lambda sampler: sampler)
+    monkeypatch.setattr(scheduler, "sampler_name", lambda sampler: "sample_euler")
+    monkeypatch.setattr(scheduler, "_conditioning_signature", lambda _guider: "identical")
+    monkeypatch.setattr(scheduler, "_interop_identity", lambda _options: ("fake-session", "2"))
+    monkeypatch.setattr(
+        scheduler,
+        "export_residual_geometry_evidence",
+        lambda tensors, **_kwargs: {"status": "mock", "names": sorted(tensors)},
+    )
+    first_video = video.clone()
+    original_clean = video.clone()
+    original_clean[:, :, 7:] += video[:, :, :7].mean() * 0.02
+    original_clean_packed = pack_streams((original_clean, audio))[0]
+    frozen = capture_rng()
+    result = scheduler._run_frozen_source_low_aba(
+        fake_executor,
+        guider,
+        binding,
+        frozen_pre_rng=frozen,
+        conditioning_template=original_conds,
+        sampler=object(),
+        low_sigmas=torch.tensor([1.0, 0.5]),
+        probe_sigmas=torch.tensor([0.5]),
+        low_shapes=shapes,
+        low_noise=noise,
+        original_latent=packed,
+        low_mask=mask,
+        seed=42,
+        disable_pbar=True,
+        low_plan=low_plan,
+        original_prefix=original_prefix,
+        candidate_prefix=alternate_prefix,
+        authoritative_prefix=torch.randn((1, 24, 7, 8, 8)),
+        baseline_probe_internal=original_clean_packed,
+        baseline_first_actual=first_video,
+        sigma=0.5,
+        index=1,
+        source_h=4,
+        source_w=4,
+        target_h=8,
+        target_w=8,
+    )
+    assert result["causal_low_input_effect_qualified"] is True
+    assert result["known_input_pairing"]["input_pair_eligible"] is True
+    assert result["changed_b_clean_suffix"]["rms"] > 0
+    assert result["changed_b_first_actual_prediction"]["rms"] > 0
+    assert len(low_stage_calls) == 2
+    assert torch.equal(low_stage_calls[0], alternate_prefix)
+    assert torch.equal(low_stage_calls[1], original_prefix)
+    assert binding.metrics is main_metrics
+    assert binding.trajectory is original_trajectory
+    assert guider.conds is original_conds
+    assert binding.captured_run_id == "main-trajectory"
+    assert result["evidence"]["status"] == "mock"
