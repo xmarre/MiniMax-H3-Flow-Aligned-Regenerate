@@ -26,7 +26,12 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget recommended profile (`progressive_uniform_source`, exact audio/video ownership, `main_then_shadow`, `frame_gauge_repair=false`, `suffix_dc_bridge=false`, the unused target-band width, and the current overlap/provenance values);
+- [`prefix-projection-ab.workflow.json`](workflows/examples/prefix-projection-ab.workflow.json) — VAE-only paired source-prefix reconstruction on an existing uniform-source witness, with three aligned PNG frame sequences saved under `output/h3_flow_regenerate/prefix_projection_audits/`; see [exact setup, context controls and acceptance](docs/PREFIX_PROJECTION_AB.md). No H3 sampling or production setting changes;
+- **Source-prefix continuation experiment:** the Partitioned Exact-Prefix Handoff has `source_prefix_projection=latent_bicubic|vae_rgb_roundtrip|native_source_carry` and an optional `video_vae` input. Default is latent bicubic. The roundtrip mode processes only the carried prefix once before low sampling; use the generation's native video VAE and a uniform-source spatial stage. [Controlled continuation A/B and limitations](docs/PREFIX_PROJECTION_AB.md#controlled-continuation-ab).
+- **Native source carry experiment:** select `source_prefix_projection=native_source_carry` to reuse the preceding chunk's actual low/probe clean prediction as protected source context. Requires a full sequence with the same patched MODEL and exact target-suffix pairing; adds no H3/VAE calls. [Setup, ownership and limitations](docs/NATIVE_SOURCE_PREFIX_CARRY.md).
+- **Frozen low-sampler A/B/A root-cause test (default off):** set `low_sampler_aba=true` on the Partitioned Exact-Prefix Handoff alongside `progressive_uniform_source`, `native_source_carry`, boundary witness capture and Flow trajectory capture. The same continuation executes its ordinary source-carry low/probe **A**, an actual target-projected-prefix low/probe **B**, and a repeated source-carry low/probe **A'** to check reproducibility. All generated-suffix initial noise, masks, conditioning and target prefix are shared. Two extra low/probe lifetimes add GPU time; high always receives the original A. The stage tensors can be replayed through the new **MiniMax H3 Frozen Low A/B Audit** node using the production native video VAE. This is an opt-in diagnostic, not a geometry repair or rendered acceptance. [Setup, evidence and qualifications](docs/LOW_SOURCE_SAMPLING_PAIRING.md).
+
+- [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the established 32-widget recommended profile (the newer default-off low_sampler_aba selector is omitted for compatibility) (`progressive_uniform_source`, exact audio/video ownership, `main_then_shadow`, `frame_gauge_repair=false`, `suffix_dc_bridge=false`, the unused target-band width, and the current overlap/provenance values);
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — dependency-minimal source-input progressive control using a `1.20x` target handoff.
 
@@ -78,6 +83,7 @@ suffix_dc_bridge                 = false
 target_band_tokens               = 4
 target_band_handoff_state        = renoise_clean
 target_band_context              = mixed_grid
+uniform_source_detail_transport  = false
 ```
 
 **Workflows saved with an older release keep their stored widget values.** To
@@ -86,6 +92,27 @@ move such a workflow to the recommended profile, set
 and `suffix_dc_bridge=false`, and leave the other values above unchanged.
 
 ### Recommended continuation: one uniform source trajectory
+
+Run 01770 rejected the image-resize change as a complete boundary fix. The
+current PR99 candidate instead preserves the low stage's measured flow residual
+when entering high. Its Gaussian component is coupled on the ordinary image
+grid; newly added noise has zero projection onto those retained modes. For a
+deterministic sampler, model drift uses a separate image-consistent lift; a
+stochastic sampler transfers the complete residual. Both uniform modes use this
+without enabling frame-gauge or static detail correction. The reduced low grid,
+model-call budget and exact prefix remain. Rendered continuity and GPU timing
+are pending; see [01770 investigation](docs/validation/CONTINUATION_01770_IMAGE_NOISE.md).
+
+Static fine detail can change at the join despite exact returned prefix bytes.
+The opt-in `progressive_uniform_source_exact_context` candidate supplies the
+unresampled prefix to low/probe through Core's native video-reference layout,
+keeping one reduced-grid generated trajectory. The reference occupies its own
+time span before the targets; target audio, video and keyframes advance together.
+This preserves their relative timing while changing their time relative to text
+and existing references. Rendered continuity and GPU latency remain unvalidated;
+the release default is unchanged. Keep `uniform_source_detail_transport=false`
+when checking this mode. See
+[continuation investigation and acceptance](docs/validation/CONTINUATION_01764_EXACT_VISUAL_CONTEXT.md).
 
 `spatial_stage_control=progressive_uniform_source` is the recommended
 continuation mode. Low/probe evaluates one full-duration clip on the configured
@@ -96,18 +123,22 @@ generated trajectory to the target grid. The caller's exact target-grid prefix
 is then restored, and high refinement runs on the target grid with the original
 exact-prefix contract. The returned latent carries the exact prefix.
 
-Low/probe sees the physical-lattice projection of the protected prefix on the
-reduced grid, not exact target-grid prefix attention. The handoff re-enters the
-target grid through the same learned transfer as the first chunk, and high
-refinement re-attends to the exact prefix.
+Low/probe sees the ordinary antialiased image-grid resize of the protected
+prefix on the reduced grid. Uniform continuation uses the provider's ordinary
+image-grid learned transfer, matching the first chunk. Attention-coordinate
+resampling remains confined to the heterogeneous modes. High refinement
+re-attends to the exact prefix. The image-grid correction is covered by native
+runtime regression tests but was insufficient in 01770; see
+[image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
 
-In the accepted reference continuation (default profile, native attention
+In the earlier accepted reference continuation (default profile, native attention
 backend), the join had no visible discontinuity. Measured final luminance
 changed by less than 0.001 across the join. Continuation sampling took 1.23
 times the first chunk's sampling time, and Spectrum forecast both the low and
 the high stage. See [validation: run 01737](docs/validation/CONTINUATION_01737_AUDIT_LIFETIME.md).
 This is acceptance of one continuation, not a guarantee for every model,
-scene, seed or hardware. Sol attention selection uses the same equal-grid
+scene, seed or hardware, and predates the image-grid correction above. Sol
+attention selection uses the same equal-grid
 partition and history contract and is covered by CPU contract tests; it has
 no separate rendered acceptance.
 
@@ -372,6 +403,28 @@ conditioning rows, and streamed VDN weights may be fetched twice per block.
 Wall time and peak memory need measurement. Existing modes and defaults retain
 their previous execution paths.
 
+### Experimental uniform-source detail transport
+
+`uniform_source_detail_transport=false` is the default for new nodes, saved
+workflows that omit the widget, and the canonical overlay. Keep it off when
+checking `progressive_uniform_source_exact_context` alone.
+
+Explicitly enabling it adds a weighted copy of the last exact-prefix frame's
+exact-minus-learned latent residual to generated frames before high refinement.
+Weights depend on local learned change and residual persistence fitted on
+prefix-frame pairs. A separate set of prefix pairs must improve before the
+transport applies. This checks prefix residual prediction; it does not establish
+suffix motion safety or rendered quality. Fine detail can move while its reduced
+projection stays unchanged, causing the transport to carry stale detail or an
+overlay. The weights can be fractional. GPU quality remains unvalidated.
+
+It applies to both uniform-source modes and adds no model, upscaler or VAE call,
+though calibration has compute and memory costs. When applied, it supersedes the
+one-token suffix DC bridge. The `partitioned_uniform_source_detail_transport`
+receipt records the decision, prefix error ratio, weights and suffix weight mean.
+Use this only as a separate experimental comparison on identical inputs and
+seed; inspect moving detail and the actual assembled join.
+
 ### Suffix DC bridge
 
 `suffix_dc_bridge` controls the one-token channel-mean bridge on learned-transfer
@@ -531,12 +584,95 @@ pixel units. The region can still contain motion or insufficient texture, so
 these measurements are not automatic defect classifications. The default is
 `off`. Region analysis adds CPU work without extra decoding or image export.
 
+**Static-room zoom and background detail localization (01784/00040):**
+The Local Boundary Audit also supports `static_roi_profile=01784_room`
+for four named fractional-image regions: left bookshelf, framed picture,
+right curtain and white wall. For a different scene, select
+`static_roi_profile=custom` and provide `static_roi_json` such as
+`{"books":[0.0,0.42,0.13,0.60],"curtain":[0.83,0.04,0.99,0.36]}`.
+Names are arbitrary; the values are `[x0,y0,x1,y1]` fractions in
+`[0,1]`, not pixel coordinates. The default is `off`, adding no work.
+
+Set `chunk_join_frame=175` and
+`audit_scope=transfer_and_decoder_context` for a complete 01784
+boundary bundle. Within **each decoded stage independently**
+(`source_grid`, `provider`, `pre_high`,
+`first_high_before_flow`, `first_high_after_flow`, `final`),
+`stages.<stage>.static_background_rois` reports stationary-region Sobel
+gradient-energy ratios between the last prefix frame (174) and frame 180,
+pre-join trend, local luma difference, phase-correlated position changes,
+and an approximate horizontal background-scale slope from spatially
+separated room landmarks. Texture-unstable or implausibly large
+correspondences are marked unreliable rather than allowed to distort the
+scale estimate. White-wall texture is useful for shading but can be
+unsuitable for phase correlation. The full report records which landmarks
+were supported.
+
+**Feature-tracked background motion (new, optional):** Phase correlation
+can return an apparent zero displacement when books, curtains and framed
+images are progressively defocused. That is **not evidence of zero image
+motion**. Set `feature_tracking_enabled=true` with a static ROI profile in
+the Local Boundary Audit to add `stages.final.tracked_background_features`.
+The **MiniMax H3 Image Geometry Probe (diagnostic)** also has
+`feature_tracking_enabled` (default true), applied to the exact in-graph
+IMAGE frames fed to Save Video. Both use sequential pyramidal Lucas–Kanade
+optical flow, forward/backward consistency and RANSAC similarity estimation
+from spatially separated background regions, with an f174 anchor for join
+175. Inspect `frame_trajectories.180` / `.190`, including
+`cumulative_apparent_scale_percent`, `ransac_inliers`,
+`support_left/right` and `median_inlier_residual_px`. Ambiguous
+correspondences report `low_confidence_indeterminate`, **not** a
+fictitious 0% movement. Requires OpenCV (`cv2`) for the optional
+diagnostic; when unavailable the report explicitly says
+`opencv_unavailable` without preventing ordinary generation. The
+tracker does not change a single production pixel, frame, latent, mask,
+model call or decode. Its scale is an *apparent background-image*
+similarity estimate and does not prove the physical camera was zooming.
+
+For 01792 and the lossless 00008 case, do **not** infer encoder-only motion
+from an in-graph phase-correlation reading near zero. Run the **same
+feature tracker** on the in-graph frames and the lossless video, then
+compare the decoded final stage, Finalize Duration output and file at
+identical frame indices. Any downstream stage implicated must first
+reproduce the nonzero tracked displacement; no spatial-warp correction
+should be based on phase matching alone.
+
+**Compare each stage's pre/post ratios**; raw 704px reduced-grid and
+992px target-grid gradients have different native pixel bandwidths.
+Each region therefore reports **both native-grid Sobel energy and a
+common-grid (maximum 704px, antialiased-downsampled) energy ratio**, along
+with prefix-baseline stability. Region registration uses diagnostic-only
+subpixel phase correlation; only previously stable, plausible static
+landmarks contribute to separate horizontal and vertical apparent-scale
+fits. Ambiguous backgrounds (including a moving actor or texture-changing
+wall) can still bias the estimate, so the reported scale is **not physical
+camera ground truth**.
+
+The report additionally contains
+`static_background_same_frame_stage_pairs`: co-located ROI sharpness at the
+same decoded times for `source_grid → provider → pre_high →
+first_high_before_flow → first_high_after_flow → final`, resampled to a
+**shared target canvas of no more than 704 pixels on its longest side**.
+A stage's candidate/reference sharpness ratio is normalized to the same
+stage pair on frame 174 before evaluating frames 176–181, which prevents
+stable resolution-induced baseline differences from masquerading as a new
+join defect. These numerical comparisons identify a candidate first
+failure stage for subsequent manual review; they are not a production
+acceptance check.
+These static-ROI measurements only use RGB frames already decoded by
+the audit; no additional VAE calls, sampling steps or production
+adjustments occur, and the analysis does not modify source operands or
+rendered frames. Combine the stage receipts with the saved capture
+provenance before proposing a correction to the Flow path. The tone
+correction remains owned by Continuum PR #42 and is separate.
+
 Set `audit_scope=transfer_and_decoder_context` for the extended replay. It adds
 the saved uniform reduced-grid handoff view and compares identical pixel times
 from two independently decoded seven-token contexts near the band/tail edge for
-each stage. The reduced view contains a projected target-grid head and a native
-reduced-grid tail; it
-does not represent uniform reduced-grid generation of the head. Its geometry
+each stage. The reduced view contains the saved source prefix and native
+reduced-grid tail. Bicubic and VAE roundtrip prefixes reconstruct target context;
+`native_source_carry` uses the preceding chunk's actual source clean prediction.
+Its geometry
 uses its own decoded pixel units, reported alongside the canvas dimensions.
 The loader verifies its hash, exact tail ownership and the head projection
 within float32 interpolation tolerance (`atol=1e-4`, `rtol=1e-5`).
@@ -551,6 +687,30 @@ the default `stage_continuity` mode uses five calls. Both modes save numerical
 JSON only and perform no diffusion generation or provider inference. Geometry
 estimates and context disagreement still require comparison with visually
 accepted output; they are not automatic defect classifications.
+
+Uniform-source prefixes of at least seven tokens also receive an absolute
+source/target prefix comparison, separating the preceding standalone window
+from the following window with generated future context. This reuses existing
+decodes and adds no VAE calls. See [paired prefix replay and interpretation](docs/NATIVE_SOURCE_PREFIX_CARRY.md#compare-paired-prefix-states-without-regenerating).
+
+**Decoder-context equivalence check (optional, expensive):**
+Set `validate_full_video_decoder=true` on the **MiniMax H3 Local Boundary Audit**
+to decode the *entire* saved final target-grid clean latent through the same
+connected native H3 VAE, in addition to the existing cropped-window stage
+replay. It compares identical global frames (e.g. 170–195 for join 175)
+by per-frame RGB RMS/luma, full-frame diagnostic geometry and—when a static
+ROI profile is enabled—same-time ROI sharpness and static-landmark
+motion. Receipts appear at
+`full_video_decoder_context_validation`, including the full-decoder global
+origin, cropped origin, pixel-time labels and extra VAE call count.
+The option defaults to **false**. It adds **one full-timeline VAE decode**
+with potentially significant GPU/CPU memory cost, and may stop with OOM
+rather than evicting other resident models. It does not change the
+production video, sampling state, prompt or audio; it does **not**
+automatically prove that the two assembled chunk decodes match the final
+MP4. Differences would isolate context sensitivity of the native
+decoder (crop vs full); matching pixels would redirect investigation
+toward the external assembly/stitching path or rendered-image registration.
 
 Only numerical JSON is saved in `output/h3_flow_regenerate/boundary_audits` and
 returned by the node. Images, prompts and binary operands are not included in

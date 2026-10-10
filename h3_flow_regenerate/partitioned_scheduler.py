@@ -28,6 +28,7 @@ from .boundary_content_diagnostics import (
     measure_provider_boundary_temporal_predictor,
 )
 from .contracts import H3FlowTrajectory
+from .decode_context import video_latent_fingerprint
 from .frame_gauge import (
     FRAME_GAUGE_POLICY_VERSION,
     GUIDANCE_REFERENCE_POLICY,
@@ -44,9 +45,13 @@ from .geometry import (
 )
 from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
 from .handoff import (
+    H3_HANDOFF_DRIFT_NOISE_MODES,
     H3_HANDOFF_NOISE_DENSE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_RESIDUAL,
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    H3_HANDOFF_RESIDUAL_NOISE_MODES,
     H3_LATENT_UPSCALER_API_VERSION,
     H3_LATENT_UPSCALER_KIND,
     CleanVideoPostprocessResult,
@@ -60,6 +65,9 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .low_input_pairing import compare_low_input_pairing_receipts, make_low_input_pairing_receipt
+from .low_sampler_ab import LOW_SAMPLER_AB_KEY, capture_rng, compare_aba, counterfactual_low_inputs, frozen_rng
+from .metrics import H3FlowMetrics
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
 )
@@ -116,6 +124,8 @@ from .partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
     PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
@@ -151,6 +161,7 @@ from .partitioned_diagnostics import (
     resolve_partitioned_target_band_context,
     resolve_partitioned_target_band_handoff_state,
     resolve_partitioned_target_band_tokens,
+    resolve_partitioned_uniform_source_detail_transport,
     resolve_partitioned_video_guided_overlap_tokens,
 )
 from .partitioned_prefix import PARTITIONED_NATIVE_CARRIER_SOURCE, PARTITIONED_NATIVE_CARRIER_TARGET
@@ -205,12 +216,20 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+from .source_prefix_carry import SOURCE_PREFIX_CARRY_POLICY, source_carry_owner, source_carry_scope
+from .source_prefix_projection import (
+    SOURCE_PREFIX_PROJECTION_KEY,
+    SOURCE_PREFIX_ROUNDTRIP_POLICY,
+    SourcePrefixProjection,
+    project_source_prefix,
+)
 from .tone_bridge import (
     apply_suffix_dc_bridge,
     disabled_suffix_dc_bridge_metrics,
     map_clean_bridge_to_conditional_state,
 )
 from .transfer_lattice import H3_TRANSFER_LATTICE, H3PatchLatticeTransferProvider, measure_paired_prefix_affine
+from .uniform_source_detail import UNIFORM_SOURCE_DETAIL_TRANSPORT_POLICY, apply_uniform_source_detail_transport
 from .vae_boundary_video import (
     VAE_WINDOW_VIDEO_POLICY,
     apply_vae_window_vertical_translation,
@@ -813,6 +832,7 @@ def _partitioned_stage_contract(
     target_band=None,
     attention_head_t=None,
     target_band_domain=None,
+    exact_prefix_visual_context=None,
 ):
     options = getattr(guider, "model_options", None)
     if not isinstance(options, dict):
@@ -877,7 +897,7 @@ def _partitioned_stage_contract(
             if (
                 transformer.get(FLOW_STAGE_KEY) == "high"
                 or target_band is not None
-                or transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+                or transformer.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY) in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
             )
             else configured_boundary_witness(metrics, directory=witness_directory)
         ),
@@ -886,6 +906,7 @@ def _partitioned_stage_contract(
         target_band=target_band,
         attention_head_t=attention_head_t,
         target_band_domain=target_band_domain,
+        exact_prefix_visual_context=exact_prefix_visual_context,
     )
     if target_band_domain is not None and (
         target_band is None
@@ -1162,7 +1183,7 @@ def _validate_partitioned_vdn_compat(
     scheduler_capture = (
         isinstance(model_options, dict)
         and (model_options.get("transformer_options") or {}).get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY)
-        == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+        in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     )
     boundary_witness_requested = (
         required_native_carrier != PARTITIONED_NATIVE_CARRIER_TARGET
@@ -1619,7 +1640,11 @@ def _validate_partitioned_sol_sink_measure(mode: str) -> None:
 
 # Spatial-stage controls whose continuation performs a real learned spatial transfer.
 _LEARNED_TRANSFER_SPATIAL_STAGES = frozenset(
-    {PARTITIONED_SPATIAL_STAGE_PROGRESSIVE, PARTITIONED_SPATIAL_STAGE_TARGET_BAND}
+    {
+        PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
+        PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
+        *PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
+    }
 )
 
 
@@ -2120,7 +2145,7 @@ def _resolve_partitioned_transfer_clean(
             raise RuntimeError("captured handoff clean tensor is not finite floating-point video")
         return actual_handoff_clean, "actual_clean_postprocess", "actual_clean_postprocess_no_inverse"
 
-    if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
+    if handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES:
         raise RuntimeError(
             "source-residual handoff lost the actual clean postprocess tensor; "
             "refusing deterministic-noise inverse recovery"
@@ -3444,6 +3469,252 @@ def _measure_partitioned_transfer_splice(
     return fields
 
 
+def _run_frozen_source_low_aba(
+    executor,
+    guider,
+    binding,
+    *,
+    frozen_pre_rng,
+    conditioning_template,
+    sampler,
+    low_sigmas,
+    probe_sigmas,
+    low_shapes,
+    low_noise,
+    original_latent,
+    low_mask,
+    seed,
+    disable_pbar,
+    low_plan,
+    original_prefix,
+    candidate_prefix,
+    authoritative_prefix,
+    baseline_probe_internal,
+    baseline_first_actual,
+    sigma,
+    index,
+    source_h,
+    source_w,
+    target_h,
+    target_w,
+):
+    """One original A plus B/A' low/probe lifetimes, before any high refinement.
+
+    No model/backend is switched off. The existing A controls downstream
+    production handoff. B and A' use distinct temporary Flow captures and
+    metrics, leaving original trajectory identity and counters untouched.
+    """
+    if binding.active_capture is not None or binding.active_guidance_run is not None:
+        raise RuntimeError("frozen A/B requires a quiescent low/probe capture boundary")
+    if binding.trajectory is None or not binding.capture_enabled or baseline_first_actual is None:
+        raise RuntimeError("frozen A/B requires actual low-stage Flow trajectory capture")
+    from .low_sampler_ab import POLICY as LOW_AB_POLICY
+
+    candidate_latent = counterfactual_low_inputs(
+        original_latent,
+        low_shapes,
+        original_prefix,
+        candidate_prefix,
+        low_plan.prefix_t,
+    )
+    before_pair = make_low_input_pairing_receipt(
+        authoritative_target_prefix=authoritative_prefix,
+        source_prefix=original_prefix,
+        low_noise=low_noise,
+        low_latent_image=original_latent,
+        low_mask=low_mask,
+        low_shapes=low_shapes,
+        low_sigmas=low_sigmas,
+        prefix_t=low_plan.prefix_t,
+        source_policy=SOURCE_PREFIX_CARRY_POLICY,
+        sampler=sampler_name(sampler),
+        seed=int(seed or 0),
+        conditioning_signature=_conditioning_signature(guider),
+    )
+    alternate_pair = make_low_input_pairing_receipt(
+        authoritative_target_prefix=authoritative_prefix,
+        source_prefix=candidate_prefix,
+        low_noise=low_noise,
+        low_latent_image=candidate_latent,
+        low_mask=low_mask,
+        low_shapes=low_shapes,
+        low_sigmas=low_sigmas,
+        prefix_t=low_plan.prefix_t,
+        source_policy="half_pixel_latent_v1",
+        sampler=sampler_name(sampler),
+        seed=int(seed or 0),
+        conditioning_signature=_conditioning_signature(guider),
+    )
+    pairing = compare_low_input_pairing_receipts(before_pair, alternate_pair)
+    if not pairing["input_pair_eligible"]:
+        raise RuntimeError(f"frozen low A/B initial inputs are not paired: {pairing['mismatched_fields']}")
+    # Shadow comparison operands have CPU ownership; do not retain additional
+    # full source trajectories on the H3-loaded GPU through later high stages.
+    source_reference = baseline_probe_internal.detach().to(device="cpu", copy=True)
+    first_reference = baseline_first_actual.detach().to(device="cpu", copy=True)
+    protected_inputs = {
+        "low_noise": low_noise,
+        "original_latent": original_latent,
+        "low_mask": low_mask,
+        "low_sigmas": low_sigmas,
+        "original_prefix": original_prefix,
+        "candidate_prefix": candidate_prefix,
+        "authoritative_prefix": authoritative_prefix,
+        "baseline_probe_internal": baseline_probe_internal,
+    }
+    input_hashes_before = {name: tensor_sha256(value) for name, value in protected_inputs.items()}
+    if source_reference.ndim != 3 or first_reference.ndim != 5:
+        raise RuntimeError("frozen low A/B source and first-prediction domains are malformed")
+
+    prior_metrics, prior_conds = binding.metrics, guider.conds
+    diagnostic_metrics = H3FlowMetrics()
+    base_model = guider.model_patcher.model
+    transformer = guider.model_options["transformer_options"]
+    alt_plan = PartitionedStagePlan(
+        prefix=candidate_prefix.detach().to(torch.float32).clone(),
+        temporal=low_plan.temporal,
+        source_h=low_plan.source_h,
+        source_w=low_plan.source_w,
+        prefix_noise=low_plan.prefix_noise.detach().clone(),
+    )
+    outputs = {}
+    binding.metrics = diagnostic_metrics
+    try:
+        for label, latent, plan in (
+            ("B_target_projection", candidate_latent, alt_plan),
+            ("A_replay", original_latent, low_plan),
+        ):
+            with frozen_rng(frozen_pre_rng):
+                with _isolated_shadow_trajectory_capture(
+                    binding, guider, sampler, low_sigmas, low_shapes, enabled=True
+                ) as capture:
+                    _reset_guider_conds(guider, template=conditioning_template)
+                    with (
+                        _flow_stage_contract(guider, "low"),
+                        _partitioned_stage_contract(guider, plan, diagnostic_metrics),
+                    ):
+                        shadow_low = executor(
+                            low_noise,
+                            latent,
+                            sampler,
+                            low_sigmas,
+                            low_mask,
+                            None,
+                            disable_pbar,
+                            seed,
+                            latent_shapes=low_shapes,
+                        )
+                    shadow_raw = _raw_sampler_state(base_model, shadow_low, low_shapes, sigma)
+                    shadow_internal = _process_latent_in(base_model, latent, low_shapes)
+                    shadow_probe_noise = _noise_argument(base_model, shadow_raw, sigma, shadow_internal)
+                    previous_context = transformer.get(PROBE_CONTEXT_KEY)
+                    transformer[PROBE_CONTEXT_KEY] = {"outer_step": index}
+                    try:
+                        _reset_guider_conds(guider, template=conditioning_template)
+                        with (
+                            _flow_stage_contract(guider, "probe"),
+                            _high_stage_contract(guider),
+                            _partitioned_stage_contract(guider, plan, diagnostic_metrics),
+                        ):
+                            shadow_probe = executor(
+                                shadow_probe_noise,
+                                latent,
+                                _make_probe_sampler(sampler),
+                                probe_sigmas,
+                                low_mask,
+                                None,
+                                disable_pbar,
+                                seed,
+                                latent_shapes=low_shapes,
+                            )
+                    finally:
+                        if previous_context is None:
+                            transformer.pop(PROBE_CONTEXT_KEY, None)
+                        else:
+                            transformer[PROBE_CONTEXT_KEY] = previous_context
+                    clean_internal = _process_latent_in(base_model, shadow_probe, low_shapes)
+                run = capture.get("run")
+                actuals = (
+                    [sample for sample in run.exact_samples() if sample.phase != "handoff_probe"]
+                    if run is not None
+                    else []
+                )
+                if not actuals:
+                    raise RuntimeError("frozen source A/B did not capture a real low prediction")
+                first = actuals[0].video_x0.detach().to(device="cpu", copy=True)
+                video, _audio = unpack_streams(clean_internal, low_shapes)
+                outputs[label] = (video.detach().to(device="cpu", copy=True), first)
+    finally:
+        binding.metrics = prior_metrics
+        guider.conds = prior_conds
+
+    input_hashes_after = {name: tensor_sha256(value) for name, value in protected_inputs.items()}
+    if input_hashes_after != input_hashes_before:
+        raise RuntimeError("frozen low B/A' replay mutated caller-owned sampler inputs or original A")
+    original_video, _original_audio = unpack_streams(source_reference, low_shapes)
+    b_video, b_first = outputs["B_target_projection"]
+    a_replay_video, a_replay_first = outputs["A_replay"]
+    report = compare_aba(
+        original_video,
+        b_video,
+        a_replay_video,
+        first_reference,
+        b_first,
+        a_replay_first,
+        prefix_t=low_plan.prefix_t,
+    )
+    report["known_input_pairing"] = pairing
+    report["authoritative_target_prefix_sha256"] = before_pair["authoritative_target_prefix_sha256"]
+    report["carried_source_prefix_sha256"] = before_pair["source_prefix_sha256"]
+    report["counterfactual_prefix_sha256"] = alternate_pair["source_prefix_sha256"]
+    report["shadow_model_actual_nfe"] = int(diagnostic_metrics.counters.get("transformer_actual_nfe", 0))
+    report["shadow_model_forecast_calls"] = int(diagnostic_metrics.counters.get("spectrum_forecast_calls", 0))
+    report["extra_low_sampler_lifetimes"] = 2
+    report["extra_probe_sampler_lifetimes"] = 2
+    report["extra_high_sampler_lifetimes"] = 0
+    report["rng_restore_scopes"] = 2
+    report["production_main_source_selected"] = True
+    report["caller_owned_low_inputs_unchanged"] = True
+    report["caller_owned_low_input_sha256"] = input_hashes_before
+    report["source_carry_snapshot_mutated"] = False
+    report["model_backend_selection_mutated"] = False
+    report["sampler_A2_resumes_no_production_output"] = True
+    report["physical_model_cache_isolation_unproven"] = True
+    session_id, chunk_id = _interop_identity(getattr(guider, "model_options", None))
+    export = export_residual_geometry_evidence(
+        {
+            "source_A_full": original_video,
+            "source_B_full": b_video,
+            "source_A_replay_full": a_replay_video,
+            "authoritative_target_prefix": authoritative_prefix,
+            "first_actual_A": first_reference,
+            "first_actual_B": b_first,
+            "first_actual_A_replay": a_replay_first,
+        },
+        session_id=session_id,
+        chunk_id=chunk_id,
+        seed=int(seed or 0),
+        sigma=float(sigma),
+        evidence_kind="h3_flow_frozen_low_source_aba_v1",
+        metadata={
+            "policy": LOW_AB_POLICY,
+            "source_hw": [int(source_h), int(source_w)],
+            "target_hw": [int(target_h), int(target_w)],
+            "prefix_t": int(low_plan.prefix_t),
+            "temporal": int(low_plan.temporal),
+            "low_input_pairing": pairing,
+            "reproduction_verified": bool(report["reproduction_verified"]),
+            "model_domain": "model_internal_clean",
+            "decoded_media_required": True,
+            "high_refinement_executed_inside_pair": False,
+        },
+    )
+    report["evidence"] = export
+    prior_metrics.event("partitioned_frozen_low_source_aba", **report)
+    return report
+
+
+@source_carry_scope()
 def run_partitioned_progressive(
     executor,
     guider,
@@ -3566,7 +3837,40 @@ def run_partitioned_progressive(
     )
     suffix_dc_bridge_enabled = resolve_partitioned_suffix_dc_bridge(initial_transformer)
     band_mode = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_TARGET_BAND
-    uniform_source = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
+    exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
+    prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
+    source_carry = source_carry_owner(guider)
+    low_aba_enabled = bool(initial_model_options.get(LOW_SAMPLER_AB_KEY, False))
+    if low_aba_enabled and (
+        source_carry is None
+        or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+        or not isinstance(initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1"), str)
+        or not initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1")
+        or not binding.capture_enabled
+        or binding.trajectory is None
+    ):
+        raise PartitionedPreflightUnsupported(
+            "low_sampler_aba requires native_source_carry, progressive_uniform_source, "
+            "capture_boundary_witness and active Flow trajectory capture"
+        )
+    if source_carry is not None and prefix_projection is not None:
+        raise ValueError("native_source_carry cannot also reconstruct the prefix through the VAE")
+    if source_carry is not None and not uniform_source:
+        raise ValueError("native_source_carry requires a uniform-source continuation configuration")
+    if prefix_projection is not None and (
+        not uniform_source or not isinstance(prefix_projection, SourcePrefixProjection)
+    ):
+        raise ValueError("VAE source-prefix projection requires a uniform-source continuation configuration")
+    if uniform_source and (int(config.source_noise_offset) & ((1 << 63) - 1)) == (
+        int(config.seed_offset) & ((1 << 63) - 1)
+    ):
+        raise PartitionedPreflightUnsupported(
+            "image-grid residual coupling requires distinct source and innovation seeds"
+        )
+    uniform_source_detail_transport = uniform_source and resolve_partitioned_uniform_source_detail_transport(
+        initial_transformer
+    )
     if uniform_source and (
         prefix_transformer_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or vdn_linear_diagnostic != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
@@ -3860,7 +4164,8 @@ def run_partitioned_progressive(
     source_shapes[0] = (*source_shapes[0][:-2], source_h, source_w)
     transfer_lattice_provider = None
     if (
-        spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
+        not uniform_source
+        and spatial_stage_control != PARTITIONED_SPATIAL_STAGE_SAME_GRID
         and handoff_transfer_control != PARTITIONED_HANDOFF_TRANSFER_BICUBIC_CONTROL
     ):
         transfer_lattice_provider = H3PatchLatticeTransferProvider(config.learned_upscaler)
@@ -3874,28 +4179,52 @@ def run_partitioned_progressive(
     low_noise = pack_streams((source_video_noise, target_audio_noise))[0]
     low_latent_image = _resize_packed_latent_image(latent_image, target_shapes, source_shapes)
     low_video, low_audio = unpack_streams(low_latent_image, source_shapes)
-    physical_prefix_source = resize_spatial_5d_h3_patch_lattice(
-        stage_plan.prefix.to(low_video),
-        source_h,
-        source_w,
-    )
-    if int(physical_prefix_source.shape[2]) != int(stage_plan.prefix_t):
-        raise RuntimeError("H3 physical prefix resample changed temporal ownership")
     generic_prefix_source = low_video[:, :, : stage_plan.prefix_t]
-    prefix_resample_delta = physical_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
+    # A native uniform clip uses image-grid resize, exactly as the initial
+    # progressive chunk does. RoPE coordinates label attention patches; they
+    # do not redefine the pixel centers of the VAE/learned upscaler. Keep the
+    # physical projection only for the explicitly heterogeneous carrier.
+    prefix_projection_policy = "half_pixel_latent_v1" if uniform_source else H3_TRANSFER_LATTICE
+    projected_prefix_source = (
+        generic_prefix_source
+        if uniform_source
+        else resize_spatial_5d_h3_patch_lattice(stage_plan.prefix.to(low_video), source_h, source_w)
+    )
+    prefix_projection_receipt = None
+    if source_carry is not None:
+        projected_prefix_source, prefix_projection_receipt = source_carry.project(
+            stage_plan.prefix, int(source_h), int(source_w)
+        )
+        projected_prefix_source = projected_prefix_source.to(low_video)
+        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
+        prefix_projection_policy = SOURCE_PREFIX_CARRY_POLICY
+        binding.metrics.event("partitioned_source_prefix_projection", **prefix_projection_receipt)
+    if prefix_projection is not None:
+        # Only the carried prefix enters the VAE. This runs before the first
+        # sampler lifetime; low/probe and provider reuse these same source bytes.
+        projected_prefix_source, prefix_projection_receipt = project_source_prefix(
+            prefix_projection.vae, stage_plan.prefix, int(source_h), int(source_w)
+        )
+        projected_prefix_source = projected_prefix_source.to(low_video)
+        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
+        prefix_projection_policy = SOURCE_PREFIX_ROUNDTRIP_POLICY
+        binding.metrics.event("partitioned_source_prefix_projection", **prefix_projection_receipt)
+    if int(projected_prefix_source.shape[2]) != int(stage_plan.prefix_t):
+        raise RuntimeError("H3 prefix resample changed temporal ownership")
+    prefix_resample_delta = projected_prefix_source.to(torch.float32) - generic_prefix_source.to(torch.float32)
     prefix_resample_delta_rms = float(prefix_resample_delta.square().mean().sqrt().item())
     prefix_resample_delta_abs_max = float(prefix_resample_delta.abs().max().item())
     low_video = low_video.clone()
-    low_video[:, :, : stage_plan.prefix_t] = physical_prefix_source
+    low_video[:, :, : stage_plan.prefix_t] = projected_prefix_source
     low_latent_image = pack_streams((low_video, low_audio))[0]
     binding.metrics.event(
         "partitioned_prefix_source_resample",
-        policy=H3_TRANSFER_LATTICE,
+        policy=prefix_projection_policy,
         prefix_source="authoritative_exact_target_prefix",
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
         source_hw=(int(source_h), int(source_w)),
-        generic_half_pixel_prefix_replaced=True,
+        generic_half_pixel_prefix_replaced=not uniform_source or prefix_projection_receipt is not None,
         generic_vs_physical_delta_rms=prefix_resample_delta_rms,
         generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
         numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
@@ -3910,7 +4239,7 @@ def run_partitioned_progressive(
         # conditioning rows. Equal-grid partition transport preserves backend
         # and Spectrum history ownership without a second hidden stream.
         low_transformer_plan = PartitionedStagePlan(
-            prefix=physical_prefix_source.detach().to(torch.float32).clone(),
+            prefix=projected_prefix_source.detach().to(torch.float32).clone(),
             temporal=stage_plan.temporal,
             source_h=source_h,
             source_w=source_w,
@@ -3931,6 +4260,7 @@ def run_partitioned_progressive(
             learned_transfer_scope="all_generated_frames",
             native_band_splice=False,
             authoritative_target_prefix_restore=True,
+            exact_target_visual_context=exact_uniform_context,
         )
     target_band_domain = None
     if domain_context_requested:
@@ -3938,7 +4268,7 @@ def run_partitioned_progressive(
         weight_square = h3_patch_lattice_weight_square_sum(target_h, target_w, source_h, source_w)
         target_band_domain = TargetBandDomainContext(
             policy=TARGET_BAND_DOMAIN_UNIFORM_POLICY,
-            source_prefix=physical_prefix_source.detach().to(torch.float32).clone(),
+            source_prefix=projected_prefix_source.detach().to(torch.float32).clone(),
             source_prefix_noise=source_video_noise[:, :, : stage_plan.prefix_t].detach().to(torch.float32).clone(),
             source_band_noise=source_video_noise[:, :, stage_plan.prefix_t : head_t].detach().to(torch.float32).clone(),
             band_noise_complement=(1.0 - weight_square).clamp_min(0.0).sqrt(),
@@ -3998,6 +4328,29 @@ def run_partitioned_progressive(
         target_shapes,
         source_shapes,
     )
+
+    # The explicit boundary witness also proves which low-sampler inputs were
+    # actually executed. The receipt is intentionally not a replay or an A/B
+    # eligibility verdict: backend state and model weight identity remain open.
+    low_input_pairing_requested = bool(uniform_source and band_witness_requested)
+    if low_input_pairing_requested:
+        binding.metrics.event(
+            "partitioned_low_input_pairing",
+            **make_low_input_pairing_receipt(
+                authoritative_target_prefix=stage_plan.prefix,
+                source_prefix=projected_prefix_source,
+                low_noise=low_noise,
+                low_latent_image=low_latent_image,
+                low_mask=low_mask,
+                low_shapes=low_shapes,
+                low_sigmas=low_sigmas,
+                prefix_t=stage_plan.prefix_t,
+                source_policy=prefix_projection_policy,
+                sampler=sampler_name(sampler),
+                seed=int(seed or 0),
+                conditioning_signature=_conditioning_signature(guider),
+            ),
+        )
 
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
@@ -4145,6 +4498,7 @@ def run_partitioned_progressive(
             x = _resize_packed_latent_image(x, source_shapes, target_shapes)
         return callback(step, x0, x, len(sigmas) - 1)
 
+    frozen_low_rng = capture_rng() if low_aba_enabled else None
     if target_band is None:
         _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     else:
@@ -4174,6 +4528,7 @@ def run_partitioned_progressive(
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
+                    exact_prefix_visual_context=stage_plan if exact_uniform_context else None,
                 ),
             ):
                 low_result = executor(
@@ -4221,6 +4576,7 @@ def run_partitioned_progressive(
                     binding.metrics,
                     target_band=target_band,
                     target_band_domain=target_band_domain,
+                    exact_prefix_visual_context=stage_plan if exact_uniform_context else None,
                 ),
             ):
                 source_x0 = executor(
@@ -4250,6 +4606,30 @@ def run_partitioned_progressive(
         raise
 
     committed_low_run = _finish_capture(binding)
+    if low_input_pairing_requested:
+        first_actual_low = (
+            next(
+                (sample for sample in committed_low_run.exact_samples() if sample.phase != "handoff_probe"),
+                None,
+            )
+            if committed_low_run is not None
+            else None
+        )
+        binding.metrics.event(
+            "partitioned_low_first_actual_prediction",
+            status="captured" if first_actual_low is not None else "unavailable_without_trajectory",
+            **(
+                {
+                    "video_x0_sha256": tensor_sha256(first_actual_low.video_x0),
+                    "sigma": float(first_actual_low.video_sigma),
+                    "outer_step": int(first_actual_low.outer_step),
+                    "phase": str(first_actual_low.phase),
+                    "provenance": str(first_actual_low.provenance),
+                }
+                if first_actual_low is not None
+                else {}
+            ),
+        )
     binding.metrics.increment("handoff_exact_probe_nfe")
     _cuda_allocator_checkpoint(binding.metrics, "after_primary_probe")
     boundary_window_evidence = None
@@ -4546,6 +4926,53 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        if low_aba_enabled:
+            if frozen_low_rng is None or committed_low_run is None:
+                raise RuntimeError("frozen low experiment lost its original low-stage RNG or captured trajectory")
+            first_original = next(
+                (s for s in committed_low_run.exact_samples() if s.phase != "handoff_probe"),
+                None,
+            )
+            _run_frozen_source_low_aba(
+                executor,
+                guider,
+                binding,
+                frozen_pre_rng=frozen_low_rng,
+                conditioning_template=conditioning_template,
+                sampler=sampler,
+                low_sigmas=low_sigmas,
+                probe_sigmas=sigmas[index : index + 1],
+                low_shapes=low_shapes,
+                low_noise=low_noise,
+                original_latent=low_latent_image,
+                low_mask=low_mask,
+                seed=seed,
+                disable_pbar=disable_pbar,
+                low_plan=low_transformer_plan,
+                original_prefix=projected_prefix_source,
+                candidate_prefix=generic_prefix_source,
+                authoritative_prefix=stage_plan.prefix,
+                baseline_probe_internal=source_x0,
+                baseline_first_actual=(first_original.video_x0 if first_original is not None else None),
+                sigma=sigma,
+                index=index,
+                source_h=source_h,
+                source_w=source_w,
+                target_h=target_h,
+                target_w=target_w,
+            )
+        if low_input_pairing_requested:
+            final_low_video, _final_low_audio = unpack_streams(source_x0, low_shapes)
+            binding.metrics.event(
+                "partitioned_low_probe_clean_pairing",
+                source_suffix_sha256=tensor_sha256(final_low_video[:, :, stage_plan.prefix_t :]),
+                source_prefix_sha256=tensor_sha256(final_low_video[:, :, : stage_plan.prefix_t]),
+                domain="model_internal_clean",
+                source_hw=[int(source_h), int(source_w)],
+                prefix_t=int(stage_plan.prefix_t),
+            )
+        if source_carry is not None:
+            source_carry.stage_source(unpack_streams(source_x0, low_shapes)[0])
         band_clean_video = None
         band_raw_video = None
         measure_band_trajectory = normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure"
@@ -4646,7 +5073,7 @@ def run_partitioned_progressive(
                 source_hw=(source_h, source_w),
                 target_hw=(target_h, target_w),
             )
-        exact_prefix_source = physical_prefix_source.to(clean_video)
+        exact_prefix_source = projected_prefix_source.to(clean_video)
         if av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW:
             if shadow_source_x0 is None or shadow_source_raw is None:
                 raise RuntimeError("source-uniform AV handoff shadow lost its low/probe state")
@@ -4931,21 +5358,37 @@ def run_partitioned_progressive(
                 actual_handoff_clean = result.clean_video.detach().clone()
                 return result
 
+        elif uniform_source:
+
+            def clean_video_postprocess(learned_clean):
+                nonlocal actual_handoff_clean
+                # Residual-coupled entry cannot be inverted using an independent
+                # seeded noise field. Keep the actual provider clean operand for
+                # guidance and audit; this callback changes no tensor values.
+                actual_handoff_clean = learned_clean.detach().clone()
+                return CleanVideoPostprocessResult(
+                    clean_video=learned_clean,
+                    protected_prefix_t=int(stage_plan.prefix_t),
+                    metadata={"enabled": False, "result": "capture_only", "output_modified": False},
+                )
+
         transfer_started = time.perf_counter()
         transfer_metrics: dict[str, Any] = {}
         deterministic_handoff_sampler, handoff_sampler = _dense_drift_sampler_contract(sampler)
-        # Target-band continuation re-noises its learned tail with independent
-        # Gaussian noise, as the uniform progressive handoff does. Transporting the
-        # low-stage residual into the tail carries content-correlated structure
-        # into the high-stage entry noise, which the high stage sharpens.
+        # Uniform continuation retains its measured source trajectory on the
+        # ordinary image grid. Gaussian modes and deterministic model drift have
+        # distinct transfer laws; stochastic samplers retain the complete residual.
+        # The target-band and heterogeneous controls keep their existing policies.
         handoff_noise_mode = (
-            (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
+            (H3_HANDOFF_NOISE_IMAGE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_IMAGE_RESIDUAL)
+            if uniform_source
+            else (H3_HANDOFF_NOISE_DENSE_DRIFT if deterministic_handoff_sampler else H3_HANDOFF_NOISE_SOURCE_RESIDUAL)
             if config.frame_gauge_repair
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and target_band is None
             else H3_HANDOFF_NOISE_INDEPENDENT
         )
-        if handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
+        if handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES:
             source_state_video, _ = unpack_streams(source_raw, source_shapes)
             source_clean_video, _ = unpack_streams(source_x0, source_shapes)
             source_effective_residual = (
@@ -5007,7 +5450,7 @@ def run_partitioned_progressive(
             # the checkpoint transform itself with deterministic spatial bicubic.
             spatial_transfer_control = _BicubicSameSourceTransferProvider(config.learned_upscaler)
             effective_upscaler = spatial_transfer_control
-        else:
+        elif not uniform_source:
             effective_upscaler = transfer_lattice_provider
         if spatial_transfer_control is not None:
             source_clean_control, _source_clean_audio_control = unpack_streams(source_x0, source_shapes)
@@ -5027,8 +5470,13 @@ def run_partitioned_progressive(
             transfer_metrics=transfer_metrics,
             clean_video_postprocess=clean_video_postprocess,
             noise_mode=handoff_noise_mode,
-            initial_source_noise=source_video_noise if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else None,
-            model_noise_scale=model_noise_scale if handoff_noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT else 1.0,
+            initial_source_noise=source_video_noise if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES else None,
+            model_noise_scale=(
+                model_noise_scale
+                if handoff_noise_mode in H3_HANDOFF_DRIFT_NOISE_MODES
+                or handoff_noise_mode == H3_HANDOFF_NOISE_IMAGE_RESIDUAL
+                else 1.0
+            ),
             run_same_grid_handoff=spatial_stage_control == PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         )
         if spatial_transfer_control is not None:
@@ -5239,12 +5687,46 @@ def run_partitioned_progressive(
             else:
                 if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
                     provider_boundary_stabilization_receipt["reason"] = "exact_overlap_fallback_not_selected"
+                bridge_clean = learned_clean
+                if uniform_source:
+                    if uniform_source_detail_transport:
+                        bridge_clean, detail_receipt = apply_uniform_source_detail_transport(
+                            learned_clean,
+                            exact_prefix,
+                            prefix_t=stage_plan.prefix_t,
+                        )
+                        if detail_receipt["applied"]:
+                            # Clean-space change mapped exactly onto the already
+                            # re-noised suffix; the noise and prefix are untouched.
+                            target_video = map_clean_bridge_to_conditional_state(
+                                target_video,
+                                learned_clean,
+                                bridge_clean,
+                                sigma=sigma,
+                                prefix_t=stage_plan.prefix_t,
+                                corrected_tokens=int(learned_clean.shape[2]) - int(stage_plan.prefix_t),
+                            )
+                    else:
+                        detail_receipt = {
+                            "policy": UNIFORM_SOURCE_DETAIL_TRANSPORT_POLICY,
+                            "applied": False,
+                            "reason": "disabled",
+                        }
+                    # The suffix DC bridge moves the first suffix token by the same
+                    # prefix offset the transport already carried; never apply both.
+                    detail_receipt["suffix_dc_bridge_superseded"] = bool(
+                        detail_receipt["applied"] and suffix_dc_bridge_enabled
+                    )
+                    binding.metrics.event("partitioned_uniform_source_detail_transport", **detail_receipt)
+                    dc_bridge_enabled = suffix_dc_bridge_enabled and not detail_receipt["applied"]
+                else:
+                    dc_bridge_enabled = suffix_dc_bridge_enabled
                 target_video, corrected_clean, dc_metrics = _apply_partitioned_suffix_dc_bridge(
                     target_video,
-                    learned_clean,
+                    bridge_clean,
                     exact_prefix,
                     sigma=sigma,
-                    enabled=suffix_dc_bridge_enabled,
+                    enabled=dc_bridge_enabled,
                 )
             if exact_overlap_fallback_requested:
                 if splice_clean_source == "inverse_recovered":
@@ -5272,6 +5754,20 @@ def run_partitioned_progressive(
                 target_hw=(target_h, target_w),
                 resample_position="encoder_to_decoder",
                 provider_calls=effective_upscaler.calls,
+                transferred_prefix_output_discarded=True,
+                exact_prefix_modified=False,
+                extra_h3_nfe=0,
+                extra_provider_calls=0,
+            )
+        elif uniform_source and spatial_transfer_control is None:
+            binding.metrics.event(
+                "partitioned_transfer_lattice",
+                policy="half_pixel_latent_v1",
+                prefix_projection_policy=prefix_projection_policy,
+                source_hw=(source_h, source_w),
+                target_hw=(target_h, target_w),
+                resample_position="encoder_to_decoder",
+                provider_calls=1,
                 transferred_prefix_output_discarded=True,
                 exact_prefix_modified=False,
                 extra_h3_nfe=0,
@@ -5524,7 +6020,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
+            and handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled
@@ -5561,7 +6057,7 @@ def run_partitioned_progressive(
             and prefix_transformer_context == PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
             and av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_MAIN
             and guidance_trajectory_source == PARTITIONED_GUIDANCE_TRAJECTORY_SOURCE_MAIN
-            and handoff_noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}
+            and handoff_noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES
             and representation_metrics.get("suffix_representation_bridge_accepted", False)
             and exact_overlap_corrected_tokens == 1
             and not high_video_reference_enabled
@@ -6934,6 +7430,8 @@ def run_partitioned_progressive(
                     "policy": "native_boundary_decoder_window_evidence_v1",
                     "window": boundary_window_evidence.plan,
                     "domain": "model_internal_clean_except_sampler_input_and_mask",
+                    "source_prefix_projection_policy": prefix_projection_policy,
+                    **({"source_prefix_projection": prefix_projection_receipt} if prefix_projection_receipt else {}),
                     "prediction_prefix": "native_model_prediction_not_recanonicalized",
                     "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
                     "sampler_input_domain": "predict_noise_input_after_sampler_inpaint",
@@ -6959,7 +7457,7 @@ def run_partitioned_progressive(
                         if target_band is not None
                         else (
                             {
-                                "spatial_stage_control": PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+                                "spatial_stage_control": spatial_stage_control,
                                 "target_band_tokens": 0,
                                 "target_band_transfer_start_t": int(stage_plan.prefix_t),
                                 "full_video_snapshots": True,
@@ -6983,7 +7481,7 @@ def run_partitioned_progressive(
                     "capture_boundary_witness_requested": bool(band_witness_requested),
                     "extra_h3_nfe": 0,
                     "extra_provider_calls": 0,
-                    "extra_vae_calls": 0,
+                    "extra_vae_calls": 2 if prefix_projection is not None else 0,
                 },
             )
             binding.metrics.event(
@@ -7107,6 +7605,17 @@ def run_partitioned_progressive(
                 history_boundary_count=history_boundary_count,
                 diagnostic_only=True,
             )
+        returned_video, _returned_audio = unpack_streams(result, target_shapes)
+        binding.metrics.event(
+            "partitioned_returned_video_latent_fingerprint",
+            domain="caller_output_latent",
+            comparable_to="H3 Flow video decode-input fingerprint",
+            **video_latent_fingerprint(returned_video),
+        )
+        if source_carry is not None:
+            returned_internal = _process_latent_in(base_model, result.clone(), target_shapes)
+            carry_receipt = source_carry.prepare_success(unpack_streams(returned_internal, target_shapes)[0])
+            binding.metrics.event("source_prefix_carry_prepared", **carry_receipt)
         return result
     except BaseException as exc:
         if committed_low_run is not None and binding.trajectory is not None:

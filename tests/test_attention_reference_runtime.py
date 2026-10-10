@@ -1428,7 +1428,8 @@ def test_exact_probe_preserves_sampler_inpaint_options(monkeypatch):
     assert probe.inpaint_options is not source.inpaint_options
 
 
-def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch):
+@pytest.mark.parametrize("carry", [False, True])
+def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_audio(monkeypatch, carry):
     class KSampler:
         def __init__(self, function, inpaint_options=None):
             self.sampler_function = function
@@ -1442,7 +1443,8 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
     monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
     monkeypatch.setitem(sys.modules, "comfy.samplers", fake_samplers)
 
-    source_video = torch.randn(1, 24, 1, 4, 4)
+    temporal = 17 if carry else 1
+    source_video = torch.randn(1, 24, temporal, 4, 4)
     source_audio = torch.randn(1, 32, 2, 5)
     source_raw, source_shapes = __import__("h3_flow_regenerate.geometry", fromlist=["pack_streams"]).pack_streams(
         (source_video, source_audio)
@@ -1467,6 +1469,12 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
         original_conds={"positive": [original_cond]},
         conds={"positive": [runtime_cond]},
     )
+    owner = None
+    if carry:
+        from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
+
+        owner = SourcePrefixCarry()
+        guider.model_options[SOURCE_PREFIX_CARRY_KEY] = owner
     calls = []
 
     class Executor:
@@ -1514,11 +1522,21 @@ def test_progressive_runtime_uses_three_fresh_downstream_calls_and_preserves_aud
     assert calls[-1][2]["h3_refinement"]["min_actual_prefix_steps"] == 1
     assert [call[4] for call in calls] == [False, False, False]
     assert [call[5] for call in calls] == [(4, 4), (4, 4), (8, 6)]
-    assert mutable_shapes[0] == (1, 24, 1, 8, 6)
+    assert mutable_shapes[0] == (1, 24, temporal, 8, 6)
     _, result_audio = __import__("h3_flow_regenerate.geometry", fromlist=["unpack_streams"]).unpack_streams(
         result * float(calls[-1][3][0]), mutable_shapes
     )
     assert torch.allclose(result_audio, source_audio)
+
+    if owner is not None:
+        result_video, _ = unpack_streams(result, mutable_shapes)
+        with owner.transaction(object()):
+            carried, receipt = owner.project(result_video[:, :, -7:], 4, 4)
+        assert torch.equal(carried, source_video[:, :, -7:])
+        assert receipt["generation"] == 1
+        prepared = [event for event in binding.metrics.events if event.kind == "source_prefix_carry_prepared"]
+        assert len(prepared) == 1
+        assert prepared[0].fields["retained_cuda_bytes"] == 0
 
 
 def test_reference_native_parity_and_direct_only_decoupling():

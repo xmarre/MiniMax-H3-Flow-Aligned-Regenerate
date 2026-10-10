@@ -1,0 +1,260 @@
+{
+  "id": "71c7e7ad-79bd-4f27-bfe5-b7162b55c010",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        360,
+        70
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae_int8_convrot.safetensors"
+      ],
+      "title": "Select the captured native H3 video VAE"
+    },
+    {
+      "id": 2,
+      "type": "H3FlowPrefixProjectionAudit",
+      "pos": [
+        430,
+        0
+      ],
+      "size": [
+        450,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_vae",
+          "type": "VAE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "rgb_reference",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        },
+        {
+          "name": "latent_bicubic",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "vae_rgb_roundtrip",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "numerical_report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3FlowPrefixProjectionAudit"
+      },
+      "widgets_values": [
+        "",
+        175,
+        "01784_room",
+        true,
+        ""
+      ]
+    },
+    {
+      "id": 3,
+      "type": "SaveImage",
+      "pos": [
+        970,
+        0
+      ],
+      "size": [
+        480,
+        340
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 2
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/rgb_reference/rgb_reference"
+      ],
+      "title": "Common source RGB reference"
+    },
+    {
+      "id": 4,
+      "type": "SaveImage",
+      "pos": [
+        970,
+        380
+      ],
+      "size": [
+        480,
+        340
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/latent_bicubic/latent_bicubic"
+      ],
+      "title": "A: latent bicubic"
+    },
+    {
+      "id": 5,
+      "type": "SaveImage",
+      "pos": [
+        970,
+        760
+      ],
+      "size": [
+        480,
+        340
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/vae_rgb_roundtrip/vae_rgb_roundtrip"
+      ],
+      "title": "B: native VAE RGB roundtrip"
+    },
+    {
+      "id": 6,
+      "type": "MarkdownNote",
+      "pos": [
+        0,
+        130
+      ],
+      "size": [
+        370,
+        470
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "MarkdownNote"
+      },
+      "widgets_values": [
+        "VAE-only source-prefix A/B. Select the SAME native video VAE used for the captured generation. Set bundle_path to an existing uniform-source boundary witness directory or its manifest.json. The numerical audit JSON alone is insufficient. Set the assembled join frame (175 for the room example). No H3 sampler/model is connected. Expected room geometry: 39 output frames, 704x704, labels 136\u2013174. JSON and all three PNG frame sequences are saved under output/h3_flow_regenerate/prefix_projection_audits/. The sequences have separate rgb_reference/, latent_bicubic/ and vae_rgb_roundtrip/ folders. PNGs are 8-bit RGB visual exports; report metrics use the original float32 pixels. Each sequence is ordered from frame 136 to 174. No video files are created automatically. Inspect all three outputs and terminal-context controls before accepting the candidate. See docs/PREFIX_PROJECTION_AB.md."
+      ],
+      "title": "VAE-only A/B setup"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "VAE"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      2,
+      1,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      2,
+      2,
+      5,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8,
+      "offset": [
+        40,
+        70
+      ]
+    }
+  },
+  "version": 0.4
+}

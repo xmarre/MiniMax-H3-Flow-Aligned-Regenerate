@@ -113,11 +113,17 @@ PARTITIONED_SPATIAL_STAGE_PROGRESSIVE = "progressive_low_to_high"
 PARTITIONED_SPATIAL_STAGE_SAME_GRID = "same_grid_target_control"
 PARTITIONED_SPATIAL_STAGE_TARGET_BAND = "progressive_target_band"
 PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE = "progressive_uniform_source"
+PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT = "progressive_uniform_source_exact_context"
+PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES = (
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+)
 PARTITIONED_SPATIAL_STAGE_CONTROL_OPTIONS = (
     PARTITIONED_SPATIAL_STAGE_PROGRESSIVE,
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
 )
 
 # Number of generated H3 temporal latent tokens that stay on the target grid
@@ -155,6 +161,7 @@ PARTITIONED_TARGET_BAND_CONTEXT_OPTIONS = (
 # Absence is the historical contract: the one-token suffix DC bridge is active.
 # The leaf is published only when a node explicitly disables the bridge.
 PARTITIONED_SUFFIX_DC_BRIDGE_KEY = "h3_flow_partitioned_suffix_dc_bridge_v1"
+PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY = "h3_flow_partitioned_uniform_source_detail_transport_v1"
 
 PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY = "h3_flow_partitioned_softmax_diagnostic_v1"
 PARTITIONED_SOFTMAX_DIAGNOSTIC_API = 1
@@ -273,6 +280,16 @@ def resolve_partitioned_suffix_dc_bridge(transformer_options: dict[str, Any]) ->
     if value is not False:
         raise ValueError("the partitioned suffix DC bridge leaf may only carry the explicit value False")
     return False
+
+
+def resolve_partitioned_uniform_source_detail_transport(transformer_options: dict[str, Any]) -> bool:
+    """Require an explicit opt-in to experimental uniform-source detail transport."""
+    if PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY not in transformer_options:
+        return False
+    value = transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY]
+    if type(value) is not bool:
+        raise ValueError("the uniform-source detail transport leaf must carry a boolean")
+    return value
 
 
 def normalize_partitioned_softmax_diagnostic(value: str) -> str:
@@ -469,6 +486,7 @@ def apply_partitioned_diagnostic_controls(
     target_band_tokens: int = PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     target_band_handoff_state: str = PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
     target_band_context: str = PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+    uniform_source_detail_transport: bool = False,
 ):
     """Install diagnostic controls on one cloned MODEL only."""
 
@@ -493,7 +511,7 @@ def apply_partitioned_diagnostic_controls(
     boundary_stabilization = normalize_provider_boundary_stabilization(provider_boundary_stabilization)
     handoff_transfer = normalize_handoff_transfer_control(handoff_transfer_control)
     spatial_stage = normalize_spatial_stage_control(spatial_stage_control)
-    if spatial_stage == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE and (
+    if spatial_stage in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES and (
         prefix_context != PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT
         or mode != PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL
         or temporal_carrier_policy != PARTITIONED_VDN_TEMPORAL_CARRIER_NATIVE
@@ -520,6 +538,8 @@ def apply_partitioned_diagnostic_controls(
     )
     if type(suffix_dc_bridge) is not bool:
         raise TypeError("suffix_dc_bridge must be a boolean")
+    if type(uniform_source_detail_transport) is not bool:
+        raise TypeError("uniform_source_detail_transport must be a boolean")
     band_tokens = validate_target_band_tokens(target_band_tokens, source="target_band_tokens")
     band_handoff_state = normalize_target_band_handoff_state(target_band_handoff_state)
     band_context = normalize_target_band_context(target_band_context)
@@ -604,6 +624,10 @@ def apply_partitioned_diagnostic_controls(
         transformer_options.pop(PARTITIONED_SUFFIX_DC_BRIDGE_KEY, None)
     else:
         transformer_options[PARTITIONED_SUFFIX_DC_BRIDGE_KEY] = False
+    if uniform_source_detail_transport:
+        transformer_options[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] = True
+    else:
+        transformer_options.pop(PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY, None)
     if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
         transformer_options[PARTITIONED_TARGET_BAND_TOKENS_KEY] = band_tokens
     else:
@@ -660,6 +684,8 @@ def apply_partitioned_diagnostic_controls(
             fields["softmax_diagnostic"] = softmax_mode
         if not suffix_dc_bridge:
             fields["suffix_dc_bridge"] = False
+        if uniform_source_detail_transport:
+            fields["uniform_source_detail_transport"] = True
         if spatial_stage == PARTITIONED_SPATIAL_STAGE_TARGET_BAND:
             fields["target_band_tokens"] = band_tokens
         if band_handoff_state != PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE:
@@ -723,6 +749,8 @@ __all__ = [
     "PARTITIONED_SPATIAL_STAGE_SAME_GRID",
     "PARTITIONED_SPATIAL_STAGE_TARGET_BAND",
     "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE",
+    "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES",
+    "PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT",
     "PARTITIONED_SUFFIX_DC_BRIDGE_KEY",
     "PARTITIONED_TARGET_BAND_CONTEXT_ALL_STAGES",
     "PARTITIONED_TARGET_BAND_CONTEXT_DOMAIN_UNIFORM",
@@ -735,6 +763,7 @@ __all__ = [
     "PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE",
     "PARTITIONED_TARGET_BAND_TOKENS_DEFAULT",
     "PARTITIONED_TARGET_BAND_TOKENS_KEY",
+    "PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_BYPASS",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_KEY",
     "PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL",
@@ -773,6 +802,7 @@ __all__ = [
     "resolve_partitioned_target_band_context",
     "resolve_partitioned_target_band_handoff_state",
     "resolve_partitioned_target_band_tokens",
+    "resolve_partitioned_uniform_source_detail_transport",
     "resolve_partitioned_video_guided_overlap_tokens",
     "validate_target_band_tokens",
 ]

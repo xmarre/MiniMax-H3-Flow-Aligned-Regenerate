@@ -75,6 +75,7 @@ def test_progressive_overlay_defines_partitioned_defaults_and_preserves_controls
         "video_guided_overlap_tokens": 6,
         "suffix_dc_bridge": False,
         "target_band_tokens": 4,
+        "uniform_source_detail_transport": False,
         "weight_semantics": (
             "With guidance_mode=direction+temporal, acceleration_weight and consistency_weight are staged values "
             "only; apply_guidance does not use them unless the corresponding guidance mode is selected."
