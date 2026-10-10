@@ -14,8 +14,9 @@ accepted continuation correction.
    **MiniMax H3 Prefix Projection A/B** under **MiniMax H3 / diagnostics** to a
    separate small workflow.
 3. Connect the **same native H3 video VAE** used for the captured generation to
-   `video_vae`. The example loader checkpoint is a placeholder: select the actual
-   checkpoint. A preview VAE, audio VAE or decoder-only replacement cannot run
+   `video_vae`. The example selects `minimax_h3_video_vae_int8_convrot.safetensors`
+   from the reported run; select your actual checkpoint if different.
+   A preview VAE, audio VAE or decoder-only replacement cannot run
    this encode/decode experiment.
 4. Set `bundle_path` to the existing uniform-source boundary bundle directory
    containing `manifest.json` and its original `.bin` files, or the manifest
@@ -36,8 +37,27 @@ accepted continuation correction.
 
 For a 62×62 target grid, 44×44 source grid and 12-token protected prefix, each
 IMAGE output contains **39 frames at 704×704**. With a join at 175, these are
-frames **136–174**, not generated frames after the join. The example previews
-all three clips. To inspect animation, connect each IMAGE output separately to
+frames **136–174**, not generated frames after the join. The example saves and
+previews all three PNG frame sequences using ComfyUI **Save Image** nodes:
+
+| Output | Folder beneath your configured ComfyUI output directory |
+|---|---|
+| `rgb_reference` | `h3_flow_regenerate/prefix_projection_audits/rgb_reference/` |
+| `latent_bicubic` | `h3_flow_regenerate/prefix_projection_audits/latent_bicubic/` |
+| `vae_rgb_roundtrip` | `h3_flow_regenerate/prefix_projection_audits/vae_rgb_roundtrip/` |
+
+Each folder receives 39 numbered PNGs per room-example run, in frame order
+136–174. Counters in filenames are save counters, not assembled frame labels.
+These are 8-bit RGB visual exports; report metrics use the original float32
+pixels before export. No video files are created automatically.
+
+The earlier workflow used **Preview Image** nodes, which wrote only temporary
+PNGs to your configured ComfyUI temp directory (normally `ComfyUI/temp/`, with
+names like `ComfyUI_temp_abcde_00001_.png`). Those runs did not save permanent
+image outputs. Refresh through Patcher and load the corrected example to save
+all three sequences; rerun only the VAE diagnostic, using the existing witness.
+
+To inspect animation, connect each IMAGE output separately to
 VHS Video Combine at **24 fps**, with no audio, selecting `video/ffv1-mkv`.
 Keep identical save settings for all three. Do not judge geometry or local
 contrast from an independently resized or differently encoded preview.
@@ -116,8 +136,8 @@ VAE-only result still does not prove that continuation expansion or speech is
 fixed. A later continuation A/B must retain the first chunk, seed, prefix hash,
 checkpoint set, geometry and schedule, changing only source-prefix projection.
 
-Return the report JSON, the selected video-VAE checkpoint name and matched
-lossless previews of the three IMAGE outputs (or native-scale corresponding
+Return the report JSON, the selected video-VAE checkpoint name and the three
+saved PNG sequences (or native-scale corresponding
 frames, especially the last five). The report records each of the **five
 decode calls and one encode call**, synchronized CUDA timing where applicable,
 allocated/reserved memory before/after calls, and the cumulative process peak.

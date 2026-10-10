@@ -32,7 +32,7 @@
         "Node name for S&R": "VAELoader"
       },
       "widgets_values": [
-        "minimax_h3_video_vae_fp16.safetensors"
+        "minimax_h3_video_vae_int8_convrot.safetensors"
       ],
       "title": "Select the captured native H3 video VAE"
     },
@@ -98,7 +98,7 @@
     },
     {
       "id": 3,
-      "type": "PreviewImage",
+      "type": "SaveImage",
       "pos": [
         970,
         0
@@ -119,14 +119,16 @@
       ],
       "outputs": [],
       "properties": {
-        "Node name for S&R": "PreviewImage"
+        "Node name for S&R": "SaveImage"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/rgb_reference/rgb_reference"
+      ],
       "title": "Common source RGB reference"
     },
     {
       "id": 4,
-      "type": "PreviewImage",
+      "type": "SaveImage",
       "pos": [
         970,
         380
@@ -147,14 +149,16 @@
       ],
       "outputs": [],
       "properties": {
-        "Node name for S&R": "PreviewImage"
+        "Node name for S&R": "SaveImage"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/latent_bicubic/latent_bicubic"
+      ],
       "title": "A: latent bicubic"
     },
     {
       "id": 5,
-      "type": "PreviewImage",
+      "type": "SaveImage",
       "pos": [
         970,
         760
@@ -175,9 +179,11 @@
       ],
       "outputs": [],
       "properties": {
-        "Node name for S&R": "PreviewImage"
+        "Node name for S&R": "SaveImage"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        "h3_flow_regenerate/prefix_projection_audits/vae_rgb_roundtrip/vae_rgb_roundtrip"
+      ],
       "title": "B: native VAE RGB roundtrip"
     },
     {
@@ -200,7 +206,7 @@
         "Node name for S&R": "MarkdownNote"
       },
       "widgets_values": [
-        "VAE-only source-prefix A/B. Select the SAME native video VAE used for the captured generation. Set bundle_path to an existing uniform-source boundary witness directory or its manifest.json. The numerical audit JSON alone is insufficient. Set the assembled join frame (175 for the room example). No H3 sampler/model is connected. Expected room geometry: 39 output frames, 704x704, labels 136\u2013174. JSON is saved under output/h3_flow_regenerate/prefix_projection_audits/. Inspect all three outputs and terminal-context controls before accepting the candidate. See docs/PREFIX_PROJECTION_AB.md."
+        "VAE-only source-prefix A/B. Select the SAME native video VAE used for the captured generation. Set bundle_path to an existing uniform-source boundary witness directory or its manifest.json. The numerical audit JSON alone is insufficient. Set the assembled join frame (175 for the room example). No H3 sampler/model is connected. Expected room geometry: 39 output frames, 704x704, labels 136\u2013174. JSON and all three PNG frame sequences are saved under output/h3_flow_regenerate/prefix_projection_audits/. The sequences have separate rgb_reference/, latent_bicubic/ and vae_rgb_roundtrip/ folders. PNGs are 8-bit RGB visual exports; report metrics use the original float32 pixels. Each sequence is ordered from frame 136 to 174. No video files are created automatically. Inspect all three outputs and terminal-context controls before accepting the candidate. See docs/PREFIX_PROJECTION_AB.md."
       ],
       "title": "VAE-only A/B setup"
     }

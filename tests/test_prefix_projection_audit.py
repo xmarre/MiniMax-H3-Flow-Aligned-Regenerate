@@ -386,7 +386,7 @@ def test_companion_node_saves_paired_report_and_returns_same_time_clips(bundle, 
     assert json.loads(text)["candidate_integration"].startswith("not_enabled")
 
 
-def test_loadable_ab_workflow_contains_only_vae_diagnostic_and_previews():
+def test_loadable_ab_workflow_contains_only_vae_diagnostic_and_image_saves():
     from importlib.util import module_from_spec, spec_from_file_location
 
     root = Path(__file__).parents[1]
@@ -401,10 +401,13 @@ def test_loadable_ab_workflow_contains_only_vae_diagnostic_and_previews():
     assert {n["type"] for n in nodes.values()} == {
         "VAELoader",
         "H3FlowPrefixProjectionAudit",
-        "PreviewImage",
+        "SaveImage",
         "MarkdownNote",
     }
     assert nodes[2]["widgets_values"] == ["", 175, "01784_room", True, ""]
+    assert nodes[1]["widgets_values"] == ["minimax_h3_video_vae_int8_convrot.safetensors"]
+    for node_id, stream in ((3, "rgb_reference"), (4, "latent_bicubic"), (5, "vae_rgb_roundtrip")):
+        assert nodes[node_id]["widgets_values"] == [f"h3_flow_regenerate/prefix_projection_audits/{stream}/{stream}"]
     assert workflow["links"] == [
         [1, 1, 0, 2, 0, "VAE"],
         [2, 2, 0, 3, 0, "IMAGE"],

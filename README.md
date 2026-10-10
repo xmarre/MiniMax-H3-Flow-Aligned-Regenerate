@@ -26,7 +26,7 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`prefix-projection-ab.workflow.json`](workflows/examples/prefix-projection-ab.workflow.json) — VAE-only paired source-prefix reconstruction on an existing uniform-source witness, with three aligned IMAGE previews; see [exact setup, context controls and acceptance](docs/PREFIX_PROJECTION_AB.md). No H3 sampling or production setting changes;
+- [`prefix-projection-ab.workflow.json`](workflows/examples/prefix-projection-ab.workflow.json) — VAE-only paired source-prefix reconstruction on an existing uniform-source witness, with three aligned PNG frame sequences saved under `output/h3_flow_regenerate/prefix_projection_audits/`; see [exact setup, context controls and acceptance](docs/PREFIX_PROJECTION_AB.md). No H3 sampling or production setting changes;
 
 - [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — production-node wiring for **MiniMax H3 Partitioned Exact-Prefix Handoff**, including the complete 32-widget recommended profile (`progressive_uniform_source`, exact audio/video ownership, `main_then_shadow`, `frame_gauge_repair=false`, `suffix_dc_bridge=false`, the unused target-band width, and the current overlap/provenance values);
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control using `source_scale=0.70`, fixed `0.35` handoff, `direction+temporal`, and `learned_3d` transfer;
