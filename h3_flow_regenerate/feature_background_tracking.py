@@ -159,9 +159,31 @@ def track_background_features(
             if valid:
                 scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
                 delta_x = current[:, 0] - initial[:, 0]
+                center = np.array([width / 2, height / 2, 1.0])
+                center_delta = matrix @ center - center[:2]
+                region_displacements = {}
+                for name, (x0, y0, x1, y1) in rois.items():
+                    selected = (
+                        supported
+                        & (initial[:, 0] >= x0 * width)
+                        & (initial[:, 0] < x1 * width)
+                        & (initial[:, 1] >= y0 * height)
+                        & (initial[:, 1] < y1 * height)
+                    )
+                    count_region = int(selected.sum())
+                    region_displacements[name] = {
+                        "ransac_inliers": count_region,
+                        "median_dx_dy_px": (
+                            np.median(current[selected] - initial[selected], axis=0).round(4).tolist()
+                            if count_region
+                            else None
+                        ),
+                    }
                 row.update(
                     {
                         "cumulative_apparent_scale_percent": round((scale - 1) * 100, 5),
+                        "center_displacement_dx_dy_px": center_delta.round(4).tolist(),
+                        "inlier_region_displacements": region_displacements,
                         "rotation_degrees": round(float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))), 5),
                         "left_median_dx_px": round(float(np.median(delta_x[initial[:, 0] < width * 0.35])), 4),
                         "right_median_dx_px": round(float(np.median(delta_x[initial[:, 0] > width * 0.65])), 4),

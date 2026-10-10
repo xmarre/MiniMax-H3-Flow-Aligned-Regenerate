@@ -225,31 +225,7 @@ def load_replay_operands(
     hashes = {}
 
     def read(name):
-        entry = entries[name]
-        shape = entry["shape"]
-        if (
-            entry.get("dtype") != "torch.float32"
-            or entry.get("byte_order") != "native_torch_contiguous"
-            or len(shape) != 5
-            or shape[:2] != [1, 24]
-            or any(type(n) is not int or n <= 0 for n in shape)
-            or entry.get("nbytes") != math.prod(shape) * 4
-        ):
-            raise ValueError(f"invalid saved operand geometry: {name}")
-        path = (directory / entry["file"]).resolve()
-        if not path.is_relative_to(directory):
-            raise ValueError("saved tensor path leaves the selected bundle")
-        if path.stat().st_size != entry["nbytes"]:
-            raise ValueError(f"saved operand byte count differs: {name}")
-        raw = path.read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
-        if digest != entry["sha256"]:
-            raise ValueError(f"saved operand hash differs: {name}")
-        value = torch.frombuffer(bytearray(raw), dtype=torch.float32).reshape(shape)
-        if not bool(torch.isfinite(value).all()):
-            raise ValueError(f"saved operand is not finite: {name}")
-        hashes[name] = digest
-        return value
+        return read_verified_operand(directory, entries, name, hashes)
 
     prefix = read("authoritative_prefix_full")
     if prefix.shape[2] != plan["prefix_t"]:
@@ -394,6 +370,35 @@ def load_replay_operands(
     return plan, stages, identity
 
 
+def read_verified_operand(directory, entries, name, hashes):
+    """Read one immutable witness operand; shared by narrowly scoped replays."""
+    entry = entries[name]
+    shape = entry["shape"]
+    if (
+        entry.get("dtype") != "torch.float32"
+        or entry.get("byte_order") != "native_torch_contiguous"
+        or len(shape) != 5
+        or shape[:2] != [1, 24]
+        or any(type(n) is not int or n <= 0 for n in shape)
+        or entry.get("nbytes") != math.prod(shape) * 4
+    ):
+        raise ValueError(f"invalid saved operand geometry: {name}")
+    path = (directory / entry["file"]).resolve()
+    if not path.is_relative_to(directory):
+        raise ValueError("saved tensor path leaves the selected bundle")
+    if path.stat().st_size != entry["nbytes"]:
+        raise ValueError(f"saved operand byte count differs: {name}")
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != entry["sha256"]:
+        raise ValueError(f"saved operand hash differs: {name}")
+    value = torch.frombuffer(bytearray(raw), dtype=torch.float32).reshape(shape)
+    if not bool(torch.isfinite(value).all()):
+        raise ValueError(f"saved operand is not finite: {name}")
+    hashes[name] = digest
+    return value
+
+
 def geometry_comparison(reference, candidate, frame_labels):
     """Diagnostic same-pixel-time affine fit, including scale/shear gradients."""
     h, w = reference.shape[1:3]
@@ -440,8 +445,8 @@ def geometry_comparison(reference, candidate, frame_labels):
     }
 
 
-def _resident_decode(vae, samples):
-    """Reuse the connected VAE and avoid managed decode's workspace admission.
+def _resident_admit(vae, workspace):
+    """Admit diagnostic VAE work without evicting unrelated loaded models.
 
     ``VAE.decode`` and even ``load_models_gpu(memory_required=0)`` can unload
     unrelated models to reserve workspace. A VAE already on its decode device is
@@ -459,7 +464,7 @@ def _resident_decode(vae, samples):
         missing = int(patcher.model_size())
         if patcher.current_loaded_device() == vae.device:
             missing = max(0, missing - int(patcher.loaded_size()))
-        workspace = int(vae.memory_used_decode(samples.shape, vae.vae_dtype))
+        workspace = int(workspace)
         reserve = max(
             int(model_management.minimum_inference_memory()),
             workspace + int(model_management.extra_reserved_memory()),
@@ -479,6 +484,17 @@ def _resident_decode(vae, samples):
         model_management.load_models_gpu(
             [patcher], memory_required=workspace, force_full_load=bool(vae.disable_offload)
         )
+
+
+def _resident_decode(vae, samples):
+    """Reuse the connected VAE with the diagnostic residency contract."""
+    import comfy.model_management as model_management
+
+    # Resident/partially loaded VAEs need no admission or workspace estimate.
+    resident = any(model is vae.patcher for model in model_management.loaded_models()) and (
+        vae.patcher.current_loaded_device() == vae.device
+    )
+    _resident_admit(vae, 0 if resident else vae.memory_used_decode(samples.shape, vae.vae_dtype))
     try:
         with model_management.cuda_device_context(vae.device), torch.inference_mode():
             pixels = vae.first_stage_model.decode(samples.to(device=vae.device, dtype=vae.vae_dtype))

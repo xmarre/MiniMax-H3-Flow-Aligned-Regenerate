@@ -24,6 +24,12 @@ try:
     from .h3_flow_regenerate.partitioned_node import (
         NODE_DISPLAY_NAME_MAPPINGS as PARTITIONED_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from .h3_flow_regenerate.prefix_projection_audit import (
+        NODE_CLASS_MAPPINGS as PREFIX_AUDIT_NODE_CLASS_MAPPINGS,
+    )
+    from .h3_flow_regenerate.prefix_projection_audit import (
+        NODE_DISPLAY_NAME_MAPPINGS as PREFIX_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
+    )
     from .h3_flow_regenerate.target_sparse_node import (
         NODE_CLASS_MAPPINGS as TARGET_SPARSE_NODE_CLASS_MAPPINGS,
     )
@@ -56,6 +62,12 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.partitioned_node import (
         NODE_DISPLAY_NAME_MAPPINGS as PARTITIONED_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from h3_flow_regenerate.prefix_projection_audit import (
+        NODE_CLASS_MAPPINGS as PREFIX_AUDIT_NODE_CLASS_MAPPINGS,
+    )
+    from h3_flow_regenerate.prefix_projection_audit import (
+        NODE_DISPLAY_NAME_MAPPINGS as PREFIX_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
+    )
     from h3_flow_regenerate.target_sparse_node import (
         NODE_CLASS_MAPPINGS as TARGET_SPARSE_NODE_CLASS_MAPPINGS,
     )
@@ -64,6 +76,7 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     )
 
 NODE_CLASS_MAPPINGS = {
+    **PREFIX_AUDIT_NODE_CLASS_MAPPINGS,
     **LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
     **AUDIO_AUDIT_NODE_CLASS_MAPPINGS,
     **NODE_CLASS_MAPPINGS,
@@ -72,6 +85,7 @@ NODE_CLASS_MAPPINGS = {
     **DECODE_NODE_CLASS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    **PREFIX_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
     **LOCAL_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
     **AUDIO_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
     **NODE_DISPLAY_NAME_MAPPINGS,
