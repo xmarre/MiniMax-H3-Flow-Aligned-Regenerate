@@ -162,8 +162,8 @@ def audit_native_prefix_counterfactual(
     if (
         plan["head_t"] != plan["prefix_t"]
         or identity["source_prefix_projection_policy"] != "native_source_carry_v1"
-        or expected_manifest_sha256 is not None
-        and identity["manifest_sha256"] != expected_manifest_sha256
+        or (expected_manifest_sha256 is not None
+            and identity["manifest_sha256"] != expected_manifest_sha256)
     ):
         raise ValueError("counterfactual requires a hash-matched uniform native_source_carry_v1 bundle")
 
@@ -196,8 +196,8 @@ def audit_native_prefix_counterfactual(
     prefix_t = plan["prefix_t"]
     if (
         target.shape[2] != prefix_t
-        or expected_manifest_sha256 == CAPTURE_01795_MANIFEST_SHA256
-        and video_latent_fingerprint(target)["sha256_float32"] != CAPTURE_01795_PREFIX_SHA256
+        or (expected_manifest_sha256 == CAPTURE_01795_MANIFEST_SHA256
+            and video_latent_fingerprint(target)["sha256_float32"] != CAPTURE_01795_PREFIX_SHA256)
     ):
         raise ValueError("authoritative target prefix does not match the selected capture")
     original_source = video_latent_fingerprint(source)
@@ -286,9 +286,9 @@ def audit_native_prefix_counterfactual(
         "decoder_only": True, "audio_state_supplied": False,
         "rendered_acceptance": False,
         "limitations": [
-            "Replacing decoder prefix changes the decoded anchor at f174; scale relative to that anchor alone is confounded.",
+            "Replacing the prefix changes the f174 anchor; f174-relative scale is confounded.",
             "Same generated latent suffix does not imply equal decoded pixel suffix under temporal VAE context.",
-            "Post-join f178 tracking still depends on decoder context, but its image anchor is inside generated suffix.",
+            "The f178 tracking anchor is inside the suffix but can still depend on decoder context.",
             "Scale estimates describe matched static-image features and are not camera ground truth.",
             "Similarity, Sobel and photometric changes are diagnostic, not proof of rendering improvement.",
             "A VAE-only counterfactual cannot demonstrate correction of the source sampler trajectory.",
