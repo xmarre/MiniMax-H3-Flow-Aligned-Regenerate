@@ -48,6 +48,7 @@ def audit_saved_low_aba(
     static_roi_json="",
     feature_tracking_enabled=True,
     expected_manifest_sha256=None,
+    diagnose_failed_replay=False,
 ):
     if type(join_frame) is not int or join_frame < 10:
         raise ValueError("a valid assembled join frame is required")
@@ -71,7 +72,13 @@ def audit_saved_low_aba(
         raise ValueError("frozen low A/B manifest hash does not match selected witness")
     manifest = json.loads(raw)
     if manifest.get("schema") != 1 or manifest.get("kind") != KIND:
-        raise ValueError("expected the exact frozen low-source A/B/A export manifest")
+        raise ValueError(
+            f"expected frozen low A/B/A manifest kind {KIND!r}, got "
+            f"schema={manifest.get('schema')!r} kind={manifest.get('kind')!r} at "
+            f"{directory / 'manifest.json'}; select the session bundle named in "
+            "metrics event partitioned_frozen_low_source_aba.fields.evidence.bundle, "
+            "not an earlier boundary-witness or decoder-only manifest"
+        )
     metadata = manifest.get("metadata", {})
     if (
         metadata.get("policy") != "h3_frozen_low_source_aba_v1"
@@ -82,8 +89,13 @@ def audit_saved_low_aba(
         "input_pair_eligible"
     ):
         raise ValueError("A/B witness was not recorded from hash-matched low-stage inputs")
-    if metadata.get("reproduction_verified") is not True:
-        raise ValueError("frozen low A' did not reproduce A; decoder audit is unqualified")
+    manifest_replay_verified = metadata.get("reproduction_verified") is True
+    if not manifest_replay_verified and not diagnose_failed_replay:
+        raise ValueError(
+            "frozen low A' did not reproduce A (unqualified); set "
+            "diagnose_failed_replay=true for read-only A/B/A' discrepancy analysis, "
+            "never causal acceptance"
+        )
     hashes = {}
     tensors = {name: read_verified_operand(directory, manifest["tensor_bytes"], name, hashes) for name in NAMES}
     a, b, a2, target, first_a, first_b, first_a2 = (tensors[name] for name in NAMES)
@@ -111,10 +123,23 @@ def audit_saved_low_aba(
     # The disk loader currently rejects non-finite tensors, but do not rely
     # on that separate contract for replay eligibility. A NaN comparison with
     # "max() > tolerance" can incorrectly report success.
-    for original, repeated, start in ((a, a2, 0), (first_a, first_a2, 0)):
-        differences = (original[:, :, start:] - repeated[:, :, start:]).abs()
-        if not bool((torch.isfinite(differences) & (differences <= 1e-5)).all()):
-            raise ValueError("replayed A no longer matches saved first/source output within 1e-5")
+    replay_errors = {}
+    for name, original, repeated in (
+        ("clean_source_full", a, a2),
+        ("first_actual_prediction", first_a, first_a2),
+    ):
+        differences = (original - repeated).abs()
+        if not bool(torch.isfinite(differences).all()):
+            raise ValueError("saved low A/A' replay error contains non-finite values")
+        replay_errors[name] = {
+            "abs_max": float(differences.max()),
+            "rms": float(differences.square().mean().sqrt()),
+            "exact": bool(torch.equal(original, repeated)),
+        }
+    measured_replay_verified = all(v["abs_max"] <= 1e-5 for v in replay_errors.values())
+    if manifest_replay_verified and not measured_replay_verified:
+        raise ValueError("replayed A no longer matches saved first/source output within 1e-5")
+    replay_qualified = manifest_replay_verified and measured_replay_verified
     if torch.equal(a[:, :, :prefix_t], b[:, :, :prefix_t]):
         raise ValueError("saved A/B source prefixes are identical; no prefix intervention")
     output_sha_before = {name: hashes[name] for name in NAMES}
@@ -122,8 +147,18 @@ def audit_saved_low_aba(
     labels = list(range(join_frame - 5, join_frame + 21))
     pixels_a, elapsed_a = _native_pixels(vae, a, process_out, origin, labels)
     pixels_b, elapsed_b = _native_pixels(vae, b, process_out, origin, labels)
+    pixels_a_replay, elapsed_a_replay = (
+        _native_pixels(vae, a2, process_out, origin, labels)
+        if not replay_qualified
+        else (None, 0.0)
+    )
     full_rois = {**rois, "upper45_full": (0.0, 0.0, 1.0, 0.45)}
     same = compare_same_frame_prefix_rois(pixels_a, pixels_b, labels, rois=full_rois)
+    replay_same = (
+        compare_same_frame_prefix_rois(pixels_a, pixels_a_replay, labels, rois=full_rois)
+        if pixels_a_replay is not None
+        else None
+    )
     if any(tensor_sha256(tensors[name]) != hashes[name] for name in NAMES):
         raise RuntimeError("saved low A/B operand changed during read-only decode")
     return {
@@ -140,20 +175,29 @@ def audit_saved_low_aba(
         "frame_labels": labels,
         "source_canvas_px": [source_hw[0] * 16, source_hw[1] * 16],
         "source_generation_suffix_is_altered": not torch.equal(a[:, :, prefix_t:], b[:, :, prefix_t:]),
-        "a_replay_verified": True,
+        "a_replay_verified": bool(replay_qualified),
+        "causal_low_input_effect_qualified": bool(replay_qualified),
+        "unqualified_diagnostic_only": not replay_qualified,
+        "reproduction_errors": replay_errors,
         "baseline_A": _variant_pixels(pixels_a, labels, join_frame, rois, feature_tracking_enabled),
         "candidate_B": _variant_pixels(pixels_b, labels, join_frame, rois, feature_tracking_enabled),
         "same_frame_A_to_B": same,
+        "same_frame_A_to_A_replay": replay_same,
         "same_frame_geometry": geometry_comparison(pixels_a, pixels_b, labels),
+        "same_frame_geometry_A_to_A_replay": (
+            geometry_comparison(pixels_a, pixels_a_replay, labels) if pixels_a_replay is not None else None
+        ),
         "temporal_increment_delta": _temporal_increment(pixels_a, pixels_b, labels),
         "decode": {
             "vae_class": f"{type(native).__module__}.{type(native).__qualname__}",
-            "full_source_vae_calls": 2,
+            "full_source_vae_calls": 2 + int(pixels_a_replay is not None),
             "extra_h3_nfe": 0,
             "A_ms": elapsed_a,
             "B_ms": elapsed_b,
+            "A_replay_ms": elapsed_a_replay,
         },
         "limitations": [
+            "If unqualified_diagnostic_only is true, A/B is NOT a causal result: A' did not reproduce A.",
             "A/B differs in the generated latent suffix; this is a real low-model intervention, not decoder-only.",
             "f174 anchor photometry and sharpness may differ across A/B; compare same-frame absolute gradients.",
             "Background trackers independently pick features per variant, not necessarily identical landmarks.",
@@ -179,6 +223,7 @@ class H3FrozenLowABAudit:
                 "static_roi_json": ("STRING", {"default": "", "multiline": True}),
                 "feature_tracking_enabled": ("BOOLEAN", {"default": True}),
                 "expected_manifest_sha256": ("STRING", {"default": ""}),
+                "diagnose_failed_replay": ("BOOLEAN", {"default": False}),
             },
         }
 
@@ -203,6 +248,7 @@ class H3FrozenLowABAudit:
         static_roi_json="",
         feature_tracking_enabled=True,
         expected_manifest_sha256="",
+        diagnose_failed_replay=False,
     ):
         _AUDIT_MODEL_OWNERS.retain()
         import folder_paths
@@ -217,6 +263,7 @@ class H3FrozenLowABAudit:
             static_roi_json=static_roi_json,
             feature_tracking_enabled=feature_tracking_enabled,
             expected_manifest_sha256=expected_manifest_sha256 or None,
+            diagnose_failed_replay=bool(diagnose_failed_replay),
         )
         serialized = json.dumps(result, indent=2, allow_nan=False)
         directory = Path(folder_paths.get_output_directory()) / "h3_flow_regenerate" / "boundary_audits"
