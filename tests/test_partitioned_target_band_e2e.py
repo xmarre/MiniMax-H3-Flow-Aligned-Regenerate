@@ -725,7 +725,7 @@ def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monke
         protected_audio_ticks=4,
         extra_model_options={SOURCE_PREFIX_CARRY_KEY: owner},
         extra_transformer_options={
-            "h3_continuum": {"active": True, "session_id": "continuum", "chunk_index": 2},
+            "h3_continuum": {"active": True, "api": 1, "context_frames": 39, "chunk_index": 2},
         },
         residual_mode="measure" if capture else "off",
         witness_directory=str(tmp_path) if capture else None,
@@ -752,13 +752,15 @@ def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monke
     next_guider = SimpleNamespace(
         model_options={
             "transformer_options": {
-                "h3_continuum": {"active": True, "session_id": "continuum", "chunk_index": 3},
+                "h3_continuum": {"active": True, "api": 1, "context_frames": 39, "chunk_index": 3},
             }
         }
     )
     with owner.transaction(next_guider):
         carried, receipt = owner.project(final[:, :, -12:], *SOURCE_HW)
     assert receipt["generation"] == 2
+    assert receipt["previous_sequence"] == (None, 2)
+    assert receipt["explicit_session_id_verified"] is False
     assert torch.equal(carried, selected.upscaler.inputs[0][:, :, -12:])
     if capture:
         manifests = list(tmp_path.rglob("manifest.json"))

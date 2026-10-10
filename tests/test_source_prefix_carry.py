@@ -128,6 +128,7 @@ def test_sequence_lineage_rejects_cached_initial_or_foreign_session():
         output, receipt = owner.project(target[:, :, -7:], 4, 6)
     assert torch.equal(output, source[:, :, -7:])
     assert receipt["previous_sequence"] == ("clip-a", 1)
+    assert receipt["explicit_session_id_verified"] is True
     request["session_id"] = "clip-b"
     with owner.transaction(guider), pytest.raises(RuntimeError, match="immediately preceding"):
         owner.project(target[:, :, -7:], 4, 6)
@@ -137,7 +138,7 @@ def test_continuum_unlabeled_initial_binds_only_first_labeled_continuation():
     source, target = pair()
     owner = SourcePrefixCarry()
     prime(owner, source, target)
-    request = {"active": True, "session_id": "continuum", "chunk_index": 3}
+    request = {"active": True, "api": 1, "context_frames": 39, "chunk_index": 3}
     guider = SimpleNamespace(model_options={"transformer_options": {"h3_continuum": request}})
     with owner.transaction(guider), pytest.raises(RuntimeError, match="immediately preceding"):
         owner.project(target[:, :, -7:], 4, 6)
@@ -146,6 +147,8 @@ def test_continuum_unlabeled_initial_binds_only_first_labeled_continuation():
         output, receipt = owner.project(target[:, :, -7:], 4, 6)
         assert torch.equal(output, source[:, :, -7:])
         assert receipt["initial_unlabeled_to_chunk_2"] is True
+        assert receipt["current_sequence"] == (None, 2)
+        assert receipt["explicit_session_id_verified"] is False
         owner.stage_source(source + 1)
         owner.prepare_success(target + 1)
     with owner.transaction(guider), pytest.raises(RuntimeError, match="immediately preceding"):
@@ -154,6 +157,7 @@ def test_continuum_unlabeled_initial_binds_only_first_labeled_continuation():
     with owner.transaction(guider):
         _, receipt = owner.project(target[:, :, -7:] + 1, 4, 6)
         assert receipt["initial_unlabeled_to_chunk_2"] is False
+        assert receipt["explicit_session_id_verified"] is False
     owner = SourcePrefixCarry()
     with owner.transaction(object()):
         owner.stage_source(source)

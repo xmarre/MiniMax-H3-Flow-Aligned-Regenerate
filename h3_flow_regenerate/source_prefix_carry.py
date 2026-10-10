@@ -37,7 +37,7 @@ class _Snapshot:
     target_hw: tuple[int, int]
     target_suffix_hashes: dict[int, str]
     generation: int
-    sequence: tuple[str, int] | None
+    sequence: tuple[str | None, int] | None
     initial: bool
 
 
@@ -94,7 +94,8 @@ class SourcePrefixCarry:
             chunk = int(request["chunk_index"])
         except (KeyError, ValueError, TypeError):
             raise ValueError("native source carry requires an integer Continuum chunk index") from None
-        return str(request.get("session_id", "continuum")), chunk
+        session = request.get("session_id")
+        return (str(session) if session is not None else None), chunk
 
     def begin_initial(self):
         self._require_transaction()
@@ -135,6 +136,7 @@ class SourcePrefixCarry:
             "source_role": "low_probe_clean_prediction_at_handoff_sigma",
             "sequence": self._pending.sequence,
             "initial_chunk": self._pending.initial,
+            "explicit_session_id_present": self._pending.sequence is not None and self._pending.sequence[0] is not None,
             "publication": "after_successful_outer_sampling_transaction",
             "elapsed_ms": (time.perf_counter() - started) * 1000,
             "extra_h3_nfe": 0,
@@ -185,6 +187,12 @@ class SourcePrefixCarry:
             "previous_sequence": snapshot.sequence,
             "current_sequence": sequence,
             "initial_unlabeled_to_chunk_2": initial_transition,
+            "explicit_session_id_verified": (
+                snapshot.sequence is not None
+                and sequence is not None
+                and snapshot.sequence[0] is not None
+                and sequence[0] is not None
+            ),
             "prefix_t": n,
             "authoritative_prefix": fingerprint,
             "authoritative_prefix_preserved_bitwise": True,

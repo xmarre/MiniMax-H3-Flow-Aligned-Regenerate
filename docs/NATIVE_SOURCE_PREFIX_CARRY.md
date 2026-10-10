@@ -39,11 +39,13 @@ by that sampling transaction. A continuation requires an exact float32 hash
 match between its authoritative target prefix and the preceding returned target
 suffix. Target and source grids must match the recorded grids, both clips must
 use native `5k+2` temporal lengths, and the prefix must end on the same native
-phase. When Continuum sequence metadata is present, session identity and the
-immediately preceding chunk index must also match. Continuum's initial Flow
+phase. When Continuum sequence metadata is present, chunk indices must advance
+consecutively. Explicit session IDs, when supplied, must also match. The native
+Continuum request does not supply a session ID: its receipt leaves that identity
+unset, rather than claiming verified session provenance. Continuum's initial Flow
 pass is unlabeled; the first labeled request (chunk 2) can bind that initial
 pair by its exact target-suffix hash. An unlabeled continuation or skipped chunk
-cannot use this exception. Later requests must advance the labeled session.
+cannot use this exception. Later requests must advance the labeled chunk order.
 
 The matching tail of that source clean prediction replaces only the protected
 source prefix before low sampling. Low/probe and learned transfer reuse those
@@ -57,7 +59,8 @@ prediction at a nonzero handoff sigma**, not a fully sampled low-resolution
 video. It can disagree with the high-refined target's pose, texture or tone;
 rendered seam quality remains an empirical question.
 
-Missing previous context, a changed prefix, foreign/skipped sequence, changed
+Missing previous context, a changed prefix, skipped chunk or mismatched explicit
+session, changed
 geometry or invalid temporal phase stops before the first low sampler. There is
 no silent bicubic fallback. Latent processing between generation and continuation
 that changes the carried target bytes will fail the pairing check. This includes
