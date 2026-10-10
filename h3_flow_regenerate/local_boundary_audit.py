@@ -698,7 +698,7 @@ def audit_local_boundary(
                 "adjacent_luma_mean_change": (selected_luma[1:] - selected_luma[:-1]).mean((1, 2)).tolist(),
                 "adjacent_frame_geometry": geometry_comparison(selected[:-1], selected[1:], labels),
             }
-        if feature_tracking_enabled and name == "final":
+        if feature_tracking_enabled:
             from .feature_background_tracking import track_background_features
 
             report["stages"][name]["tracked_background_features"] = track_background_features(
