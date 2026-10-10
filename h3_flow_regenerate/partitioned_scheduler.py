@@ -212,6 +212,7 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+from .source_prefix_carry import SOURCE_PREFIX_CARRY_POLICY, source_carry_owner, source_carry_scope
 from .source_prefix_projection import (
     SOURCE_PREFIX_PROJECTION_KEY,
     SOURCE_PREFIX_ROUNDTRIP_POLICY,
@@ -3464,6 +3465,7 @@ def _measure_partitioned_transfer_splice(
     return fields
 
 
+@source_carry_scope()
 def run_partitioned_progressive(
     executor,
     guider,
@@ -3589,6 +3591,11 @@ def run_partitioned_progressive(
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
+    source_carry = source_carry_owner(guider)
+    if source_carry is not None and prefix_projection is not None:
+        raise ValueError("native_source_carry cannot also reconstruct the prefix through the VAE")
+    if source_carry is not None and not uniform_source:
+        raise ValueError("native_source_carry requires a uniform-source continuation configuration")
     if prefix_projection is not None and (
         not uniform_source or not isinstance(prefix_projection, SourcePrefixProjection)
     ):
@@ -3922,6 +3929,14 @@ def run_partitioned_progressive(
         else resize_spatial_5d_h3_patch_lattice(stage_plan.prefix.to(low_video), source_h, source_w)
     )
     prefix_projection_receipt = None
+    if source_carry is not None:
+        projected_prefix_source, prefix_projection_receipt = source_carry.project(
+            stage_plan.prefix, int(source_h), int(source_w)
+        )
+        projected_prefix_source = projected_prefix_source.to(low_video)
+        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
+        prefix_projection_policy = SOURCE_PREFIX_CARRY_POLICY
+        binding.metrics.event("partitioned_source_prefix_projection", **prefix_projection_receipt)
     if prefix_projection is not None:
         # Only the carried prefix enters the VAE. This runs before the first
         # sampler lifetime; low/probe and provider reuse these same source bytes.
@@ -3947,7 +3962,7 @@ def run_partitioned_progressive(
         prefix_t=int(stage_plan.prefix_t),
         target_hw=(int(target_h), int(target_w)),
         source_hw=(int(source_h), int(source_w)),
-        generic_half_pixel_prefix_replaced=not uniform_source or prefix_projection is not None,
+        generic_half_pixel_prefix_replaced=not uniform_source or prefix_projection_receipt is not None,
         generic_vs_physical_delta_rms=prefix_resample_delta_rms,
         generic_vs_physical_delta_abs_max=prefix_resample_delta_abs_max,
         numerical_change_observed=prefix_resample_delta_abs_max > 0.0,
@@ -4601,6 +4616,8 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        if source_carry is not None:
+            source_carry.stage_source(unpack_streams(source_x0, low_shapes)[0])
         band_clean_video = None
         band_raw_video = None
         measure_band_trajectory = normalize_residual_geometry_mode(config.frame_gauge_residual_mode) == "measure"
@@ -7109,7 +7126,7 @@ def run_partitioned_progressive(
                     "capture_boundary_witness_requested": bool(band_witness_requested),
                     "extra_h3_nfe": 0,
                     "extra_provider_calls": 0,
-                    "extra_vae_calls": 2 if prefix_projection_receipt else 0,
+                    "extra_vae_calls": 2 if prefix_projection is not None else 0,
                 },
             )
             binding.metrics.event(
@@ -7240,6 +7257,10 @@ def run_partitioned_progressive(
             comparable_to="H3 Flow video decode-input fingerprint",
             **video_latent_fingerprint(returned_video),
         )
+        if source_carry is not None:
+            returned_internal = _process_latent_in(base_model, result.clone(), target_shapes)
+            carry_receipt = source_carry.prepare_success(unpack_streams(returned_internal, target_shapes)[0])
+            binding.metrics.event("source_prefix_carry_prepared", **carry_receipt)
         return result
     except BaseException as exc:
         if committed_low_run is not None and binding.trajectory is not None:

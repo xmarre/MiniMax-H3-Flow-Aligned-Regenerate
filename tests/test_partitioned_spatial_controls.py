@@ -75,7 +75,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
         "uniform_source_detail_transport",
         "source_prefix_projection",
     ]
-    assert production["source_prefix_projection"][0] == ["latent_bicubic", "vae_rgb_roundtrip"]
+    assert production["source_prefix_projection"][0] == ["latent_bicubic", "vae_rgb_roundtrip", "native_source_carry"]
     assert production["source_prefix_projection"][1]["default"] == "latent_bicubic"
     assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["optional"]["video_vae"] == ("VAE",)
     assert "uniform_source_detail_transport" not in ordinary

@@ -591,7 +591,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "Source-prefix construction for progressive_uniform_source modes. vae_rgb_roundtrip "
                     "decodes the carried target prefix, resizes RGB and encodes it once before low sampling. "
                     "Connect the generation's native video_vae. Experimental continuation input; final target "
-                    "prefix remains exact. Adds one VAE decode and one encode per continuation chunk."
+                    "prefix remains exact. Adds one VAE decode and one encode per continuation chunk. "
+                    "native_source_carry instead uses the preceding chunk's source clean prediction, paired "
+                    "by the exact returned target-prefix hash; run the full sequence with the same patched MODEL. "
+                    "No VAE is needed for carry; missing or changed context stops before sampling."
                 ),
             },
         )

@@ -129,10 +129,15 @@ Report tradeoffs rather than averaging a damaged region into full-frame gains.
 
 There is no automatic numerical threshold that selects a projection mode.
 The **MiniMax H3 Partitioned Exact-Prefix Handoff** now exposes
-`source_prefix_projection=latent_bicubic|vae_rgb_roundtrip`; the default remains
+`source_prefix_projection=latent_bicubic|vae_rgb_roundtrip|native_source_carry`; the default remains
 `latent_bicubic`. The optional `video_vae` input is required for the roundtrip.
 A successful VAE-only result justifies testing this continuation input; it does
 not establish that continuation expansion, tone or speech is fixed.
+
+The separate `native_source_carry` mode uses the preceding chunk's actual
+source clean prediction and requires a full sequence. See
+[Native source-prefix carry](NATIVE_SOURCE_PREFIX_CARRY.md); the VAE procedure
+below compares the first two modes.
 
 ## Controlled continuation A/B
 

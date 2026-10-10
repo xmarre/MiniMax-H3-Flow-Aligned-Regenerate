@@ -297,7 +297,7 @@ def load_replay_operands(
         projection_policy = metadata.get("source_prefix_projection_policy", H3_TRANSFER_LATTICE)
         if projection_policy == "half_pixel_latent_v1" and uniform_source:
             expected_head = resize_spatial_5d(native_head, h, w, mode="bicubic")
-        elif projection_policy == "native_vae_rgb_roundtrip_v1" and uniform_source:
+        elif projection_policy in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1") and uniform_source:
             from .decode_context import video_latent_fingerprint
 
             receipt = metadata.get("source_prefix_projection", {})
@@ -310,7 +310,7 @@ def load_replay_operands(
                 or receipt.get("projected_prefix", {}).get("sha256_float32") != actual["sha256_float32"]
                 or receipt.get("authoritative_prefix", {}).get("sha256_float32") != target["sha256_float32"]
             ):
-                raise ValueError("saved VAE source prefix differs from its projection receipt")
+                raise ValueError("saved source prefix differs from its projection receipt")
             # A lossy native encode cannot be replayed by interpolation. The
             # hash-verified source operand is authoritative for this experiment.
             expected_head = source[:, :, :head]

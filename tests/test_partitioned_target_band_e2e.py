@@ -696,6 +696,87 @@ def test_vae_projection_failure_stops_before_sampler_and_is_not_retried(monkeypa
         )
 
 
+@pytest.mark.parametrize("capture", [False, True])
+def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monkeypatch, tmp_path, capture):
+    import json
+    import sys
+
+    from h3_flow_regenerate.local_boundary_audit import load_replay_operands
+    from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    folder_paths = pytest.importorskip("folder_paths")
+    monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
+    mode = PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    baseline = _harness(monkeypatch, spatial_stage_control=mode, protected_audio_ticks=4)
+    exact, _ = unpack_streams(baseline.latent_image, baseline.shapes)
+    prior_target = exact.clone()
+    prior_target[:, :, -PROTECTED_T:] = exact[:, :, :PROTECTED_T]
+    source = resize_spatial_5d(prior_target, *SOURCE_HW) + 0.125
+    owner = SourcePrefixCarry()
+    with owner.transaction(object()):
+        owner.begin_initial()
+        owner.stage_source(source)
+        owner.prepare_success(prior_target)
+    selected = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        protected_audio_ticks=4,
+        extra_model_options={SOURCE_PREFIX_CARRY_KEY: owner},
+        residual_mode="measure" if capture else "off",
+        witness_directory=str(tmp_path) if capture else None,
+        frame_gauge_repair=False,
+    )
+    assert [call["stage"] for call in selected.calls] == ["low", "probe", "high"]
+    for a, b in zip(baseline.calls, selected.calls, strict=True):
+        assert torch.equal(a["mask"], b["mask"])
+        assert torch.equal(a["sigmas"], b["sigmas"])
+    low, audio = unpack_streams(selected.calls[0]["latent"], selected.calls[0]["shapes"])
+    baseline_low, baseline_audio = unpack_streams(baseline.calls[0]["latent"], baseline.calls[0]["shapes"])
+    assert torch.equal(low[:, :, :PROTECTED_T], source[:, :, -PROTECTED_T:])
+    assert torch.equal(low[:, :, PROTECTED_T:], baseline_low[:, :, PROTECTED_T:])
+    assert torch.equal(audio, baseline_audio)
+    assert torch.equal(selected.upscaler.inputs[0][:, :, :PROTECTED_T], low[:, :, :PROTECTED_T])
+    final, final_audio = unpack_streams(selected.result, selected.shapes)
+    _, authoritative_audio = unpack_streams(selected.latent_image, selected.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], exact[:, :, :PROTECTED_T])
+    assert torch.equal(final_audio[:, :, :, :4], authoritative_audio[:, :, :, :4])
+    projection = _events(selected.metrics, "partitioned_source_prefix_projection")
+    assert len(projection) == 1
+    assert projection[0]["extra_vae_decode_calls"] == projection[0]["extra_vae_encode_calls"] == 0
+    assert len(_events(selected.metrics, "source_prefix_carry_prepared")) == 1
+    with owner.transaction(object()):
+        carried, receipt = owner.project(final[:, :, -12:], *SOURCE_HW)
+    assert receipt["generation"] == 2
+    assert torch.equal(carried, selected.upscaler.inputs[0][:, :, -12:])
+    if capture:
+        manifests = list(tmp_path.rglob("manifest.json"))
+        assert len(manifests) == 1
+        manifest = json.loads(manifests[0].read_text())
+        assert manifest["metadata"]["source_prefix_projection_policy"] == "native_source_carry_v1"
+        assert manifest["metadata"]["extra_vae_calls"] == 0
+        _, stages, _ = load_replay_operands(str(manifests[0]), 175, include_source=True)
+        assert stages["source_grid"].shape[-2:] == SOURCE_HW
+
+
+def test_native_carry_missing_pair_stops_before_capture_and_sampler(monkeypatch):
+    import sys
+
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    monkeypatch.setattr(scheduler, "_begin_capture", lambda *_a, **_k: pytest.fail("entered capture"))
+    with pytest.raises(RuntimeError, match="preceding successful"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            extra_model_options={SOURCE_PREFIX_CARRY_KEY: SourcePrefixCarry()},
+        )
+
+
 @pytest.mark.parametrize(
     "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
 )

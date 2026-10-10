@@ -10,9 +10,10 @@ import torch
 from .decode_context import _frames, video_latent_fingerprint
 from .local_boundary_audit import _decode_owned_pixels
 from .prefix_projection_audit import _encode_owned_pixels, resize_rgb
+from .source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
 
 SOURCE_PREFIX_PROJECTION_KEY = "h3_flow_source_prefix_projection_v1"
-SOURCE_PREFIX_PROJECTION_OPTIONS = ("latent_bicubic", "vae_rgb_roundtrip")
+SOURCE_PREFIX_PROJECTION_OPTIONS = ("latent_bicubic", "vae_rgb_roundtrip", "native_source_carry")
 SOURCE_PREFIX_ROUNDTRIP_POLICY = "native_vae_rgb_roundtrip_v1"
 
 
@@ -42,11 +43,17 @@ def configure_source_prefix_projection(model, mode, vae, spatial_stage_control):
     if mode not in SOURCE_PREFIX_PROJECTION_OPTIONS:
         raise ValueError(f"unsupported source_prefix_projection: {mode!r}")
     options = dict(model.model_options)
+    options.pop(SOURCE_PREFIX_CARRY_KEY, None)
     if mode == "latent_bicubic":
         options.pop(SOURCE_PREFIX_PROJECTION_KEY, None)
     else:
         if spatial_stage_control not in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES:
-            raise ValueError("vae_rgb_roundtrip requires a progressive_uniform_source spatial stage")
+            raise ValueError(f"{mode} requires a progressive_uniform_source spatial stage")
+        if mode == "native_source_carry":
+            options.pop(SOURCE_PREFIX_PROJECTION_KEY, None)
+            options[SOURCE_PREFIX_CARRY_KEY] = SourcePrefixCarry()
+            model.model_options = options
+            return
         if vae is None:
             raise ValueError("Connect the generation's native video VAE to video_vae for vae_rgb_roundtrip")
         validate_native_video_vae(vae)
