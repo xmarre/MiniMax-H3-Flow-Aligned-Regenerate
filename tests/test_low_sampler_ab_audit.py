@@ -160,7 +160,7 @@ def test_audit_rejects_false_prefix_or_replay_evidence_before_decode(source_pair
 
         monkeypatch.setattr(audit, "read_verified_operand", compromised_reader)
     (folder / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="identical|replayed A"):
+    with pytest.raises(ValueError, match=r"identical|replayed A"):
         audit.audit_saved_low_aba(
             model,
             str(folder),
