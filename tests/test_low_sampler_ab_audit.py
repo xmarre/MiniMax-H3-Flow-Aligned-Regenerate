@@ -190,8 +190,12 @@ def test_unqualified_aba_can_be_inspected_only_with_explicit_opt_in(source_pair,
     with pytest.raises(ValueError, match="diagnose_failed_replay"):
         audit.audit_saved_low_aba(model, str(folder), 175, lambda x: x, feature_tracking_enabled=False)
     report = audit.audit_saved_low_aba(
-        model, str(folder), 175, lambda x: x,
-        feature_tracking_enabled=False, diagnose_failed_replay=True,
+        model,
+        str(folder),
+        175,
+        lambda x: x,
+        feature_tracking_enabled=False,
+        diagnose_failed_replay=True,
     )
     assert report["a_replay_verified"] is False
     assert report["causal_low_input_effect_qualified"] is False
