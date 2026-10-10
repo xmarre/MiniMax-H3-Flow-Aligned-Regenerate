@@ -65,7 +65,9 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
-from .low_input_pairing import make_low_input_pairing_receipt
+from .low_input_pairing import compare_low_input_pairing_receipts, make_low_input_pairing_receipt
+from .low_sampler_ab import LOW_SAMPLER_AB_KEY, capture_rng, compare_aba, counterfactual_low_inputs, frozen_rng
+from .metrics import H3FlowMetrics
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
 )
