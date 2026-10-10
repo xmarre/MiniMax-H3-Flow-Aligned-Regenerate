@@ -100,7 +100,7 @@ class FakeNativeVAE:
         return torch.stack(out, dim=1).clamp(0, 1)
 
 
-def _run(capture, vae, *, expected_hash=None):
+def _run(capture, vae, *, expected_hash=None, feature_tracking=False):
     return audit_native_prefix_counterfactual(
         vae,
         capture[0],
@@ -108,7 +108,7 @@ def _run(capture, vae, *, expected_hash=None):
         lambda x: x,
         static_roi_profile="custom",
         static_roi_json=ROIS,
-        feature_tracking_enabled=False,
+        feature_tracking_enabled=feature_tracking,
         expected_manifest_sha256=expected_hash,
     )
 
@@ -162,6 +162,41 @@ def test_full_native_replay_preserves_saved_bytes_and_makes_three_vae_calls(nati
     assert report["full_vs_cropped_baseline"]["same_frame"]["policy"] == "h3_same_frame_prefix_context_v1"
     assert report["temporal_increment_delta"]["175"]["temporal_increment_change_rms"] is not None
     assert saved == {p.name: p.read_bytes() for p in directory.iterdir()}
+
+
+def test_background_tracker_receives_only_named_static_rois_for_both_anchors_and_arms(
+    native_capture, monkeypatch
+):
+    from h3_flow_regenerate import native_prefix_counterfactual as counterfactual
+
+    seen = []
+
+    def capture_rois(pixels, labels, *, join_frame, rois):
+        # Snapshot each call: do not accept a mutable dict later modified by
+        # an appended foreground/upper-region diagnostic.
+        seen.append((join_frame, dict(rois)))
+        return {"status": "measured", "join_frame": join_frame, "regions_xyxy": dict(rois)}
+
+    monkeypatch.setattr(counterfactual, "track_background_features", capture_rois)
+    report = _run(native_capture, FakeNativeVAE(cross_boundary=True), feature_tracking=True)
+    expected = {
+        "left": (0.0, 0.0, 0.48, 0.8),
+        "right": (0.52, 0.0, 1.0, 0.8),
+    }
+
+    assert seen == [(175, expected), (179, expected), (175, expected), (179, expected)]
+    assert report["background_tracking_support"] == (
+        "independently_detected_per_variant_and_anchor; static_rois_only"
+    )
+    for arm in ("baseline", "counterfactual"):
+        variant = report[arm]
+        assert set(variant["static_background_rois"]["regions"]) == set(expected)
+        assert variant["feature_tracking_from_f174"]["regions_xyxy"] == expected
+        assert variant["feature_tracking_from_f178"]["regions_xyxy"] == expected
+    for key in ("same_frame_A_to_B",):
+        assert "upper45_full" in report[key]["regions"]
+    assert "upper45_full" in report["full_vs_cropped_baseline"]["same_frame"]["regions"]
+    assert report["same_frame_geometry_upper45"]["status"] in ("estimated", "insufficient_texture")
 
 
 def test_equal_prefix_decodes_identically(native_capture):
