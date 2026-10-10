@@ -3558,7 +3558,6 @@ def _run_frozen_source_low_aba(
 
     prior_metrics, prior_conds = binding.metrics, guider.conds
     diagnostic_metrics = H3FlowMetrics()
-    binding.metrics = diagnostic_metrics
     base_model = guider.model_patcher.model
     transformer = guider.model_options["transformer_options"]
     alt_plan = PartitionedStagePlan(
@@ -3569,6 +3568,7 @@ def _run_frozen_source_low_aba(
         prefix_noise=low_plan.prefix_noise.detach().clone(),
     )
     outputs = {}
+    binding.metrics = diagnostic_metrics
     try:
         for label, latent, plan in (
             ("B_target_projection", candidate_latent, alt_plan),
