@@ -1,4 +1,5 @@
 """Structural tests for saved-source, decoder-only H3 prefix counterfactual."""
+
 import hashlib
 import json
 from types import SimpleNamespace
@@ -22,9 +23,12 @@ def _save(directory, manifest, name, video):
     raw = video.contiguous().numpy().tobytes()
     (directory / f"{name}.bin").write_bytes(raw)
     manifest["tensor_bytes"][name] = {
-        "file": f"{name}.bin", "shape": list(video.shape),
-        "dtype": "torch.float32", "byte_order": "native_torch_contiguous",
-        "nbytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+        "file": f"{name}.bin",
+        "shape": list(video.shape),
+        "dtype": "torch.float32",
+        "byte_order": "native_torch_contiguous",
+        "nbytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
     }
 
 
@@ -36,7 +40,8 @@ def native_capture(tmp_path):
     source = torch.rand((1, 24, 22, 4, 4), generator=g) / 4
     source[:, :, :12] = resize_spatial_5d(prefix, 4, 4, mode="bicubic") + 0.1
     manifest = {
-        "schema": 1, "kind": "h3_flow_native_boundary_decoder_window_evidence",
+        "schema": 1,
+        "kind": "h3_flow_native_boundary_decoder_window_evidence",
         "metadata": {
             "policy": "native_boundary_decoder_window_evidence_v1",
             "domain": "model_internal_clean_except_sampler_input_and_mask",
@@ -44,14 +49,17 @@ def native_capture(tmp_path):
             "provider_clean_provenance": "actual_learned_provider_uniform_source",
             "decoder_comparison_prefix": "replace_with_authoritative_prefix_bytes",
             "process_latent_out_required_before_vae": True,
-            "full_video_snapshots": True, "full_video_temporal_start_t": 0,
+            "full_video_snapshots": True,
+            "full_video_temporal_start_t": 0,
             "low_probe_native_carrier_decodable": True,
             "spatial_stage_control": "progressive_uniform_source",
-            "target_band_tokens": 0, "target_band_transfer_start_t": 12,
+            "target_band_tokens": 0,
+            "target_band_transfer_start_t": 12,
             "source_probe_clean_grid": [4, 4],
             "source_prefix_projection_policy": "native_source_carry_v1",
             "source_prefix_projection": {
-                "policy": "native_source_carry_v1", "prefix_t": 12,
+                "policy": "native_source_carry_v1",
+                "prefix_t": 12,
                 "projected_prefix": video_latent_fingerprint(source[:, :, :12]),
                 "authoritative_prefix": video_latent_fingerprint(prefix),
             },
@@ -94,9 +102,14 @@ class FakeNativeVAE:
 
 def _run(capture, vae, *, expected_hash=None):
     return audit_native_prefix_counterfactual(
-        vae, capture[0], 175, lambda x: x,
-        static_roi_profile="custom", static_roi_json=ROIS,
-        feature_tracking_enabled=False, expected_manifest_sha256=expected_hash,
+        vae,
+        capture[0],
+        175,
+        lambda x: x,
+        static_roi_profile="custom",
+        static_roi_json=ROIS,
+        feature_tracking_enabled=False,
+        expected_manifest_sha256=expected_hash,
     )
 
 
