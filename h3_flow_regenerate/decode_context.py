@@ -155,5 +155,80 @@ class H3ContinuumDecodeContext:
         return prepare_decode_context(video_latents, assembly_plan[0])
 
 
-NODE_CLASS_MAPPINGS = {"H3ContinuumDecodeContext": H3ContinuumDecodeContext}
-NODE_DISPLAY_NAME_MAPPINGS = {"H3ContinuumDecodeContext": "MiniMax H3 Continuum Decode Context"}
+def probe_image_geometry(images: torch.Tensor, *, join_frame: int, rois: dict) -> dict:
+    """Static-background texture and geometry of an in-graph IMAGE timeline.
+
+    Uses the Local Boundary Audit's ROI estimator on frames
+    ``join_frame - 16 .. join_frame + 15`` of the given timeline, labelled by
+    their index in it. The images are only read.
+    """
+    from .stage_static_roi_audit import measure_stage_static_rois
+
+    if not torch.is_tensor(images) or images.ndim != 4 or images.shape[-1] < 3:
+        raise ValueError("geometry probe expects an IMAGE tensor [frames,H,W,C]")
+    first = max(0, int(join_frame) - 16)
+    stop = min(int(images.shape[0]), int(join_frame) + 16)
+    if not first < join_frame < stop:
+        raise ValueError("geometry probe join frame is outside the image timeline")
+    window = images[first:stop, ..., :3].detach().to(device="cpu", dtype=torch.float32)
+    result = measure_stage_static_rois(
+        window,
+        list(range(first, stop)),
+        join_frame=int(join_frame),
+        rois=rois,
+    )
+    return {
+        "policy": "h3_in_graph_image_geometry_probe_v1",
+        "frames_in_timeline": int(images.shape[0]),
+        "canvas_hw": [int(images.shape[1]), int(images.shape[2])],
+        "measured_frames": [first, stop - 1],
+        "images_modified": False,
+        **result,
+    }
+
+
+class H3ContinuumImageGeometryProbe:
+    CATEGORY = "MiniMax H3/flow regenerate"
+    DESCRIPTION = (
+        "Diagnostic. Measures static-background sharpness and position around a join on decoded or "
+        "assembled IMAGE frames inside the graph, before video encoding, with the Local Boundary "
+        "Audit's ROI estimator. Images pass through unchanged."
+    )
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "report")
+    FUNCTION = "probe"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "join_frame": ("INT", {"default": 175, "min": 1, "max": 100000}),
+                "static_roi_profile": (["01784_room", "custom"], {"default": "01784_room"}),
+                "static_roi_json": ("STRING", {"default": "", "multiline": True}),
+            }
+        }
+
+    def probe(self, images, join_frame, static_roi_profile, static_roi_json):
+        import json
+
+        from .stage_static_roi_audit import parse_static_rois
+
+        rois = parse_static_rois(static_roi_profile, static_roi_json)
+        report = json.dumps(
+            probe_image_geometry(images, join_frame=int(join_frame), rois=rois),
+            allow_nan=False,
+        )
+        LOG.info("H3 Flow image geometry probe %s", report)
+        return images, report
+
+
+NODE_CLASS_MAPPINGS = {
+    "H3ContinuumDecodeContext": H3ContinuumDecodeContext,
+    "H3ContinuumImageGeometryProbe": H3ContinuumImageGeometryProbe,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3ContinuumDecodeContext": "MiniMax H3 Continuum Decode Context",
+    "H3ContinuumImageGeometryProbe": "MiniMax H3 Image Geometry Probe (diagnostic)",
+}

@@ -198,3 +198,21 @@ def test_decode_input_fingerprint_is_dtype_independent_and_reported():
     for index, latent in enumerate(latents):
         expected = video_latent_fingerprint(latent["samples"])["sha256_float32"]
         assert f"input group {index + 1}: sha256_float32={expected}" in report
+
+
+def test_image_geometry_probe_measures_without_modifying_images():
+    import json
+
+    from h3_flow_regenerate.decode_context import H3ContinuumImageGeometryProbe
+
+    generator = torch.Generator().manual_seed(7)
+    base = torch.rand(1, 128, 128, 3, generator=generator)
+    images = base.repeat(200, 1, 1, 1)
+    before = images.clone()
+    out, report = H3ContinuumImageGeometryProbe().probe(images, 175, "01784_room", "")
+    assert out is images and torch.equal(images, before)
+    parsed = json.loads(report)
+    assert parsed["measured_frames"] == [159, 190]
+    assert parsed["images_modified"] is False
+    shift = parsed["trajectory"]["per_frame_regions"]["bookshelf"]["190"]["relative_to_prefix_displacement"]
+    assert abs(shift["dx_px"]) < 1e-6 and abs(shift["dy_px"]) < 1e-6
