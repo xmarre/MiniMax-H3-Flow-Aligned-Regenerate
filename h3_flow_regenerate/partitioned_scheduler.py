@@ -3822,6 +3822,19 @@ def run_partitioned_progressive(
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
     source_carry = source_carry_owner(guider)
+    low_aba_enabled = bool(initial_model_options.get(LOW_SAMPLER_AB_KEY, False))
+    if low_aba_enabled and (
+        source_carry is None
+        or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+        or not isinstance(initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1"), str)
+        or not initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1")
+        or not binding.capture_enabled
+        or binding.trajectory is None
+    ):
+        raise PartitionedPreflightUnsupported(
+            "low_sampler_aba requires native_source_carry, progressive_uniform_source, "
+            "capture_boundary_witness and active Flow trajectory capture"
+        )
     if source_carry is not None and prefix_projection is not None:
         raise ValueError("native_source_carry cannot also reconstruct the prefix through the VAE")
     if source_carry is not None and not uniform_source:
@@ -4466,6 +4479,7 @@ def run_partitioned_progressive(
             x = _resize_packed_latent_image(x, source_shapes, target_shapes)
         return callback(step, x0, x, len(sigmas) - 1)
 
+    frozen_low_rng = capture_rng() if low_aba_enabled else None
     if target_band is None:
         _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     else:
@@ -4893,6 +4907,41 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        if low_aba_enabled:
+            if frozen_low_rng is None or committed_low_run is None:
+                raise RuntimeError("frozen low experiment lost its original low-stage RNG or captured trajectory")
+            first_original = next(
+                (s for s in committed_low_run.exact_samples() if s.phase != "handoff_probe"),
+                None,
+            )
+            _run_frozen_source_low_aba(
+                executor,
+                guider,
+                binding,
+                frozen_pre_rng=frozen_low_rng,
+                conditioning_template=conditioning_template,
+                sampler=sampler,
+                low_sigmas=low_sigmas,
+                probe_sigmas=sigmas[index : index + 1],
+                low_shapes=low_shapes,
+                low_noise=low_noise,
+                original_latent=low_latent_image,
+                low_mask=low_mask,
+                seed=seed,
+                disable_pbar=disable_pbar,
+                low_plan=low_transformer_plan,
+                original_prefix=projected_prefix_source,
+                candidate_prefix=generic_prefix_source,
+                authoritative_prefix=stage_plan.prefix,
+                baseline_probe_internal=source_x0,
+                baseline_first_actual=(first_original.video_x0 if first_original is not None else None),
+                sigma=sigma,
+                index=index,
+                source_h=source_h,
+                source_w=source_w,
+                target_h=target_h,
+                target_w=target_w,
+            )
         if low_input_pairing_requested:
             final_low_video, _final_low_audio = unpack_streams(source_x0, low_shapes)
             binding.metrics.event(
