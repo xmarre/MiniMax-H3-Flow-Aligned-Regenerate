@@ -3549,8 +3549,10 @@ def _run_frozen_source_low_aba(
     pairing = compare_low_input_pairing_receipts(before_pair, alternate_pair)
     if not pairing["input_pair_eligible"]:
         raise RuntimeError(f"frozen low A/B initial inputs are not paired: {pairing['mismatched_fields']}")
-    source_reference = baseline_probe_internal.detach().clone()
-    first_reference = baseline_first_actual.detach().clone()
+    # Shadow comparison operands have CPU ownership; do not retain additional
+    # full source trajectories on the H3-loaded GPU through later high stages.
+    source_reference = baseline_probe_internal.detach().to(device="cpu", copy=True)
+    first_reference = baseline_first_actual.detach().to(device="cpu", copy=True)
     if source_reference.ndim != 3 or first_reference.ndim != 5:
         raise RuntimeError("frozen low A/B source and first-prediction domains are malformed")
 
@@ -3629,9 +3631,9 @@ def _run_frozen_source_low_aba(
                 )
                 if not actuals:
                     raise RuntimeError("frozen source A/B did not capture a real low prediction")
-                first = actuals[0].video_x0.detach().clone()
+                first = actuals[0].video_x0.detach().to(device="cpu", copy=True)
                 video, _audio = unpack_streams(clean_internal, low_shapes)
-                outputs[label] = (video.detach().clone(), first)
+                outputs[label] = (video.detach().to(device="cpu", copy=True), first)
     finally:
         binding.metrics = prior_metrics
         guider.conds = prior_conds
