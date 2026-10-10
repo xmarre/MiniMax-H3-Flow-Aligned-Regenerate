@@ -44,7 +44,6 @@ from .geometry import (
     unpack_streams,
 )
 from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
-from .low_input_pairing import make_low_input_pairing_receipt
 from .handoff import (
     H3_HANDOFF_DRIFT_NOISE_MODES,
     H3_HANDOFF_NOISE_DENSE_DRIFT,
@@ -66,6 +65,7 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .low_input_pairing import make_low_input_pairing_receipt
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
 )
