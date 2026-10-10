@@ -44,6 +44,7 @@ from .geometry import (
     unpack_streams,
 )
 from .guidance import HandoffGuidanceReference, RegisteredGuidanceReference, time_matched_reference_info
+from .low_input_pairing import make_low_input_pairing_receipt
 from .handoff import (
     H3_HANDOFF_DRIFT_NOISE_MODES,
     H3_HANDOFF_NOISE_DENSE_DRIFT,
@@ -4067,6 +4068,29 @@ def run_partitioned_progressive(
         source_shapes,
     )
 
+    # The explicit boundary witness also proves which low-sampler inputs were
+    # actually executed. The receipt is intentionally not a replay or an A/B
+    # eligibility verdict: backend state and model weight identity remain open.
+    low_input_pairing_requested = bool(uniform_source and band_witness_requested)
+    if low_input_pairing_requested:
+        binding.metrics.event(
+            "partitioned_low_input_pairing",
+            **make_low_input_pairing_receipt(
+                authoritative_target_prefix=stage_plan.prefix,
+                source_prefix=projected_prefix_source,
+                low_noise=low_noise,
+                low_latent_image=low_latent_image,
+                low_mask=low_mask,
+                low_shapes=low_shapes,
+                low_sigmas=low_sigmas,
+                prefix_t=stage_plan.prefix_t,
+                source_policy=prefix_projection_policy,
+                sampler=sampler_name(sampler),
+                seed=int(seed or 0),
+                conditioning_signature=_conditioning_signature(guider),
+            ),
+        )
+
     binding.metrics.increment("progressive_partitioned_exact_prefix_runs")
     binding.metrics.event(
         "partitioned_stage_plan",
@@ -4320,6 +4344,30 @@ def run_partitioned_progressive(
         raise
 
     committed_low_run = _finish_capture(binding)
+    if low_input_pairing_requested:
+        first_actual_low = (
+            next(
+                (sample for sample in committed_low_run.exact_samples() if sample.phase != "handoff_probe"),
+                None,
+            )
+            if committed_low_run is not None
+            else None
+        )
+        binding.metrics.event(
+            "partitioned_low_first_actual_prediction",
+            status="captured" if first_actual_low is not None else "unavailable_without_trajectory",
+            **(
+                {
+                    "video_x0_sha256": tensor_sha256(first_actual_low.video_x0),
+                    "sigma": float(first_actual_low.video_sigma),
+                    "outer_step": int(first_actual_low.outer_step),
+                    "phase": str(first_actual_low.phase),
+                    "provenance": str(first_actual_low.provenance),
+                }
+                if first_actual_low is not None
+                else {}
+            ),
+        )
     binding.metrics.increment("handoff_exact_probe_nfe")
     _cuda_allocator_checkpoint(binding.metrics, "after_primary_probe")
     boundary_window_evidence = None
@@ -4616,6 +4664,16 @@ def run_partitioned_progressive(
             )
 
         source_x0 = _process_latent_in(base_model, source_x0, low_shapes)
+        if low_input_pairing_requested:
+            final_low_video, _final_low_audio = unpack_streams(source_x0, low_shapes)
+            binding.metrics.event(
+                "partitioned_low_probe_clean_pairing",
+                source_suffix_sha256=tensor_sha256(final_low_video[:, :, stage_plan.prefix_t :]),
+                source_prefix_sha256=tensor_sha256(final_low_video[:, :, : stage_plan.prefix_t]),
+                domain="model_internal_clean",
+                source_hw=[int(source_h), int(source_w)],
+                prefix_t=int(stage_plan.prefix_t),
+            )
         if source_carry is not None:
             source_carry.stage_source(unpack_streams(source_x0, low_shapes)[0])
         band_clean_video = None
