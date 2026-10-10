@@ -603,6 +603,35 @@ scale estimate. White-wall texture is useful for shading but can be
 unsuitable for phase correlation. The full report records which landmarks
 were supported.
 
+**Feature-tracked background motion (new, optional):** Phase correlation
+can return an apparent zero displacement when books, curtains and framed
+images are progressively defocused. That is **not evidence of zero image
+motion**. Set `feature_tracking_enabled=true` with a static ROI profile in
+the Local Boundary Audit to add `stages.final.tracked_background_features`.
+The **MiniMax H3 Image Geometry Probe (diagnostic)** also has
+`feature_tracking_enabled` (default true), applied to the exact in-graph
+IMAGE frames fed to Save Video. Both use sequential pyramidal Lucas–Kanade
+optical flow, forward/backward consistency and RANSAC similarity estimation
+from spatially separated background regions, with an f174 anchor for join
+175. Inspect `frame_trajectories.180` / `.190`, including
+`cumulative_apparent_scale_percent`, `ransac_inliers`,
+`support_left/right` and `median_inlier_residual_px`. Ambiguous
+correspondences report `low_confidence_indeterminate`, **not** a
+fictitious 0% movement. Requires OpenCV (`cv2`) for the optional
+diagnostic; when unavailable the report explicitly says
+`opencv_unavailable` without preventing ordinary generation. The
+tracker does not change a single production pixel, frame, latent, mask,
+model call or decode. Its scale is an *apparent background-image*
+similarity estimate and does not prove the physical camera was zooming.
+
+For 01792 and the lossless 00008 case, do **not** infer encoder-only motion
+from an in-graph phase-correlation reading near zero. Run the **same
+feature tracker** on the in-graph frames and the lossless video, then
+compare the decoded final stage, Finalize Duration output and file at
+identical frame indices. Any downstream stage implicated must first
+reproduce the nonzero tracked displacement; no spatial-warp correction
+should be based on phase matching alone.
+
 **Compare each stage's pre/post ratios**; raw 704px reduced-grid and
 992px target-grid gradients have different native pixel bandwidths.
 Each region therefore reports **both native-grid Sobel energy and a
