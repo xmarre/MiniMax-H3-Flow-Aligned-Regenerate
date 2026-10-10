@@ -51,9 +51,7 @@ def source_pair(tmp_path):
         _save(tmp_path, manifest["tensor_bytes"], name, tensor)
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
     model = SimpleNamespace(
-        first_stage_model=SimpleNamespace(
-            tokens_chunk_size=5, token_overlap=2, frame_pre_padding=3, clip_length=17
-        )
+        first_stage_model=SimpleNamespace(tokens_chunk_size=5, token_overlap=2, frame_pre_padding=3, clip_length=17)
     )
     return tmp_path, model, manifest
 
