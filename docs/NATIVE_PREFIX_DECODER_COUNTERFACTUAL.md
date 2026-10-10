@@ -77,10 +77,16 @@ new videos, rewritten source operands or workflow-output modifications.
 * `full_vs_cropped_baseline.same_frame`: same-frame full-native A
   versus existing cropped native source replay, including absolute RGB/luma,
   Sobel and structure comparisons. The two decoder contexts may disagree.
-* `baseline` and `counterfactual`: individual ROI luma/Sobel and phase
-  trajectories, adjacent-frame geometry, and OpenCV background tracking.
-  The default profile includes bookshelf, framed picture, curtain and wall;
-  `upper45_full` adds an upper-region diagnostic.
+* `baseline` and `counterfactual`: individual static-ROI luma/Sobel
+  and phase trajectories, adjacent-frame geometry, and OpenCV background
+  tracking. The default profile includes bookshelf, framed picture, curtain
+  and wall. Tracking and static-scale fitting use **only the requested
+  static ROIs**. The `upper45_full` region is added only to paired
+  `same_frame_A_to_B` and `full_vs_cropped_baseline.same_frame`
+  pixel-residual measurements; it can contain moving foreground, so is
+  never silently used as a static-background tracking region.
+  `adjacent_frame_geometry_upper45` and `same_frame_geometry_upper45`
+  separately measure upper-region geometry without calling it static.
 * `same_frame_A_to_B`, `same_frame_geometry`,
   `same_frame_geometry_upper45` and `temporal_increment_delta`:
   same pixel times in the two arms, including per-frame RGB RMSE and
@@ -90,6 +96,11 @@ new videos, rewritten source operands or workflow-output modifications.
   A smaller f190/f174 scale need not mean corrected continuation if B
   moved the decoded f174 anchor. The f178 anchor lies in the generated
   suffix, although the *decoded* f178 pixels can still depend on the prefix.
+  `background_tracking_support` explicitly records independent
+  corner detection for each arm and anchor. Consequently A/B scale estimates
+  can use **different landmark sets**, even with identical ROI masks; they
+  are not a matched-feature causal estimate. Inspect per-region support,
+  RANSAC inliers and same-frame registration before interpreting any delta.
   Confidence failures, scene motion or texture changes remain indeterminate.
 * `vae`: total VAE call counts and individual elapsed times. Inspect
   `limitations` before attributing image-space changes to a root cause.
