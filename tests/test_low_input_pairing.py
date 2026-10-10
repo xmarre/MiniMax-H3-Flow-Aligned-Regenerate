@@ -5,7 +5,7 @@ import copy
 import pytest
 import torch
 
-from h3_flow_regenerate.geometry import pack_streams
+from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.low_input_pairing import (
     POLICY,
     compare_low_input_pairing_receipts,
@@ -64,16 +64,13 @@ def test_only_source_prefix_variation_is_pair_eligible_not_causally_qualified():
     right_args = copy.deepcopy(left_args)
     different = right_args["source_prefix"] + 0.125
     right_args["source_prefix"] = different.contiguous()
-    right_args["low_latent_image"], _ = pack_streams(
-        (torch.cat((different, left_args["low_latent_image"].new_zeros((1, 24, 10, 4, 4))), dim=2),
-         torch.zeros((1, 32, 2, 4, 4))))
-    # Restore actual shared suffix and audio exactly. Only prefix is varied.
-    right_args["low_latent_image"] = left_args["low_latent_image"].clone()
-    suffix_start = different.numel()
-    right_args["low_latent_image"][..., :suffix_start] = different.reshape(1, 1, -1)
+    original_video, original_audio = unpack_streams(left_args["low_latent_image"], left_args["low_shapes"])
+    candidate_video = original_video.clone()
+    candidate_video[:, :, :7] = different
+    right_args["low_latent_image"], _ = pack_streams((candidate_video, original_audio.clone()))
+    right_args["source_policy"] = "half_pixel_latent_v1"
     a = make_low_input_pairing_receipt(**left_args)
     b = make_low_input_pairing_receipt(**right_args)
-    b["source_policy"] = "half_pixel_latent_v1"
     comparison = compare_low_input_pairing_receipts(a, b)
     assert comparison["matched_known_low_inputs"] is True
     assert comparison["source_prefix_intervention_observed"] is True
