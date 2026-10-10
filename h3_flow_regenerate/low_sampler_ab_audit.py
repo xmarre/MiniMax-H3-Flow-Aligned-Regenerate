@@ -16,6 +16,7 @@ import torch
 
 from .local_boundary_audit import _AUDIT_MODEL_OWNERS, geometry_comparison, normalize_bundle_path, read_verified_operand
 from .native_prefix_counterfactual import _native_pixels, _temporal_increment, _variant_pixels
+from .partitioned_stage import tensor_sha256
 from .stage_static_roi_audit import PROFILES, compare_same_frame_prefix_rois, parse_static_rois
 
 POLICY = "h3_frozen_low_source_aba_native_decode_v1"
@@ -106,7 +107,7 @@ def audit_saved_low_aba(
     pixels_b, elapsed_b = _native_pixels(vae, b, process_out, origin, labels)
     full_rois = {**rois, "upper45_full": (0.0, 0.0, 1.0, 0.45)}
     same = compare_same_frame_prefix_rois(pixels_a, pixels_b, labels, rois=full_rois)
-    if any(not torch.equal(tensors[name], tensors[name].clone()) for name in NAMES):
+    if any(tensor_sha256(tensors[name]) != hashes[name] for name in NAMES):
         raise RuntimeError("saved low A/B operand changed during read-only decode")
     return {
         "policy": POLICY,
