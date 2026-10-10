@@ -44,11 +44,7 @@ def _fixture():
 
 def test_low_pair_receipt_checks_actual_input_and_preserves_source_tensors():
     params = _fixture()
-    copies = {
-        name: value.clone()
-        for name, value in params.items()
-        if isinstance(value, torch.Tensor)
-    }
+    copies = {name: value.clone() for name, value in params.items() if isinstance(value, torch.Tensor)}
     report = make_low_input_pairing_receipt(**params)
     assert report["policy"] == POLICY
     assert report["source_temporal"] == 17
