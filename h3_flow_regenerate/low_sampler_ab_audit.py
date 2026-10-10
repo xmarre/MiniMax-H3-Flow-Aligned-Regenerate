@@ -148,9 +148,7 @@ def audit_saved_low_aba(
     pixels_a, elapsed_a = _native_pixels(vae, a, process_out, origin, labels)
     pixels_b, elapsed_b = _native_pixels(vae, b, process_out, origin, labels)
     pixels_a_replay, elapsed_a_replay = (
-        _native_pixels(vae, a2, process_out, origin, labels)
-        if not replay_qualified
-        else (None, 0.0)
+        _native_pixels(vae, a2, process_out, origin, labels) if not replay_qualified else (None, 0.0)
     )
     full_rois = {**rois, "upper45_full": (0.0, 0.0, 1.0, 0.45)}
     same = compare_same_frame_prefix_rois(pixels_a, pixels_b, labels, rois=full_rois)
