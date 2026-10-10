@@ -301,7 +301,7 @@ def audit_native_prefix_counterfactual(
             "Replacing the prefix changes the f174 anchor; f174-relative scale is confounded.",
             "Same generated latent suffix does not imply equal decoded pixel suffix under temporal VAE context.",
             "The f178 tracking anchor is inside the suffix but can still depend on decoder context.",
-            "Each variant/anchor tracks independently selected static-ROI features; A/B scales are not matched-landmark fits.",
+            "A/B trackers select landmarks independently, even within identical static ROIs.",
             "Scale estimates are diagnostic apparent movement, not calibrated camera ground truth.",
             "Similarity, Sobel and photometric changes are diagnostic, not proof of rendering improvement.",
             "A VAE-only counterfactual cannot demonstrate correction of the source sampler trajectory.",
