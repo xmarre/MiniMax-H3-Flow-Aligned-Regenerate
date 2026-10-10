@@ -756,8 +756,9 @@ def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monke
         manifest = json.loads(manifests[0].read_text())
         assert manifest["metadata"]["source_prefix_projection_policy"] == "native_source_carry_v1"
         assert manifest["metadata"]["extra_vae_calls"] == 0
-        _, stages, _ = load_replay_operands(str(manifests[0]), 175, include_source=True)
+        _, stages, identity = load_replay_operands(str(manifests[0]), 175, include_source=True)
         assert stages["source_grid"].shape[-2:] == SOURCE_HW
+        assert identity["source_prefix_projection_policy"] == "native_source_carry_v1"
 
 
 def test_native_carry_missing_pair_stops_before_capture_and_sampler(monkeypatch):

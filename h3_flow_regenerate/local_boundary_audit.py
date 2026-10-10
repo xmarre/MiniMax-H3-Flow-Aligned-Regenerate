@@ -311,8 +311,8 @@ def load_replay_operands(
                 or receipt.get("authoritative_prefix", {}).get("sha256_float32") != target["sha256_float32"]
             ):
                 raise ValueError("saved source prefix differs from its projection receipt")
-            # A lossy native encode cannot be replayed by interpolation. The
-            # hash-verified source operand is authoritative for this experiment.
+            # Native encode and a previous source prediction cannot be replayed
+            # by interpolation. Use the hash-verified captured source operand.
             expected_head = source[:, :, :head]
         elif projection_policy == H3_TRANSFER_LATTICE:
             expected_head = resize_spatial_5d_h3_patch_lattice(native_head, h, w)
@@ -324,6 +324,8 @@ def load_replay_operands(
             raise ValueError("reduced-grid handoff head differs from the projected native head")
         stages = {"source_grid": source[:, :, crop].clone(), **stages}
     identity = {"manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(), "operand_sha256": hashes}
+    if include_source:
+        identity["source_prefix_projection_policy"] = projection_policy
     if include_high_predictions:
         trace = metadata["window"].get("high_prediction_trace")
         if not isinstance(trace, dict) or trace.get("policy") != "bounded_high_prediction_windows_v1":
@@ -738,8 +740,13 @@ def audit_local_boundary(
                 frames, [labels[0] - 1, *labels], join_frame=join_frame, rois=static_rois
             )
         if name == "source_grid":
-            report["stages"][name]["state_role"] = "uniform_reduced_view_with_projected_target_grid_head"
-            report["stages"][name]["native_reduced_grid_generation_for_head"] = False
+            carried = identity.get("source_prefix_projection_policy") == "native_source_carry_v1"
+            report["stages"][name]["state_role"] = (
+                "uniform_source_with_previous_native_clean_prediction_head"
+                if carried
+                else "uniform_reduced_view_with_projected_target_grid_head"
+            )
+            report["stages"][name]["native_reduced_grid_generation_for_head"] = carried
         if extended:
             LOG.info("H3 local boundary audit: comparing decoder contexts of %s", name)
             report["stages"][name]["window_context"] = measure_window_context(
