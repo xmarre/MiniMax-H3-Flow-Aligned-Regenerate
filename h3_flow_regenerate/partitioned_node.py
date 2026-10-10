@@ -8,6 +8,7 @@ from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
+from .low_sampler_ab import LOW_SAMPLER_AB_KEY
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_attention import sol_attention_selected
@@ -598,6 +599,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["low_sampler_aba"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "EXPERIMENTAL GPU A/B/A source-low sampler replay for native_source_carry. "
+                    "Run full initial+continuation with the same MODEL, trajectory capture and "
+                    "capture_boundary_witness=true. Adds two complete low/probe lifetimes and "
+                    "freezes Python/NumPy/Torch RNG. The initial A is the normal production "
+                    "low path, B changes only its source prefix, A' verifies reproducibility. "
+                    "A/B/A measurements are not a seam fix or production acceptance."
+                ),
+            },
+        )
         spec["optional"]["video_vae"] = ("VAE",)
         return spec
 
@@ -654,6 +669,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         temporal_weight=0.20,
         source_prefix_projection="latent_bicubic",
         video_vae=None,
+        low_sampler_aba=False,
     ):
         patched, metrics = super().patch(
             model=model,
@@ -675,6 +691,16 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
+        if low_sampler_aba and (
+            source_prefix_projection != "native_source_carry"
+            or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+            or not capture_boundary_witness
+            or trajectory is None
+        ):
+            raise ValueError(
+                "low_sampler_aba requires native_source_carry, progressive_uniform_source, "
+                "capture_boundary_witness=true and a connected Flow trajectory"
+            )
         configure_source_prefix_projection(patched, source_prefix_projection, video_vae, spatial_stage_control)
         witness_directory = ""
         if capture_boundary_witness:
@@ -699,7 +725,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             restart_required=False,
             output_mutated=False,
         )
-        return apply_partitioned_diagnostic_controls(
+        patched, metrics = apply_partitioned_diagnostic_controls(
             patched,
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
@@ -723,6 +749,15 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             target_band_context=target_band_context,
             uniform_source_detail_transport=uniform_source_detail_transport,
         )
+        patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
+        metrics.event(
+            "partitioned_low_sampler_aba_control",
+            enabled=bool(low_sampler_aba),
+            source_projection=source_prefix_projection,
+            diagnostic_only=True,
+            default_changed=False,
+        )
+        return patched, metrics
 
 
 NODE_CLASS_MAPPINGS = {
