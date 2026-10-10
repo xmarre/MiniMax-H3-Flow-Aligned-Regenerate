@@ -3841,12 +3841,14 @@ def run_partitioned_progressive(
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
     source_carry = source_carry_owner(guider)
+    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
+
     low_aba_enabled = bool(initial_model_options.get(LOW_SAMPLER_AB_KEY, False))
     if low_aba_enabled and (
         source_carry is None
         or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
-        or not isinstance(initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1"), str)
-        or not initial_model_options.get("h3_flow_partitioned_boundary_witness_directory_v1")
+        or not isinstance(initial_model_options.get(WITNESS_DIRECTORY_OPTION), str)
+        or not initial_model_options.get(WITNESS_DIRECTORY_OPTION)
         or not binding.capture_enabled
         or binding.trajectory is None
     ):
@@ -3886,8 +3888,6 @@ def run_partitioned_progressive(
             "progressive_uniform_source requires native uniform attention, normal VDN diagnostics, "
             "learned_3d transfer and main handoff/guidance sources"
         )
-    from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
-
     band_witness_requested = (band_mode or uniform_source) and witness_requested(
         initial_model_options.get(WITNESS_DIRECTORY_OPTION)
     )
