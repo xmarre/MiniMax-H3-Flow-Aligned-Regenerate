@@ -130,7 +130,7 @@ def audit_saved_low_aba(
     ):
         differences = (original - repeated).abs()
         if not bool(torch.isfinite(differences).all()):
-            raise ValueError("saved low A/A' replay error contains non-finite values")
+            raise ValueError("replayed A source or first-prediction difference contains non-finite values")
         replay_errors[name] = {
             "abs_max": float(differences.max()),
             "rms": float(differences.square().mean().sqrt()),
