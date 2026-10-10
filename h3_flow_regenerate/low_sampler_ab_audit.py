@@ -108,9 +108,15 @@ def audit_saved_low_aba(
         or any(t.dtype != torch.float32 or t.device.type != "cpu" for t in tensors.values())
     ):
         raise ValueError("saved low A/B/A source/first-prediction temporal or spatial geometry changed")
-    for original, repeated, start in ((a, a2, prefix_t), (first_a, first_a2, 0)):
-        if (original[:, :, start:] - repeated[:, :, start:]).abs().max() > 1e-5:
+    # The disk loader currently rejects non-finite tensors, but do not rely
+    # on that separate contract for replay eligibility. A NaN comparison with
+    # "max() > tolerance" can incorrectly report success.
+    for original, repeated, start in ((a, a2, 0), (first_a, first_a2, 0)):
+        differences = (original[:, :, start:] - repeated[:, :, start:]).abs()
+        if not bool((torch.isfinite(differences) & (differences <= 1e-5)).all()):
             raise ValueError("replayed A no longer matches saved first/source output within 1e-5")
+    if torch.equal(a[:, :, :prefix_t], b[:, :, :prefix_t]):
+        raise ValueError("saved A/B source prefixes are identical; no prefix intervention")
     output_sha_before = {name: hashes[name] for name in NAMES}
     origin = join_frame - prefix_t // 5 * 17 - 5
     labels = list(range(join_frame - 5, join_frame + 21))
