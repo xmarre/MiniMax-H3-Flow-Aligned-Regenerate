@@ -228,7 +228,9 @@ class H3ContinuumImageGeometryProbe:
         rois = parse_static_rois(static_roi_profile, static_roi_json)
         report = json.dumps(
             probe_image_geometry(
-                images, join_frame=int(join_frame), rois=rois,
+                images,
+                join_frame=int(join_frame),
+                rois=rois,
                 feature_tracking_enabled=feature_tracking_enabled,
             ),
             allow_nan=False,
