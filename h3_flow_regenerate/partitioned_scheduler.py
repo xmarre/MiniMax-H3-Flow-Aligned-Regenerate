@@ -3469,7 +3469,6 @@ def _measure_partitioned_transfer_splice(
     return fields
 
 
-@source_carry_scope()
 def _run_frozen_source_low_aba(
     executor,
     guider,
@@ -3715,6 +3714,7 @@ def _run_frozen_source_low_aba(
     return report
 
 
+@source_carry_scope()
 def run_partitioned_progressive(
     executor,
     guider,
