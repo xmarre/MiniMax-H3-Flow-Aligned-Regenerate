@@ -10,16 +10,16 @@ import numpy as np
 import pytest
 import torch
 
-from h3_flow_regenerate.geometry import pack_streams, unpack_streams
-from h3_flow_regenerate.metrics import H3FlowMetrics
-from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan
 from h3_flow_regenerate import partitioned_scheduler as scheduler
+from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.low_sampler_ab import (
     capture_rng,
     compare_aba,
     counterfactual_low_inputs,
     frozen_rng,
 )
+from h3_flow_regenerate.metrics import H3FlowMetrics
+from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan
 
 
 @pytest.fixture
@@ -108,7 +108,10 @@ def test_later_model_state_leakage_rejects_a2(inputs):
 def test_real_scheduler_aba_shadow_uses_two_independent_low_probe_lifetimes(inputs, monkeypatch):
     video, audio, packed, shapes = inputs
     noise, _ = pack_streams((torch.zeros_like(video), torch.zeros_like(audio)))
-    mask, _ = pack_streams((torch.cat((torch.zeros_like(video[:, :, :7]), torch.ones_like(video[:, :, 7:])), dim=2), torch.ones_like(audio)))
+    video_mask = torch.cat(
+        (torch.zeros_like(video[:, :, :7]), torch.ones_like(video[:, :, 7:])), dim=2
+    )
+    mask, _ = pack_streams((video_mask, torch.ones_like(audio)))
     original_prefix = video[:, :, :7].clone()
     alternate_prefix = original_prefix + 0.125
     low_plan = PartitionedStagePlan(
