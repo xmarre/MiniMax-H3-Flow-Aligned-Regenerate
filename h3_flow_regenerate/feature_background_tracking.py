@@ -4,6 +4,7 @@ Unlike absolute ROI phase matching, this tracks features consecutively through
 defocus before estimating cumulative background similarity scale. Requires
 OpenCV when invoked; no production paths depend on OpenCV at import time.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -53,15 +54,11 @@ def track_background_features(
         return {"policy": POLICY, "status": "missing_prefix_anchor", "images_modified": False}
     mask = np.zeros((height, width), dtype=np.uint8)
     for rect in rois.values():
-        if len(rect) != 4 or not (
-            0 <= rect[0] < rect[2] <= 1 and 0 <= rect[1] < rect[3] <= 1
-        ):
+        if len(rect) != 4 or not (0 <= rect[0] < rect[2] <= 1 and 0 <= rect[1] < rect[3] <= 1):
             raise ValueError("background tracking expects normalized XYXY ROIs")
         x0, y0, x1, y1 = rect
         mask[round(y0 * height) : round(y1 * height), round(x0 * width) : round(x1 * width)] = 255
-    corners = cv2.goodFeaturesToTrack(
-        gray[idx[anchor]], 900, 0.006, 8, mask=mask, blockSize=5
-    )
+    corners = cv2.goodFeaturesToTrack(gray[idx[anchor]], 900, 0.006, 8, mask=mask, blockSize=5)
     if corners is None or len(corners) < 25:
         return {
             "policy": POLICY,
@@ -89,26 +86,31 @@ def track_background_features(
                 break
             source, target = gray[idx[previous]], gray[idx[frame_no]]
             forward, forward_status, _ = cv2.calcOpticalFlowPyrLK(
-                source, target, positions, None, winSize=(25, 25), maxLevel=3,
+                source,
+                target,
+                positions,
+                None,
+                winSize=(25, 25),
+                maxLevel=3,
                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.003),
             )
             if forward is None:
                 records[frame_no] = {"status": "no_tracked_landmarks", "tracked_landmarks": 0}
                 break
             backward, backward_status, _ = cv2.calcOpticalFlowPyrLK(
-                target, source, forward, None, winSize=(25, 25), maxLevel=3,
+                target,
+                source,
+                forward,
+                None,
+                winSize=(25, 25),
+                maxLevel=3,
                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.003),
             )
             if backward is None:
                 records[frame_no] = {"status": "no_reverse_correspondence", "tracked_landmarks": 0}
                 break
             fb_error = np.linalg.norm((positions - backward)[:, 0, :], axis=1)
-            keep = (
-                (forward_status[:, 0] > 0)
-                & (backward_status[:, 0] > 0)
-                & np.isfinite(fb_error)
-                & (fb_error < 1.2)
-            )
+            keep = (forward_status[:, 0] > 0) & (backward_status[:, 0] > 0) & np.isfinite(fb_error) & (fb_error < 1.2)
             positions = forward[keep]
             indices = indices[keep]
             previous = frame_no
@@ -122,8 +124,13 @@ def track_background_features(
             initial = original[indices]
             current = positions[:, 0, :]
             matrix, inliers = cv2.estimateAffinePartial2D(
-                initial, current, method=cv2.RANSAC, ransacReprojThreshold=2.0,
-                maxIters=1500, confidence=0.995, refineIters=10,
+                initial,
+                current,
+                method=cv2.RANSAC,
+                ransacReprojThreshold=2.0,
+                maxIters=1500,
+                confidence=0.995,
+                refineIters=10,
             )
             if matrix is None or inliers is None:
                 records[frame_no] = {"status": "affine_fit_failed", "tracked_landmarks": count}
@@ -137,8 +144,7 @@ def track_background_features(
             left = int(((initial[:, 0] < width * 0.35) & supported).sum())
             right = int(((initial[:, 0] > width * 0.65) & supported).sum())
             valid = (
-                n >= 25 and n / count >= 0.30 and left >= 6 and right >= 6
-                and spread >= 0.45 and median_error <= 1.5
+                n >= 25 and n / count >= 0.30 and left >= 6 and right >= 6 and spread >= 0.45 and median_error <= 1.5
             )
             row = {
                 "status": "measured" if valid else "low_confidence_indeterminate",
@@ -153,12 +159,14 @@ def track_background_features(
             if valid:
                 scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
                 delta_x = current[:, 0] - initial[:, 0]
-                row.update({
-                    "cumulative_apparent_scale_percent": round((scale - 1) * 100, 5),
-                    "rotation_degrees": round(float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))), 5),
-                    "left_median_dx_px": round(float(np.median(delta_x[initial[:, 0] < width * 0.35])), 4),
-                    "right_median_dx_px": round(float(np.median(delta_x[initial[:, 0] > width * 0.65])), 4),
-                })
+                row.update(
+                    {
+                        "cumulative_apparent_scale_percent": round((scale - 1) * 100, 5),
+                        "rotation_degrees": round(float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))), 5),
+                        "left_median_dx_px": round(float(np.median(delta_x[initial[:, 0] < width * 0.35])), 4),
+                        "right_median_dx_px": round(float(np.median(delta_x[initial[:, 0] > width * 0.65])), 4),
+                    }
+                )
             records[frame_no] = row
     return {
         "policy": POLICY,
