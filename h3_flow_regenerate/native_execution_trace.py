@@ -85,7 +85,7 @@ def _vdn_owner(attention):
 
 
 class NativeExecutionTrace:
-    def __init__(self, step, hasher, *, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=12):
+    def __init__(self, step, hasher, *, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40):
         self.step = validate_step(step)
         self.hasher = hasher
         self.arm_bytes, self.tensor_bytes, self.max_records = arm_bytes, tensor_bytes, max_records
@@ -185,24 +185,40 @@ class NativeExecutionTrace:
             return
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
-        if layer not in {0, layers // 2, layers - 1} or (boundary == "input" and layer != 0):
+        full = (
+            (boundary == "input" and layer == 0)
+            or (boundary == "output" and layer in {0, layers // 2, layers - 1})
+        )
+        # The 01860 replay matches through block 25, but differs by block 49.
+        # Sampling one in 32 *token rows* across all hidden features observes
+        # every intervening block within the original 2 GiB-per-arm budget.
+        # Sample equality is not full-state equality: retain the existing full
+        # SHA256 sentinels at the first, middle, and last block.
+        sampled = boundary == "output" and layers // 2 < layer < layers - 1
+        if not (full or sampled):
             return
         rows = self.arms.setdefault(trace.arm, [])
         if len(rows) >= self.max_records:
             self.omitted[trace.arm] = self.omitted.get(trace.arm, 0) + 1
             return
-        row = {"key": [trace.stage, trace.evaluation, trace.native_call, layer, boundary], "layers": layers}
+        row = {
+            "key": [trace.stage, trace.evaluation, trace.native_call, layer, boundary],
+            "layers": layers,
+            "coverage": "full" if full else "token_rows_stride_32",
+            "source_shape": list(tensor.shape),
+        }
         rows.append(row)
         try:
             row["backend"] = self.backend(tensor, block, options, previous)
-            size = tensor.numel() * tensor.element_size()
-            row.update(shape=list(tensor.shape), dtype=str(tensor.dtype), nbytes=size)
+            observed = tensor if full else tensor[::32]
+            size = observed.numel() * observed.element_size()
+            row.update(shape=list(observed.shape), dtype=str(observed.dtype), nbytes=size)
             used = self.bytes.get(trace.arm, 0)
             if size > self.tensor_bytes or used + size > self.arm_bytes:
                 row["unobserved"] = "tensor_or_arm_byte_budget"
                 return
             self.bytes[trace.arm] = used + size
-            row["sha256"] = self.hasher(tensor)
+            row["sha256"] = self.hasher(observed)
         except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as error:
             row["unobserved"] = type(error).__name__
 
@@ -212,7 +228,8 @@ class NativeExecutionTrace:
         layers = baseline[0]["layers"] if baseline else 0
         expected = (
             [["low", self.step, 1, 0, "input"]]
-            + [["low", self.step, 1, layer, "output"] for layer in sorted({0, layers // 2, layers - 1})]
+            + [["low", self.step, 1, layer, "output"] for layer in
+               sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))]
             if layers > 0
             else []
         )
@@ -223,7 +240,11 @@ class NativeExecutionTrace:
                 and [r["key"] for r in baseline] == expected
                 and len(baseline) == len(other)
                 and all(
-                    a["key"] == b["key"] and a["layers"] == b["layers"] for a, b in zip(baseline, other, strict=True)
+                    a["key"] == b["key"]
+                    and a["layers"] == b["layers"]
+                    and a["coverage"] == b["coverage"]
+                    and a["source_shape"] == b["source_shape"]
+                    for a, b in zip(baseline, other, strict=True)
                 )
             )
             complete = (
@@ -236,7 +257,12 @@ class NativeExecutionTrace:
             if aligned:
                 for a, b in zip(baseline, other, strict=True):
                     if "sha256" in a and "sha256" in b and any(a[k] != b[k] for k in ("shape", "dtype", "sha256")):
-                        first = {"key": a["key"], "classification": "packed_hidden_" + a["key"][-1]}
+                        first = {
+                            "key": a["key"],
+                            "classification": "packed_hidden_" + a["key"][-1]
+                            + ("_sampled" if a["coverage"] != "full" else ""),
+                            "coverage": a["coverage"],
+                        }
                         break
             comparisons[arm] = {
                 "alignment_complete": aligned,
@@ -262,11 +288,14 @@ class NativeExecutionTrace:
                 "metadata_nodes_per_value": 256,
                 "cache_entries": 8,
                 "hooks_per_module": 4,
+                "intervening_output_token_row_stride": 32,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
             "limitations": [
-                "Only first, middle and final block outputs and first block input are fingerprinted.",
+                "Block zero input and first/middle/final outputs are hashed in full; "
+                "intervening outputs after the middle block use every 32nd token row.", 
+                "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",
                 "Cache keys, pool IDs and hook inventories do not establish tensor/weight or execution-state equality.",

@@ -100,18 +100,27 @@ call is observed. A forecast, missing prediction or unsupported block path has
 no selected native witness and is explicitly incomplete.
 
 The observer fingerprints every byte of the packed hidden input to block zero
-and the outputs of blocks zero, `block_count // 2`, and `block_count - 1`, before
-Flow maps the final hidden state back to native carrier rows. Hidden states
-include conditioning and both target AV streams; these are not clean video
-latents. Matching selected hashes establishes only equality at those boundaries.
-A changed middle/final hash bounds a coarse interval; it does not identify the
-first differing unobserved block, attention primitive or model weight.
+and outputs of blocks zero, `block_count // 2`, and `block_count - 1`, before
+Flow maps the final hidden state back to native carrier rows. For outputs of
+blocks strictly between the middle and final block, it additionally hashes all
+features in every 32nd token row. Those probes are labeled
+`coverage=token_rows_stride_32` and are **not** complete block hashes.
+For a 50-block model these are blocks 26–48; four full witnesses plus 23 sampled
+witnesses consume approximately 1.85 GiB per A/B/A′ arm at 36,445 × 5,376
+bf16 hidden shape, under the existing 2 GiB limit.
+
+Hidden states include conditioning and both target AV streams; they are not clean
+video latents. Full selected hash identity establishes only equality at those
+boundaries. A differing strided probe identifies the earliest *observed sampled*
+difference, not proof that the preceding unobserved token rows or earlier blocks
+are identical. Follow up on a suspect block with a full-byte observation before
+attributing divergence to that specific block, attention primitive, or weight.
 
 `native_execution_trace` in the first-divergence report contains the observations,
 topology checks, source receipts, inspection budgets and omissions. Full hidden
 tensors are never retained on GPU or exported. Hashing streams at most 8 MiB of
 logical tensor bytes per host slice, charges at most 2 GiB per arm (6 GiB across
-the three arms), and rejects tensors larger than 512 MiB. Budget/layout/read
+the three arms), and rejects individual observed tensors larger than 512 MiB. Budget/layout/read
 failures, missing boundaries or different topology prevent selected-boundary
 equality. Existing native AV divergence operands remain a separate export.
 

@@ -187,3 +187,49 @@ def test_real_core_flow_block_chain_preserves_av_outputs_and_captures_inside_lea
         assert trace.summary()["native_execution_trace"] == report
     assert active_trace() is None and runtime.current_runtime_buffers() is None
     assert torch.equal(torch.get_rng_state(), rng)
+
+
+def test_01860_late_block_refinement_finds_earliest_sampled_difference():
+    observer = NativeExecutionTrace(5, _full_sha)
+    module = block()
+    layers = 50
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        for layer in range(layers):
+            value = torch.arange(128.0).reshape(32, 4)
+            if arm == "A_replay" and layer >= 37:
+                value = value.clone()
+                value[0, 0] += 0.125
+            observer.observe(trace, layer, layers, "output", value, module, {}, None)
+            if layer == 0:
+                observer.observe(trace, 0, layers, "input", value, module, {}, None)
+    result = observer.summary()
+    first = result["comparisons"]["A_replay"]["first_observed_difference"]
+    assert result["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert first == {
+        "key": ["low", 5, 1, 37, "output"],
+        "classification": "packed_hidden_output_sampled",
+        "coverage": "token_rows_stride_32",
+    }
+    assert len(result["arms"]["A"]) == 27
+    assert sum(row["coverage"] == "token_rows_stride_32" for row in result["arms"]["A"]) == 23
+    assert observer.bytes["A"] == 4 * 128 * 4 + 23 * 4 * 4
+
+
+def test_strided_probe_never_claims_full_block_coverage():
+    observer = NativeExecutionTrace(5, _full_sha)
+    module = block()
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        for layer in range(5):
+            value = torch.arange(128.0).reshape(32, 4)
+            if arm == "A_replay" and layer == 3:
+                value = value.clone()
+                value[1, 0] += 0.125  # Not among sampled token rows.
+            observer.observe(trace, layer, 5, "output", value, module, {}, None)
+            if layer == 0:
+                observer.observe(trace, 0, 5, "input", value, module, {}, None)
+    report = observer.summary()
+    assert report["comparisons"]["A_replay"]["selected_boundaries_exact"]
+    assert report["arms"]["A"][3]["coverage"] == "token_rows_stride_32"
+    assert any("Sampled equality does not establish" in note for note in report["limitations"])
