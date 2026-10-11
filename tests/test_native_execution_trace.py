@@ -501,3 +501,102 @@ def test_01891_projection_selector_fails_closed_and_geometry_stays_within_budget
     assert total == 2089902080
     assert total < 2 * 1024**3
     assert bf16_bytes * n_rows * out_proj_input < 512 * 1024**2
+
+
+def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
+    class QKV(torch.nn.Module):
+        def forward(self, value):
+            return torch.cat((value[:, :2], value[:, :2], value[:, :2]), dim=-1)
+
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.heads = 1
+    module.attn.head_dim = 2
+    module.attn.qkv_proj = QKV()
+    adapter = {"strength": 0}
+
+    def original_adapter(_module, _args, value):
+        return value + adapter["strength"] * 0.125
+
+    handle = module.attn.qkv_proj.register_forward_hook(original_adapter)
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True)
+    try:
+        for arm in ("A", "B_target_projection", "A_replay"):
+            if arm == "A_replay":
+                adapter["strength"] = 1
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            source = torch.ones((9000, 4), dtype=torch.bfloat16)
+            observer.observe(trace, 45, 50, "input", source, module, {}, None)
+            with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+                for start in range(0, len(source), 4096):
+                    module.attn.qkv_proj(source[start : start + 4096])
+            assert tuple(module.attn.qkv_proj._forward_hooks.values()) == (original_adapter,)
+            assert not module.attn.qkv_proj._forward_pre_hooks
+        report = observer.summary()
+        assert report["internal_qkv_detail"]
+        assert report["chunked_qkv_expected"]["A"]["rows"] == 9000
+        assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+        assert report["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "qkv_output_0"
+        assert [row["key"][-1] for row in report["arms"]["A"]] == [
+            "qkv_input_0", "qkv_output_0", "qkv_input_1", "qkv_output_1",
+            "qkv_input_2", "qkv_output_2",
+        ]
+        assert all(row["coverage"] == "full" for row in report["arms"]["A"])
+        assert report["inspection_bytes_charged_per_arm"]["A"] == 9000 * (4 + 6) * 2
+    finally:
+        handle.remove()
+
+
+def test_01892_chunked_qkv_missing_chunk_and_budget_fail_closed():
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.heads = 1
+    module.attn.head_dim = 2
+    module.attn.qkv_proj = torch.nn.Linear(4, 6, bias=False, dtype=torch.bfloat16)
+    for omit_last, budget in ((True, 2 * 1024**3), (False, 100)):
+        observer = NativeExecutionTrace(
+            5, _full_sha, pair_block=45, module_detail=True, projection_detail=True,
+            qkv_detail=True, arm_bytes=budget,
+        )
+        for arm in ("A", "A_replay"):
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            value = torch.ones(5000, 4, dtype=torch.bfloat16)
+            observer.observe(trace, 45, 50, "input", value, module, {}, None)
+            with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+                module.attn.qkv_proj(value[:4096])
+                if not omit_last:
+                    module.attn.qkv_proj(value[4096:])
+        assert not observer.summary()["comparisons"]["A_replay"]["selected_boundaries_complete"]
+        assert not module.attn.qkv_proj._forward_hooks
+        assert not module.attn.qkv_proj._forward_pre_hooks
+    with pytest.raises(ValueError, match="qkv_detail"):
+        NativeExecutionTrace(5, _full_sha, pair_block=45, qkv_detail=True)
+
+
+def test_01892_qkv_selector_validation_and_cleanup_exception():
+    from h3_flow_regenerate.native_execution_trace import validate_qkv_detail
+    from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
+
+    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]["low_native_trace_qkv_detail"][1][
+        "default"
+    ] is False
+    with pytest.raises(ValueError, match="qkv_detail"):
+        validate_qkv_detail(1)
+    with pytest.raises(ValueError, match="qkv_detail"):
+        node_call(low_native_trace_qkv_detail=True)
+    with pytest.raises(ValueError, match="qkv_detail"):
+        LowReplayTrace(native_step=5, native_pair_block=45, native_qkv_detail=True)
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.qkv_proj = torch.nn.Identity()
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True)
+    trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
+    with (
+        pytest.raises(RuntimeError, match="deliberate"),
+        observer.internal_block_hooks(trace, 45, 50, module, {}, None),
+    ):
+        raise RuntimeError("deliberate")
+    assert not module.attn.qkv_proj._forward_hooks
+    assert not module.attn.qkv_proj._forward_pre_hooks
+    assert 36445 * (5376 + 21504) * 2 == 1959283200
+    assert 1959283200 < 2 * 1024**3
