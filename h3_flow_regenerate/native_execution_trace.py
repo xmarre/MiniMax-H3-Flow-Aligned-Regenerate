@@ -185,10 +185,7 @@ class NativeExecutionTrace:
             return
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
-        full = (
-            (boundary == "input" and layer == 0)
-            or (boundary == "output" and layer in {0, layers // 2, layers - 1})
-        )
+        full = (boundary == "input" and layer == 0) or (boundary == "output" and layer in {0, layers // 2, layers - 1})
         # The 01860 replay matches through block 25, but differs by block 49.
         # Sampling one in 32 *token rows* across all hidden features observes
         # every intervening block within the original 2 GiB-per-arm budget.
@@ -228,8 +225,10 @@ class NativeExecutionTrace:
         layers = baseline[0]["layers"] if baseline else 0
         expected = (
             [["low", self.step, 1, 0, "input"]]
-            + [["low", self.step, 1, layer, "output"] for layer in
-               sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))]
+            + [
+                ["low", self.step, 1, layer, "output"]
+                for layer in sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))
+            ]
             if layers > 0
             else []
         )
@@ -259,7 +258,8 @@ class NativeExecutionTrace:
                     if "sha256" in a and "sha256" in b and any(a[k] != b[k] for k in ("shape", "dtype", "sha256")):
                         first = {
                             "key": a["key"],
-                            "classification": "packed_hidden_" + a["key"][-1]
+                            "classification": "packed_hidden_"
+                            + a["key"][-1]
                             + ("_sampled" if a["coverage"] != "full" else ""),
                             "coverage": a["coverage"],
                         }
@@ -294,7 +294,7 @@ class NativeExecutionTrace:
             "physical_state_isolation_verified": False,
             "limitations": [
                 "Block zero input and first/middle/final outputs are hashed in full; "
-                "intervening outputs after the middle block use every 32nd token row.", 
+                "intervening outputs after the middle block use every 32nd token row.",
                 "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",
