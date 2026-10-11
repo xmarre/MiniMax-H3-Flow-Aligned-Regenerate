@@ -242,10 +242,10 @@ def test_01867_full_pair_hashes_complete_neighboring_blocks_with_exact_coverage(
         trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
         for layer in range(50):
             rows = torch.arange(128.0).reshape(32, 4)
+            observer.observe(trace, layer, 50, "input", rows, module, {}, None)
             if arm == "A_replay" and layer == 45:
                 rows = rows.clone()
                 rows[1, 0] += 0.125  # Missed by one-in-32 sampled probe.
-            observer.observe(trace, layer, 50, "input", rows, module, {}, None)
             observer.observe(trace, layer, 50, "output", rows, module, {}, None)
     report = observer.summary()
     a_rows = report["arms"]["A"]
