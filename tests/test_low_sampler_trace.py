@@ -192,6 +192,22 @@ def test_missing_end_on_stage_exit_is_explicit_and_context_restores(trace):
     assert not trace.summary()["recorded_tensor_coverage_complete"]
 
 
+@pytest.mark.parametrize("field", ["spectrum_h3_solver_phase", "spectrum_h3_outer_step_id"])
+def test_malformed_prediction_identity_is_unobserved_without_changing_return(trace, field):
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+
+    def solver(x):
+        trace.begin_prediction(guider, x, torch.ones(1), {})
+        native_trace_wrapper(lambda values, *a, **kw: values, [x[:, :2], x[:, 2:]], torch.ones(1), x, {})
+        result = trace.finish_prediction(x, guider, {field: None})
+        assert result is x
+
+    with trace_stage(trace, "A", "low", SimpleNamespace(sampler_function=solver), guider):
+        solver(torch.ones(1, 4))
+    assert any("incomplete_prediction_identity" in r for r in trace.truncated)
+    assert not trace.summary()["recorded_tensor_coverage_complete"]
+
+
 def native_pair(trace, payload, *, options=None):
     guider = SimpleNamespace(model_options={"transformer_options": {}})
 

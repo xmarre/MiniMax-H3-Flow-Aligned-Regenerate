@@ -505,11 +505,11 @@ class LowReplayTrace:
         if identity is None:
             probe = options.get("h3_flow_exact_probe_context")
             identity = (
-                ("handoff_probe", int(probe["outer_step"]))
+                ("handoff_probe", probe.get("outer_step"))
                 if isinstance(probe, dict)
                 else (
-                    str(options.get("spectrum_h3_solver_phase", "model")),
-                    int(options.get("spectrum_h3_outer_step_id", self.evaluation)),
+                    options.get("spectrum_h3_solver_phase", "model"),
+                    options.get("spectrum_h3_outer_step_id", self.evaluation),
                 )
             )
         self.end_prediction(
