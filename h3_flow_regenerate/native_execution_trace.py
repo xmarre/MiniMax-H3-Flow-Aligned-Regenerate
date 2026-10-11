@@ -392,10 +392,8 @@ class NativeExecutionTrace:
                 ]
             else:
                 expected = [["low", self.step, 1, 0, "input"]]
-                expected.extend(
-                    ["low", self.step, 1, layer, "output"]
-                    for layer in self.selected_outputs(layers)
-                )
+                for layer in self.selected_outputs(layers):
+                    expected.append(["low", self.step, 1, layer, "output"])
         for arm in ("B_target_projection", "A_replay"):
             other = self.arms.get(arm, [])
             aligned = (
