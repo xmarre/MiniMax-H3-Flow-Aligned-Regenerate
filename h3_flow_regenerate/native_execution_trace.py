@@ -375,26 +375,27 @@ class NativeExecutionTrace:
         comparisons = {}
         baseline = self.arms.get("A", [])
         layers = baseline[0]["layers"] if baseline else 0
-        expected = (
-            (
-                [
+        expected = []
+        if layers > 0:
+            if self.module_detail:
+                expected = [
                     ["low", self.step, 1, self.pair_block, boundary]
                     for boundary in ("input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output")
                 ]
-                if self.module_detail
-                else [
+            elif self.pair_block >= 0:
+                expected = [
                     ["low", self.step, 1, 0, "input"],
                     ["low", self.step, 1, self.pair_block - 1, "output"],
                     ["low", self.step, 1, self.pair_block, "input"],
                     ["low", self.step, 1, self.pair_block, "output"],
                     ["low", self.step, 1, layers - 1, "output"],
                 ]
-                if self.pair_block >= 0
-                else [["low", self.step, 1, layer, "output"] for layer in self.selected_outputs(layers)]
-            )
-            if layers > 0
-            else []
-        )
+            else:
+                expected = [["low", self.step, 1, 0, "input"]]
+                expected.extend(
+                    ["low", self.step, 1, layer, "output"]
+                    for layer in self.selected_outputs(layers)
+                )
         for arm in ("B_target_projection", "A_replay"):
             other = self.arms.get(arm, [])
             aligned = (
