@@ -1417,6 +1417,15 @@ def partitioned_diffusion_wrapper(
                     forwarded["transformer_options"],
                     previous,
                 )
+                observer.observe_sparse_inputs(
+                    trace,
+                    layer,
+                    len(inner.blocks),
+                    inner.blocks[layer],
+                    forwarded["transformer_options"],
+                    previous,
+                    forwarded.get("rope_freqs"),
+                )
             if observer is not None:
                 with observer.internal_block_hooks(
                     trace,
