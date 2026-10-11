@@ -329,7 +329,11 @@ def test_01881_module_detail_brackets_attention_residual_and_mlp():
     for arm in ("A", "B_target_projection", "A_replay"):
         rows = report["arms"][arm]
         assert [row["key"][-1] for row in rows] == [
-            "input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"
+            "input",
+            "attention_out_proj",
+            "post_attention_norm2",
+            "mlp_output",
+            "output",
         ]
         assert all(row["coverage"] == "full" and row["sha256"] for row in rows)
     assert report["comparisons"]["A_replay"]["alignment_complete"]
