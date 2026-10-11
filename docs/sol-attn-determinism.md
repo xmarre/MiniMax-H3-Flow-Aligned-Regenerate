@@ -14,7 +14,7 @@ From the installed Flow node directory:
 python tools/reproduce_sol_attn_determinism.py --repeats 32 --production-geometry --stages --output sol-determinism/report.json
 ```
 
-`--stages` requires a CUDA toolkit with `nvcc` supporting the current GPU.
+`--stages` targets Linux/WSL and requires a CUDA toolkit with `nvcc` supporting the current GPU.
 The runner downloads a small set of source files at commit
 `be003b7c23c5b01328657955b8bc5d3f073d868e` (tag `v0.2.37`), verifies each
 against the committed SHA256 manifest, and builds a **separate** diagnostic
@@ -113,6 +113,12 @@ retained only for the current case; full model tensors or replay files are
 not written. The large case needs several GiB of free GPU and host memory.
 
 ## Source-grounded hypothesis
+
+Pinned upstream sources:
+[chunked wrapper](https://github.com/Comfy-Org/comfy-kitchen/blob/be003b7c23c5b01328657955b8bc5d3f073d868e/comfy_kitchen/backends/cuda/__init__.py),
+[workspace and stage orchestration](https://github.com/Comfy-Org/comfy-kitchen/blob/be003b7c23c5b01328657955b8bc5d3f073d868e/comfy_kitchen/backends/cuda/sage_attention/sol_attn.cu),
+[token kernels](https://github.com/Comfy-Org/comfy-kitchen/blob/be003b7c23c5b01328657955b8bc5d3f073d868e/comfy_kitchen/backends/cuda/sage_attention/sol_attn_token.cu),
+[upstream tests](https://github.com/Comfy-Org/comfy-kitchen/blob/be003b7c23c5b01328657955b8bc5d3f073d868e/tests/test_sol_attn.py).
 
 In `sol_attn_token.cu`, pass 1 builds an integer score histogram. Pass 2
 admits whole bins until another bin would exceed the budget. This normally
