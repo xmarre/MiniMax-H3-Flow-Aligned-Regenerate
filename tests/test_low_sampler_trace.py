@@ -279,6 +279,8 @@ def test_forecast_option_difference_is_labeled_at_predictor_not_native_boundary(
 
 
 def test_backend_objects_are_caveated_without_obscuring_mandatory_options(trace):
+    import uuid
+
     report = native_pair(
         trace,
         lambda arm: None,
@@ -287,6 +289,7 @@ def test_backend_objects_are_caveated_without_obscuring_mandatory_options(trace)
             "spectrum_h3_runtime": SimpleNamespace(cache=arm),
             "optimized_attention_override": object(),
             "minimax_h3_sigma_shift_video": 3.0,
+            "uuids": [uuid.UUID(int=1)],
         },
     )
     assert report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
@@ -294,6 +297,21 @@ def test_backend_objects_are_caveated_without_obscuring_mandatory_options(trace)
     assert not report["physical_state_isolation_verified"]
     row = next(r for r in report["arms"]["A"] if r["boundary"] == "native_input_video")
     assert "wrappers" in row["metadata"]["unobserved_backend_options"]
+
+
+def test_changed_core_conditioning_uuid_is_observed_as_data(trace):
+    import uuid
+
+    report = native_pair(
+        trace,
+        lambda arm: None,
+        options=lambda arm: {
+            "uuids": [uuid.UUID(int=1 if arm == "A" else 2)],
+        },
+    )
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_divergence"]["boundary"] == "native_conditioning"
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
 
 
 def test_partitioned_prefix_and_noise_are_semantic_data_and_metrics_are_not(trace):

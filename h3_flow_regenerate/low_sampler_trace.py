@@ -17,6 +17,7 @@ import pickle
 import random
 import sys
 import tempfile
+import uuid
 from dataclasses import fields
 from pathlib import Path
 
@@ -97,6 +98,10 @@ def _digest(value, *, budget=CONDITIONING_BYTES, max_nodes=2048):
                 hashed_bytes += size
                 entry["sha256"] = _full_sha(item)
             return entry
+        if isinstance(item, uuid.UUID):
+            # Core sampler_helpers.convert_cond publishes immutable branch IDs;
+            # Spectrum's branch_labels reads their string values.
+            return {"uuid": str(item)}
         semantic = _semantic_owner(item)
         if semantic is not item:
             return visit(semantic, path, depth + 1)
