@@ -28,8 +28,10 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY,
 )
 from h3_flow_regenerate.partitioned_scheduler import (
     PARTITIONED_SOL_REQUIRED_METADATA,
@@ -58,12 +60,17 @@ class _Upscaler:
 
     def __init__(self):
         self.inputs = []
+        self.lattices = []
 
     def upscale_clean_video(self, video, *, target_h, target_w):
+        self.lattices.append("half_pixel_latent_v1")
         self.inputs.append(video.detach().clone())
         return resize_spatial_5d(video, target_h, target_w, mode="bicubic").to(video)
 
-    upscale_clean_video_h3_patch_lattice = upscale_clean_video
+    def upscale_clean_video_h3_patch_lattice(self, video, *, target_h, target_w):
+        self.lattices.append("h3_dense_patch_center_lattice_v2")
+        self.inputs.append(video.detach().clone())
+        return resize_spatial_5d(video, target_h, target_w, mode="bicubic").to(video)
 
 
 def _vdn_owner():
@@ -83,10 +90,13 @@ def _harness(
     *,
     spatial_stage_control,
     extra_transformer_options=None,
+    extra_model_options=None,
+    protected_audio_ticks=0,
     guidance_mode="off",
     native_sampler=None,
     residual_mode="off",
     witness_directory=None,
+    frame_gauge_repair=True,
 ):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
@@ -157,7 +167,9 @@ def _harness(
     )[0]
     video_mask = torch.ones_like(target_video)
     video_mask[:, :, :PROTECTED_T] = 0
-    mask = pack_streams((video_mask, torch.ones_like(target_audio)))[0]
+    audio_mask = torch.ones_like(target_audio)
+    audio_mask[:, :, :, :protected_audio_ticks] = 0
+    mask = pack_streams((video_mask, audio_mask))[0]
 
     transformer_options = {SOL_RUNTIME_KEY: dict(PARTITIONED_SOL_REQUIRED_METADATA)}
     if spatial_stage_control != PARTITIONED_SPATIAL_STAGE_PROGRESSIVE:
@@ -179,6 +191,7 @@ def _harness(
         ),
     )
     guider.model_patcher.model_options = guider.model_options
+    guider.model_options.update(extra_model_options or {})
     if witness_directory is not None:
         from h3_flow_regenerate.boundary_witness import WITNESS_DIRECTORY_OPTION
 
@@ -322,7 +335,7 @@ def _harness(
         transfer_mode="learned_3d",
         learned_upscaler=upscaler,
         exact_prefix_mode="fallback",
-        frame_gauge_repair=True,
+        frame_gauge_repair=frame_gauge_repair,
         frame_gauge_residual_mode=residual_mode,
     )
     sampler = SimpleNamespace(sampler_function=SimpleNamespace(__name__="sample_euler"), extra_options={})
@@ -560,6 +573,7 @@ def test_band_stage_evidence_preserves_output_and_keeps_provider_and_band_owners
         PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     ],
 )
 def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, control):
@@ -579,8 +593,11 @@ def test_every_spatial_stage_control_keeps_exact_prefix_ownership(monkeypatch, c
 
 
 @pytest.mark.parametrize("sampler", ["euler", "euler_ancestral"])
-def test_uniform_source_with_native_samplers_preserves_protected_streams(monkeypatch, sampler):
-    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, native_sampler=sampler)
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_with_native_samplers_preserves_protected_streams(monkeypatch, sampler, control):
+    run = _harness(monkeypatch, spatial_stage_control=control, native_sampler=sampler)
     protected = run.calls[-1]["mask"] == 0
     assert torch.equal(run.result[protected], run.latent_image[protected])
     assert bool(torch.isfinite(run.result).all())
@@ -609,23 +626,291 @@ def test_uniform_source_uses_one_full_clip_and_no_native_band_splice(monkeypatch
         assert event["temporal"] == TEMPORAL
 
 
-def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_vae_projection_reaches_low_probe_once_and_preserves_target_audio_masks(monkeypatch, mode):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
+
+    calls = []
+
+    def project(vae, prefix, h, w):
+        calls.append((vae, prefix.clone(), h, w))
+        out = resize_spatial_5d(prefix, h, w) + 0.125
+        return out, {"policy": "native_vae_rgb_roundtrip_v1", "extra_vae_decode_calls": 1, "extra_vae_encode_calls": 1}
+
+    monkeypatch.setattr(scheduler, "project_source_prefix", project)
+    default = _harness(monkeypatch, spatial_stage_control=mode, protected_audio_ticks=4)
+    assert calls == []
+    vae = object()
+    selected = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_model_options={SOURCE_PREFIX_PROJECTION_KEY: SourcePrefixProjection(vae)},
+        protected_audio_ticks=4,
+    )
+    assert len(calls) == 1
+    assert calls[0][0] is vae and calls[0][2:] == SOURCE_HW
+    exact_video, exact_audio = unpack_streams(selected.latent_image, selected.shapes)
+    assert torch.equal(calls[0][1], exact_video[:, :, :PROTECTED_T])
+    for before, after in zip(default.calls, selected.calls, strict=True):
+        assert before["stage"] == after["stage"]
+        assert torch.equal(before["mask"], after["mask"])
+        assert torch.equal(before["sigmas"], after["sigmas"])
+    low = selected.calls[0]
+    a_low, a_audio = unpack_streams(default.calls[0]["latent"], default.calls[0]["shapes"])
+    b_low, b_audio = unpack_streams(low["latent"], low["shapes"])
+    assert torch.equal(a_audio, b_audio)
+    assert torch.equal(a_low[:, :, PROTECTED_T:], b_low[:, :, PROTECTED_T:])
+    assert torch.allclose(b_low[:, :, :PROTECTED_T], a_low[:, :, :PROTECTED_T] + 0.125)
+    source = selected.upscaler.inputs[0]
+    assert torch.equal(source[:, :, :PROTECTED_T], b_low[:, :, :PROTECTED_T])
+    high_video, _ = unpack_streams(selected.calls[-1]["latent"], selected.shapes)
+    assert torch.equal(high_video[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
+    final, final_audio = unpack_streams(selected.result, selected.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
+    assert torch.equal(final_audio[:, :, :, :4], exact_audio[:, :, :, :4])
+    assert len(_events(selected.metrics, "partitioned_source_prefix_projection")) == 1
+    assert _events(selected.metrics, "partitioned_prefix_source_resample")[0]["policy"] == "native_vae_rgb_roundtrip_v1"
+    assert [call["stage"] for call in selected.calls] == ["low", "probe", "high"]
+
+
+def test_vae_projection_failure_stops_before_sampler_and_is_not_retried(monkeypatch):
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("projection failure")
+
+    def no_sampler(*_args, **_kwargs):
+        pytest.fail("failed projection entered a sampler lifetime")
+
+    monkeypatch.setattr(scheduler, "project_source_prefix", fail)
+    monkeypatch.setattr(scheduler, "_begin_capture", no_sampler)
+    with pytest.raises(RuntimeError, match="projection failure"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            extra_model_options={SOURCE_PREFIX_PROJECTION_KEY: SourcePrefixProjection(object())},
+        )
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_native_source_carry_preserves_sampling_contracts_and_saved_prefix(monkeypatch, tmp_path, capture):
+    import json
+    import sys
+
+    from h3_flow_regenerate.local_boundary_audit import load_replay_operands
+    from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    folder_paths = pytest.importorskip("folder_paths")
+    monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
+    mode = PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    baseline = _harness(monkeypatch, spatial_stage_control=mode, protected_audio_ticks=4)
+    exact, _ = unpack_streams(baseline.latent_image, baseline.shapes)
+    prior_target = exact.clone()
+    prior_target[:, :, -PROTECTED_T:] = exact[:, :, :PROTECTED_T]
+    source = resize_spatial_5d(prior_target, *SOURCE_HW) + 0.125
+    owner = SourcePrefixCarry()
+    with owner.transaction(object()):
+        owner.begin_initial()
+        owner.stage_source(source)
+        owner.prepare_success(prior_target)
+    selected = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        protected_audio_ticks=4,
+        extra_model_options={SOURCE_PREFIX_CARRY_KEY: owner},
+        extra_transformer_options={
+            "h3_continuum": {"active": True, "api": 1, "context_frames": 39, "chunk_index": 2},
+        },
+        residual_mode="measure" if capture else "off",
+        witness_directory=str(tmp_path) if capture else None,
+        frame_gauge_repair=False,
+    )
+    assert [call["stage"] for call in selected.calls] == ["low", "probe", "high"]
+    for a, b in zip(baseline.calls, selected.calls, strict=True):
+        assert torch.equal(a["mask"], b["mask"])
+        assert torch.equal(a["sigmas"], b["sigmas"])
+    low, audio = unpack_streams(selected.calls[0]["latent"], selected.calls[0]["shapes"])
+    baseline_low, baseline_audio = unpack_streams(baseline.calls[0]["latent"], baseline.calls[0]["shapes"])
+    assert torch.equal(low[:, :, :PROTECTED_T], source[:, :, -PROTECTED_T:])
+    assert torch.equal(low[:, :, PROTECTED_T:], baseline_low[:, :, PROTECTED_T:])
+    assert torch.equal(audio, baseline_audio)
+    assert torch.equal(selected.upscaler.inputs[0][:, :, :PROTECTED_T], low[:, :, :PROTECTED_T])
+    final, final_audio = unpack_streams(selected.result, selected.shapes)
+    _, authoritative_audio = unpack_streams(selected.latent_image, selected.shapes)
+    assert torch.equal(final[:, :, :PROTECTED_T], exact[:, :, :PROTECTED_T])
+    assert torch.equal(final_audio[:, :, :, :4], authoritative_audio[:, :, :, :4])
+    projection = _events(selected.metrics, "partitioned_source_prefix_projection")
+    assert len(projection) == 1
+    assert projection[0]["extra_vae_decode_calls"] == projection[0]["extra_vae_encode_calls"] == 0
+    assert len(_events(selected.metrics, "source_prefix_carry_prepared")) == 1
+    next_guider = SimpleNamespace(
+        model_options={
+            "transformer_options": {
+                "h3_continuum": {"active": True, "api": 1, "context_frames": 39, "chunk_index": 3},
+            }
+        }
+    )
+    with owner.transaction(next_guider):
+        carried, receipt = owner.project(final[:, :, -12:], *SOURCE_HW)
+    assert receipt["generation"] == 2
+    assert receipt["previous_sequence"] == (None, 2)
+    assert receipt["explicit_session_id_verified"] is False
+    assert torch.equal(carried, selected.upscaler.inputs[0][:, :, -12:])
+    if capture:
+        manifests = list(tmp_path.rglob("manifest.json"))
+        assert len(manifests) == 1
+        manifest = json.loads(manifests[0].read_text())
+        assert manifest["metadata"]["source_prefix_projection_policy"] == "native_source_carry_v1"
+        assert manifest["metadata"]["extra_vae_calls"] == 0
+        _, stages, identity = load_replay_operands(str(manifests[0]), 175, include_source=True)
+        assert stages["source_grid"].shape[-2:] == SOURCE_HW
+        assert identity["source_prefix_projection_policy"] == "native_source_carry_v1"
+
+
+def test_native_carry_missing_pair_stops_before_capture_and_sampler(monkeypatch):
+    import sys
+
+    from h3_flow_regenerate import partitioned_scheduler as scheduler
+    from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    monkeypatch.setattr(scheduler, "_begin_capture", lambda *_a, **_k: pytest.fail("entered capture"))
+    with pytest.raises(RuntimeError, match="preceding successful"):
+        _harness(
+            monkeypatch,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            extra_model_options={SOURCE_PREFIX_CARRY_KEY: SourcePrefixCarry()},
+        )
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+@pytest.mark.parametrize("target_hw,source_hw", [((24, 18), (16, 12)), ((18, 24), (12, 16)), ((24, 18), (16, 14))])
+def test_uniform_source_uses_first_chunk_image_lattice_for_prefix_and_provider(monkeypatch, mode, target_hw, source_hw):
+    monkeypatch.setitem(globals(), "TARGET_HW", target_hw)
+    monkeypatch.setitem(globals(), "SOURCE_HW", source_hw)
+    run = _harness(monkeypatch, spatial_stage_control=mode)
+    exact_video, _ = unpack_streams(run.latent_image, run.shapes)
+    expected = resize_spatial_5d(exact_video[:, :, :PROTECTED_T], *SOURCE_HW, mode="bicubic")
+    # The provider's protected prefix is the low sampler's clean condition, not
+    # an independently shifted RoPE-coordinate interpretation of that image.
+    assert torch.equal(run.upscaler.inputs[0][:, :, :PROTECTED_T], expected)
+    assert run.upscaler.lattices == ["half_pixel_latent_v1"]
+    receipt = _events(run.metrics, "partitioned_prefix_source_resample")[0]
+    assert receipt["policy"] == "half_pixel_latent_v1"
+    assert receipt["generic_half_pixel_prefix_replaced"] is False
+    assert receipt["generic_vs_physical_delta_abs_max"] == 0.0
+    transfer = _events(run.metrics, "partitioned_transfer_lattice")[0]
+    assert transfer["policy"] == transfer["prefix_projection_policy"] == "half_pixel_latent_v1"
+    assert transfer["provider_calls"] == 1
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+
+
+def test_heterogeneous_continuation_keeps_its_explicit_patch_lattice_provider(monkeypatch):
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_PROGRESSIVE)
+    assert run.upscaler.lattices == ["h3_dense_patch_center_lattice_v2"]
+    assert _events(run.metrics, "partitioned_prefix_source_resample")[0]["generic_half_pixel_prefix_replaced"] is True
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_detail_transport_changes_only_the_high_entry_suffix(monkeypatch, mode):
+    import sys
+
+    monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
+    monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
+    # The suffix DC bridge is off in both runs so the comparison isolates the transport.
+    disabled = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={
+            PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
+        },
+    )
+    enabled = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={
+            PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True,
+            PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False,
+        },
+    )
+    with_bridge = _harness(
+        monkeypatch,
+        spatial_stage_control=mode,
+        extra_transformer_options={PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True},
+    )
+    bridge_receipt = _events(with_bridge.metrics, "partitioned_uniform_source_detail_transport")[0]
+    assert bridge_receipt["suffix_dc_bridge_superseded"] is bridge_receipt["applied"]
+
+    off = _events(disabled.metrics, "partitioned_uniform_source_detail_transport")
+    assert len(off) == 1 and off[0]["applied"] is False and off[0]["reason"] == "disabled"
+    receipt = _events(enabled.metrics, "partitioned_uniform_source_detail_transport")
+    assert len(receipt) == 1
+    assert receipt[0]["authoritative_prefix_modified"] is False
+    assert receipt[0]["extra_h3_nfe"] == 0 and receipt[0]["extra_provider_calls"] == 0
+
+    # Low/probe are untouched; only the target-high entry state can change.
+    for before, after in zip(disabled.calls[:2], enabled.calls[:2], strict=True):
+        assert torch.equal(before["latent"], after["latent"])
+        assert torch.equal(before["noise"], after["noise"])
+    # The high entry state reaches the sampler through its noise argument.
+    assert torch.equal(disabled.calls[-1]["latent"], enabled.calls[-1]["latent"])
+    off_video, off_audio = unpack_streams(disabled.calls[-1]["noise"], disabled.shapes)
+    on_video, on_audio = unpack_streams(enabled.calls[-1]["noise"], enabled.shapes)
+    assert torch.equal(off_audio, on_audio)
+    assert torch.equal(off_video[:, :, :PROTECTED_T], on_video[:, :, :PROTECTED_T])
+    suffix_changed = not torch.equal(off_video[:, :, PROTECTED_T:], on_video[:, :, PROTECTED_T:])
+    assert suffix_changed is bool(receipt[0]["applied"] and receipt[0]["delta_rms"] > 0.0)
+    video, _audio = unpack_streams(enabled.result, enabled.shapes)
+    exact_video, _exact_audio = unpack_streams(enabled.latent_image, enabled.shapes)
+    assert torch.equal(video[:, :, :PROTECTED_T], exact_video[:, :, :PROTECTED_T])
+
+
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monkeypatch, tmp_path, mode, roundtrip):
     import sys
 
     folder_paths = pytest.importorskip("folder_paths")
 
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
     from h3_flow_regenerate.local_boundary_audit import load_replay_operands
+    from h3_flow_regenerate.source_prefix_projection import SOURCE_PREFIX_PROJECTION_KEY, SourcePrefixProjection
 
     monkeypatch.setattr(sys.modules[__name__], "PROTECTED_T", 12)
     monkeypatch.setattr(sys.modules[__name__], "TEMPORAL", 22)
     monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path))
-    control = _harness(
-        monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, witness_directory=""
-    )
+    options = {}
+    if roundtrip:
+        from h3_flow_regenerate import partitioned_scheduler as scheduler
+
+        def project(_vae, prefix, h, w):
+            return resize_spatial_5d(prefix, h, w) + 0.125, {
+                "policy": "native_vae_rgb_roundtrip_v1",
+                "prefix_t": int(prefix.shape[2]),
+                "authoritative_prefix": video_latent_fingerprint(prefix),
+            }
+
+        monkeypatch.setattr(scheduler, "project_source_prefix", project)
+        options[SOURCE_PREFIX_PROJECTION_KEY] = SourcePrefixProjection(object())
+    control = _harness(monkeypatch, spatial_stage_control=mode, witness_directory="", extra_model_options=options)
     captured = _harness(
         monkeypatch,
-        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        spatial_stage_control=mode,
         witness_directory=str(tmp_path / "witness"),
+        extra_model_options=options,
     )
     assert torch.equal(control.result, captured.result)
     assert control.metrics.counters["transformer_actual_nfe"] == captured.metrics.counters["transformer_actual_nfe"]
@@ -634,6 +919,40 @@ def test_uniform_source_capture_is_output_neutral_and_replays_native_source(monk
     plan, stages, _identity = load_replay_operands(tmp_path / receipt["bundle"], 175, include_source=True)
     assert plan["head_t"] == plan["prefix_t"] == 12
     assert torch.equal(stages["source_grid"], captured.upscaler.inputs[0][:, :, 5:22].cpu())
+
+
+@pytest.mark.parametrize("sol", [False, True])
+def test_uniform_source_exact_context_keeps_one_video_owner_and_native_high(monkeypatch, sol):
+    if not sol:
+        make_owner = _vdn_owner
+
+        def capable_owner():
+            owner = make_owner()
+            owner._vdn_partitioned_attention_provider_api = 1
+            return owner
+
+        monkeypatch.setitem(globals(), "_vdn_owner", capable_owner)
+    extra = None if sol else {SOL_RUNTIME_KEY: None}
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
+        extra_transformer_options=extra,
+    )
+    context_calls = _events(run.metrics, "partitioned_exact_visual_prefix")
+    assert {event["stage"] for event in context_calls} == {"low", "probe"}
+    for event in context_calls:
+        assert event["target_hw"] == TARGET_HW
+        assert event["prefix_t"] == PROTECTED_T
+        assert event["exact_prefix_unresampled"] is True
+        assert event["prefix_time_colocated"] is False
+        assert event["native_reference_timeline"] is True
+        assert event["target_timeline_shift"] > 0
+        assert event["video_recurrence_grid"] == SOURCE_HW
+        assert event["generated_video_streams"] == 1
+        assert event["cross_grid_video_temporal_taps"] is False
+    assert len(run.upscaler.inputs) == 1
+    assert not _events(run.metrics, "partitioned_target_band_domain_transformer")
+    assert _events(run.metrics, "partitioned_exact_prefix_complete")[0]["final_prefix_exact"] is True
 
 
 def _record_band_clean(monkeypatch):
@@ -1236,7 +1555,10 @@ def test_sol_history_recognizes_domain_low_probe_and_uniform_high(monkeypatch):
 
 
 @pytest.mark.usefixtures("native_audio_duration")
-def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch):
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch, control):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     interop = pytest.importorskip("sol_h3.interop")
@@ -1263,7 +1585,7 @@ def test_sol_history_recognizes_every_uniform_source_stage(monkeypatch):
         return original(Recording(), *args, **kwargs)
 
     monkeypatch.setattr(transform, "partitioned_diffusion_wrapper", recording_wrapper)
-    _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    _harness(monkeypatch, spatial_stage_control=control)
     flow_kind = history.PARTITIONED_FLOW_IDENTITY
     assert recognized == {"low": {flow_kind}, "probe": {flow_kind}, "high": {flow_kind}}
 
@@ -1299,3 +1621,87 @@ def test_domain_invalid_audio_fails_before_sampler_lifetime(monkeypatch):
             spatial_stage_control=PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
             extra_transformer_options=_domain_extra(),
         )
+
+
+@pytest.mark.usefixtures("native_audio_duration")
+@pytest.mark.parametrize(
+    "control", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+@pytest.mark.parametrize(
+    "sampler,policy",
+    [
+        ("euler", "source_residual_image_drift_v1"),
+        ("dpmpp_2m", "source_residual_image_drift_v1"),
+        ("euler_ancestral", "source_residual_image_refinement_v1"),
+    ],
+)
+def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(monkeypatch, control, sampler, policy):
+    import torch.nn.functional as F
+
+    from h3_flow_regenerate.handoff import deterministic_video_noise
+    from h3_flow_regenerate.image_residual import transport_image_flow_residual
+
+    monkeypatch.setattr(__import__(__name__, fromlist=["TARGET_HW"]), "TARGET_HW", (8, 10))
+    monkeypatch.setattr(__import__(__name__, fromlist=["SOURCE_HW"]), "SOURCE_HW", (4, 6))
+    run = _harness(
+        monkeypatch,
+        spatial_stage_control=control,
+        native_sampler=sampler,
+        frame_gauge_repair=False,
+        extra_transformer_options={PARTITIONED_SUFFIX_DC_BRIDGE_KEY: False},
+    )
+    assert [call["stage"] for call in run.calls] == ["low", "probe", "high"]
+    assert len(run.upscaler.inputs) == 1
+    assert run.upscaler.lattices == ["half_pixel_latent_v1"]
+    receipt = _events(run.metrics, "partitioned_transfer")[0]
+    assert receipt["actual_learned_checkpoint_provider_invoked"] is True
+    assert receipt["learned_transfer_performed"] is True
+    assert receipt["clean_video_postprocess"]["output_modified"] is False
+    assert receipt["handoff_noise"]["policy"] == policy
+    assert _events(run.metrics, "partitioned_handoff_noise")[0]["frame_gauge_repair_enabled"] is False
+    low, _, high = run.calls
+    source_raw, source_audio = unpack_streams(low["final_state"], low["shapes"])
+    high_entry, high_audio = unpack_streams(high["entry_state"], high["shapes"])
+    source_clean = run.upscaler.inputs[0]
+    sigma = float(high["sigmas"][0])
+    measured = (source_raw - (1 - sigma) * source_clean) / sigma
+    learned = resize_spatial_5d(source_clean, *TARGET_HW, mode="bicubic")
+    target_residual = (high_entry - (1 - sigma) * learned) / sigma
+    if policy == "source_residual_image_drift_v1":
+        initial, _ = unpack_streams(low["noise"], low["shapes"])
+        innovation = deterministic_video_noise(
+            tuple(high_entry.shape),
+            seed=receipt["handoff_noise"]["innovation_seed"],
+            device=initial.device,
+            dtype=torch.float32,
+        )
+        expected, _ = transport_image_flow_residual(measured, initial, innovation, noise_scale=1.7)
+        torch.testing.assert_close(target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0)
+    else:
+        assert receipt["handoff_noise"]["innovation_noise_scale"] == pytest.approx(1.7)
+        from h3_flow_regenerate.image_residual import refine_image_residual
+
+        innovation = deterministic_video_noise(
+            tuple(high_entry.shape),
+            seed=receipt["handoff_noise"]["innovation_seed"],
+            device=measured.device,
+            dtype=torch.float32,
+        )
+        expected, _ = refine_image_residual(measured, innovation * 1.7)
+        torch.testing.assert_close(target_residual[:, :, PROTECTED_T:], expected[:, :, PROTECTED_T:], atol=2e-6, rtol=0)
+        # Independent whole-image projection, rather than reusing the transfer.
+        basis = torch.eye(TARGET_HW[0] * TARGET_HW[1], dtype=torch.float64).reshape(-1, 1, *TARGET_HW)
+        a = F.interpolate(basis, size=SOURCE_HW, mode="bicubic", align_corners=False, antialias=True).flatten(1).T
+        eig, vec = torch.linalg.eigh(a @ a.T)
+        q = (vec / eig.sqrt()) @ vec.T @ a
+        coarse = target_residual[:, :, PROTECTED_T:].double().flatten(-2) @ q.T
+        torch.testing.assert_close(coarse, measured[:, :, PROTECTED_T:].double().flatten(-2), atol=3e-6, rtol=0)
+    # The audio-copy diagnostic event is optional; check the actual carried
+    # audio operands even when diagnostic_audio_control is disabled.
+    # Native CONST re-entry divides/multiplies the effective state by sigma and
+    # model noise_scale; allow only floating-point reconstruction roundoff.
+    torch.testing.assert_close(high_audio, source_audio, rtol=0, atol=1e-6)
+    video, _ = unpack_streams(run.result, run.shapes)
+    original, _ = unpack_streams(run.latent_image, run.shapes)
+    assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
+    assert run.binding.active_capture is None
