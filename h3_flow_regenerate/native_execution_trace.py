@@ -107,8 +107,9 @@ class NativeExecutionTrace:
     def selected_outputs(self, layers):
         if self.pair_block < 0:
             return sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))
-        # Five complete packed-hidden hashes (input 0 + four outputs) fit under
-        # 2 GiB at the observed 50-block/36,445-row bf16 H3 geometry.
+        # Five complete packed-hidden hashes (input 0, output pair-1,
+        # input and output pair, output last) fit under 2 GiB for the
+        # 50-block/36,445-row BF16 H3 geometry.
         # Refuse unsupported pair identities rather than silently discarding
         # a sentinel or claiming coverage after a budget overrun.
         if not layers // 2 + 2 <= self.pair_block < layers - 1:
@@ -116,7 +117,7 @@ class NativeExecutionTrace:
                 "low_native_trace_pair_block requires a block between "
                 "the middle+2 and penultimate transformer blocks"
             )
-        return sorted({layers // 2, self.pair_block - 1, self.pair_block, layers - 1})
+        return sorted({self.pair_block - 1, self.pair_block, layers - 1})
 
     def callable_source(self, function):
         function = getattr(function, "__func__", function)
@@ -210,11 +211,16 @@ class NativeExecutionTrace:
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
         outputs = self.selected_outputs(layers)
-        full = (boundary == "input" and layer == 0) or (boundary == "output" and layer in outputs and
-                                                                    (self.pair_block >= 0 or layer in {0, layers // 2, layers - 1}))
-        # In default sampled mode the original full-byte sentinels remain;
-        # the optional pair mode replaces sampled probes with four complete
-        # output checkpoints to resolve an otherwise ambiguous late block.
+        full_input = boundary == "input" and (
+            layer == 0 or (self.pair_block >= 0 and layer == self.pair_block)
+        )
+        full_output = boundary == "output" and layer in outputs and (
+            self.pair_block >= 0 or layer in {0, layers // 2, layers - 1}
+        )
+        full = full_input or full_output
+        # Default mode retains the full sentinels and sampled outputs.
+        # Pair mode observes both entry and exit to the suspect block,
+        # distinguishing an upstream transition from in-block divergence.
         sampled = self.pair_block < 0 and boundary == "output" and layers // 2 < layer < layers - 1
         if not (full or sampled):
             return
@@ -249,10 +255,19 @@ class NativeExecutionTrace:
         layers = baseline[0]["layers"] if baseline else 0
         expected = (
             [["low", self.step, 1, 0, "input"]]
-            + [
-                ["low", self.step, 1, layer, "output"]
-                for layer in self.selected_outputs(layers)
-            ]
+            + (
+                [
+                    ["low", self.step, 1, self.pair_block - 1, "output"],
+                    ["low", self.step, 1, self.pair_block, "input"],
+                    ["low", self.step, 1, self.pair_block, "output"],
+                    ["low", self.step, 1, layers - 1, "output"],
+                ]
+                if self.pair_block >= 0
+                else [
+                    ["low", self.step, 1, layer, "output"]
+                    for layer in self.selected_outputs(layers)
+                ]
+            )
             if layers > 0
             else []
         )
@@ -320,8 +335,8 @@ class NativeExecutionTrace:
             "physical_state_isolation_verified": False,
             "limitations": [
                 (
-                    "Pair mode hashes block 0 input plus full outputs at middle, pair-1, pair and last; "
-                    "all other block outputs remain unobserved."
+                    "Pair mode hashes block 0 input, pair-1 output, pair input and output, "
+                    "and final output in full; other block boundaries are unobserved."
                     if self.pair_block >= 0
                     else "Block zero input and first/middle/final outputs are hashed in full; "
                     "intervening outputs after the middle block use every 32nd token row."

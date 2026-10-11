@@ -111,19 +111,23 @@ bf16 hidden shape, under the existing 2 GiB limit.
 
 For the confirmed 01867 sampled discrepancy first observed at block 45,
 `low_native_trace_pair_block=45` selects a separate **full-byte** pair mode.
-It keeps full packed-hidden fingerprints of input to block 0 and the outputs of
-block 25, block 44, block 45, and block 49; **no intermediate sampled rows** are
-recorded in pair mode. The pair must be after `block_count // 2 + 1` and before
+It keeps full packed-hidden fingerprints of the input to block 0, output
+of block 44, **input and output** of block 45, and output of block 49;
+**no intermediate sampled rows** are recorded in pair mode. The pair must be after `block_count // 2 + 1` and before
 the final block. At the 01867 geometry, five 36,445 × 5,376 bf16 fingerprints
 cost approximately 1.82 GiB per arm, below the existing 2 GiB inspection budget.
 The setting is optional, defaults to `-1` (preserving the original sampled mode),
 and requires `low_sampler_aba=true` and `low_native_trace_step>=0`.
 The selected pair is validated against the actual block count before hashing;
 invalid pair identities and missing/full-hash budget failures never pass
-observation completeness. If A/A′ full outputs after block 44 are identical
-but full outputs after block 45 differ, the mismatch is created within the
-block-45 execution interval. Otherwise the prior sampled equality missed some
-earlier differing tokens and source-level attribution must remain open.
+observation completeness. If A/A′ full block-44 outputs and full block-45 inputs are identical,
+but the full block-45 outputs differ, the mismatch is created within the
+block-45 execution interval. A differing block-45 input despite matching
+block-44 output instead implicates the inter-block transition. A differing
+block-44 output means the earlier sampled witnesses missed an upstream
+difference. The pair mode does not distinguish attention, MLP, adapters or
+other operations **inside** the block; further source-backed investigation
+is required before applying a fix.
 
 Hidden states include conditioning and both target AV streams; they are not clean
 video latents. Full selected hash identity establishes only equality at those

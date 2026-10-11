@@ -636,8 +636,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "Optional full-byte native block-pair inspection in low_sampler_aba. -1 retains "
                     "the original sampled late-block tracing; otherwise choose a zero-based block "
                     "after middle+1 and before the final block (45 for run 01867). Full-hashes the "
-                    "outputs of the chosen block and its predecessor plus middle/final block outputs "
-                    "and block-0 input, within 2 GiB per arm. Requires low_native_trace_step>=0."
+                    "output of the predecessor, input and output of the chosen block, final "
+                    "output and block-0 input, within 2 GiB per arm. Requires low_native_trace_step>=0."
                 ),
             },
         )

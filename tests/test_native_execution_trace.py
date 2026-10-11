@@ -245,13 +245,16 @@ def test_01867_full_pair_hashes_complete_neighboring_blocks_with_exact_coverage(
             if arm == "A_replay" and layer == 45:
                 rows = rows.clone()
                 rows[1, 0] += 0.125  # Missed by one-in-32 sampled probe.
-            if layer == 0:
-                observer.observe(trace, 0, 50, "input", rows, module, {}, None)
+            observer.observe(trace, layer, 50, "input", rows, module, {}, None)
             observer.observe(trace, layer, 50, "output", rows, module, {}, None)
     report = observer.summary()
     a_rows = report["arms"]["A"]
     assert [row["key"][-2:] for row in a_rows] == [
-        [0, "input"], [25, "output"], [44, "output"], [45, "output"], [49, "output"]
+        [0, "input"],
+        [44, "output"],
+        [45, "input"],
+        [45, "output"],
+        [49, "output"],
     ]
     assert all(row["coverage"] == "full" for row in a_rows)
     assert all(row["source_shape"] == row["shape"] for row in a_rows)
@@ -293,15 +296,13 @@ def test_full_pair_missing_or_over_budget_fails_closed():
     observer = NativeExecutionTrace(5, _full_sha, pair_block=45, arm_bytes=4 * 128 * 4)
     for layer in range(50):
         value = torch.arange(128.0).reshape(32, 4)
-        if layer == 0:
-            observer.observe(trace, 0, 50, "input", value, module, {}, None)
+        observer.observe(trace, layer, 50, "input", value, module, {}, None)
         observer.observe(trace, layer, 50, "output", value, module, {}, None)
     for arm in ("B_target_projection", "A_replay"):
         other = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
         for layer in range(50):
             value = torch.arange(128.0).reshape(32, 4)
-            if layer == 0:
-                observer.observe(other, 0, 50, "input", value, module, {}, None)
+            observer.observe(other, layer, 50, "input", value, module, {}, None)
             observer.observe(other, layer, 50, "output", value, module, {}, None)
     assert not observer.summary()["comparisons"]["A_replay"]["selected_boundaries_complete"]
     assert observer.summary()["arms"]["A"][-1]["unobserved"] == "tensor_or_arm_byte_budget"
