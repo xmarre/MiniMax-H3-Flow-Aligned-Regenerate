@@ -388,24 +388,33 @@ class LowReplayTrace:
         native_step=-1,
         native_pair_block=-1,
         native_module_detail=False,
+        native_projection_detail=False,
     ):
         from .native_execution_trace import (
             NativeExecutionTrace,
             validate_module_detail,
             validate_pair_block,
+            validate_projection_detail,
             validate_step,
         )
 
         validate_step(native_step)
         validate_pair_block(native_pair_block)
         validate_module_detail(native_module_detail)
+        validate_projection_detail(native_projection_detail)
+        if native_projection_detail and not native_module_detail:
+            raise ValueError("low_native_trace_projection_detail requires module detail")
         if native_pair_block >= 0 and native_step < 0:
             raise ValueError("low_native_trace_pair_block requires low_native_trace_step>=0")
         if native_module_detail and (native_step < 0 or native_pair_block < 0):
             raise ValueError("low_native_trace_module_detail requires native step and pair block")
         self.native_execution = (
             NativeExecutionTrace(
-                native_step, _full_sha, pair_block=native_pair_block, module_detail=native_module_detail
+                native_step,
+                _full_sha,
+                pair_block=native_pair_block,
+                module_detail=native_module_detail,
+                projection_detail=native_projection_detail,
             )
             if native_step >= 0
             else None
@@ -878,7 +887,7 @@ def current_trace_owner():
 
 
 @contextlib.contextmanager
-def low_trace_scope(native_step=-1, native_pair_block=-1, native_module_detail=False):
+def low_trace_scope(native_step=-1, native_pair_block=-1, native_module_detail=False, native_projection_detail=False):
     if _OWNER.get() is not None:
         yield _OWNER.get()
         return
@@ -886,6 +895,7 @@ def low_trace_scope(native_step=-1, native_pair_block=-1, native_module_detail=F
         native_step=native_step,
         native_pair_block=native_pair_block,
         native_module_detail=native_module_detail,
+        native_projection_detail=native_projection_detail,
     )
     token = _OWNER.set(trace)
     try:
@@ -902,12 +912,13 @@ def traced_partitioned(function):
     def wrapped(executor, guider, *args, **kwargs):
         if not guider.model_options.get("h3_flow_low_sampler_aba_v1", False):
             return function(executor, guider, *args, **kwargs)
-        from .native_execution_trace import MODULE_OPTION, OPTION, PAIR_OPTION
+        from .native_execution_trace import MODULE_OPTION, OPTION, PAIR_OPTION, PROJECTION_OPTION
 
         with low_trace_scope(
             guider.model_options.get(OPTION, -1),
             guider.model_options.get(PAIR_OPTION, -1),
             guider.model_options.get(MODULE_OPTION, False),
+            guider.model_options.get(PROJECTION_OPTION, False),
         ):
             return function(executor, guider, *args, **kwargs)
 
