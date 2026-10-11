@@ -348,6 +348,9 @@ class PartitionedStageRuntime:
     attention_head_t: int | None = None
     # The two-stream operator is also used by opt-in equal-grid high refinement.
     target_band_domain: TargetBandDomainContext | None = None
+    # Exact target-grid visual context for the opt-in uniform-source candidate.
+    # Generated video still has one native source-grid recurrence.
+    exact_prefix_visual_context: PartitionedStagePlan | None = None
 
 
 def build_partitioned_stage_plan(
