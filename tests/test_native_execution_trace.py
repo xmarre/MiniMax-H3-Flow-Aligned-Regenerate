@@ -306,3 +306,68 @@ def test_full_pair_missing_or_over_budget_fails_closed():
             observer.observe(other, layer, 50, "output", value, module, {}, None)
     assert not observer.summary()["comparisons"]["A_replay"]["selected_boundaries_complete"]
     assert observer.summary()["arms"]["A"][-1]["unobserved"] == "tensor_or_arm_byte_budget"
+
+
+def test_01881_module_detail_brackets_attention_residual_and_mlp():
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True)
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.out_proj = torch.nn.Identity()
+    module.norm2 = torch.nn.Identity()
+    module.mlp = torch.nn.Identity()
+    for arm in ("A", "B_target_projection", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        value = torch.ones(6, 4)
+        observer.observe(trace, 45, 50, "input", value, module, {}, None)
+        with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+            projected = module.attn.out_proj(value + (0.125 if arm == "A_replay" else 0.0))
+            normalized = module.norm2(projected)
+            mlp_out = module.mlp(normalized)
+        observer.observe(trace, 45, 50, "output", mlp_out, module, {}, None)
+    report = observer.summary()
+    assert report["internal_module_detail"]
+    for arm in ("A", "B_target_projection", "A_replay"):
+        rows = report["arms"][arm]
+        assert [row["key"][-1] for row in rows] == [
+            "input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"
+        ]
+        assert all(row["coverage"] == "full" and row["sha256"] for row in rows)
+    assert report["comparisons"]["A_replay"]["alignment_complete"]
+    assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "attention_out_proj"
+    assert not module.attn.out_proj._forward_hooks
+    assert not module.norm2._forward_hooks
+    assert not module.mlp._forward_hooks
+
+
+def test_module_detail_fails_closed_if_module_skipped():
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True)
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.out_proj = torch.nn.Identity()
+    module.norm2 = torch.nn.Identity()
+    module.mlp = torch.nn.Identity()
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        value = torch.ones(6, 4)
+        observer.observe(trace, 45, 50, "input", value, module, {}, None)
+        with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+            module.attn.out_proj(value)
+            module.mlp(value)  # missing norm2 must not be marked complete
+        observer.observe(trace, 45, 50, "output", value, module, {}, None)
+    assert not observer.summary()["comparisons"]["A_replay"]["selected_boundaries_complete"]
+
+
+def test_module_detail_opt_in_validation():
+    from h3_flow_regenerate.native_execution_trace import validate_module_detail
+    from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
+
+    spec = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]
+    assert spec["low_native_trace_module_detail"][1]["default"] is False
+    with pytest.raises(ValueError, match="low_native_trace_module_detail"):
+        validate_module_detail(1)
+    with pytest.raises(ValueError, match="low_native_trace_module_detail"):
+        node_call(low_native_trace_module_detail=True)
+    with pytest.raises(ValueError, match="low_native_trace_module_detail"):
+        LowReplayTrace(native_step=5, native_module_detail=True)
+    assert NativeExecutionTrace(5, _full_sha, pair_block=45).module_detail is False
