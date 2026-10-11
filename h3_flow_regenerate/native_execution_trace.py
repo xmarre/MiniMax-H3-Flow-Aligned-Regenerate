@@ -147,7 +147,63 @@ class NativeExecutionTrace:
                 self.sources[path] = {"unobserved": type(error).__name__}
         return {"module": function.__module__, "name": function.__qualname__, "file": path, "line": code.co_firstlineno}
 
-    def backend(self, tensor, block, options, previous):
+    def core_sparse_stats(self, tensor, layer, options, previous):
+        """Read only the Core H3 block-sparse producer's matching pooled state.
+
+        The producer's (block, packed rows, conditioning UUIDs) cache survives
+        model calls. Existence of cached statistics is not proof that this
+        particular invocation selected the producer instead of dense fallback.
+        """
+        if not inspect.isfunction(previous):
+            return {"available": False, "reason": "no_function_replacement"}
+        try:
+            values = inspect.getclosurevars(previous).nonlocals
+        except (TypeError, ValueError):
+            return {"available": False, "reason": "opaque_replacement"}
+        patch = values.get("patch")
+        if (
+            type(patch).__name__ != "SparseAttnPatch"
+            or type(patch).__module__ != "comfy_extras.nodes_sparse_attention"
+        ):
+            return {"available": False, "reason": "not_core_sparse_patch"}
+        pooled = getattr(patch, "pooled", None)
+        if not isinstance(pooled, dict):
+            return {"available": False, "reason": "no_pooled_mapping"}
+        try:
+            key = (int(layer), int(tensor.shape[0]), tuple(options.get("uuids", ())))
+            hit = pooled.get(key)
+        except (TypeError, ValueError):
+            return {"available": True, "key_observed": False, "reason": "unhashable_uuids"}
+        receipt = {
+            "available": True,
+            "key_observed": True,
+            "present": hit is not None,
+            "total_cached_keys": len(pooled),
+            "statistics": [],
+            "primitive_selection": "unobserved",
+        }
+        if hit is None:
+            return receipt
+        if not isinstance(hit, (tuple, list)) or len(hit) != 2:
+            receipt["statistics"] = [{"unobserved": "unexpected_pool_shape"}]
+            return receipt
+        for statistic in hit:
+            if not torch.is_tensor(statistic):
+                receipt["statistics"].append({"unobserved": "not_tensor"})
+                continue
+            nbytes = statistic.numel() * statistic.element_size()
+            row = {"dtype": str(statistic.dtype), "shape": list(statistic.shape), "nbytes": nbytes}
+            if nbytes <= 256 * 1024:
+                try:
+                    row["sha256"] = self.hasher(statistic)
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    row["unobserved"] = "hash_failed"
+            else:
+                row["unobserved"] = "statistic_byte_budget"
+            receipt["statistics"].append(row)
+        return receipt
+
+    def backend(self, tensor, block, options, previous, layer=None):
         attention = getattr(block, "attn", None)
         vdn = sys.modules.get("vdn_h3.runtime")
         accessor = getattr(vdn, "current_runtime_buffers", None)
@@ -191,6 +247,8 @@ class NativeExecutionTrace:
             "physical_state_isolation_verified": False,
             "primitive_kernel_internals_and_weight_contents": "unobserved",
         }
+        if self.module_detail and layer == self.pair_block:
+            receipt["core_sparse_pool"] = self.core_sparse_stats(tensor, layer, options, previous)
         for name, module in (
             ("block", block),
             ("attention", attention),
@@ -291,7 +349,7 @@ class NativeExecutionTrace:
         }
         rows.append(row)
         try:
-            row["backend"] = self.backend(tensor, block, options, previous)
+            row["backend"] = self.backend(tensor, block, options, previous, layer=layer)
             observed = tensor if full else tensor[::32]
             size = observed.numel() * observed.element_size()
             row.update(shape=list(observed.shape), dtype=str(observed.dtype), nbytes=size)
@@ -407,6 +465,7 @@ class NativeExecutionTrace:
                 "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",
+                "Core sparse pooled statistics are read-only and per selected key; differing values do not prove causality.",
                 "Cache keys, pool IDs and hook inventories do not establish tensor/weight or execution-state equality.",
                 "Host hashing synchronizes observed data and can perturb timing; "
                 "disappearance of a failure is inconclusive.",
