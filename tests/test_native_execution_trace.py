@@ -450,10 +450,7 @@ def test_01891_projection_detail_identifies_changed_attention_input_and_cleans_o
 
 def test_01891_core_filesystem_module_identity_recovers_matching_pooled_stats():
     code = compile(
-        "def bind(patch):\n"
-        "    def previous(args, extra):\n"
-        "        return patch.pooled\n"
-        "    return previous\n",
+        "def bind(patch):\\n    def previous(args, extra):\\n        return patch.pooled\\n    return previous\\n",
         "/home/toor/ComfyUI/comfy_extras/nodes_sparse_attention.py",
         "exec",
     )
@@ -482,9 +479,12 @@ def test_01891_projection_selector_fails_closed_and_geometry_stays_within_budget
     from h3_flow_regenerate.native_execution_trace import validate_projection_detail
     from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
 
-    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"][
-        "low_native_trace_projection_detail"
-    ][1]["default"] is False
+    assert (
+        H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]["low_native_trace_projection_detail"][1][
+            "default"
+        ]
+        is False
+    )
     with pytest.raises(ValueError, match="projection_detail"):
         validate_projection_detail(1)
     with pytest.raises(ValueError, match="projection_detail"):
