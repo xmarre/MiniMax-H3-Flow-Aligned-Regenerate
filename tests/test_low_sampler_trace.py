@@ -531,6 +531,9 @@ def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(tra
         values = []
         for stage in ("low", "probe"):
             options["transformer_options"]["h3_flow_stage"] = stage
+            options["transformer_options"].pop("h3_flow_exact_probe_context", None)
+            if stage == "probe":
+                options["transformer_options"]["h3_flow_exact_probe_context"] = {"outer_step": 7}
             with trace_stage(trace, arm, stage, sampler, guider):
                 for step in range(3 if stage == "low" else 1):
                     control["step"] = step
@@ -539,7 +542,8 @@ def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(tra
     assert all(torch.equal(a, b) for a, b in zip(*observed, strict=True))
     calls = [r for r in trace.arms["A"] if r["boundary"] == "predict_output"]
     assert [r["metadata"]["actual"] for r in calls] == [*actuals, True]
-    assert [r["metadata"]["outer_step"] for r in calls] == [0, 1, 2, 0]
+    assert [r["metadata"]["outer_step"] for r in calls] == [0, 1, 2, 7]
+    assert [r["metadata"]["phase"] for r in calls] == ["model", "model", "model", "handoff_probe"]
     assert len([r for r in trace.arms["A"] if r["boundary"] == "native_output_audio"]) == 3
     if guidance_mode != "unbound":
         assert binding.metrics.counters["spectrum_forecast_calls"] == 2
