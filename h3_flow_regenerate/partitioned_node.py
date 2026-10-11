@@ -729,10 +729,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_native_trace_module_detail=False,
         low_native_trace_projection_detail=False,
     ):
-        from .native_execution_trace import PROJECTION_OPTION as NATIVE_PROJECTION_OPTION
         from .native_execution_trace import MODULE_OPTION as NATIVE_MODULE_OPTION
         from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
         from .native_execution_trace import PAIR_OPTION as NATIVE_PAIR_OPTION
+        from .native_execution_trace import PROJECTION_OPTION as NATIVE_PROJECTION_OPTION
         from .native_execution_trace import (
             validate_module_detail,
             validate_pair_block,
