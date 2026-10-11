@@ -149,7 +149,9 @@ def node_call(**changes):
     values = {"model": None, "trajectory": None}
     for name, parameter in inspect.signature(node.patch).parameters.items():
         if name not in values and parameter.default is inspect.Parameter.empty:
-            values[name] = spec[name][1]["default"]
+            definition = spec[name]
+            settings = definition[1] if len(definition) > 1 and isinstance(definition[1], dict) else {}
+            values[name] = settings.get("default")
     return node.patch(**(values | changes))
 
 
