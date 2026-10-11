@@ -810,3 +810,45 @@ def test_01894_sparse_core_rope_disagreement_and_invalid_arguments_are_not_exact
         assert not model.attn.qkv_proj._forward_hooks
         assert not model.attn.qkv_proj._forward_pre_hooks
         assert not model.attn.out_proj._forward_pre_hooks
+
+
+def test_01894_equal_sparse_qkv_first_difference_is_sampled_attention_output():
+    model = torch.nn.Module()
+    model.attn = torch.nn.Module()
+    model.attn.heads = 1
+    model.attn.head_dim = 2
+    model.attn.qkv_proj = torch.nn.Linear(4, 6, bias=False, dtype=torch.bfloat16)
+    observer = NativeExecutionTrace(
+        5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+    )
+    _setup_sparse_probe_fixture(observer, model)
+    observer.core_sparse_stats = lambda *_args: {
+        "available": True,
+        "key_observed": True,
+        "present": True,
+        "statistics": [{"sha256": "k"}, {"sha256": "v"}],
+    }
+    source = torch.ones((9000, 4), dtype=torch.bfloat16)
+    for arm in ("A", "B_target_projection", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        observer.observe(trace, 45, 50, "input", source, model, {}, None)
+        _emit_sparse_probe_context(observer, trace, model, len(source))
+        with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
+            for start in range(0, len(source), 4096):
+                model.attn.qkv_proj(source[start : start + 4096])
+            model.attn.out_proj(
+                torch.ones((len(source), 2), dtype=torch.bfloat16) * (2 if arm == "A_replay" else 1)
+            )
+    report = observer.summary()
+    assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_difference"] == {
+        "key": ["low", 5, 1, 45, "sparse_attention_out_proj_input"],
+        "classification": "packed_hidden_sparse_attention_out_proj_input_sampled",
+        "coverage": "token_rows_stride_32",
+    }
+    for x, y in zip(report["arms"]["A"][:-1], report["arms"]["A_replay"][:-1], strict=True):
+        assert x["sha256"] == y["sha256"]
+    assert report["comparisons"]["B_target_projection"]["selected_boundaries_exact"]
+    assert not model.attn.qkv_proj._forward_hooks
+    assert not model.attn.qkv_proj._forward_pre_hooks
+    assert not model.attn.out_proj._forward_pre_hooks
