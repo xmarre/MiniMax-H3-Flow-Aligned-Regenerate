@@ -633,7 +633,10 @@ class LowReplayTrace:
                         "record": i,
                         "stage": b["stage"],
                         "evaluation": b["evaluation"],
-                        "boundary": "native_conditioning",
+                        "boundary": "native_conditioning"
+                        if b["boundary"] == "native_input_video"
+                        else "predictor_conditioning",
+                        "record_boundary": b["boundary"],
                         "classification": "conditioning_or_mask_payload",
                         "a": condition_a,
                         "b": condition_b,
@@ -665,7 +668,11 @@ class LowReplayTrace:
                     r.get("difference", {}).get("finite", False) and r["difference"]["abs_max"] <= 1e-5 for r in rows
                 )
             )
-            if first is not None and first["boundary"] in {"native_conditioning", "guidance_cfg"}:
+            if first is not None and first["boundary"] in {
+                "native_conditioning",
+                "predictor_conditioning",
+                "guidance_cfg",
+            }:
                 within_tolerance = False
             comparisons[arm] = {
                 "first_observed_divergence": first,

@@ -100,7 +100,7 @@ def test_conditioning_difference_prevents_mislabeling_later_tensor_export(trace)
     emit(trace, "A_replay", changed=(1, "predict_output"))
     trace.arms["A_replay"][1]["metadata"]["conditioning"] = {"sha256": "changed"}
     report = trace.summary()["comparisons"]["A_replay"]
-    assert report["first_observed_divergence"]["boundary"] == "native_conditioning"
+    assert report["first_observed_divergence"]["boundary"] == "predictor_conditioning"
     assert not report["reproduction_within_tolerance"]
     assert not trace.divergent_operands()
 
@@ -257,6 +257,25 @@ def test_changed_positional_native_mask_is_a_conditioning_divergence(trace):
     first = report["comparisons"]["A_replay"]["first_observed_divergence"]
     assert first["boundary"] == "native_conditioning"
     assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+
+
+def test_forecast_option_difference_is_labeled_at_predictor_not_native_boundary(trace):
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+
+    def solver(x, arm):
+        options = {"denoise_mask": torch.tensor([0.0 if arm == "A" else 1.0])}
+        trace.begin_prediction(guider, x, torch.ones(1), options)
+        trace.end_prediction(x.clone(), actual=False, phase="model", outer=0)
+
+    for arm in ("A", "A_replay"):
+        with trace_stage(trace, arm, "low", SimpleNamespace(sampler_function=solver), guider):
+            solver(torch.ones(1, 4), arm)
+    report = trace.summary()["comparisons"]["A_replay"]
+    first = report["first_observed_divergence"]
+    assert first["boundary"] == "predictor_conditioning"
+    assert first["record_boundary"] == "predict_input"
+    assert not any(r["boundary"].startswith("native_") for r in trace.arms["A"])
+    assert not report["reproduction_within_tolerance"]
 
 
 def test_backend_objects_are_caveated_without_obscuring_mandatory_options(trace):
