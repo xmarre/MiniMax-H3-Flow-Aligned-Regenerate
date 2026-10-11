@@ -13,6 +13,7 @@ from pathlib import Path
 import torch
 
 OPTION = "h3_flow_low_native_trace_step_v1"
+PAIR_OPTION = "h3_flow_low_native_full_pair_block_v1"
 POLICY = "h3_low_native_execution_v1"
 
 
@@ -20,6 +21,12 @@ def validate_step(step):
     if type(step) is not int or not -1 <= step <= 511:
         raise ValueError("low_native_trace_step must be an integer from -1 to 511")
     return step
+
+
+def validate_pair_block(block):
+    if type(block) is not int or not -1 <= block <= 511:
+        raise ValueError("low_native_trace_pair_block must be an integer from -1 to 511")
+    return block
 
 
 def _metadata(value, depth=0, remaining=None):
@@ -85,14 +92,31 @@ def _vdn_owner(attention):
 
 
 class NativeExecutionTrace:
-    def __init__(self, step, hasher, *, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40):
+    def __init__(
+        self, step, hasher, *, pair_block=-1, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40
+    ):
         self.step = validate_step(step)
+        self.pair_block = validate_pair_block(pair_block)
         self.hasher = hasher
         self.arm_bytes, self.tensor_bytes, self.max_records = arm_bytes, tensor_bytes, max_records
         self.arms = {}
         self.bytes = {}
         self.omitted = {}
         self.sources = {}
+
+    def selected_outputs(self, layers):
+        if self.pair_block < 0:
+            return sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))
+        # Five complete packed-hidden hashes (input 0 + four outputs) fit under
+        # 2 GiB at the observed 50-block/36,445-row bf16 H3 geometry.
+        # Refuse unsupported pair identities rather than silently discarding
+        # a sentinel or claiming coverage after a budget overrun.
+        if not layers // 2 + 2 <= self.pair_block < layers - 1:
+            raise ValueError(
+                "low_native_trace_pair_block requires a block between "
+                "the middle+2 and penultimate transformer blocks"
+            )
+        return sorted({layers // 2, self.pair_block - 1, self.pair_block, layers - 1})
 
     def callable_source(self, function):
         function = getattr(function, "__func__", function)
@@ -185,13 +209,13 @@ class NativeExecutionTrace:
             return
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
-        full = (boundary == "input" and layer == 0) or (boundary == "output" and layer in {0, layers // 2, layers - 1})
-        # The 01860 replay matches through block 25, but differs by block 49.
-        # Sampling one in 32 *token rows* across all hidden features observes
-        # every intervening block within the original 2 GiB-per-arm budget.
-        # Sample equality is not full-state equality: retain the existing full
-        # SHA256 sentinels at the first, middle, and last block.
-        sampled = boundary == "output" and layers // 2 < layer < layers - 1
+        outputs = self.selected_outputs(layers)
+        full = (boundary == "input" and layer == 0) or (boundary == "output" and layer in outputs and
+                                                                    (self.pair_block >= 0 or layer in {0, layers // 2, layers - 1}))
+        # In default sampled mode the original full-byte sentinels remain;
+        # the optional pair mode replaces sampled probes with four complete
+        # output checkpoints to resolve an otherwise ambiguous late block.
+        sampled = self.pair_block < 0 and boundary == "output" and layers // 2 < layer < layers - 1
         if not (full or sampled):
             return
         rows = self.arms.setdefault(trace.arm, [])
@@ -227,7 +251,7 @@ class NativeExecutionTrace:
             [["low", self.step, 1, 0, "input"]]
             + [
                 ["low", self.step, 1, layer, "output"]
-                for layer in sorted({0, layers // 2, layers - 1} | set(range(layers // 2 + 1, layers - 1)))
+                for layer in self.selected_outputs(layers)
             ]
             if layers > 0
             else []
@@ -275,6 +299,7 @@ class NativeExecutionTrace:
             "policy": POLICY,
             "enabled": self.step >= 0,
             "low_logical_prediction": self.step,
+            "full_pair_block": self.pair_block,
             "native_call": 1,
             "arms": self.arms,
             "comparisons": comparisons,
@@ -288,13 +313,19 @@ class NativeExecutionTrace:
                 "metadata_nodes_per_value": 256,
                 "cache_entries": 8,
                 "hooks_per_module": 4,
-                "intervening_output_token_row_stride": 32,
+                "intervening_output_token_row_stride": 32 if self.pair_block < 0 else None,
+                "full_pair_selected": self.pair_block >= 0,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
             "limitations": [
-                "Block zero input and first/middle/final outputs are hashed in full; "
-                "intervening outputs after the middle block use every 32nd token row.",
+                (
+                    "Pair mode hashes block 0 input plus full outputs at middle, pair-1, pair and last; "
+                    "all other block outputs remain unobserved."
+                    if self.pair_block >= 0
+                    else "Block zero input and first/middle/final outputs are hashed in full; "
+                    "intervening outputs after the middle block use every 32nd token row."
+                ),
                 "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",

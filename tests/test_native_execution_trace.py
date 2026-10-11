@@ -233,3 +233,75 @@ def test_strided_probe_never_claims_full_block_coverage():
     assert report["comparisons"]["A_replay"]["selected_boundaries_exact"]
     assert report["arms"]["A"][3]["coverage"] == "token_rows_stride_32"
     assert any("Sampled equality does not establish" in note for note in report["limitations"])
+
+
+def test_01867_full_pair_hashes_complete_neighboring_blocks_with_exact_coverage():
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45)
+    module = block()
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        for layer in range(50):
+            rows = torch.arange(128.0).reshape(32, 4)
+            if arm == "A_replay" and layer == 45:
+                rows = rows.clone()
+                rows[1, 0] += 0.125  # Missed by one-in-32 sampled probe.
+            if layer == 0:
+                observer.observe(trace, 0, 50, "input", rows, module, {}, None)
+            observer.observe(trace, layer, 50, "output", rows, module, {}, None)
+    report = observer.summary()
+    a_rows = report["arms"]["A"]
+    assert [row["key"][-2:] for row in a_rows] == [
+        [0, "input"], [25, "output"], [44, "output"], [45, "output"], [49, "output"]
+    ]
+    assert all(row["coverage"] == "full" for row in a_rows)
+    assert all(row["source_shape"] == row["shape"] for row in a_rows)
+    assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_difference"] == {
+        "key": ["low", 5, 1, 45, "output"],
+        "classification": "packed_hidden_output",
+        "coverage": "full",
+    }
+    assert observer.bytes["A"] == 5 * 128 * 4
+
+
+@pytest.mark.parametrize("block", [-2, 512, True, 1.5])
+def test_invalid_pair_selector_rejected_before_sampling(block):
+    from h3_flow_regenerate.native_execution_trace import validate_pair_block
+
+    with pytest.raises(ValueError, match="low_native_trace_pair_block"):
+        validate_pair_block(block)
+    with pytest.raises(ValueError, match="low_native_trace_pair_block"):
+        node_call(low_native_trace_pair_block=block)
+
+
+def test_pair_selector_default_off_and_requires_selected_native_prediction():
+    from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
+
+    spec = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]
+    assert spec["low_native_trace_pair_block"][1]["default"] == -1
+    with pytest.raises(ValueError, match="low_native_trace_pair_block requires"):
+        node_call(low_native_trace_pair_block=45)
+    with pytest.raises(ValueError, match="low_native_trace_pair_block requires"):
+        LowReplayTrace(native_pair_block=45)
+    with pytest.raises(ValueError, match="middle\\+2"):
+        NativeExecutionTrace(5, _full_sha, pair_block=25).selected_outputs(50)
+
+
+def test_full_pair_missing_or_over_budget_fails_closed():
+    module = block()
+    trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, arm_bytes=4 * 128 * 4)
+    for layer in range(50):
+        value = torch.arange(128.0).reshape(32, 4)
+        if layer == 0:
+            observer.observe(trace, 0, 50, "input", value, module, {}, None)
+        observer.observe(trace, layer, 50, "output", value, module, {}, None)
+    for arm in ("B_target_projection", "A_replay"):
+        other = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        for layer in range(50):
+            value = torch.arange(128.0).reshape(32, 4)
+            if layer == 0:
+                observer.observe(other, 0, 50, "input", value, module, {}, None)
+            observer.observe(other, layer, 50, "output", value, module, {}, None)
+    assert not observer.summary()["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert observer.summary()["arms"]["A"][-1]["unobserved"] == "tensor_or_arm_byte_budget"

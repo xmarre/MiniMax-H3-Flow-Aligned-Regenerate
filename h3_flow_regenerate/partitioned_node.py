@@ -626,6 +626,21 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "host-copy synchronization can perturb timing. Forecast predictions have no native witness.",
             },
         )
+        spec["required"]["low_native_trace_pair_block"] = (
+            "INT",
+            {
+                "default": -1,
+                "min": -1,
+                "max": 511,
+                "tooltip": (
+                    "Optional full-byte native block-pair inspection in low_sampler_aba. -1 retains "
+                    "the original sampled late-block tracing; otherwise choose a zero-based block "
+                    "after middle+1 and before the final block (45 for run 01867). Full-hashes the "
+                    "outputs of the chosen block and its predecessor plus middle/final block outputs "
+                    "and block-0 input, within 2 GiB per arm. Requires low_native_trace_step>=0."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -683,13 +698,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         video_vae=None,
         low_sampler_aba=False,
         low_native_trace_step=-1,
+        low_native_trace_pair_block=-1,
     ):
         from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
-        from .native_execution_trace import validate_step
+        from .native_execution_trace import PAIR_OPTION as NATIVE_PAIR_OPTION
+        from .native_execution_trace import validate_pair_block, validate_step
 
         validate_step(low_native_trace_step)
+        validate_pair_block(low_native_trace_pair_block)
         if low_native_trace_step >= 0 and not low_sampler_aba:
             raise ValueError("low_native_trace_step requires low_sampler_aba=true")
+        if low_native_trace_pair_block >= 0 and (not low_sampler_aba or low_native_trace_step < 0):
+            raise ValueError("low_native_trace_pair_block requires low_sampler_aba=true and low_native_trace_step>=0")
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
@@ -770,6 +790,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         )
         patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
         patched.model_options[NATIVE_TRACE_OPTION] = low_native_trace_step
+        patched.model_options[NATIVE_PAIR_OPTION] = low_native_trace_pair_block
         metrics.event(
             "partitioned_low_sampler_aba_control",
             enabled=bool(low_sampler_aba),
@@ -777,6 +798,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             diagnostic_only=True,
             default_changed=False,
             low_native_trace_step=low_native_trace_step,
+            low_native_trace_pair_block=low_native_trace_pair_block,
         )
         return patched, metrics
 

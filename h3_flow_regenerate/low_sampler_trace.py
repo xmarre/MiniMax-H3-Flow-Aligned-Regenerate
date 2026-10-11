@@ -379,11 +379,19 @@ def rng_receipt():
 
 
 class LowReplayTrace:
-    def __init__(self, *, max_bytes=2 * 1024**3, max_records=512, max_tensor_bytes=128 * 1024**2, native_step=-1):
-        from .native_execution_trace import NativeExecutionTrace, validate_step
+    def __init__(
+        self, *, max_bytes=2 * 1024**3, max_records=512, max_tensor_bytes=128 * 1024**2,
+        native_step=-1, native_pair_block=-1
+    ):
+        from .native_execution_trace import NativeExecutionTrace, validate_pair_block, validate_step
 
         validate_step(native_step)
-        self.native_execution = NativeExecutionTrace(native_step, _full_sha) if native_step >= 0 else None
+        validate_pair_block(native_pair_block)
+        if native_pair_block >= 0 and native_step < 0:
+            raise ValueError("low_native_trace_pair_block requires low_native_trace_step>=0")
+        self.native_execution = (
+            NativeExecutionTrace(native_step, _full_sha, pair_block=native_pair_block) if native_step >= 0 else None
+        )
         self._temp = tempfile.TemporaryDirectory(prefix="h3-low-replay-")
         self.root = Path(self._temp.name)
         self.max_bytes, self.max_records, self.max_tensor_bytes = max_bytes, max_records, max_tensor_bytes
@@ -852,11 +860,11 @@ def current_trace_owner():
 
 
 @contextlib.contextmanager
-def low_trace_scope(native_step=-1):
+def low_trace_scope(native_step=-1, native_pair_block=-1):
     if _OWNER.get() is not None:
         yield _OWNER.get()
         return
-    trace = LowReplayTrace(native_step=native_step)
+    trace = LowReplayTrace(native_step=native_step, native_pair_block=native_pair_block)
     token = _OWNER.set(trace)
     try:
         yield trace
@@ -872,9 +880,12 @@ def traced_partitioned(function):
     def wrapped(executor, guider, *args, **kwargs):
         if not guider.model_options.get("h3_flow_low_sampler_aba_v1", False):
             return function(executor, guider, *args, **kwargs)
-        from .native_execution_trace import OPTION
+        from .native_execution_trace import OPTION, PAIR_OPTION
 
-        with low_trace_scope(guider.model_options.get(OPTION, -1)):
+        with low_trace_scope(
+            guider.model_options.get(OPTION, -1),
+            guider.model_options.get(PAIR_OPTION, -1),
+        ):
             return function(executor, guider, *args, **kwargs)
 
     return wrapped

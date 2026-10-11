@@ -109,6 +109,22 @@ For a 50-block model these are blocks 26–48; four full witnesses plus 23 sampl
 witnesses consume approximately 1.72 GiB per A/B/A′ arm at 36,445 × 5,376
 bf16 hidden shape, under the existing 2 GiB limit.
 
+For the confirmed 01867 sampled discrepancy first observed at block 45,
+`low_native_trace_pair_block=45` selects a separate **full-byte** pair mode.
+It keeps full packed-hidden fingerprints of input to block 0 and the outputs of
+block 25, block 44, block 45, and block 49; **no intermediate sampled rows** are
+recorded in pair mode. The pair must be after `block_count // 2 + 1` and before
+the final block. At the 01867 geometry, five 36,445 × 5,376 bf16 fingerprints
+cost approximately 1.82 GiB per arm, below the existing 2 GiB inspection budget.
+The setting is optional, defaults to `-1` (preserving the original sampled mode),
+and requires `low_sampler_aba=true` and `low_native_trace_step>=0`.
+The selected pair is validated against the actual block count before hashing;
+invalid pair identities and missing/full-hash budget failures never pass
+observation completeness. If A/A′ full outputs after block 44 are identical
+but full outputs after block 45 differ, the mismatch is created within the
+block-45 execution interval. Otherwise the prior sampled equality missed some
+earlier differing tokens and source-level attribution must remain open.
+
 Hidden states include conditioning and both target AV streams; they are not clean
 video latents. Full selected hash identity establishes only equality at those
 boundaries. A differing strided probe identifies the earliest *observed sampled*
@@ -123,6 +139,15 @@ logical tensor bytes per host slice, charges at most 2 GiB per arm (6 GiB across
 the three arms), and rejects individual observed tensors larger than 512 MiB. Budget/layout/read
 failures, missing boundaries or different topology prevent selected-boundary
 equality. Existing native AV divergence operands remain a separate export.
+
+The 01867 manifest `e2c38cb34a789dd66190e1da6aa0b2301020dd15323c7a3b3ca7db38c409bf60`
+and all nine raw tensor files were independently integrity-checked. A/A′ full
+block-0-input and outputs 0/25 matched, sampled outputs 26–44 matched, and
+sampled output 45 was the first observed mismatch. The A/A′ native velocity
+mismatch was entirely in the generated 50 temporal suffix tokens; the protected
+12 matched bitwise. This is **not** proof that the complete output of block 44
+matched or that block 45 caused the first difference. The full-byte pair mode
+exists to resolve that precise ambiguity without an attention-provider change.
 
 Block receipts read VDN's active lease, bounded cache keys/storage metadata,
 prefetch generation/target, CUDA stream, active Sol request, callable sources and
