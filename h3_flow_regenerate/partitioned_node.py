@@ -677,9 +677,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "Core H3 sparse attention-producing QKV chunk in selected block. "
                     "Cold pooled state replays producer twice; counts both passes but "
                     "captures the second. Primed state captures the only pass. "
-                    "Requires module/projection detail. Unknown state or unexpected "
-                    "pass count fails completeness. At 36,445 rows the 18 hashes cost "
-                    "1,959,283,200 bytes/arm under 2 GiB. Hooks removed on exit."
+                    "Requires module/projection detail. Also fingerprints complete Core "
+                    "RoPE and Q/K norm weights, sparse-call scalar/sink arguments, and "
+                    "every 32nd row of attention output entering out_proj. Missing "
+                    "or differing argument provenance fails exactness. At 36,445 "
+                    "BF16 rows, total witness stays below 2 GiB/arm. Hook cleanup "
+                    "preserved; sampler/backend/VDN remain unchanged."
                 ),
             },
         )
