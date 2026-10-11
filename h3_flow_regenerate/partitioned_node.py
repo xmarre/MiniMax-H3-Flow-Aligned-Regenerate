@@ -641,6 +641,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["low_native_trace_module_detail"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Optional full-byte internal module witnesses for selected trace pair block: "
+                    "input, attention out_proj, post-attention norm2, MLP and block output. "
+                    "Five BF16 witnesses remain within 2 GiB per arm. Temporary read-only hooks "
+                    "are removed after the block; also reads Core sparse pooled-statistic hashes. "
+                    "Requires low_sampler_aba, native trace step and native trace pair block."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -699,17 +712,24 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_sampler_aba=False,
         low_native_trace_step=-1,
         low_native_trace_pair_block=-1,
+        low_native_trace_module_detail=False,
     ):
+        from .native_execution_trace import MODULE_OPTION as NATIVE_MODULE_OPTION
         from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
         from .native_execution_trace import PAIR_OPTION as NATIVE_PAIR_OPTION
-        from .native_execution_trace import validate_pair_block, validate_step
+        from .native_execution_trace import validate_module_detail, validate_pair_block, validate_step
 
         validate_step(low_native_trace_step)
         validate_pair_block(low_native_trace_pair_block)
+        validate_module_detail(low_native_trace_module_detail)
         if low_native_trace_step >= 0 and not low_sampler_aba:
             raise ValueError("low_native_trace_step requires low_sampler_aba=true")
         if low_native_trace_pair_block >= 0 and (not low_sampler_aba or low_native_trace_step < 0):
             raise ValueError("low_native_trace_pair_block requires low_sampler_aba=true and low_native_trace_step>=0")
+        if low_native_trace_module_detail and (
+            not low_sampler_aba or low_native_trace_step < 0 or low_native_trace_pair_block < 0
+        ):
+            raise ValueError("low_native_trace_module_detail requires replay, native step and pair block")
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
@@ -791,6 +811,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
         patched.model_options[NATIVE_TRACE_OPTION] = low_native_trace_step
         patched.model_options[NATIVE_PAIR_OPTION] = low_native_trace_pair_block
+        patched.model_options[NATIVE_MODULE_OPTION] = low_native_trace_module_detail
         metrics.event(
             "partitioned_low_sampler_aba_control",
             enabled=bool(low_sampler_aba),
@@ -799,6 +820,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             default_changed=False,
             low_native_trace_step=low_native_trace_step,
             low_native_trace_pair_block=low_native_trace_pair_block,
+            low_native_trace_module_detail=low_native_trace_module_detail,
         )
         return patched, metrics
 
