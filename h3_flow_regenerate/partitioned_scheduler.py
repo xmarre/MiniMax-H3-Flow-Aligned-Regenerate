@@ -4507,19 +4507,22 @@ def run_partitioned_progressive(
     )
 
     replay_trace = current_trace_owner()
+    if replay_trace is not None:
+        replay_trace.user_callback_present = callback is not None
 
     def low_callback(step, x0, x, _total):
         if replay_trace is not None:
             replay_trace.callback(step, x0, x, _total)
         if callback is None:
             return None
-        if target_band is not None:
-            x0 = _target_band_preview_packed(x0, target_band, target_shapes)
-            x = _target_band_preview_packed(x, target_band, target_shapes)
-        else:
-            x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
-            x = _resize_packed_latent_image(x, source_shapes, target_shapes)
-        return callback(step, x0, x, len(sigmas) - 1)
+        with replay_trace.user_callback(step, x0, x) if replay_trace is not None else contextlib.nullcontext():
+            if target_band is not None:
+                x0 = _target_band_preview_packed(x0, target_band, target_shapes)
+                x = _target_band_preview_packed(x, target_band, target_shapes)
+            else:
+                x0 = _resize_packed_latent_image(x0, source_shapes, target_shapes)
+                x = _resize_packed_latent_image(x, source_shapes, target_shapes)
+            return callback(step, x0, x, len(sigmas) - 1)
 
     frozen_low_rng = capture_rng() if low_aba_enabled else None
     if target_band is None:

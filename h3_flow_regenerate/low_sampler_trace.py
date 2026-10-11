@@ -17,6 +17,7 @@ import pickle
 import random
 import sys
 import tempfile
+from dataclasses import fields
 from pathlib import Path
 
 import torch
@@ -24,6 +25,11 @@ import torch
 from .partitioned_stage import tensor_sha256
 
 POLICY = "h3_low_first_divergence_v1"
+CONDITIONING_BYTES = 64 * 1024**2
+BACKEND_RECEIPT_BYTES = 16 * 1024**2
+BACKEND_TOTAL_BYTES = 256 * 1024**2
+HISTORY_ENTRIES = 128
+HASH_CHUNK_BYTES = 8 * 1024**2
 _ACTIVE = contextvars.ContextVar("h3_low_first_divergence", default=None)
 _OWNER = contextvars.ContextVar("h3_low_replay_owner", default=None)
 
@@ -31,62 +37,203 @@ _OWNER = contextvars.ContextVar("h3_low_replay_owner", default=None)
 def _full_sha(value):
     # Stream large contiguous history through bounded host buffers. The hash
     # covers every byte, including dtype-level distinctions such as signed zero.
-    flat = value.detach().reshape(-1)
+    if value.device.type == "meta" or value.layout != torch.strided:
+        raise ValueError("tensor has no observable strided storage")
     digest = hashlib.sha256()
-    elements = max(1, 8 * 1024 * 1024 // value.element_size())
-    for start in range(0, flat.numel(), elements):
-        chunk = flat[start : start + elements].to(device="cpu").contiguous().view(torch.uint8)
+    elements = max(1, HASH_CHUNK_BYTES // value.element_size())
+
+    def chunks(tensor):
+        if tensor.is_contiguous():
+            flat = tensor.view(-1)
+            for start in range(0, flat.numel(), elements):
+                yield flat[start : start + elements]
+        elif tensor.numel() <= elements:
+            yield tensor
+        else:
+            # Slice logical row order before any copy or reshape. A strided
+            # device-to-host copy may use scratch, but only for this bounded
+            # slice, never for the entire larger non-contiguous tensor.
+            row_elements = math.prod(tensor.shape[1:])
+            rows = max(1, elements // max(1, row_elements))
+            for start in range(0, tensor.shape[0], rows):
+                part = tensor[start : start + rows]
+                yield from chunks(part[0] if part.shape[0] == 1 else part)
+
+    for part in chunks(value.detach()):
+        chunk = part.to(device="cpu").contiguous().reshape(-1).view(torch.uint8)
         digest.update(chunk.numpy().tobytes())
     return digest.hexdigest()
 
 
-def _digest(value, *, budget=64 * 1024 * 1024):
+def _digest(value, *, budget=CONDITIONING_BYTES, max_nodes=2048):
     """Full tensor hashes within a byte budget; never silently sample tensors."""
     remaining = budget
     hashed_bytes = 0
     unobserved = []
+    nodes = 0
+    omitted = 0
+
+    def missing(path, reason):
+        nonlocal omitted
+        omitted += 1
+        if len(unobserved) < 128:
+            unobserved.append(path)
+        return {"unobserved": reason}
 
     def visit(item, path, depth=0):
-        nonlocal remaining, hashed_bytes
+        nonlocal remaining, hashed_bytes, nodes
+        nodes += 1
+        if nodes > max_nodes:
+            return missing(path, "node_limit")
         if depth > 12:
-            unobserved.append(path)
-            return {"unobserved": "depth_limit"}
+            return missing(path, "depth_limit")
         if torch.is_tensor(item):
             size = item.numel() * item.element_size()
             entry = {"shape": list(item.shape), "dtype": str(item.dtype), "nbytes": size}
-            if (
-                (remaining is not None and size > remaining)
-                or item.device.type == "meta"
-                or (item.layout != torch.strided or (remaining is None and not item.is_contiguous()))
-            ):
-                unobserved.append(path)
-                entry["unobserved"] = "byte_budget_or_tensor_layout"
+            if size > remaining or item.device.type == "meta" or item.layout != torch.strided:
+                entry.update(missing(path, "byte_budget_or_tensor_layout"))
             else:
-                if remaining is not None:
-                    remaining -= size
+                remaining -= size
                 hashed_bytes += size
                 entry["sha256"] = _full_sha(item)
             return entry
+        semantic = _semantic_owner(item)
+        if semantic is not item:
+            return visit(semantic, path, depth + 1)
         if isinstance(item, dict):
+            if len(item) > max_nodes - nodes:
+                return missing(path, "container_node_limit")
+            if any(not isinstance(k, (str, int)) or (isinstance(k, str) and len(k) > 4096) for k in item):
+                return missing(path, "unsupported_dictionary_key")
             return {
                 str(k): visit(v, f"{path}.{k}", depth + 1) for k, v in sorted(item.items(), key=lambda p: str(p[0]))
             }
         if isinstance(item, (list, tuple)):
+            if len(item) > max_nodes - nodes:
+                return missing(path, "container_node_limit")
             return [visit(v, f"{path}.{i}", depth + 1) for i, v in enumerate(item)]
+        if isinstance(item, str) and len(item) > 4096:
+            return missing(path, "string_limit")
         if item is None or isinstance(item, (str, bool, int)):
             return item
         if isinstance(item, float):
             return item if math.isfinite(item) else {"nonfinite": str(item)}
-        unobserved.append(path)
-        return {"unobserved_type": f"{type(item).__module__}.{type(item).__qualname__}"}
+        return missing(path, f"opaque_type:{type(item).__module__}.{type(item).__qualname__}")
 
     tree = visit(value, "root")
     return {
         "sha256": hashlib.sha256(json.dumps(tree, sort_keys=True).encode()).hexdigest(),
         "hashed_bytes": hashed_bytes,
         "unobserved": unobserved,
+        "complete": omitted == 0,
+        "omitted_count": omitted,
+        "byte_budget": budget,
+        "node_limit": max_nodes,
         "tree": tree,
     }
+
+
+def _semantic_owner(value):
+    """Read only reviewed data owners; exclude caches, metrics and lifetime IDs."""
+    from .partitioned_diagnostics import PartitionedAudioModelTimestepContext
+    from .partitioned_prefix import PartitionedExactPrefixPlan
+    from .partitioned_stage import (
+        PartitionedPositionPolicy,
+        PartitionedStagePlan,
+        PartitionedStageRuntime,
+        PartitionedStageStreamView,
+        PartitionedTargetBandGeometry,
+        TargetBandDomainContext,
+    )
+
+    if isinstance(value, PartitionedStageStreamView):
+        return {
+            "owner": _semantic_owner(value._owner),
+            "stream": value.stream,
+            "attention_head_t": value.attention_head_t,
+        }
+    if isinstance(value, PartitionedStageRuntime):
+        return {
+            name: getattr(value, name)
+            for name in (
+                "plan",
+                "vdn_linear_diagnostic",
+                "softmax_diagnostic",
+                "vdn_temporal_carrier_policy",
+                "vdn_temporal_carrier_short_conv_spec",
+                "vdn_temporal_carrier_contract",
+                "prefix_transformer_context",
+                "audio_position_domain",
+                "position_policy",
+                "position_policy_positions",
+                "target_band",
+                "attention_head_t",
+                "target_band_domain",
+                "exact_prefix_visual_context",
+            )
+        }
+    if isinstance(
+        value,
+        (
+            PartitionedPositionPolicy,
+            PartitionedStagePlan,
+            PartitionedTargetBandGeometry,
+            TargetBandDomainContext,
+            PartitionedAudioModelTimestepContext,
+            PartitionedExactPrefixPlan,
+        ),
+    ):
+        return {f.name: getattr(value, f.name) for f in fields(value) if f.name != "stage_owner_generation"}
+    if (type(value).__module__, type(value).__name__) == ("comfy.ldm.minimax.model", "PackedLayout"):
+        return vars(value)
+    return value
+
+
+# These keys transport executable wrappers, backend caches or run-local receipts,
+# not the model's semantic data payload. Their internals remain unobserved.
+# Core model.py/model_base.py, Spectrum sampling.py, Sol runtime.py/interop.py and
+# Flow partitioned_transformer.py own these published keys. Unknown options are
+# included as mandatory data, so future opaque payloads fail completeness.
+_BACKEND_OPTION_KEYS = frozenset(
+    {
+        "wrappers",
+        "patches",
+        "patches_replace",
+        "optimized_attention_override",
+        "spectrum_h3_runtime",
+        "spectrum_h3_run_id",
+        "spectrum_h3_step_id",
+        "spectrum_h3_reason",
+        "spectrum_h3_actual",
+        "spectrum_h3_solver_phase",
+        "spectrum_h3_outer_step_id",
+        "spectrum_h3_coordinate",
+        "spectrum_h3_er_sde_stochastic_tracker",
+        "spectrum_h3_refdelta_bridge",
+        "attention_backend_history_v1",
+        "attention_backend_receipts_v1",
+        "attention_measure_capabilities_v1",
+        "vdn_softmax_provider_v1",
+        "vdn_softmax_provider_v2",
+        "vdn_softmax_provider_v3",
+        "vdn_softmax_provider_v4",
+        "vdn_attention_preprocess_v1",
+        "vdn_partitioned_attention_provider_v1",
+        "h3_flow_request_id_v1",
+        "h3_flow_stage_id_v1",
+        "h3_flow_evaluation_id_v1",
+        "h3_flow_partitioned_boundary_witness_v1",
+    }
+)
+
+
+def native_conditioning(context, kwargs, options, *, budget=CONDITIONING_BYTES):
+    options = options or {}
+    if not isinstance(options, dict) or len(options) > 2048:
+        return _digest({"context": context, "kwargs": kwargs, "transformer_options": options}, budget=budget), []
+    data = {key: value for key, value in options.items() if key not in _BACKEND_OPTION_KEYS}
+    digest = _digest({"context": context, "kwargs": kwargs, "transformer_options": data}, budget=budget)
+    return digest, sorted(key for key in options if key in _BACKEND_OPTION_KEYS)
 
 
 def _delta(a, b):
@@ -116,6 +263,20 @@ def backend_receipt(guider, options):
         "model_owned_runtime_buffers": "unobserved",
         "attention_kernel_internal_state": "unobserved",
     }
+    trace = active_trace()
+    allowance = min(
+        BACKEND_RECEIPT_BYTES,
+        trace.backend_bytes_remaining if trace is not None else BACKEND_RECEIPT_BYTES,
+        trace.backend_arm_bytes_remaining.get(trace.arm, 0) if trace is not None else BACKEND_RECEIPT_BYTES,
+    )
+    remaining = allowance
+
+    def bounded_digest(value):
+        nonlocal remaining
+        digest = _digest(value, budget=remaining)
+        remaining -= digest["hashed_bytes"]
+        return digest
+
     if runtime is None:
         receipt["spectrum"] = {"available": False}
     else:
@@ -132,21 +293,39 @@ def backend_receipt(guider, options):
             "generation": getattr(forecaster, "_generation", None),
             "factor_generation": getattr(forecaster, "_factor_generation", None),
             "history_length": len(history),
-            "history": _digest(
-                [(getattr(h, "coordinate", None), getattr(h, "feature_flat", None)) for h in history], budget=None
+            "history_entries_omitted": max(0, len(history) - HISTORY_ENTRIES),
+            "history": bounded_digest(
+                [(getattr(h, "coordinate", None), getattr(h, "feature_flat", None)) for h in history[:HISTORY_ENTRIES]]
             ),
-            "evidence": _digest(
+            "evidence": bounded_digest(
                 {
                     k: getattr(forecaster, k, None)
                     for k in ("_evidence_history", "_exact_head_history", "_design", "_cholesky")
                 }
             ),
-            "controller_fields": _digest(
+            "controller_fields": bounded_digest(
                 vars(getattr(runtime, "_generic_correction_controller", None))
                 if hasattr(getattr(runtime, "_generic_correction_controller", None), "__dict__")
                 else None
             ),
         }
+        spectrum = receipt["spectrum"]
+        spectrum["state_digest_complete"] = not spectrum["history_entries_omitted"] and all(
+            spectrum[name]["complete"] for name in ("history", "evidence", "controller_fields")
+        )
+    consumed = allowance - remaining
+    if trace is not None:
+        trace.backend_bytes_remaining -= consumed
+        trace.backend_arm_bytes_remaining[trace.arm] -= consumed
+    receipt["inspection_budget"] = {
+        "per_receipt_bytes": BACKEND_RECEIPT_BYTES,
+        "invocation_bytes": BACKEND_TOTAL_BYTES,
+        "hashed_bytes": consumed,
+        "invocation_bytes_remaining": trace.backend_bytes_remaining if trace is not None else None,
+        "arm_bytes_limit": BACKEND_TOTAL_BYTES // 3,
+        "arm_bytes_remaining": trace.backend_arm_bytes_remaining.get(trace.arm) if trace is not None else None,
+        "history_entry_limit": HISTORY_ENTRIES,
+    }
     stage = options.get("h3_flow_partitioned_stage_v1")
     receipt["partition"] = {
         "owner_id": id(stage) if stage is not None else None,
@@ -206,6 +385,14 @@ class LowReplayTrace:
         self.truncated = []
         self.unobserved_count = 0
         self._first_operands = {}
+        self._pending_prediction = None
+        self.backend_bytes_remaining = BACKEND_TOTAL_BYTES
+        self.backend_arm_bytes_remaining = {
+            arm: BACKEND_TOTAL_BYTES // 3 for arm in ("A", "B_target_projection", "A_replay")
+        }
+        self.user_callback_present = False
+        self.callback_effects = []
+        self.mandatory_conditioning_complete = True
 
     def close(self):
         self._temp.cleanup()
@@ -261,7 +448,10 @@ class LowReplayTrace:
         rows.append(row)
 
     def begin_prediction(self, guider, x, timestep, options):
+        if self._pending_prediction is not None:
+            self.unobserve(f"{self._pending_prediction}:missing_predict_output")
         self.evaluation += 1
+        self._pending_prediction = (self.arm, self.stage, self.evaluation)
         self.native_call = 0
         self._native_count = 0
         # Retain no frame references: tensors are copied before the frame exits.
@@ -279,6 +469,7 @@ class LowReplayTrace:
         self.record(
             "predict_input",
             x,
+            conditioning=self.conditioning(None, {}, options),
             backend=backend_receipt(guider, options),
             rng=rng_receipt(),
             cfg=getattr(guider, "cfg", None),
@@ -287,17 +478,109 @@ class LowReplayTrace:
         self.record("timestep", timestep)
 
     def end_prediction(self, result, *, actual, phase, outer, backend=None):
+        expected = (self.arm, self.stage, self.evaluation)
+        if self._pending_prediction != expected:
+            self.unobserve(f"{expected}:predict_output_without_matching_begin")
+        self._pending_prediction = None
+        if type(actual) is not bool or not isinstance(phase, str) or not phase or type(outer) is not int:
+            self.unobserve(f"{expected}:incomplete_prediction_identity")
+        if actual and self._native_count == 0:
+            self.mandatory_conditioning_complete = False
+            self.unobserve(f"{expected}:actual_native_mandatory_conditioning_unobserved")
         self.record("predict_output", result, actual=actual, phase=phase, outer_step=outer, backend=backend)
+
+    def conditioning(self, context, kwargs, options):
+        digest, _ = native_conditioning(context, kwargs, options)
+        if not digest["complete"]:
+            self.mandatory_conditioning_complete = False
+            self.unobserve(
+                f"{self.arm}/{self.stage}/{self.evaluation}/{self.native_call}:mandatory_conditioning_incomplete"
+            )
+        return digest
+
+    def finish_prediction(self, result, guider, options, *, actual=None, identity=None):
+        if actual is None:
+            value = options.get("spectrum_h3_actual")
+            actual = True if value is None else bool(value)
+        if identity is None:
+            probe = options.get("h3_flow_exact_probe_context")
+            identity = (
+                ("handoff_probe", int(probe["outer_step"]))
+                if isinstance(probe, dict)
+                else (
+                    str(options.get("spectrum_h3_solver_phase", "model")),
+                    int(options.get("spectrum_h3_outer_step_id", self.evaluation)),
+                )
+            )
+        self.end_prediction(
+            result, actual=actual, phase=identity[0], outer=identity[1], backend=backend_receipt(guider, options)
+        )
+        return result
 
     def callback(self, step, x0, x, total):
         self.record("callback_x", x, callback_step=int(step), total=int(total), observation="before_update")
         self.record("callback_x0", x0, callback_step=int(step))
+
+    @contextlib.contextmanager
+    def user_callback(self, step, x0, x):
+        """Observe accessible effects, without replaying the user's callback."""
+        self.user_callback_present = True
+        before = _digest({"x": x, "x0": x0})
+        rng_before = rng_receipt()
+        try:
+            yield
+        finally:
+            after = _digest({"x": x, "x0": x0})
+            rng_after = rng_receipt()
+            complete = before["complete"] and after["complete"]
+            effect = {
+                "stage": self.stage,
+                "evaluation": self.evaluation,
+                "callback_step": int(step),
+                "sampler_tensors_observed": complete,
+                "sampler_tensors_changed": before["sha256"] != after["sha256"] if complete else None,
+                "rng_changed": rng_before != rng_after,
+                "hidden_model_effects": "unobserved",
+            }
+            if len(self.callback_effects) < self.max_records:
+                self.callback_effects.append(effect)
+            else:
+                self.unobserve("callback_effect_record_limit")
+            if not complete or effect["sampler_tensors_changed"] or effect["rng_changed"]:
+                self.unobserve(f"A/{self.stage}/{self.evaluation}:user_callback_effect_or_incomplete_observation")
+
+    @staticmethod
+    def prediction_coverage(rows):
+        inputs = [r for r in rows if r["boundary"] == "predict_input"]
+        outputs = [r for r in rows if r["boundary"] == "predict_output"]
+
+        def identities(values):
+            return [(r["stage"], r["evaluation"]) for r in values]
+
+        valid = (
+            bool(inputs)
+            and identities(inputs) == identities(outputs)
+            and all(
+                type(r["metadata"].get("actual")) is bool
+                and isinstance(r["metadata"].get("phase"), str)
+                and bool(r["metadata"]["phase"])
+                and type(r["metadata"].get("outer_step")) is int
+                for r in outputs
+            )
+        )
+        return {"complete": valid, "begins": len(inputs), "ends": len(outputs)}
 
     def summary(self):
         def public(row):
             return {k: v for k, v in row.items() if k != "file"}
 
         baseline = self.arms.get("A", [])
+        prediction_coverage = {arm: self.prediction_coverage(rows) for arm, rows in self.arms.items()}
+        predictions_complete = (
+            bool(prediction_coverage)
+            and all(c["complete"] for c in prediction_coverage.values())
+            and self._pending_prediction is None
+        )
         comparisons = {}
         for arm in ("B_target_projection", "A_replay"):
             rows = self.arms.get(arm, [])
@@ -375,6 +658,9 @@ class LowReplayTrace:
                 and topology is None
                 and semantic_match
                 and not self.truncated
+                and prediction_coverage.get("A", {}).get("complete", False)
+                and prediction_coverage.get(arm, {}).get("complete", False)
+                and self._pending_prediction is None
                 and all(
                     r.get("difference", {}).get("finite", False) and r["difference"]["abs_max"] <= 1e-5 for r in rows
                 )
@@ -391,6 +677,11 @@ class LowReplayTrace:
                 and topology is None
                 and not self.truncated,
             }
+            comparisons[arm]["fully_observed_records_exact"] &= (
+                prediction_coverage.get("A", {}).get("complete", False)
+                and prediction_coverage.get(arm, {}).get("complete", False)
+                and self._pending_prediction is None
+            )
         sources = {}
         for name in (
             "comfy.samplers",
@@ -410,7 +701,16 @@ class LowReplayTrace:
             "policy": POLICY,
             "arms": {a: [public(r) for r in rows] for a, rows in self.arms.items()},
             "comparisons": comparisons,
-            "recorded_tensor_coverage_complete": not self.truncated,
+            "recorded_tensor_coverage_complete": not self.truncated and predictions_complete,
+            "logical_prediction_coverage": prediction_coverage,
+            "mandatory_conditioning_coverage_complete": self.mandatory_conditioning_complete,
+            "callback_provenance": {
+                "production_user_callback_present": self.user_callback_present,
+                "shadow_user_callback_invoked": False,
+                "execution_history_equivalence_verified": False,
+                "effects": self.callback_effects,
+                "hidden_model_effects": "unobserved",
+            },
             "unobserved": list(self.truncated),
             "unobserved_boundary_count": self.unobserved_count,
             "baseline_disk_bytes": self.bytes,
@@ -419,6 +719,9 @@ class LowReplayTrace:
                 "baseline_disk_bytes": self.max_bytes,
                 "records_per_arm": self.max_records,
                 "individual_tensor_bytes": self.max_tensor_bytes,
+                "backend_bytes_per_receipt": BACKEND_RECEIPT_BYTES,
+                "backend_bytes_per_invocation": BACKEND_TOTAL_BYTES,
+                "conditioning_bytes_per_call": CONDITIONING_BYTES,
             },
             "physical_state_isolation_verified": False,
             "limitations": [
@@ -427,6 +730,7 @@ class LowReplayTrace:
                 "Terminal raw state is reconstructed; pre-inverse-scaling solver return is unobserved.",
                 "Native witnesses observe the installed diffusion wrapper, not individual transformer blocks.",
                 "Backend digests can be partial; occupancy and lifetime identity do not prove cache equality.",
+                "Only A invokes the user callback; accessible receipts do not prove callback/model-state equivalence.",
             ],
         }
 
@@ -483,6 +787,9 @@ def trace_stage(trace, arm, stage, sampler, guider):
     try:
         yield
     finally:
+        if trace._pending_prediction is not None:
+            trace.unobserve(f"{trace._pending_prediction}:missing_predict_output_at_stage_exit")
+            trace._pending_prediction = None
         _ACTIVE.reset(token)
         if previous is missing:
             options.pop("wrappers", None)
@@ -500,8 +807,15 @@ def native_trace_wrapper(executor, x, timestep, context, transformer_options=Non
         return executor(x, timestep, context, transformer_options, **kwargs)
     trace._native_count += 1
     trace.native_call = trace._native_count
-    conditioning = _digest({"context": context, "kwargs": kwargs})
-    trace.record("native_input_video", x[0], conditioning=conditioning)
+    conditioning, unobserved_backend_options = native_conditioning(context, kwargs, transformer_options)
+    if not conditioning["complete"]:
+        trace.mandatory_conditioning_complete = False
+        trace.unobserve(
+            f"{trace.arm}/{trace.stage}/{trace.evaluation}/{trace.native_call}:mandatory_conditioning_incomplete"
+        )
+    trace.record(
+        "native_input_video", x[0], conditioning=conditioning, unobserved_backend_options=unobserved_backend_options
+    )
     trace.record("native_input_audio", x[1])
     trace.record("native_timestep", timestep)
     result = executor(x, timestep, context, transformer_options, **kwargs)

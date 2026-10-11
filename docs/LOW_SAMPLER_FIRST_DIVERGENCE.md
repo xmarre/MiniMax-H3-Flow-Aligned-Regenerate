@@ -12,6 +12,10 @@ records full tensor SHA256, shape/dtype and, for matched shadow operands,
 float32 elementwise RMS and maximum error. Bitwise identity is reported
 separately from the existing `1e-5` numerical tolerance. Nonfinite differences,
 changed call topology and missing records cannot qualify reproduction.
+Every logical prediction input requires one returned output with actual/forecast,
+phase and outer-step identity. This includes low/probe calls with configured
+Flow guidance and no active guidance run. An interrupted or missing output
+makes coverage incomplete, even when all remaining tensor rows match.
 
 ## Observed boundaries
 
@@ -19,8 +23,13 @@ changed call topology and missing records cannot qualify reproduction.
   inpainting. The callable and sampling algorithm are not replaced.
 - Flow predictor input after Core's sampler mask reconstruction, and timestep.
 - Native diffusion wrapper input video/audio, native timestep, returned
-  video/audio velocities and full conditioning/mask/payload hashes within a
-  64 MiB hashing budget. Opaque objects and budget omissions are explicit.
+  video/audio velocities and conditioning/mask/payload hashes within a 64 MiB
+  hashing budget. Positional transformer options are included. Source-backed
+  data owners expose prefix/noise, geometry, position policy and domain data;
+  metrics, executable wrappers, provider caches and run IDs remain separately
+  labeled backend state. Unknown option values stay mandatory data. Opaque
+  mandatory objects, depth/node/string limits or byte omissions disqualify
+  complete replay. Matching omission descriptors never establish equality.
 - Full packed AV actual or forecast predictor output, distinguished by Flow's
   existing active/completed Spectrum provenance and solver phase.
 - Native callback latent and denoised state, **before** the solver update.
@@ -57,10 +66,23 @@ tensor pair is retained for export. No additional CUDA trajectory is retained.
 
 Bounds are 2 GiB baseline tensor payload, 512 tensor records per arm, 128 MiB
 per operand and 128 retained omission descriptions. File headers and one
-additional A′ mismatch operand add bounded overhead. Large contiguous Spectrum
-history tensors are hashed completely through 8 MiB CPU buffers. Other cache
-and conditioning digests use a 64 MiB per-digest budget. Limits mark observation
-incomplete and prevent a reproduction pass; they do not silently sample bytes.
+additional A′ mismatch operand add bounded overhead. Hash transfers are at most
+8 MiB. Non-contiguous tensors are sliced in logical row order before copying
+to CPU and reshaping. Copy implementations can allocate scratch for a bounded
+slice; the observer never reshapes an entire non-contiguous device tensor.
+
+Spectrum history/evidence/controller inspection shares a 16 MiB receipt limit
+and a 256 MiB invocation limit, reserved equally for A/B/A′. History lists are
+limited to 128 entries. Budgets exhausted by A cannot consume the shadow arms'
+reserved observation. Complete tensor hashes are produced within these bounds;
+larger operands are explicitly unobserved, never sampled. Backend receipts
+report hashed bytes, remaining budgets and `state_digest_complete`.
+
+Mandatory conditioning digests use a 64 MiB budget, at most 2,048 nodes, depth
+12 and 4,096 characters per string. Tensor/mandatory semantic omissions prevent
+a reproduction pass. Partial backend cache inspection remains caveated and does
+not independently prevent operational tensor matching. Neither result proves
+physical model/cache isolation.
 
 The manifest can include `first_divergence_A` and
 `first_divergence_A_replay`. They are raw operands at the saved boundary,
@@ -78,6 +100,15 @@ are not numerical equality keys. Hashing can synchronize GPU work and adds
 host-transfer/disk overhead; observer overhead is not a production speed result.
 Loaded Core/Spectrum/VDN/Sol source paths and SHA256 identify observed source
 files without asserting they are the user's complete installed repository.
+
+Only production A invokes the user low callback; B/A′ invoke the trace callback.
+`callback_provenance` reports that asymmetry and accessible effects: sampler
+tensor hashes and known RNG states before/after A's preview/user callback.
+Observed mutation or incomplete tensor inspection prevents qualification.
+The callback still runs exactly once and its effects are preserved; the observer
+does not rewind them or invoke it in shadows. Hidden callback/model effects are
+unobserved even when these receipts match. Full sampler-side execution-history
+equivalence is never asserted from tensor or RNG receipts alone.
 
 ## Offline control
 

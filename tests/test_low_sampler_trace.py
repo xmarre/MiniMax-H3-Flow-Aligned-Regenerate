@@ -10,7 +10,9 @@ from h3_flow_regenerate.low_sampler_trace import (
     LowReplayTrace,
     _delta,
     _digest,
+    _full_sha,
     active_trace,
+    backend_receipt,
     low_trace_scope,
     native_trace_wrapper,
     trace_stage,
@@ -164,6 +166,230 @@ def test_scope_restores_options_and_context_on_exception(trace):
     assert not path.exists()
 
 
+@pytest.mark.parametrize("missing", ["both", "replay"])
+def test_missing_logical_outputs_never_qualify_even_when_other_rows_match(trace, missing):
+    emit(trace, "A")
+    emit(trace, "A_replay")
+    for arm in ("A", "A_replay") if missing == "both" else ("A_replay",):
+        trace.arms[arm] = [r for r in trace.arms[arm] if r["boundary"] != "predict_output"]
+    report = trace.summary()
+    assert not report["recorded_tensor_coverage_complete"]
+    assert not report["comparisons"]["A_replay"]["fully_observed_records_exact"]
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+
+
+def test_missing_end_on_stage_exit_is_explicit_and_context_restores(trace):
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+
+    def solver(x):
+        trace.begin_prediction(guider, x, torch.ones(1), {})
+
+    with trace_stage(trace, "A", "low", SimpleNamespace(sampler_function=solver), guider):
+        solver(torch.ones(1, 4))
+    assert active_trace() is None
+    assert trace._pending_prediction is None
+    assert any("missing_predict_output_at_stage_exit" in r for r in trace.truncated)
+    assert not trace.summary()["recorded_tensor_coverage_complete"]
+
+
+def native_pair(trace, payload, *, options=None):
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+
+    def solver(x, arm):
+        trace.begin_prediction(guider, x, torch.ones(1), {})
+        values = native_trace_wrapper(
+            lambda x, *a, **kw: x,
+            [x[:, :2], x[:, 2:]],
+            torch.ones(1),
+            torch.ones(1),
+            options(arm) if options else {},
+            payload=payload(arm),
+        )
+        trace.end_prediction(torch.cat(values, dim=1), actual=True, phase="model", outer=0)
+
+    for arm in ("A", "A_replay"):
+        with trace_stage(trace, arm, "low", SimpleNamespace(sampler_function=solver), guider):
+            solver(torch.ones(1, 4), arm)
+    return trace.summary()
+
+
+@pytest.mark.parametrize("kind", ["opaque", "over_budget"])
+def test_identically_omitted_but_different_mandatory_payload_cannot_qualify(trace, kind):
+    from h3_flow_regenerate.low_sampler_trace import CONDITIONING_BYTES
+
+    def payload(arm):
+        value = 0 if arm == "A" else 1
+        if kind == "opaque":
+            return SimpleNamespace(mutable_conditioning=value)
+        return torch.full((CONDITIONING_BYTES // 4 + 1,), float(value))
+
+    report = native_pair(trace, payload)
+    assert not report["mandatory_conditioning_coverage_complete"]
+    assert not report["recorded_tensor_coverage_complete"]
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+    assert not report["comparisons"]["A_replay"]["fully_observed_records_exact"]
+
+
+def test_changed_positional_native_mask_is_a_conditioning_divergence(trace):
+    report = native_pair(
+        trace,
+        lambda arm: None,
+        options=lambda arm: {
+            "denoise_mask": torch.tensor([0.0 if arm == "A" else 1.0]),
+        },
+    )
+    first = report["comparisons"]["A_replay"]["first_observed_divergence"]
+    assert first["boundary"] == "native_conditioning"
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+
+
+def test_backend_objects_are_caveated_without_obscuring_mandatory_options(trace):
+    report = native_pair(
+        trace,
+        lambda arm: None,
+        options=lambda arm: {
+            "wrappers": {"opaque": SimpleNamespace(changed=arm)},
+            "spectrum_h3_runtime": SimpleNamespace(cache=arm),
+            "optimized_attention_override": object(),
+            "minimax_h3_sigma_shift_video": 3.0,
+        },
+    )
+    assert report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert not report["physical_state_isolation_verified"]
+    row = next(r for r in report["arms"]["A"] if r["boundary"] == "native_input_video")
+    assert "wrappers" in row["metadata"]["unobserved_backend_options"]
+
+
+def test_partitioned_prefix_and_noise_are_semantic_data_and_metrics_are_not(trace):
+    from h3_flow_regenerate.partitioned_stage import PartitionedStagePlan, PartitionedStageRuntime
+
+    def options(arm):
+        prefix = torch.full((1, 24, 1, 4, 4), 0.0 if arm == "A" else 1.0)
+        owner = PartitionedStageRuntime(
+            PartitionedStagePlan(prefix, 3, 2, 2, torch.zeros_like(prefix)),
+            SimpleNamespace(counter=arm),
+        )
+        return {"h3_flow_partitioned_stage_v1": owner}
+
+    report = native_pair(trace, lambda arm: None, options=options)
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_divergence"]["boundary"] == "native_conditioning"
+
+
+def test_digest_traversal_and_noncontiguous_copy_chunks_are_bounded(monkeypatch):
+    import h3_flow_regenerate.low_sampler_trace as module
+
+    bounded = _digest(list(range(10000)), max_nodes=10)
+    assert not bounded["complete"]
+    assert bounded["omitted_count"] == 1
+    assert not _digest({"opaque": object()})["complete"]
+    view = torch.arange(16.0).reshape(4, 4).t()
+    assert _full_sha(view) == _full_sha(view.contiguous())
+    monkeypatch.setattr(module, "HASH_CHUNK_BYTES", 16)
+    copied = []
+    original_to = torch.Tensor.to
+
+    def observe_to(tensor, *args, **kwargs):
+        copied.append(tensor.numel() * tensor.element_size())
+        return original_to(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "to", observe_to)
+    assert _full_sha(view) == _full_sha(view.contiguous())
+    assert max(copied) <= 16
+    device_view = torch.empty(4, 4, device="meta").t()
+    with pytest.raises(ValueError, match="no observable strided storage"):
+        _full_sha(device_view)
+    assert not _digest(device_view)["complete"]
+
+
+@pytest.mark.parametrize("layout", ["broadcast", "permuted", "stepped", "scalar", "empty"])
+def test_strided_hash_preserves_full_logical_byte_order(monkeypatch, layout):
+    import hashlib
+
+    import h3_flow_regenerate.low_sampler_trace as module
+
+    monkeypatch.setattr(module, "HASH_CHUNK_BYTES", 16)
+    values = torch.arange(64, dtype=torch.bfloat16).reshape(2, 4, 8)
+    value = {
+        "broadcast": values[:1].expand(3, 4, 8),
+        "permuted": values.permute(2, 0, 1),
+        "stepped": values[:, ::2, ::3],
+        "scalar": torch.tensor(-0.0),
+        "empty": values[:, :0],
+    }[layout]
+    expected = hashlib.sha256(value.contiguous().reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
+    assert _full_sha(value) == expected
+
+
+def test_backend_history_per_receipt_and_invocation_budgets_are_hard_limits(trace, monkeypatch):
+    import h3_flow_regenerate.low_sampler_trace as module
+
+    monkeypatch.setattr(module, "BACKEND_RECEIPT_BYTES", 64)
+    trace.backend_bytes_remaining = 96
+    history = [SimpleNamespace(coordinate=0, feature_flat=torch.ones(16))]
+    runtime = SimpleNamespace(forecaster=SimpleNamespace(_history=history))
+    guider = SimpleNamespace(
+        model_options={"spectrum_h3_binding": SimpleNamespace(runtime=runtime), "transformer_options": {}}
+    )
+    sampler = SimpleNamespace(sampler_function=lambda: None)
+    with trace_stage(trace, "A", "low", sampler, guider):
+        receipts = [backend_receipt(guider, {}) for _ in range(4)]
+    assert sum(r["inspection_budget"]["hashed_bytes"] for r in receipts) <= 96
+    assert all(r["inspection_budget"]["hashed_bytes"] <= 64 for r in receipts)
+    assert receipts[0]["spectrum"]["state_digest_complete"]
+    assert not receipts[-1]["spectrum"]["state_digest_complete"]
+    assert trace.mandatory_conditioning_complete
+    assert not trace.truncated
+
+
+def test_backend_budget_reserves_observation_for_each_replay_arm(monkeypatch):
+    import h3_flow_regenerate.low_sampler_trace as module
+
+    monkeypatch.setattr(module, "BACKEND_RECEIPT_BYTES", 64)
+    monkeypatch.setattr(module, "BACKEND_TOTAL_BYTES", 192)
+    runtime = SimpleNamespace(
+        forecaster=SimpleNamespace(_history=[SimpleNamespace(coordinate=0, feature_flat=torch.ones(16))])
+    )
+    guider = SimpleNamespace(
+        model_options={"spectrum_h3_binding": SimpleNamespace(runtime=runtime), "transformer_options": {}}
+    )
+    observer = LowReplayTrace()
+    try:
+        for arm in ("A", "B_target_projection", "A_replay"):
+            with trace_stage(observer, arm, "low", SimpleNamespace(sampler_function=lambda: None), guider):
+                assert backend_receipt(guider, {})["inspection_budget"]["hashed_bytes"] == 64
+                assert backend_receipt(guider, {})["inspection_budget"]["hashed_bytes"] == 0
+        assert observer.backend_bytes_remaining == 0
+    finally:
+        observer.close()
+
+
+@pytest.mark.parametrize("effect", ["none", "rng", "tensor"])
+def test_user_callback_effects_preserve_execution_and_do_not_assert_history_equivalence(trace, effect):
+    emit(trace, "A")
+    emit(trace, "A_replay")
+    trace.arm, trace.stage, trace.evaluation = "A", "low", 2
+    x = torch.ones(1, 4)
+    state = torch.get_rng_state().clone()
+    try:
+        with trace.user_callback(2, x.clone(), x):
+            if effect == "rng":
+                torch.rand(1)
+            elif effect == "tensor":
+                x.add_(1)
+        report = trace.summary()
+        receipt = report["callback_provenance"]["effects"][0]
+        assert receipt["rng_changed"] == (effect == "rng")
+        assert receipt["sampler_tensors_changed"] == (effect == "tensor")
+        assert not report["callback_provenance"]["execution_history_equivalence_verified"]
+        assert report["comparisons"]["A_replay"]["reproduction_within_tolerance"] == (effect == "none")
+        assert torch.equal(torch.get_rng_state(), state) == (effect != "rng")
+        assert torch.equal(x, torch.full_like(x, 2.0 if effect == "tensor" else 1.0))
+    finally:
+        torch.set_rng_state(state)
+
+
 def test_native_full_av_output_catches_audio_only_difference(trace):
     original = torch.ones(1, 2)
     guider = SimpleNamespace(model_options={"transformer_options": {}})
@@ -226,7 +452,14 @@ def test_native_core_euler_is_observed_without_callable_replacement(trace):
 
     def model(x, sigma, **kwargs):
         trace.begin_prediction(guider, x, sigma, {})
-        result = x * 0.25
+        values = native_trace_wrapper(
+            lambda values, *a, **kw: [v * 0.25 for v in values],
+            [x[:, :2], x[:, 2:]],
+            sigma,
+            x,
+            {},
+        )
+        result = torch.cat(values, dim=1)
         trace.end_prediction(result, actual=True, phase="model", outer=trace.evaluation)
         return result
 
@@ -239,18 +472,21 @@ def test_native_core_euler_is_observed_without_callable_replacement(trace):
     assert trace.summary()["comparisons"]["A_replay"]["fully_observed_records_exact"]
 
 
-def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(trace):
+@pytest.mark.parametrize("guidance_mode", [None, "direction", "unbound"])
+def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(trace, guidance_mode):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
     from comfy.patcher_extension import WrapperExecutor, get_all_wrappers
 
+    from h3_flow_regenerate.guidance import GuidanceConfig
     from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding, flow_predict_wrapper
 
     options = {"transformer_options": {"h3_flow_stage": "low"}}
-    binding = FlowBinding()
-    options[FLOW_BINDING_KEY] = binding
+    binding = FlowBinding(guidance=GuidanceConfig(mode=guidance_mode) if guidance_mode == "direction" else None)
+    assert binding.active_guidance_run is None
+    if guidance_mode != "unbound":
+        options[FLOW_BINDING_KEY] = binding
     guider = SimpleNamespace(model_options=options)
-    sampler = SimpleNamespace(sampler_function=lambda: None)
     control = {"step": 0}
     actuals = [True, False, True]
 
@@ -269,19 +505,35 @@ def test_flow_predict_and_native_wrapper_preserve_actual_forecast_provenance(tra
             return torch.cat(values, dim=1)
         return x * 0.125
 
+    def solver(x, timestep):
+        call = WrapperExecutor.new_class_executor(predictor, guider, [flow_predict_wrapper])
+        return call.execute(x, timestep, options, 42)
+
+    sampler = SimpleNamespace(sampler_function=solver)
     observed = []
     for arm in ("A", "A_replay"):
         values = []
-        with trace_stage(trace, arm, "low", sampler, guider):
-            for step in range(3):
-                control["step"] = step
-                call = WrapperExecutor.new_class_executor(predictor, guider, [flow_predict_wrapper])
-                values.append(call.execute(torch.ones(1, 4), torch.tensor([1.0 - step * 0.25]), options, 42))
+        for stage in ("low", "probe"):
+            options["transformer_options"]["h3_flow_stage"] = stage
+            with trace_stage(trace, arm, stage, sampler, guider):
+                for step in range(3 if stage == "low" else 1):
+                    control["step"] = step
+                    values.append(solver(torch.ones(1, 4), torch.tensor([1.0 - step * 0.25])))
         observed.append(values)
     assert all(torch.equal(a, b) for a, b in zip(*observed, strict=True))
     calls = [r for r in trace.arms["A"] if r["boundary"] == "predict_output"]
-    assert [r["metadata"]["actual"] for r in calls] == actuals
-    assert [r["metadata"]["outer_step"] for r in calls] == [0, 1, 2]
-    assert len([r for r in trace.arms["A"] if r["boundary"] == "native_output_audio"]) == 2
-    assert binding.metrics.counters["spectrum_forecast_calls"] == 2
+    assert [r["metadata"]["actual"] for r in calls] == [*actuals, True]
+    assert [r["metadata"]["outer_step"] for r in calls] == [0, 1, 2, 0]
+    assert len([r for r in trace.arms["A"] if r["boundary"] == "native_output_audio"]) == 3
+    if guidance_mode != "unbound":
+        assert binding.metrics.counters["spectrum_forecast_calls"] == 2
+        assert binding.metrics.counters["transformer_actual_nfe"] == 6
+        assert binding.metrics.counters["sampler_logical_calls"] == 8
+    else:
+        assert not binding.metrics.counters
+    assert torch.equal(observed[0][0], torch.tensor([[0.25, 0.25, 0.5, 0.5]]))
+    assert torch.equal(observed[0][1], torch.full((1, 4), 0.125))
+    report = trace.summary()
+    assert report["recorded_tensor_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["fully_observed_records_exact"]
     assert active_trace() is None
