@@ -66,7 +66,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert "target_band_tokens" not in ordinary
 
     keys = list(production)
-    assert keys[-9:] == [
+    assert keys[-10:] == [
         "video_guided_overlap_tokens",
         "suffix_dc_bridge",
         "target_band_tokens",
@@ -76,6 +76,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
         "source_prefix_projection",
         "low_sampler_aba",
         "low_native_trace_step",
+        "low_native_trace_pair_block",
     ]
     assert production["low_sampler_aba"][0] == "BOOLEAN"
     assert production["low_sampler_aba"][1]["default"] is False
