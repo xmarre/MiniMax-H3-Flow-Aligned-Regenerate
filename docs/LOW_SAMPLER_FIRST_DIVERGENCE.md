@@ -504,3 +504,115 @@ RAR with manifest and nine binaries and production A MP4.
 This is a repair of the observer's measured-pass coverage,
 not evidence of a fix to A/A′ video reproducibility,
 frame shift or tone drift.
+
+
+### Run 01894: attention-producing QKV is fully exact, downstream native differs
+
+The complete owner's `metrics_01894_.json`,
+`Pasted text(20261011-121657).txt`,
+`MiniMax_H3_00069-audio.mp4` (992×992, 24 fps, 345 frames,
+14.375 seconds, H.264+AAC), and full frozen
+`session-continuum_chunk-2_seed-11918865606839656618_sigma-0.87804878_1791720841289920441.rar`
+were independently checked. All seven deployment source SHA256 receipts
+match PR head `0213469c32d331f01369203167dc3c1b67102af5`
+and the correct installed package path; archive manifest SHA256
+`28cb70b8557f506d3fba599eaddde753570cc4748ae4b3b2234e05777165653f`
+and all nine raw `.bin` SHA256 values match exported metrics.
+
+At selected native low step **5**, actual native call **1**, block
+**45**, all A/B/A′ arms have absent matching Core pooled
+statistics at entry, two expected producer passes, **18 pre**
+and **18 post** QKV calls; all 18 *selected second-pass*
+4,096-row BF16 hashes per arm are present, aligned, and within
+`1,959,283,200` bytes per arm. **A and A′ are bitwise exact at
+all nine QKV inputs and all nine outputs after VDN post-forward
+LoRA**. B differs at the first QKV input, but is not causally
+qualified, as A/A′ continued outputs still differ.
+
+A/A′ first native prediction matches exactly. The first differing
+native output at step 5 shows velocity RMS
+`0.017759273502688536`, max `0.8984375`.
+Independent BF16 decode of raw files confirms all 12 protected
+temporal video tokens are **bitwise exact** and
+**79.116391184573%** of generated suffix entries differ.
+A/A′ final clean source suffix RMS
+`0.08104407042264938`, max `2.54117488861084`;
+`reproduction_verified=false`.
+
+Earlier 01881/01891 established full input to block45 exact;
+01892 established full attention output entering `attn.out_proj`
+already differs *before* the output-projection linear and its
+VDN post-forward hook. Coupled with 01894 exact full adapted
+QKV output **entering** Core's sparse producer, the remaining
+observed interval lies in Core's `ck.sol_attn_chunked`
+execution (Q/K norm, RoPE, quantization and route, Core
+pool stats, CUDA producer/kernel and its arguments). The
+`sol_h3.runtime` active request was absent: Core invokes
+the compiled comfy-kitchen sparse backend, not an independent
+Sol-H3 extension request. This is **an interval**, NOT proof
+of a faulty CUDA kernel, race, Sol-H3, VDN, or tone/zoom cause.
+
+#### Enhanced same-call QKV diagnostic (same existing opt-in control)
+
+To avoid another ambiguous cross-run interval, the existing
+default-off `low_native_trace_qkv_detail=true` observer additionally
+takes **three full** static input hashes *before* Core block45
+and one inexpensive sampled output hash *after* its sparse
+producer:
+
+1. Complete supplied `rope_freqs` tensor before Core's private
+   RoPE packing.
+2. Complete `attn.q_norm.weight` and `attn.k_norm.weight`
+   tensors (the module weights, not an assertion about internal
+   CUDA scratch or actual cast copies).
+3. Source-backed full sparse scalar/route receipt including
+   `tau`, `topk_ratio`, `heads`, `head_dim`,
+   `token_aug`, `sink_blocks`, `sink_q`,
+   `rope_eps`, row count, and `vsa=false`;
+   verified Core patch provenance required.
+4. All 18 original full *attention-producing* QKV chunk inputs
+   and outputs after existing VDN LoRA (unchanged).
+5. Every 32nd token row (all head/features) from
+   `attn.out_proj` **pre-forward input**, the already-normal
+   sparse attention result after returning from
+   `ck.sol_attn_chunked`.
+
+This is no kernel override or production codepath replacement:
+the extra input hashes precede the existing Core block replacement;
+the `out_proj` *pre*-hook only reads its input; hooks are removed
+even on failure. The old 2 GiB/arm cap remains in force; sampled
+equality alone does NOT prove complete attention-output equality.
+Incomplete/unknown Core scalar/route provenance, absent
+data, wrong QKV pass counts/shapes, hash or budget failures
+reject exactness. In particular, this captures the matching
+full QKV and sampled sparse result **inside the same three-arm
+GPU replay**, rather than relying only on cross-run inference.
+No sampler step, weight, LoRA, VDN/Spectrum/Sol path, sparse
+cache or VAE state is modified.
+
+For the next single controlled owner replay use the same
+01894 workflow and selectors as-is:
+`low_sampler_aba=true`,
+`low_native_trace_step=5`,
+`low_native_trace_pair_block=45`,
+`low_native_trace_module_detail=true`,
+`low_native_trace_projection_detail=true`,
+`low_native_trace_qkv_detail=true`,
+`spatial_stage_control=progressive_uniform_source`,
+`source_prefix_projection=native_source_carry`,
+`capture_boundary_witness=true`.
+Refresh Flow PR #99 through Patcher, full restart, and verify
+seven new source hashes before queuing any GPU job. Return
+complete log + Flow metrics + intact frozen A/B/A′ RAR +
+production A MP4/audio; leave the original model/schedules,
+input frames, prompts, LoRAs and attention backend unchanged.
+
+If sparse static inputs and full QKV outputs are A/A′ exact
+but the sampled `sparse_attention_out_proj_input` first differs,
+the attention-processing interval is established **in one run**.
+It still does not identify a specific CUDA race or isolate
+unobserved internal kernel workspace. Follow-up should then
+be an **isolated primitive determinism reproducer** using
+the original `comfy-kitchen==0.2.37` source and controlled
+full kernel inputs, not a speculative production backend gate,
+cache reset, geometry correction or alternate sampler.
