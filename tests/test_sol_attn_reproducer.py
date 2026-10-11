@@ -82,6 +82,15 @@ def test_unsigned_block_ids_preserve_65535_without_loading_unused_tail():
     assert probe.canonical_indices(ids, torch.tensor([2]), 3).tolist() == [[65535, 1, 0]]
 
 
+def test_admission_order_changes_do_not_imply_changed_retained_set():
+    counts = torch.tensor([3])
+    a = torch.tensor([[9, 2, 5, 123]])
+    b = torch.tensor([[5, 9, 2, 456]])
+    assert torch.equal(probe.sorted_token_indices(a, counts, 4), probe.sorted_token_indices(b, counts, 4))
+    b[0, 2] = 7
+    assert not torch.equal(probe.sorted_token_indices(a, counts, 4), probe.sorted_token_indices(b, counts, 4))
+
+
 def test_wrapper_clone_uses_private_globals_and_restores_no_state():
     def original():
         return _C, _wrap_for_dlpack  # noqa: F821

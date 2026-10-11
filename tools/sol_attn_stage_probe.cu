@@ -5,6 +5,11 @@
 
 namespace { thread_local std::string probe_error; }
 extern "C" const char* sol_probe_error() { return probe_error.c_str(); }
+extern "C" void sol_token_probe_stage(int,
+    const void*, const void*, const void*, void*, void*, void*, void*,
+    const void*, const void*, const void*, void*, void*, void*, void*, void*,
+    void*, void*, void*, void*, void*, void*,
+    int, int, int, int, int, int, int, int, float, cudaStream_t);
 
 // Expose the original launch boundaries with their original arguments. The
 // Python driver synchronizes and observes between stages, outside the kernels.
@@ -41,6 +46,15 @@ extern "C" int sol_probe_stage(int stage, void* workspace, void* out,
                 w + p.tokPartO, w + p.tokPartM, w + p.tokPartL,
                 w + p.oPart, w + p.mPart, w + p.lPart,
                 1, p.Tp, H, p.NQ, p.NPAD, p.NTB, n_tok, 1, sq0, sq1, sl, stream);
+        } else if (stage >= 20 && stage <= 25) {
+            if (n_tok) sol_token_probe_stage(stage - 20,
+                w + p.qmean, w + p.tokRef, w + p.tokBits,
+                w + p.gCen8, w + p.gCens, w + p.gRef, w + p.gBits,
+                w + p.kiP, w + p.ksb, w + p.vTi, w + p.tokTiles, w + p.tokTileCnt,
+                w + p.tokHist, w + p.tokIdx, w + p.tokCnt,
+                w + p.tokPartO, w + p.tokPartM, w + p.tokPartL,
+                w + p.oPart, w + p.mPart, w + p.lPart,
+                p.Tp, H, p.NQ, p.NPAD, p.NTB, n_tok, sq0, sq1, sl, stream);
         } else if (stage == 3) {
             launch_sol_exact(w + p.qiP, w + p.qs, w + p.kiP, w + p.ksb,
                 w + p.vTi, w + p.vsc, w + p.idx, w + p.cnt,

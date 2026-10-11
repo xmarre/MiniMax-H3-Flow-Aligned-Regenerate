@@ -90,8 +90,11 @@ with both complete lists. Token reports distinguish:
 Installed-core observations are taken after its combined launch. Their order
 in the report is **not** a claim that a particular internal kernel differed
 first. With `--stages`, the pinned source library launches the original
-finish, route, token and exact functions individually on the same frozen
-workspace. `source_first_difference` locates the first differing observed
+finish, block route, token group, tile list, histogram, admission, sorting,
+tail merge, and exact functions individually on the same frozen workspace.
+Admission comparisons sort a private copy of written IDs to distinguish changed
+sets from reservation-order differences corrected by the normal sort kernel.
+`source_first_difference` locates the first differing observed
 stage in that compiled diagnostic; `source_earliest_divergent_stage` scans all
 repetitions in operation order. `source_parity_verified` separately reports
 whether all staged outputs match the first installed output bitwise. Do not

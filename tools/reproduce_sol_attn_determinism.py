@@ -85,6 +85,14 @@ def canonical_indices(indices, counts, capacity):
     return result
 
 
+def sorted_token_indices(indices, counts, capacity):
+    result = canonical_indices(indices, counts, capacity)
+    valid = torch.arange(capacity, device=indices.device) < counts.clamp(max=capacity)[..., None]
+    # Sort only the set that was admitted, excluding unused slots from ordering.
+    ordered = result.masked_fill(~valid, 2**63 - 1).sort(-1).values
+    return ordered.masked_fill(~valid, 0)
+
+
 def workspace_observations(ws, p, t, h, aug, stage):
     """Only initialized logical elements, never padding or unused list tails."""
     nq, npad, tp = p["NQ"], p["NPAD"], p["Tp"]
@@ -125,11 +133,36 @@ def workspace_observations(ws, p, t, h, aug, stage):
         if aug:
             add("tokRef", torch.float32, (h, nq))
             add("tokBits", torch.uint32, (h, nq, words))
-    elif stage == "token" and aug:
+    elif stage in ("token", "token_group", "token_tiles", "token_hist", "token_admit", "token_sort") and aug:
+        if stage == "token_group":
+            for name, dtype, shape in (
+                ("gCen8", torch.int8, (h, ng, 128)),
+                ("gCens", torch.float32, (h, ng)),
+                ("gRef", torch.float32, (h, ng)),
+                ("gBits", torch.uint32, (h, ng, words)),
+            ):
+                add(name, dtype, shape)
+            return result
+        if stage == "token_tiles":
+            groups = (ng + 63) // 64
+            counts = view_slot(ws, p, "tokTileCnt", torch.int32, (h, groups))
+            ids = view_slot(ws, p, "tokTiles", torch.int16, (h, groups, nq))
+            return {"tokTileCnt": counts, "tokTiles": canonical_indices(ids, counts, nq)}
+        if stage == "token_hist":
+            add("tokHist", torch.uint32, (h, ng, 128))
+            return result
         counts = view_slot(ws, p, "tokCnt", torch.int32, (h, ng))
         ids = view_slot(ws, p, "tokIdx", torch.int32, (h, ng, aug))
         result["tokCnt"] = counts
-        result["tokIdx"] = canonical_indices(ids, counts, aug)
+        result["tokIdx"] = sorted_token_indices(ids, counts, aug)
+        if stage == "token_admit":
+            split = max(1, min(8, (512 + (ng + 63) // 64 - 1) // ((ng + 63) // 64)))
+            add("tokPartO", torch.bfloat16, (split, h, ng, 128))
+            add("tokPartM", torch.float32, (split, h, ng))
+            add("tokPartL", torch.float32, (split, h, ng))
+            return result
+        if stage == "token_sort":
+            return result
         add("tokHist", torch.uint32, (h, ng, 128))
         add("gCen8", torch.int8, (h, ng, 128))
         add("gCens", torch.float32, (h, ng))
@@ -325,9 +358,7 @@ def build_probe(directory, source, arch=None):
         major, minor = torch.cuda.get_device_capability()
         arch = f"sm_{major}{minor}"
     root = source / SOURCE_PREFIX
-    units = [
-        root / f"sol_attn_{name}.cu" for name in ("preprocess", "producer", "vtranspose", "route", "token", "exact")
-    ]
+    units = [root / f"sol_attn_{name}.cu" for name in ("preprocess", "producer", "vtranspose", "route", "exact")]
     libpath = directory / "sol_probe.so"
     command = [
         nvcc,
@@ -341,6 +372,7 @@ def build_probe(directory, source, arch=None):
         "-I",
         str(root),
         str(Path(__file__).with_name("sol_attn_stage_probe.cu")),
+        str(Path(__file__).with_name("sol_token_stage_probe.cu")),
         *map(str, units),
         "-o",
         str(libpath),
@@ -366,7 +398,12 @@ def build_probe(directory, source, arch=None):
         ctypes.c_uint64,
     ]
     lib.sol_probe_stage.restype = ctypes.c_int
-    return lib, {"command": command, "sha256": hashlib.sha256(libpath.read_bytes()).hexdigest(), "arch": arch}
+    return lib, {
+        "command": command,
+        "compiler": subprocess.check_output([nvcc, "--version"], text=True),
+        "sha256": hashlib.sha256(libpath.read_bytes()).hexdigest(),
+        "arch": arch,
+    }
 
 
 def replay_core(backend, observer, config, repeats, probe=None):
@@ -420,7 +457,12 @@ def replay_core(backend, observer, config, repeats, probe=None):
                 row["token_summary"] = token_summary(obs, t, aug)
         if probe is not None:
             ws.copy_(frozen)
-            for stage_number, stage in enumerate(("finish", "route", "token", "exact")):
+            phases = [(0, "finish"), (1, "route")]
+            if aug:
+                phases.extend((20 + n, f"token_{s}") for n, s in enumerate(("group", "tiles", "hist", "admit", "sort")))
+                phases.append((25, "token"))
+            phases.append((3, "exact"))
+            for stage_number, stage in phases:
                 code = probe.sol_probe_stage(
                     stage_number,
                     ws.data_ptr(),
@@ -458,7 +500,17 @@ def replay_core(backend, observer, config, repeats, probe=None):
         "source_earliest_divergent_stage": next(
             (
                 stage
-                for stage in ("finish", "route", "token", "exact")
+                for stage in (
+                    "finish",
+                    "route",
+                    "token_group",
+                    "token_tiles",
+                    "token_hist",
+                    "token_admit",
+                    "token_sort",
+                    "token",
+                    "exact",
+                )
                 if any(not item["bitwise_equal"] for row in rows for item in row.get(f"source_{stage}", {}).values())
             ),
             None,
