@@ -762,9 +762,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         validate_module_detail(low_native_trace_module_detail)
         validate_projection_detail(low_native_trace_projection_detail)
         validate_qkv_detail(low_native_trace_qkv_detail)
-        if low_native_trace_qkv_detail and not (
-            low_native_trace_module_detail and low_native_trace_projection_detail
-        ):
+        if low_native_trace_qkv_detail and not (low_native_trace_module_detail and low_native_trace_projection_detail):
             raise ValueError("low_native_trace_qkv_detail requires module and projection detail")
         if low_native_trace_projection_detail and not low_native_trace_module_detail:
             raise ValueError("low_native_trace_projection_detail requires low_native_trace_module_detail=true")
