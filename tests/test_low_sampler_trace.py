@@ -259,6 +259,87 @@ def test_changed_positional_native_mask_is_a_conditioning_divergence(trace):
     assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
 
 
+def audio_context_options(arm):
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.partitioned_diagnostics import PartitionedAudioModelTimestepContext
+
+    return {
+        "h3_flow_partitioned_audio_model_timestep_context_v1": PartitionedAudioModelTimestepContext(
+            audio_mask=torch.ones(1, 1, 2, 4),
+            metrics=H3FlowMetrics(),
+            ticks=0,
+            audio_prefix_ticks=2,
+            mask_kind="exact_authoritative",
+            calls=0 if arm == "A" else 22,
+            verification_calls=0 if arm == "A" else 22,
+        ),
+        "callbacks": {"on_clone": {"test_owner": [lambda *args: None]}},
+    }
+
+
+def test_audio_context_telemetry_and_executable_callbacks_do_not_change_mandatory_data(trace):
+    report = native_pair(trace, lambda arm: None, options=audio_context_options)
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert report["recorded_tensor_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+    native = next(r for r in report["arms"]["A_replay"] if r["boundary"] == "native_input_video")
+    assert "callbacks" in native["metadata"]["unobserved_backend_options"]
+    assert not report["physical_state_isolation_verified"]
+
+
+@pytest.mark.parametrize("field", ["audio_mask", "ticks", "audio_prefix_ticks", "mask_kind"])
+def test_audio_context_semantic_fields_remain_mandatory(trace, field):
+    def options(arm):
+        result = audio_context_options(arm)
+        context = result["h3_flow_partitioned_audio_model_timestep_context_v1"]
+        if arm == "A_replay":
+            setattr(
+                context,
+                field,
+                {
+                    "audio_mask": torch.zeros(1, 1, 2, 4),
+                    "ticks": 1,
+                    "audio_prefix_ticks": 3,
+                    "mask_kind": "guided_overlap",
+                }[field],
+            )
+        return result
+
+    report = native_pair(trace, lambda arm: None, options=options)
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_divergence"]["boundary"] == "native_conditioning"
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+
+
+def test_audio_counter_drift_does_not_hide_first_native_av_divergence_operands(trace):
+    guider = SimpleNamespace(model_options={"transformer_options": {}})
+    contexts = []
+
+    def solver(x, arm):
+        options = audio_context_options(arm)
+        contexts.append(options["h3_flow_partitioned_audio_model_timestep_context_v1"])
+        trace.begin_prediction(guider, x, torch.ones(1), options)
+        values = native_trace_wrapper(
+            lambda values, *args, **kwargs: [v + (0 if arm == "A" else 0.125) for v in values],
+            [x[:, :2], x[:, 2:]],
+            torch.ones(1),
+            torch.ones(1),
+            options,
+        )
+        trace.end_prediction(torch.cat(values, dim=1), actual=True, phase="model", outer=5)
+
+    for arm in ("A", "A_replay"):
+        with trace_stage(trace, arm, "low", SimpleNamespace(sampler_function=solver), guider):
+            solver(torch.ones(1, 4), arm)
+    report = trace.summary()
+    assert report["mandatory_conditioning_coverage_complete"]
+    assert report["comparisons"]["A_replay"]["first_observed_divergence"]["boundary"] == "native_output_video"
+    assert not report["comparisons"]["A_replay"]["reproduction_within_tolerance"]
+    operands = trace.divergent_operands()
+    assert torch.equal(operands["first_divergence_A_replay"], operands["first_divergence_A"] + 0.125)
+    assert [(c.calls, c.verification_calls) for c in contexts] == [(0, 0), (22, 22)]
+
+
 def test_forecast_option_difference_is_labeled_at_predictor_not_native_boundary(trace):
     guider = SimpleNamespace(model_options={"transformer_options": {}})
 

@@ -177,6 +177,10 @@ def _semantic_owner(value):
                 "exact_prefix_visual_context",
             )
         }
+    if isinstance(value, PartitionedAudioModelTimestepContext):
+        # _audio_model_timestep_kwargs consumes these fields. The remaining
+        # fields only accumulate verification/call telemetry across lifetimes.
+        return {name: getattr(value, name) for name in ("audio_mask", "ticks", "audio_prefix_ticks", "mask_kind")}
     if isinstance(
         value,
         (
@@ -184,7 +188,6 @@ def _semantic_owner(value):
             PartitionedStagePlan,
             PartitionedTargetBandGeometry,
             TargetBandDomainContext,
-            PartitionedAudioModelTimestepContext,
             PartitionedExactPrefixPlan,
         ),
     ):
@@ -202,6 +205,7 @@ def _semantic_owner(value):
 _BACKEND_OPTION_KEYS = frozenset(
     {
         "wrappers",
+        "callbacks",
         "patches",
         "patches_replace",
         "optimized_attention_override",

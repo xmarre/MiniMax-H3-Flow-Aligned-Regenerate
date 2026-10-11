@@ -84,6 +84,13 @@ a reproduction pass. Partial backend cache inspection remains caveated and does
 not independently prevent operational tensor matching. Neither result proves
 physical model/cache isolation.
 
+The audio model-timestep context fingerprints its mask, overlap ticks, prefix
+ticks and mask kind. Its metrics owner and accumulated call/verification counters
+are telemetry, not model inputs. Core's executable callback registry is listed
+as unobserved backend state alongside wrapper registrations. Excluding these
+owners does not establish callback or backend-state equivalence; unknown
+conditioning objects still invalidate mandatory coverage.
+
 The manifest can include `first_divergence_A` and
 `first_divergence_A_replay`. They are raw operands at the saved boundary,
 possibly packed AV or native velocities; they are **not** VAE-decodable clean
