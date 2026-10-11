@@ -1,0 +1,276 @@
+"""Optional full-state fingerprints and read-only metadata inside native blocks."""
+
+from __future__ import annotations
+
+import contextvars
+import hashlib
+import inspect
+import itertools
+import sys
+from collections.abc import Mapping
+from pathlib import Path
+
+import torch
+
+OPTION = "h3_flow_low_native_trace_step_v1"
+POLICY = "h3_low_native_execution_v1"
+
+
+def validate_step(step):
+    if type(step) is not int or not -1 <= step <= 511:
+        raise ValueError("low_native_trace_step must be an integer from -1 to 511")
+    return step
+
+
+def _metadata(value, depth=0, remaining=None):
+    """Describe cache storage without reading its potentially unwritten contents."""
+    remaining = [256] if remaining is None else remaining
+    remaining[0] -= 1
+    if value is None or type(value) in (bool, int, float):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 512 else {"unobserved": "long_string"}
+    if torch.is_tensor(value):
+        return {"shape": list(value.shape), "dtype": str(value.dtype), "device": str(value.device)}
+    if isinstance(value, (torch.dtype, torch.device)):
+        return str(value)
+    if depth < 4 and isinstance(value, (tuple, list)) and len(value) <= 128:
+        result = []
+        for v in value:
+            if remaining[0] <= 0:
+                return {"items": result, "entries_omitted": len(value) - len(result)}
+            result.append(_metadata(v, depth + 1, remaining))
+        return result
+    if depth < 4 and isinstance(value, dict) and len(value) <= 16:
+        result = {}
+        for k, v in value.items():
+            if remaining[0] <= 0:
+                return {"items": result, "entries_omitted": len(value) - len(result)}
+            result[str(k)] = _metadata(v, depth + 1, remaining)
+        return result
+    return {"unobserved": type(value).__module__ + "." + type(value).__qualname__}
+
+
+def _cache_metadata(buffers):
+    caches = {}
+    for name in ("_scan", "_delta", "_plans", "_kv", "_activations", "_partition_indices"):
+        bank = getattr(buffers, name, None)
+        if not isinstance(bank, Mapping):
+            caches[name] = {"unobserved": "cache_unavailable"}
+            continue
+        # VDN bounds these banks; inspect at most the eight newest entries.
+        entries = [(key, bank[key]) for key in itertools.islice(reversed(bank), 8)]
+        caches[name] = {
+            "count": len(bank),
+            "entries_omitted": max(0, len(bank) - len(entries)),
+            "entries": [{"key": _metadata(key), "storage": _metadata(value)} for key, value in entries],
+        }
+    return caches
+
+
+def _vdn_owner(attention):
+    forward = getattr(attention, "forward", None)
+    if not getattr(forward, "_vdn_forward", False):
+        return None
+    # Published partitioned bridge preserves the released VDN forward, whose
+    # source-backed closure explicitly owns state. Never execute the callable.
+    forward = getattr(forward, "_vdn_partitioned_released_forward", forward)
+    code, cells = getattr(forward, "__code__", None), getattr(forward, "__closure__", None)
+    if code is None or cells is None:
+        return None
+    for name, cell in zip(code.co_freevars, cells, strict=True):
+        if name == "state":
+            return getattr(cell.cell_contents, "runtime", None)
+    return None
+
+
+class NativeExecutionTrace:
+    def __init__(self, step, hasher, *, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=12):
+        self.step = validate_step(step)
+        self.hasher = hasher
+        self.arm_bytes, self.tensor_bytes, self.max_records = arm_bytes, tensor_bytes, max_records
+        self.arms = {}
+        self.bytes = {}
+        self.omitted = {}
+        self.sources = {}
+
+    def callable_source(self, function):
+        function = getattr(function, "__func__", function)
+        if not inspect.isfunction(function):
+            return {"type": type(function).__module__ + "." + type(function).__qualname__, "source": "unobserved"}
+        code = function.__code__
+        path = code.co_filename
+        if path not in self.sources and len(self.sources) < 64:
+            try:
+                source = Path(path)
+                if source.stat().st_size > 8 * 1024**2:
+                    self.sources[path] = {"unobserved": "source_size_limit"}
+                else:
+                    self.sources[path] = {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            except OSError as error:
+                self.sources[path] = {"unobserved": type(error).__name__}
+        return {"module": function.__module__, "name": function.__qualname__, "file": path, "line": code.co_firstlineno}
+
+    def backend(self, tensor, block, options, previous):
+        attention = getattr(block, "attn", None)
+        vdn = sys.modules.get("vdn_h3.runtime")
+        accessor = getattr(vdn, "current_runtime_buffers", None)
+        buffers = accessor() if callable(accessor) else None
+        owner = _vdn_owner(attention)
+        active = getattr(owner, "_active", None)
+        owner_pool = active.get() if isinstance(active, contextvars.ContextVar) else None
+        prefetch = getattr(buffers, "_prefetcher", None)
+        receipt = {
+            "vdn": {
+                "module_loaded": vdn is not None,
+                "active_lease": buffers is not None,
+                "owner_id": id(owner) if owner is not None else None,
+                "buffers_id": id(buffers) if buffers is not None else None,
+                "owner_pool_matches": owner_pool is buffers if owner is not None else None,
+                "primary_pool": buffers is getattr(owner, "_primary", None) if owner is not None else None,
+                "retain": getattr(buffers, "retain", None),
+                "caches": _cache_metadata(buffers),
+                "prefetch_generation": getattr(prefetch, "_generation", None),
+                "prefetch_target": _metadata(getattr(prefetch, "_index", None)),
+                "prefetch_result_and_weights": "unobserved",
+                "cache_tensor_contents": "unobserved",
+            },
+            "cuda_stream": int(torch.cuda.current_stream(tensor.device).cuda_stream)
+            if tensor.device.type == "cuda"
+            else None,
+            "callables": {
+                "block": self.callable_source(getattr(block, "forward", None)),
+                "attention": self.callable_source(getattr(attention, "forward", None)),
+                "previous_replacement": self.callable_source(previous),
+                **{
+                    key: self.callable_source(options.get(key))
+                    for key in (
+                        "optimized_attention_override",
+                        "vdn_attention_preprocess_v1",
+                        "vdn_partitioned_attention_provider_v1",
+                    )
+                },
+            },
+            "hooks": {},
+            "physical_state_isolation_verified": False,
+            "primitive_kernel_internals_and_weight_contents": "unobserved",
+        }
+        for name, module in (
+            ("block", block),
+            ("attention", attention),
+            ("qkv_proj", getattr(attention, "qkv_proj", None)),
+            ("out_proj", getattr(attention, "out_proj", None)),
+        ):
+            hooks = getattr(module, "_forward_hooks", {})
+            receipt["hooks"][name] = {
+                "count": len(hooks),
+                "entries_omitted": max(0, len(hooks) - 4),
+                "callables": [self.callable_source(h) for h in itertools.islice(hooks.values(), 4)],
+            }
+        sol = sys.modules.get("sol_h3.runtime")
+        request_var = getattr(sol, "_REQUEST", None)
+        request = request_var.get() if isinstance(request_var, contextvars.ContextVar) else None
+        receipt["sol"] = {
+            "module_loaded": sol is not None,
+            "active_request": request is not None,
+            "request_id": id(request) if request is not None else None,
+            "kernel_id": id(getattr(request, "kernel", None)) if request is not None else None,
+            "backend_transitions": getattr(request, "backend_transitions", None),
+            "evaluations": getattr(request, "evaluations", None),
+        }
+        return receipt
+
+    def observe(self, trace, layer, layers, boundary, tensor, block, options, previous):
+        if self.step < 0 or trace.arm not in {"A", "B_target_projection", "A_replay"}:
+            return
+        if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
+            return
+        if layer not in {0, layers // 2, layers - 1} or (boundary == "input" and layer != 0):
+            return
+        rows = self.arms.setdefault(trace.arm, [])
+        if len(rows) >= self.max_records:
+            self.omitted[trace.arm] = self.omitted.get(trace.arm, 0) + 1
+            return
+        row = {"key": [trace.stage, trace.evaluation, trace.native_call, layer, boundary], "layers": layers}
+        rows.append(row)
+        try:
+            row["backend"] = self.backend(tensor, block, options, previous)
+            size = tensor.numel() * tensor.element_size()
+            row.update(shape=list(tensor.shape), dtype=str(tensor.dtype), nbytes=size)
+            used = self.bytes.get(trace.arm, 0)
+            if size > self.tensor_bytes or used + size > self.arm_bytes:
+                row["unobserved"] = "tensor_or_arm_byte_budget"
+                return
+            self.bytes[trace.arm] = used + size
+            row["sha256"] = self.hasher(tensor)
+        except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as error:
+            row["unobserved"] = type(error).__name__
+
+    def summary(self):
+        comparisons = {}
+        baseline = self.arms.get("A", [])
+        layers = baseline[0]["layers"] if baseline else 0
+        expected = (
+            [["low", self.step, 1, 0, "input"]]
+            + [["low", self.step, 1, layer, "output"] for layer in sorted({0, layers // 2, layers - 1})]
+            if layers > 0
+            else []
+        )
+        for arm in ("B_target_projection", "A_replay"):
+            other = self.arms.get(arm, [])
+            aligned = (
+                bool(expected)
+                and [r["key"] for r in baseline] == expected
+                and len(baseline) == len(other)
+                and all(
+                    a["key"] == b["key"] and a["layers"] == b["layers"] for a, b in zip(baseline, other, strict=True)
+                )
+            )
+            complete = (
+                aligned
+                and not self.omitted.get("A", 0)
+                and not self.omitted.get(arm, 0)
+                and all("sha256" in row for row in baseline + other)
+            )
+            first = None
+            if aligned:
+                for a, b in zip(baseline, other, strict=True):
+                    if "sha256" in a and "sha256" in b and any(a[k] != b[k] for k in ("shape", "dtype", "sha256")):
+                        first = {"key": a["key"], "classification": "packed_hidden_" + a["key"][-1]}
+                        break
+            comparisons[arm] = {
+                "alignment_complete": aligned,
+                "selected_boundaries_complete": bool(complete),
+                "selected_boundaries_exact": bool(complete and first is None),
+                "first_observed_difference": first,
+                "missing_selected_native_call": not baseline or not other,
+            }
+        return {
+            "policy": POLICY,
+            "enabled": self.step >= 0,
+            "low_logical_prediction": self.step,
+            "native_call": 1,
+            "arms": self.arms,
+            "comparisons": comparisons,
+            "inspection_bytes_charged_per_arm": self.bytes,
+            "omitted_records_per_arm": self.omitted,
+            "limits": {
+                "bytes_per_arm": self.arm_bytes,
+                "tensor_bytes": self.tensor_bytes,
+                "records_per_arm": self.max_records,
+                "source_files": 64,
+                "metadata_nodes_per_value": 256,
+                "cache_entries": 8,
+                "hooks_per_module": 4,
+            },
+            "source_files_at_observation": self.sources,
+            "physical_state_isolation_verified": False,
+            "limitations": [
+                "Only first, middle and final block outputs and first block input are fingerprinted.",
+                "A first observed difference bounds an interval; "
+                "intervening blocks and primitive internals are unobserved.",
+                "Cache keys, pool IDs and hook inventories do not establish tensor/weight or execution-state equality.",
+                "Host hashing synchronizes observed data and can perturb timing; "
+                "disappearance of a failure is inconclusive.",
+            ],
+        }
