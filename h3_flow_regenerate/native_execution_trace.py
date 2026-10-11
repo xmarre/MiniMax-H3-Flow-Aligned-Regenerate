@@ -16,6 +16,7 @@ import torch
 OPTION = "h3_flow_low_native_trace_step_v1"
 PAIR_OPTION = "h3_flow_low_native_full_pair_block_v1"
 MODULE_OPTION = "h3_flow_low_native_module_detail_v1"
+PROJECTION_OPTION = "h3_flow_low_native_projection_detail_v1"
 POLICY = "h3_low_native_execution_v1"
 
 
@@ -34,6 +35,12 @@ def validate_pair_block(block):
 def validate_module_detail(detail):
     if type(detail) is not bool:
         raise ValueError("low_native_trace_module_detail must be boolean")
+    return detail
+
+
+def validate_projection_detail(detail):
+    if type(detail) is not bool:
+        raise ValueError("low_native_trace_projection_detail must be boolean")
     return detail
 
 
@@ -107,6 +114,7 @@ class NativeExecutionTrace:
         *,
         pair_block=-1,
         module_detail=False,
+        projection_detail=False,
         arm_bytes=2 * 1024**3,
         tensor_bytes=512 * 1024**2,
         max_records=40,
@@ -114,6 +122,9 @@ class NativeExecutionTrace:
         self.step = validate_step(step)
         self.pair_block = validate_pair_block(pair_block)
         self.module_detail = validate_module_detail(module_detail)
+        self.projection_detail = validate_projection_detail(projection_detail)
+        if self.projection_detail and not self.module_detail:
+            raise ValueError("low_native_trace_projection_detail requires low_native_trace_module_detail=true")
         if self.module_detail and (self.step < 0 or self.pair_block < 0):
             raise ValueError("low_native_trace_module_detail requires native trace step and pair block")
         self.hasher = hasher
@@ -168,7 +179,17 @@ class NativeExecutionTrace:
         except (TypeError, ValueError):
             return {"available": False, "reason": "opaque_replacement"}
         patch = values.get("patch")
-        if type(patch).__name__ != "SparseAttnPatch" or type(patch).__module__ != "comfy_extras.nodes_sparse_attention":
+        # ComfyUI can load this node as a filesystem module, e.g.
+        # /home/.../comfy_extras/nodes_sparse_attention, not only as
+        # comfy_extras.nodes_sparse_attention. Bind identity to both the
+        # actual function code path and the source class leaf name.
+        source_file = previous.__code__.co_filename.replace("\\\\", "/")
+        if (
+            type(patch).__name__ != "SparseAttnPatch"
+            or not source_file.endswith("/comfy_extras/nodes_sparse_attention.py")
+            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1]
+            != "nodes_sparse_attention"
+        ):
             return {"available": False, "reason": "not_core_sparse_patch"}
         pooled = getattr(patch, "pooled", None)
         if not isinstance(pooled, dict):
@@ -292,22 +313,54 @@ class NativeExecutionTrace:
         if not selected:
             yield
             return
-        modules = (
-            ("attention_out_proj", getattr(getattr(block, "attn", None), "out_proj", None)),
-            ("post_attention_norm2", getattr(block, "norm2", None)),
-            ("mlp_output", getattr(block, "mlp", None)),
-        )
         handles = []
         try:
-            for boundary, module in modules:
-                if not isinstance(module, torch.nn.Module):
-                    continue
+            if self.projection_detail:
+                # Under H3 the projected input is 7168 wide and the
+                # three remaining BF16 hidden hashes are 5376 wide.
+                # At the observed 36445 rows the total of the five
+                # selected hashes is <2GiB/arm and each <512MiB.
+                projection = getattr(getattr(block, "attn", None), "out_proj", None)
+                if isinstance(projection, torch.nn.Module):
 
-                def callback(_module, _args, result, *, name=boundary):
-                    if torch.is_tensor(result):
-                        self.observe(trace, layer, layers, name, result, block, options, previous)
+                    def pre_callback(_module, args):
+                        if args and torch.is_tensor(args[0]):
+                            self.observe(trace, layer, layers, "out_proj_input", args[0], block, options, previous)
 
-                handles.append(module.register_forward_hook(callback))
+                    def post_callback(_module, _args, result, *, name):
+                        if torch.is_tensor(result):
+                            self.observe(trace, layer, layers, name, result, block, options, previous)
+
+                    handles.append(projection.register_forward_pre_hook(pre_callback))
+                    # A prepended hook observes the original output before
+                    # the pre-existing VDN post-forward LoRA callback; the
+                    # appended hook observes output after those callbacks.
+                    handles.append(
+                        projection.register_forward_hook(
+                            lambda mod, args, result: post_callback(mod, args, result, name="out_proj_raw"),
+                            prepend=True,
+                        )
+                    )
+                    handles.append(
+                        projection.register_forward_hook(
+                            lambda mod, args, result: post_callback(mod, args, result, name="out_proj_post_adapter")
+                        )
+                    )
+            else:
+                modules = (
+                    ("attention_out_proj", getattr(getattr(block, "attn", None), "out_proj", None)),
+                    ("post_attention_norm2", getattr(block, "norm2", None)),
+                    ("mlp_output", getattr(block, "mlp", None)),
+                )
+                for boundary, module in modules:
+                    if not isinstance(module, torch.nn.Module):
+                        continue
+
+                    def callback(_module, _args, result, *, name=boundary):
+                        if torch.is_tensor(result):
+                            self.observe(trace, layer, layers, name, result, block, options, previous)
+
+                    handles.append(module.register_forward_hook(callback))
             yield
         finally:
             for handle in reversed(handles):
@@ -320,13 +373,12 @@ class NativeExecutionTrace:
             return
         outputs = self.selected_outputs(layers)
         if self.module_detail:
-            full = layer == self.pair_block and boundary in {
-                "input",
-                "attention_out_proj",
-                "post_attention_norm2",
-                "mlp_output",
-                "output",
-            }
+            selected_boundaries = (
+                {"input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output"}
+                if self.projection_detail
+                else {"input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"}
+            )
+            full = layer == self.pair_block and boundary in selected_boundaries
         else:
             full_input = boundary == "input" and (layer == 0 or (self.pair_block >= 0 and layer == self.pair_block))
             full_output = (
@@ -378,10 +430,12 @@ class NativeExecutionTrace:
         expected = []
         if layers > 0:
             if self.module_detail:
-                expected = [
-                    ["low", self.step, 1, self.pair_block, boundary]
-                    for boundary in ("input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output")
-                ]
+                boundaries = (
+                    ("input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output")
+                    if self.projection_detail
+                    else ("input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output")
+                )
+                expected = [["low", self.step, 1, self.pair_block, boundary] for boundary in boundaries]
             elif self.pair_block >= 0:
                 expected = [
                     ["low", self.step, 1, 0, "input"],
@@ -439,6 +493,7 @@ class NativeExecutionTrace:
             "low_logical_prediction": self.step,
             "full_pair_block": self.pair_block,
             "internal_module_detail": self.module_detail,
+            "internal_projection_detail": self.projection_detail,
             "native_call": 1,
             "arms": self.arms,
             "comparisons": comparisons,
@@ -455,12 +510,18 @@ class NativeExecutionTrace:
                 "intervening_output_token_row_stride": 32 if self.pair_block < 0 else None,
                 "full_pair_selected": self.pair_block >= 0,
                 "internal_module_detail_selected": self.module_detail,
+                "internal_projection_detail_selected": self.projection_detail,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
             "limitations": [
                 (
-                    "Module detail hashes suspect block input, attention out_proj output, "
+                    "Projection detail hashes suspect block input, attention out_proj input, "
+                    "raw output before registered post-forward LoRA, output after the LoRA, "
+                    "and final block output; five full tensors remain under 2 GiB at "
+                    "36,445 rows with hidden=5,376 and attention width=7,168."
+                    if self.projection_detail
+                    else "Module detail hashes suspect block input, attention out_proj output, "
                     "post-attention norm2 output, MLP output and suspect block output. "
                     "Temporary post-forward hooks may perturb timing; missing module calls fail completeness."
                     if self.module_detail
@@ -473,6 +534,8 @@ class NativeExecutionTrace:
                 "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",
+                "Projection raw/post-adapter probes rely on PyTorch forward-hook order; "
+                "they do not prove identical kernel inputs or weights.",
                 "Core sparse pooled statistics are read-only and per selected key; "
                 "different values do not prove causality.",
                 "Cache keys, pool IDs and hook inventories do not establish tensor/weight or execution-state equality.",
