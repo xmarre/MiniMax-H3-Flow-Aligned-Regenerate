@@ -464,7 +464,8 @@ class NativeExecutionTrace:
                 "Sampled equality does not establish entire-block equality or an exact first differing block.",
                 "A first observed difference bounds an interval; "
                 "intervening blocks and primitive internals are unobserved.",
-                "Core sparse pooled statistics are read-only and per selected key; differing values do not prove causality.",
+                "Core sparse pooled statistics are read-only and per selected key; "
+                "different values do not prove causality.",
                 "Cache keys, pool IDs and hook inventories do not establish tensor/weight or execution-state equality.",
                 "Host hashing synchronizes observed data and can perturb timing; "
                 "disappearance of a failure is inconclusive.",
