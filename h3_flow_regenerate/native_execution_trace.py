@@ -146,6 +146,7 @@ class NativeExecutionTrace:
         self.omitted = {}
         self.sources = {}
         self.qkv_expected = {}
+        self.qkv_calls = {}
 
     def selected_outputs(self, layers):
         if self.pair_block < 0:
@@ -328,31 +329,49 @@ class NativeExecutionTrace:
         handles = []
         try:
             if self.qkv_detail:
-                # Core's h3_sparse_attention chunks QKV by 4096 packed rows.
-                # Full per-chunk inputs+post-adapter outputs fit under 2 GiB
-                # for 36,445 x (5,376+21,504) BF16; do not materialize QKV.
+                # comfy-kitchen sol_attn_chunked replays Core's 4096-row QKV
+                # factory twice if pooled kmean/vscale is absent: bootstrap
+                # statistics then the actual quantization/attention pass.
+                # Only the *last* pass feeds attention. Hashing both passes
+                # exceeded 2 GiB/arm in owner run 01893; select the last
+                # source-backed pass while counting/validating *all* calls.
                 module = getattr(getattr(block, "attn", None), "qkv_proj", None)
                 if isinstance(module, torch.nn.Module):
                     chunk_index = [0]
+                    output_count = [0]
                     waiting = [-1]
+                    spec = self.qkv_expected.get(trace.arm, {})
+                    chunks = (spec.get("rows", 0) + QKV_CHUNK - 1) // QKV_CHUNK
+                    passes = spec.get("producer_passes_expected")
+                    start = chunks * (passes - 1) if passes in (1, 2) else -1
+                    end = chunks * passes if passes in (1, 2) else -1
 
                     def qkv_pre(_module, args):
-                        if args and torch.is_tensor(args[0]):
-                            index = chunk_index[0]
-                            chunk_index[0] += 1
-                            waiting[0] = index
-                            self.observe(trace, layer, layers, f"qkv_input_{index}", args[0], block, options, previous)
+                        index = chunk_index[0]
+                        chunk_index[0] += 1
+                        waiting[0] = index
+                        if start <= index < end and args and torch.is_tensor(args[0]):
+                            self.observe(
+                                trace, layer, layers, f"qkv_input_{index - start}",
+                                args[0], block, options, previous,
+                            )
 
                     def qkv_post(_module, _args, result):
                         index = waiting[0]
                         waiting[0] = -1
-                        if torch.is_tensor(result) and index >= 0:
-                            self.observe(trace, layer, layers, f"qkv_output_{index}", result, block, options, previous)
+                        output_count[0] += 1
+                        if start <= index < end and torch.is_tensor(result):
+                            self.observe(
+                                trace, layer, layers, f"qkv_output_{index - start}",
+                                result, block, options, previous,
+                            )
 
                     handles.append(module.register_forward_pre_hook(qkv_pre))
-                    # Append AFTER existing VDN _PostForwardLoRA so that QKV
-                    # output includes the native adapter, unchanged.
+                    # Append AFTER existing VDN _PostForwardLoRA.
                     handles.append(module.register_forward_hook(qkv_post))
+                    # Count even under exception: incomplete producer attempts
+                    # must never be described as a complete native witness.
+                    self.qkv_calls[trace.arm] = (chunk_index, output_count)
             elif self.projection_detail:
                 # Under H3 the projected input is 7168 wide and the
                 # three remaining BF16 hidden hashes are 5376 wide.
@@ -411,10 +430,29 @@ class NativeExecutionTrace:
             return
         outputs = self.selected_outputs(layers)
         if self.qkv_detail and layer == self.pair_block and boundary == "input":
+            # Only Core's actual sparse pool key determines whether its
+            # chunked producer runs once (primed) or twice (cold). Anything
+            # unknown fails closed rather than guessing which pass mattered.
+            pooled = self.core_sparse_stats(tensor, layer, options, previous)
+            available = pooled.get("available") is True and pooled.get("key_observed") is True
+            present = pooled.get("present")
+            valid_primed = (
+                isinstance(pooled.get("statistics"), list)
+                and len(pooled["statistics"]) == 2
+                and all("sha256" in stat for stat in pooled["statistics"])
+            )
+            passes = (
+                2 if available and present is False and pooled.get("statistics") == []
+                else 1 if available and present is True and valid_primed
+                else None
+            )
             self.qkv_expected[trace.arm] = {
                 "rows": int(tensor.shape[0]),
                 "hidden_width": int(tensor.shape[-1]),
                 "qkv_width": int(getattr(block.attn, "heads", 0) * getattr(block.attn, "head_dim", 0) * 3),
+                "core_sparse_pool": pooled,
+                "producer_passes_expected": passes,
+                "captured_producer_pass": passes - 1 if passes is not None else None,
             }
             return
         if self.module_detail:
@@ -516,7 +554,27 @@ class NativeExecutionTrace:
             qkv_specs_match = True
             if self.qkv_detail:
                 spec = self.qkv_expected.get("A")
-                qkv_specs_match = isinstance(spec, dict) and self.qkv_expected.get(arm) == spec
+                qkv_specs_match = (
+                    isinstance(spec, dict)
+                    and spec.get("producer_passes_expected") in (1, 2)
+                    and self.qkv_expected.get(arm, {}).get("producer_passes_expected")
+                    == spec["producer_passes_expected"]
+                    and self.qkv_expected.get(arm, {}).get("captured_producer_pass")
+                    == spec["captured_producer_pass"]
+                    and all(
+                        self.qkv_expected.get(arm, {}).get(key) == spec.get(key)
+                        for key in ("rows", "hidden_width", "qkv_width")
+                    )
+                )
+                if qkv_specs_match:
+                    calls_expected = (
+                        (spec["rows"] + QKV_CHUNK - 1) // QKV_CHUNK
+                    ) * spec["producer_passes_expected"]
+                    qkv_specs_match = all(
+                        self.qkv_calls.get(who, ([None], [None]))[i][0] == calls_expected
+                        for who in ("A", arm)
+                        for i in (0, 1)
+                    )
                 if qkv_specs_match:
                     width_in, width_out, total = (
                         spec["hidden_width"],
@@ -584,6 +642,10 @@ class NativeExecutionTrace:
             "internal_projection_detail": self.projection_detail,
             "internal_qkv_detail": self.qkv_detail,
             "chunked_qkv_expected": self.qkv_expected,
+            "chunked_qkv_observed_calls": {
+                who: {"inputs": counts[0][0], "outputs": counts[1][0]}
+                for who, counts in self.qkv_calls.items()
+            },
             "native_call": 1,
             "arms": self.arms,
             "comparisons": comparisons,
@@ -603,13 +665,16 @@ class NativeExecutionTrace:
                 "internal_projection_detail_selected": self.projection_detail,
                 "internal_qkv_detail_selected": self.qkv_detail,
                 "qkv_chunk_rows": QKV_CHUNK if self.qkv_detail else None,
+                "qkv_capture_policy": "last_core_sparse_producer_pass_v1" if self.qkv_detail else None,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
             "limitations": [
                 (
                     "Full chunked QKV detail hashes every 4096-row input and adapted output "
-                    "from Core's chunked H3 sparse producer, without materializing full QKV. "
+                    "of Core's attention-producing pass; on a cold pooled cache it skips "
+                    "the first bootstrap-statistics pass but validates both call counts. "
+                    "On a primed cache it captures the only pass. Unknown state fails closed. "
                     "At 36445 BF16 rows the 18 witness hashes cost 1,959,283,200 bytes/arm. "
                     "The adapted QKV output includes existing VDN post-forward LoRA hooks; "
                     "input/output equality does not isolate normalization or kernel internals."
