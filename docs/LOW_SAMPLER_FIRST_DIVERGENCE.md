@@ -219,3 +219,49 @@ Return the metrics, complete ComfyUI log and exported frozen-low manifest with
 its first-divergence operands. A′ divergence is a diagnostic result requiring
 source-backed analysis; it is not authorization to change brightness, geometry,
 prefix policy, sampler mathematics or attention-provider selection.
+
+
+### 01881: first full-byte difference inside block 45; optional module detail
+
+The owner’s run 01881 deployed the exact prior PR head `ea75bc0` source SHA256 receipt. The
+RAR manifest SHA256 `06c452b7d298bcdcd9b27e20391bfe421e626cae7b1698f82826e8cf2b42299e`
+and all nine binary operands have been independently verified. A/A′ full hidden
+output of block 44 and full input to block 45 are bitwise identical, while the
+full block 45 output is different. First actual native AV prediction is identical;
+native video velocity RMS is 0.01767544496694189 (max 0.8203125), and final
+clean low suffix RMS is 0.09329277276992798 (max 5.541565895080566).
+This proves the observed mismatch appears during the block-45 execution
+interval, **not which primitive inside it diverged**.
+
+At this stage the existing VDN state receipts match apart from the expected
+sequential prefetch-generation counter (2, 3, 4). Separately, ComfyUI Core’s
+`comfy_extras/nodes_sparse_attention.py` declares a stateful
+`SparseAttnPatch.pooled[(block_index, n_tokens, uuids)]` mapping of
+`kmean` and `vscale` tensors, used by `ck.sol_attn_chunked` when Core
+selects its H3 sparse producer. The block-45 previous replacement has this
+Core source identity; whether that producer actually executed, or
+whether its pooled state caused the divergence, remains **unproven**.
+
+The appended control `low_native_trace_module_detail=false` defaults off.
+For one controlled replay only, set it true alongside
+`low_sampler_aba=true`, `low_native_trace_step=5`, and
+`low_native_trace_pair_block=45`. It **replaces** the five complete
+packed-hidden boundary hashes with five full hashes of the chosen
+block's input, `attn.out_proj` result (including earlier registered
+post-forward LoRA hooks), `norm2` result after attention-residual update,
+`mlp` output, and final block output. Temporary read-only forward hooks
+are appended to the three selected PyTorch modules and removed in `finally`.
+No backend override, VDN/Sol/Spectrum selection, weight or sampler change
+occurs. For the observed 36,445×5,376 BF16 tensors the five snapshots cost
+1,959,283,200 bytes per arm, below 2 GiB. Missing module calls,
+duplicate calls, layout divergence and budget overruns fail completeness.
+If source actually routes through another primitive with no such module
+boundary, the run will report incomplete rather than invent a witness.
+
+During the same selected module-detail window, read-only receipts also
+fingerprint Core's *matching exact* sparse-pooled `kmean` and `vscale`
+tensors (at most 256 KiB per statistic) before/after observed module
+boundaries. If Core producer uses VSA-padded rows or a different closure,
+this receipt explicitly remains unobserved. A cache hash difference is
+candidate evidence, **not proof of a causal kernel/attention bug**.
+Host hashing and new hooks may alter timing; a nonreproduction is inconclusive.
