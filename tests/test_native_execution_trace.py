@@ -524,7 +524,12 @@ def _setup_sparse_probe_fixture(observer, model):
 
 def _emit_sparse_probe_context(observer, trace, model, n_rows, scale=1):
     observer.observe_sparse_inputs(
-        trace, 45, 50, model, {}, None,
+        trace,
+        45,
+        50,
+        model,
+        {},
+        None,
         torch.ones((n_rows, 2), dtype=torch.bfloat16) * scale,
     )
 
@@ -784,7 +789,9 @@ def test_01894_sparse_core_rope_disagreement_and_invalid_arguments_are_not_exact
         if bad_arguments:
             observer.core_sparse_arguments = lambda *_args: {"verified": False, "reason": "unknown"}
         observer.core_sparse_stats = lambda *_args: {
-            "available": True, "key_observed": True, "present": True,
+            "available": True,
+            "key_observed": True,
+            "present": True,
             "statistics": [{"sha256": "k"}, {"sha256": "v"}],
         }
         for arm in ("A", "A_replay"):
