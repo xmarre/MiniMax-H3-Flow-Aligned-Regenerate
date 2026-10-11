@@ -18,9 +18,11 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     PARTITIONED_SPATIAL_STAGE_SAME_GRID,
     PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
     PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     PARTITIONED_SUFFIX_DC_BRIDGE_KEY,
     PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
     PARTITIONED_TARGET_BAND_TOKENS_KEY,
+    PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
     PARTITIONED_VDN_LINEAR_DIAGNOSTIC_SUPPRESS_CROSS_GRID_TEMPORAL,
     PARTITIONED_VDN_TEMPORAL_CARRIER_DESTINATION,
@@ -28,6 +30,7 @@ from h3_flow_regenerate.partitioned_diagnostics import (
     apply_partitioned_diagnostic_controls,
     resolve_partitioned_suffix_dc_bridge,
     resolve_partitioned_target_band_tokens,
+    resolve_partitioned_uniform_source_detail_transport,
 )
 from h3_flow_regenerate.partitioned_node import (
     H3PartitionedExactPrefixDiagnosticHandoff,
@@ -63,13 +66,24 @@ def test_new_controls_are_appended_after_every_historical_widget():
     assert "target_band_tokens" not in ordinary
 
     keys = list(production)
-    assert keys[-5:] == [
+    assert keys[-8:] == [
         "video_guided_overlap_tokens",
         "suffix_dc_bridge",
         "target_band_tokens",
         "target_band_handoff_state",
         "target_band_context",
+        "uniform_source_detail_transport",
+        "source_prefix_projection",
+        "low_sampler_aba",
     ]
+    assert production["low_sampler_aba"][0] == "BOOLEAN"
+    assert production["low_sampler_aba"][1]["default"] is False
+    assert production["source_prefix_projection"][0] == ["latent_bicubic", "vae_rgb_roundtrip", "native_source_carry"]
+    assert production["source_prefix_projection"][1]["default"] == "latent_bicubic"
+    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["optional"]["video_vae"] == ("VAE",)
+    assert "uniform_source_detail_transport" not in ordinary
+    assert production["uniform_source_detail_transport"][0] == "BOOLEAN"
+    assert production["uniform_source_detail_transport"][1]["default"] is False
     assert "target_band_handoff_state" not in ordinary and "target_band_context" not in ordinary
     assert production["target_band_handoff_state"][0] == ["renoise_clean", "carry_raw_band"]
     assert production["target_band_handoff_state"][1]["default"] == "renoise_clean"
@@ -91,6 +105,7 @@ def test_new_controls_are_appended_after_every_historical_widget():
         PARTITIONED_SPATIAL_STAGE_SAME_GRID,
         PARTITIONED_SPATIAL_STAGE_TARGET_BAND,
         PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+        PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT,
     )
     assert production["spatial_stage_control"][1]["default"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
 
@@ -109,16 +124,40 @@ def test_new_controls_are_appended_after_every_historical_widget():
         {"guidance_trajectory_source": "source_carrier_uniform_shadow"},
     ],
 )
-def test_uniform_source_rejects_inapplicable_attention_controls(override):
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_rejects_inapplicable_attention_controls(override, mode):
     with pytest.raises(ValueError):
-        _apply(spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, **override)
+        _apply(spatial_stage_control=mode, **override)
 
 
-def test_uniform_source_is_explicit_and_does_not_publish_band_tokens():
-    transformer, fields = _apply(spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, target_band_tokens=7)
-    assert transformer[PARTITIONED_SPATIAL_STAGE_CONTROL_KEY] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+@pytest.mark.parametrize(
+    "mode", [PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE, PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT]
+)
+def test_uniform_source_is_explicit_and_does_not_publish_band_tokens(mode):
+    transformer, fields = _apply(spatial_stage_control=mode, target_band_tokens=7)
+    assert transformer[PARTITIONED_SPATIAL_STAGE_CONTROL_KEY] == mode
     assert PARTITIONED_TARGET_BAND_TOKENS_KEY not in transformer
-    assert fields["spatial_stage_control"] == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+    assert fields["spatial_stage_control"] == mode
+
+
+def test_detail_transport_opt_in_is_model_local_and_default_clears_stale_enablement():
+    source = {"keep": "value", PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY: True}
+    model = SimpleNamespace(model_options={"transformer_options": source})
+    kwargs = dict(vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL, audio_guided_overlap_ticks=4)
+    apply_partitioned_diagnostic_controls(model, _Metrics(), **kwargs)
+    disabled = model.model_options["transformer_options"]
+    assert source[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] is True
+    assert disabled["keep"] == "value"
+    assert PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY not in disabled
+    assert resolve_partitioned_uniform_source_detail_transport(disabled) is False
+
+    apply_partitioned_diagnostic_controls(model, _Metrics(), uniform_source_detail_transport=True, **kwargs)
+    enabled = model.model_options["transformer_options"]
+    assert enabled[PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY] is True
+    assert PARTITIONED_UNIFORM_SOURCE_DETAIL_TRANSPORT_KEY not in disabled
+    assert resolve_partitioned_uniform_source_detail_transport(enabled) is True
 
 
 def test_suffix_dc_bridge_leaf_is_absent_by_default_and_explicit_only_when_disabled():

@@ -26,7 +26,7 @@ from .partitioned_diagnostics import (
     PARTITIONED_SOFTMAX_DIAGNOSTIC_KEY,
     PARTITIONED_SOFTMAX_DIAGNOSTIC_TARGET_SINK,
     PARTITIONED_SPATIAL_STAGE_CONTROL_KEY,
-    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+    PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES,
     PARTITIONED_TARGET_BAND_CONTEXT_KEY,
     PARTITIONED_TARGET_BAND_HANDOFF_STATE_KEY,
     PARTITIONED_VIDEO_GUIDED_OVERLAP_TOKENS_KEY,
@@ -40,6 +40,7 @@ from .partitioned_scheduler import (
     run_partitioned_progressive,
 )
 from .runtime import FLOW_BINDING_KEY, FlowBinding, _has_exact_video_protection
+from .source_prefix_carry import source_carry_owner, source_carry_scope
 
 LOG = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def _core_has_audio_velocity_mask_contract() -> bool:
     return _source_has_audio_velocity_mask_contract(source)
 
 
+@source_carry_scope(outer=True)
 def partitioned_outer_wrapper(
     executor,
     noise,
@@ -315,6 +317,8 @@ def partitioned_outer_wrapper(
                 "partitioned audio mask context was requested but zero MiniMax-H3 inner-forward calls executed"
             )
     except PartitionedPreflightUnsupported as exc:
+        if source_carry_owner(guider) is not None:
+            raise RuntimeError(f"native_source_carry continuation preflight failed: {exc}") from exc
         fallback_reason = str(exc)
     except BaseException as exc:
         error = exc
@@ -351,7 +355,7 @@ def partitioned_outer_wrapper(
             or PARTITIONED_TARGET_BAND_CONTEXT_KEY in transformer_options
             or (
                 transformer_options.get(PARTITIONED_SPATIAL_STAGE_CONTROL_KEY)
-                == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+                in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
             )
         ):
             raise RuntimeError(
