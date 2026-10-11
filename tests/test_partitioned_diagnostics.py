@@ -299,6 +299,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
         model=model, trajectory=object(), learned_upscaler=object(), **kwargs
     )
     options = result.model_options
+    assert options["h3_flow_low_native_trace_step_v1"] == -1
     transformer = options["transformer_options"]
     assert result is model and returned_metrics is metrics
     assert transformer["existing_owner"] is owner
