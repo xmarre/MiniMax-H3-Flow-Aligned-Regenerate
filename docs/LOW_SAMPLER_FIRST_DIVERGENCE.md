@@ -91,6 +91,40 @@ as unobserved backend state alongside wrapper registrations. Excluding these
 owners does not establish callback or backend-state equivalence; unknown
 conditioning objects still invalidate mandatory coverage.
 
+## Native execution observation
+
+`low_native_trace_step=-1` disables additional native observation. With frozen
+replay enabled, a nonnegative value selects one zero-based **logical low
+prediction**, including forecasts in its numbering. Only its first actual native
+call is observed. A forecast, missing prediction or unsupported block path has
+no selected native witness and is explicitly incomplete.
+
+The observer fingerprints every byte of the packed hidden input to block zero
+and the outputs of blocks zero, `block_count // 2`, and `block_count - 1`, before
+Flow maps the final hidden state back to native carrier rows. Hidden states
+include conditioning and both target AV streams; these are not clean video
+latents. Matching selected hashes establishes only equality at those boundaries.
+A changed middle/final hash bounds a coarse interval; it does not identify the
+first differing unobserved block, attention primitive or model weight.
+
+`native_execution_trace` in the first-divergence report contains the observations,
+topology checks, source receipts, inspection budgets and omissions. Full hidden
+tensors are never retained on GPU or exported. Hashing streams at most 8 MiB of
+logical tensor bytes per host slice, charges at most 2 GiB per arm (6 GiB across
+the three arms), and rejects tensors larger than 512 MiB. Budget/layout/read
+failures, missing boundaries or different topology prevent selected-boundary
+equality. Existing native AV divergence operands remain a separate export.
+
+Block receipts read VDN's active lease, bounded cache keys/storage metadata,
+prefetch generation/target, CUDA stream, active Sol request, callable sources and
+hook inventory. They never read scratch contents, consume a prefetch result,
+query an event, acquire a buffer lease or change dispatch. Absence of an active
+lease/request is an observation of scope, not evidence that a backend is disabled.
+Source files are hashed at observation time; this does not attest loaded weights
+or every compiled primitive. Cache identity/occupancy and hook counts do not prove
+state equivalence. Host copies introduce synchronization and can perturb timing;
+a failure that disappears under observation remains inconclusive.
+
 The manifest can include `first_divergence_A` and
 `first_divergence_A_replay`. They are raw operands at the saved boundary,
 possibly packed AV or native velocities; they are **not** VAE-decodable clean

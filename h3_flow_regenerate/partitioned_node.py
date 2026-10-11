@@ -614,6 +614,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             },
         )
         spec["optional"]["video_vae"] = ("VAE",)
+        spec["required"]["low_native_trace_step"] = (
+            "INT",
+            {
+                "default": -1,
+                "min": -1,
+                "max": 511,
+                "tooltip": "Optional native execution observation within low_sampler_aba. -1 disables; "
+                "otherwise choose a zero-based low logical prediction. Records full packed hidden hashes "
+                "at first/middle/final blocks and read-only in-lease backend metadata. No extra model calls; "
+                "host-copy synchronization can perturb timing. Forecast predictions have no native witness.",
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -670,7 +682,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         source_prefix_projection="latent_bicubic",
         video_vae=None,
         low_sampler_aba=False,
+        low_native_trace_step=-1,
     ):
+        from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
+        from .native_execution_trace import validate_step
+
+        validate_step(low_native_trace_step)
+        if low_native_trace_step >= 0 and not low_sampler_aba:
+            raise ValueError("low_native_trace_step requires low_sampler_aba=true")
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
@@ -750,12 +769,14 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             uniform_source_detail_transport=uniform_source_detail_transport,
         )
         patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
+        patched.model_options[NATIVE_TRACE_OPTION] = low_native_trace_step
         metrics.event(
             "partitioned_low_sampler_aba_control",
             enabled=bool(low_sampler_aba),
             source_projection=source_prefix_projection,
             diagnostic_only=True,
             default_changed=False,
+            low_native_trace_step=low_native_trace_step,
         )
         return patched, metrics
 

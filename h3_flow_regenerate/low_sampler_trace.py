@@ -379,7 +379,11 @@ def rng_receipt():
 
 
 class LowReplayTrace:
-    def __init__(self, *, max_bytes=2 * 1024**3, max_records=512, max_tensor_bytes=128 * 1024**2):
+    def __init__(self, *, max_bytes=2 * 1024**3, max_records=512, max_tensor_bytes=128 * 1024**2, native_step=-1):
+        from .native_execution_trace import NativeExecutionTrace, validate_step
+
+        validate_step(native_step)
+        self.native_execution = NativeExecutionTrace(native_step, _full_sha) if native_step >= 0 else None
         self._temp = tempfile.TemporaryDirectory(prefix="h3-low-replay-")
         self.root = Path(self._temp.name)
         self.max_bytes, self.max_records, self.max_tensor_bytes = max_bytes, max_records, max_tensor_bytes
@@ -731,6 +735,7 @@ class LowReplayTrace:
             "unobserved_boundary_count": self.unobserved_count,
             "baseline_disk_bytes": self.bytes,
             "loaded_source_files": sources,
+            "native_execution_trace": self.native_execution.summary() if self.native_execution is not None else None,
             "limits": {
                 "baseline_disk_bytes": self.max_bytes,
                 "records_per_arm": self.max_records,
@@ -847,11 +852,11 @@ def current_trace_owner():
 
 
 @contextlib.contextmanager
-def low_trace_scope():
+def low_trace_scope(native_step=-1):
     if _OWNER.get() is not None:
         yield _OWNER.get()
         return
-    trace = LowReplayTrace()
+    trace = LowReplayTrace(native_step=native_step)
     token = _OWNER.set(trace)
     try:
         yield trace
@@ -867,7 +872,9 @@ def traced_partitioned(function):
     def wrapped(executor, guider, *args, **kwargs):
         if not guider.model_options.get("h3_flow_low_sampler_aba_v1", False):
             return function(executor, guider, *args, **kwargs)
-        with low_trace_scope():
+        from .native_execution_trace import OPTION
+
+        with low_trace_scope(guider.model_options.get(OPTION, -1)):
             return function(executor, guider, *args, **kwargs)
 
     return wrapped

@@ -7,7 +7,15 @@ from pathlib import Path
 
 def report_diagnostic_sources():
     package = Path(__file__).resolve().parent
-    names = ("low_sampler_trace.py", "runtime.py", "partitioned_scheduler.py", "low_sampler_ab_audit.py")
+    names = (
+        "low_sampler_trace.py",
+        "runtime.py",
+        "partitioned_scheduler.py",
+        "low_sampler_ab_audit.py",
+        "native_execution_trace.py",
+        "partitioned_transformer.py",
+        "partitioned_node.py",
+    )
     sources = {}
     for name in names:
         try:

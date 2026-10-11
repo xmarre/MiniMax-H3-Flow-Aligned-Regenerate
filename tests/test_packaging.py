@@ -65,6 +65,9 @@ def test_custom_node_root_registration_smoke(capsys):
         "runtime.py",
         "partitioned_scheduler.py",
         "low_sampler_ab_audit.py",
+        "native_execution_trace.py",
+        "partitioned_transformer.py",
+        "partitioned_node.py",
     }
     for name, info in receipt["sources"].items():
         assert info == {"sha256": hashlib.sha256((package / name).read_bytes()).hexdigest()}
