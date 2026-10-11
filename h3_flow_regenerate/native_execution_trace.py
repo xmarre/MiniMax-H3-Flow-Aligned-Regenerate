@@ -539,7 +539,7 @@ class NativeExecutionTrace:
                     )
             aligned = (
                 qkv_specs_match
-                bool(expected)
+                and bool(expected)
                 and [r["key"] for r in baseline] == expected
                 and len(baseline) == len(other)
                 and all(
