@@ -1,0 +1,138 @@
+# CUDA sparse-attention determinism diagnostic
+
+This isolated runner targets the installed **comfy-kitchen 0.2.37**
+`cuda.sol_attn_chunked` primitive. It loads no H3 model, changes no ComfyUI
+configuration, and does not replace an installed kernel. Apply Flow PR #99
+through ComfyUI Patcher to obtain the tools, then stop ComfyUI to free GPU
+memory. Use the same Python environment that runs ComfyUI.
+
+## Run
+
+From the installed Flow node directory:
+
+```bash
+python tools/reproduce_sol_attn_determinism.py --repeats 32 --production-geometry --stages --output sol-determinism/report.json
+```
+
+`--stages` requires a CUDA toolkit with `nvcc` supporting the current GPU.
+The runner downloads a small set of source files at commit
+`be003b7c23c5b01328657955b8bc5d3f073d868e` (tag `v0.2.37`), verifies each
+against the committed SHA256 manifest, and builds a **separate** diagnostic
+library in the report directory. It neither installs that library nor writes
+to comfy-kitchen. Download failure, hash mismatch, or compilation failure
+stops the staged diagnostic. Without a toolkit, omit `--stages`; installed
+primitive execution and workspace observations still run, but source-stage
+attribution is unavailable. No manual repository operations are needed.
+
+Return the complete `report.json` and terminal output. Exit 1 denotes observed
+frozen-core instability; exit 0 means this finite protocol did not find it.
+Exit 0 is not a proof of determinism or evidence that H3 continuation is fixed.
+An error report preserves completed cases. Reports are rewritten after each
+completed case and on an execution exception.
+
+## Fixed inputs and controls
+
+All tensors are CUDA, fused QKV is BF16, head dimension is 128, and the local
+fixture generator seed is 119188. The fixture is generated once per case and
+its complete input hashes are checked again after execution. Chunks have
+4096 rows with a ragged last chunk. RoPE rotates 96 channels and Q/K weights
+are explicitly BF16 before the original wrapper handles them.
+
+| Case | Geometry | Input purpose |
+| --- | --- | --- |
+| Flat | 4096 tokens, 2 heads | Identical K scores; no overflowing token list expected |
+| Overflow | 4096 tokens, 2 heads | Constant Q, alternating ±K; normalized Q/K magnitude 30; identity RoPE |
+| Random | 4096 tokens, 2 heads | Nontrivial rotations and ordinary fixed random QKV |
+| Large overflow/random | 36445 tokens, 56 heads | Production dimensions and arguments; synthetic operands |
+
+Large cases use `tau=1`, `topk_ratio=0`, `sink_blocks=[0,101]`,
+`sink_q=[0,0]`, `rope_eps=1e-5`, `tail=true`, and no coarse/VSA branch.
+Small cases use empty sink ranges. Every case runs `token_aug=256` and a
+**primitive-only** `token_aug=0` control. Actual overflow is measured, not
+assumed from the fixture name. The overflow CUDA regression fails if the
+fixture does not produce reservation counts above 256.
+
+Wrapper repetitions alternate two cold-stat calls and two calls using the
+first cold call's **effective producer statistics** frozen exactly. Each pair
+uses a new RoPE tensor identity followed by the same identity to exercise cold
+and hot packed-RoPE caching. Comparisons stay within the cold/frozen-stat
+cohort; cold and stale-stat execution need not have equal results. The runner
+does not clear RNG state, caches, or the CUDA allocator.
+
+One complete producer workspace is frozen immediately before the original
+`sol_attn_core` call. Core repetitions copy those same bytes and the same
+vscale into alternating fresh/reused allocations. This removes mutable
+bootstrap/producer history from the core experiment. Undefined workspace
+padding is never hashed or exported. Allocation history here means fresh
+versus reused tensor allocations; it does not imply a flushed GPU hardware
+cache. No deliberately conflicting cross-stream execution is performed.
+
+## Boundaries and evidence
+
+The original wrapper function body runs with a private extension proxy and
+private DLPack wrapper; no module globals or model hooks are patched. The proxy
+observes effective packed RoPE, cast Q/K weights, kmean/vscale, quantized Q/K/V,
+block statistics and output at the real extension boundaries. The complete
+fixed QKV tensor has its own SHA256 receipt.
+
+Workspace observations use the original plan offsets, hash only initialized
+logical extents, and mask unwritten route-list tails. Reports retain complete
+hashes, exact equality, RMS/max differences, and the first changed route list
+with both complete lists. Token reports distinguish:
+
+- all unrouted **live** candidate-token counts from the group bitmap;
+- candidates inside/above the score histogram window;
+- reservations before capacity restriction;
+- retained IDs/counts and overflow-group frequency.
+
+Installed-core observations are taken after its combined launch. Their order
+in the report is **not** a claim that a particular internal kernel differed
+first. With `--stages`, the pinned source library launches the original
+finish, route, token and exact functions individually on the same frozen
+workspace. `source_first_difference` locates the first differing observed
+stage in that compiled diagnostic; `source_parity_verified` separately reports
+whether all staged outputs match the first installed output bitwise. Do not
+attribute a source-probe failure to the installed binary when parity is
+unqualified. Compilers, synchronization, and observer timing can change
+scheduling and whether a race manifests.
+
+`core_ms` measures the installed core using CUDA events, with no intermediate
+observations inside its interval. It is a diagnostic timing distribution,
+not a before/after performance result for a fix. `peak_allocated_bytes` counts
+PyTorch allocations including fixtures, clones and observer storage; it is
+not the production kernel's incremental memory overhead. CPU baselines are
+retained only for the current case; full model tensors or replay files are
+not written. The large case needs several GiB of free GPU and host memory.
+
+## Source-grounded hypothesis
+
+In `sol_attn_token.cu`, pass 1 builds an integer score histogram. Pass 2
+admits whole bins until another bin would exceed the budget. This normally
+bounds admissions despite concurrent `atomicAdd` reservations. The top bin
+is clamped, however. When it alone exceeds the budget, the threshold becomes
+`reference + 80` log2 units, and raw scores at or above that edge can still
+reserve slots. The upstream surplus fixture explicitly targets this regime.
+Sorting the admitted IDs can canonicalize order but cannot recover candidates
+that lost a saturated reservation race. Excess tokens remain in the centroid
+tail when they fail to obtain a slot; any correction must preserve their mass.
+
+This source mechanism is conditional. It does not establish that an H3
+invocation overflowed. Hash-only model observations do not provide complete
+replay operands. The synthetic runner has no claim to reproduce owner-model
+quality or the visible continuation defect.
+
+## Validation status and interpretation
+
+CPU tests cover source-model thresholds, exact BF16 hashing, logical workspace
+bounds, route-tail masking, comparison witnesses, private wrapper isolation,
+candidate/reservation distinction, and source integrity rejection. CUDA tests
+are explicitly skipped without a device. Neither CPU tests nor CPU GitHub
+Actions establish CUDA compilation, repeated-execution stability, performance,
+or output quality.
+
+Four conclusions require separate evidence: a general primitive race;
+occurrence with captured effective H3 operands; a corrected upstream primitive;
+and restored native A/A′ plus audiovisual continuation quality. No numerical
+production correction is included. When exact model replay becomes necessary,
+capture complete effective operands at the actual primitive boundary with a
+bounded default-off observer; the sampler witness archive is insufficient.
