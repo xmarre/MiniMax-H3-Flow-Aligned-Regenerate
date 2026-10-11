@@ -50,6 +50,7 @@ def test_canonical_ids_ignore_only_unwritten_tail_and_preserve_rows():
 def test_digest_bfloat16_full_bytes_and_noncontiguous():
     a = torch.arange(24).reshape(4, 6).to(torch.bfloat16)
     assert probe.digest(a.T) == probe.digest(a.T.contiguous())
+    assert probe.digest(a[1:2, 2:3]) == probe.digest(a[1:2, 2:3].clone())
     b = a.clone()
     b[-1, -1] += 1
     assert probe.digest(a) != probe.digest(b)
@@ -74,6 +75,11 @@ def test_workspace_slot_bounds_and_initialization_mask():
     assert x.data_ptr() == ws.data_ptr() + 16
     with pytest.raises(ValueError, match="out-of-range"):
         probe.view_slot(ws, {"x": 60}, "x", torch.int32, (2,))
+
+
+def test_unsigned_block_ids_preserve_65535_without_loading_unused_tail():
+    ids = torch.tensor([[-1, 1, -1234]], dtype=torch.int16)
+    assert probe.canonical_indices(ids, torch.tensor([2]), 3).tolist() == [[65535, 1, 0]]
 
 
 def test_wrapper_clone_uses_private_globals_and_restores_no_state():
@@ -126,6 +132,34 @@ def test_verified_source_rejects_changed_bytes(tmp_path, monkeypatch):
         probe.verified_source(tmp_path)
 
 
+def test_extension_observer_freezes_effective_stats_without_replacing_backend(monkeypatch):
+    import types
+
+    calls = []
+    extension = types.SimpleNamespace(
+        sol_attn_plan=lambda *_args, **_kw: {},
+        sol_producer_begin=lambda *args, **kw: calls.append(("begin", args, kw)),
+        sol_producer_chunk=lambda *args, **kw: calls.append(("chunk", args, kw)),
+        sol_attn_core=lambda *args, **kw: calls.append(("core", args, kw)),
+    )
+    backend = types.SimpleNamespace(_C=extension, _wrap_for_dlpack=lambda x: x)
+    monkeypatch.setattr(probe, "workspace_observations", lambda *_args: {})
+    observer = probe.ExtensionObserver(backend, 64, 2, 0, probe.Comparisons(), 0)
+    ws = torch.zeros(64, dtype=torch.uint8)
+    x = torch.ones(2, 128)
+    observer.sol_producer_begin(ws, 1, 64, 2, 0)
+    observer.sol_producer_chunk(ws, x, x, x, x, x, x * 2, 1e-5, 96, 0)
+    observer.sol_attn_core(ws, x, x * 2)
+    assert backend._C is extension
+    assert [c[0] for c in calls] == ["begin", "chunk", "core"]
+    assert torch.equal(observer.effective_stats[0], x)
+    assert torch.equal(observer.effective_stats[1], x * 2)
+    ws.fill_(7)
+    x.fill_(8)
+    assert torch.equal(observer.frozen, torch.zeros(64, dtype=torch.uint8))
+    assert float(observer.effective_stats[0].mean()) == 1.0
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA required; CPU is not determinism evidence")
 @pytest.mark.parametrize("case", ["overflow", "flat", "random"])
 def test_cuda_frozen_chunked_primitive(case):
@@ -134,8 +168,10 @@ def test_cuda_frozen_chunked_primitive(case):
 
     if importlib.metadata.version("comfy-kitchen") != "0.2.37":
         pytest.skip("this regression targets exact comfy-kitchen 0.2.37")
-    backend = kitchen.backends.cuda
-    result = probe.run_case(backend, case, 4096, 2, 256, 16, None)
+    from comfy_kitchen.backends import cuda as backend
+
+    del kitchen
+    result = probe.run_case(backend, case, 4196 if case == "random" else 4096, 2, 256, 16, None)
     counts = [r["token_summary"]["overflow_groups"] for r in result["frozen_core"]["runs"]]
     if case == "overflow":
         assert min(counts) > 0, "fixture failed to force saturation; no overflow conclusion is valid"

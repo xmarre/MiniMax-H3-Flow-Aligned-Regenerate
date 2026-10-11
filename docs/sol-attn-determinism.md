@@ -25,7 +25,9 @@ primitive execution and workspace observations still run, but source-stage
 attribution is unavailable. No manual repository operations are needed.
 
 Return the complete `report.json` and terminal output. Exit 1 denotes observed
-frozen-core instability; exit 0 means this finite protocol did not find it.
+wrapper, frozen-core, or compiled-stage instability; exit 2 includes an
+unqualified overflow/unsaturated fixture. Exit 0 means this finite protocol
+did not find instability in those repetitions.
 Exit 0 is not a proof of determinism or evidence that H3 continuation is fixed.
 An error report preserves completed cases. Reports are rewritten after each
 completed case and on an execution exception.
@@ -42,7 +44,7 @@ are explicitly BF16 before the original wrapper handles them.
 | --- | --- | --- |
 | Flat | 4096 tokens, 2 heads | Identical K scores; no overflowing token list expected |
 | Overflow | 4096 tokens, 2 heads | Constant Q, alternating ±K; normalized Q/K magnitude 30; identity RoPE |
-| Random | 4096 tokens, 2 heads | Nontrivial rotations and ordinary fixed random QKV |
+| Random | 4196 tokens, 2 heads | Nontrivial rotations and a ragged 100-row last chunk |
 | Large overflow/random | 36445 tokens, 56 heads | Production dimensions and arguments; synthetic operands |
 
 Large cases use `tau=1`, `topk_ratio=0`, `sink_blocks=[0,101]`,
@@ -90,11 +92,14 @@ in the report is **not** a claim that a particular internal kernel differed
 first. With `--stages`, the pinned source library launches the original
 finish, route, token and exact functions individually on the same frozen
 workspace. `source_first_difference` locates the first differing observed
-stage in that compiled diagnostic; `source_parity_verified` separately reports
+stage in that compiled diagnostic; `source_earliest_divergent_stage` scans all
+repetitions in operation order. `source_parity_verified` separately reports
 whether all staged outputs match the first installed output bitwise. Do not
 attribute a source-probe failure to the installed binary when parity is
 unqualified. Compilers, synchronization, and observer timing can change
-scheduling and whether a race manifests.
+scheduling and whether a race manifests. Normalization, RoPE and per-token
+quantization are fused in the producer. If their combined boundary first
+differs, these observations do not distinguish operations inside that kernel.
 
 `core_ms` measures the installed core using CUDA events, with no intermediate
 observations inside its interval. It is a diagnostic timing distribution,

@@ -74,7 +74,15 @@ def canonical_indices(indices, counts, capacity):
     if bool(((counts < 0) | (counts > 2**30)).any()):
         raise ValueError("invalid reservation count")
     valid = torch.arange(capacity, device=indices.device) < counts.clamp(max=capacity)[..., None]
-    return indices.masked_fill(~valid, 0)
+    positions = valid.nonzero(as_tuple=True)
+    result = torch.zeros(indices.shape, dtype=torch.int64, device=indices.device)
+    # Gather only written entries, so diagnostic kernels do not load uninitialized
+    # tails. Signed views let PyTorch index the underlying unsigned ID storage.
+    values = indices[positions].to(torch.int64)
+    if indices.dtype == torch.int16:
+        values &= 0xFFFF
+    result[positions] = values
+    return result
 
 
 def workspace_observations(ws, p, t, h, aug, stage):
@@ -90,24 +98,28 @@ def workspace_observations(ws, p, t, h, aug, stage):
     if stage == "producer":
         add("qiP", torch.int8, (t, h, 128))
         add("qs", torch.float32, (t, h))
-        add("kiP", torch.int8, (h, tp, 128), lambda x: x[:, :t])
-        add("ksb", torch.float32, (h, tp, 2), lambda x: x[:, :t])
-        add("vTi", torch.int8, (h, 128, tp), lambda x: x[:, :, :t])
+        # Ragged-block masks/zeros are initialized. Physical key axes are
+        # permuted, so truncating to T would omit live quantized operands.
+        add("kiP", torch.int8, (h, tp, 128))
+        add("ksb", torch.float32, (h, tp, 2))
+        add("vTi", torch.int8, (h, 128, tp))
+        if aug:
+            add("vRow", torch.int8, (h, tp, 128))
         add("statsV", torch.float32, (h, 128))
         add("qmean", torch.float32, (h, npad, 128), lambda x: x[:, :nq])
         # The first scratch slot contains post-RoPE K block sums.
         add("scratch", torch.float32, (h, npad, 128), lambda x: x[:, :nq])
-        add("vcT", torch.bfloat16, (h, 128, npad), lambda x: x[:, :, :nq])
+        add("vcT", torch.bfloat16, (h, 128, npad))
         add("cen8", torch.int8, (h, nq, 128))
         add("cens", torch.float32, (h, nq))
     elif stage == "finish":
-        add("kciP", torch.int8, (h, npad, 128), lambda x: x[:, :nq])
-        add("kcs", torch.float32, (h, npad), lambda x: x[:, :nq])
+        add("kciP", torch.int8, (h, npad, 128))
+        add("kcs", torch.float32, (h, npad))
         add("thr", torch.float32, (h, nq))
         add("vsc", torch.float32, (h, 128))
     elif stage == "route":
         counts = view_slot(ws, p, "cnt", torch.int32, (h, nq))
-        ids = view_slot(ws, p, "idx", torch.uint16, (h, nq, nq)).to(torch.int64)
+        ids = view_slot(ws, p, "idx", torch.int16, (h, nq, nq))
         result["cnt"] = counts
         result["idx"] = canonical_indices(ids, counts, nq)
         if aug:
@@ -115,7 +127,7 @@ def workspace_observations(ws, p, t, h, aug, stage):
             add("tokBits", torch.uint32, (h, nq, words))
     elif stage == "token" and aug:
         counts = view_slot(ws, p, "tokCnt", torch.int32, (h, ng))
-        ids = view_slot(ws, p, "tokIdx", torch.uint32, (h, ng, aug)).to(torch.int64)
+        ids = view_slot(ws, p, "tokIdx", torch.int32, (h, ng, aug))
         result["tokCnt"] = counts
         result["tokIdx"] = canonical_indices(ids, counts, aug)
         add("tokHist", torch.uint32, (h, ng, 128))
@@ -303,14 +315,15 @@ def verified_source(directory, download=False):
     return manifest
 
 
-def build_probe(directory, source):
+def build_probe(directory, source, arch=None):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         raise RuntimeError("--stages requires nvcc; omit it for installed-primitive evidence only")
     directory.mkdir(parents=True, exist_ok=True)
     verified_source(source, download=True)
-    major, minor = torch.cuda.get_device_capability()
-    arch = f"sm_{major}{minor}"
+    if arch is None:
+        major, minor = torch.cuda.get_device_capability()
+        arch = f"sm_{major}{minor}"
     root = source / SOURCE_PREFIX
     units = [
         root / f"sol_attn_{name}.cu" for name in ("preprocess", "producer", "vtranspose", "route", "token", "exact")
@@ -333,6 +346,12 @@ def build_probe(directory, source):
         str(libpath),
     ]
     # Always rebuild: a stale binary must not masquerade as verified source.
+    # NVIDIA's pip toolkit stores static libraries in lib; system toolkits
+    # commonly use lib64. Supply existing directories without changing linking.
+    for name in ("lib", "lib64"):
+        libdir = Path(nvcc).resolve().parent.parent / name
+        if libdir.is_dir():
+            command.extend(("-L", str(libdir)))
     subprocess.run(command, check=True)
     lib = ctypes.CDLL(str(libpath.resolve()))
     lib.sol_probe_error.restype = ctypes.c_char_p
@@ -427,6 +446,8 @@ def replay_core(backend, observer, config, repeats, probe=None):
                     if stage == "exact"
                     else workspace_observations(ws, p, t, h, aug, stage)
                 )
+                if stage == "finish":
+                    obs["kmean_next"] = km
                 row[f"source_{stage}"] = source_comparison.observe(f"source_{stage}", obs, index)
             row["source_matches_installed_reference"] = digest(out) == digest(installed_reference)
         rows.append(row)
@@ -434,6 +455,14 @@ def replay_core(backend, observer, config, repeats, probe=None):
         "runs": rows,
         "first_difference": comparison.first_difference,
         "source_first_difference": source_comparison.first_difference,
+        "source_earliest_divergent_stage": next(
+            (
+                stage
+                for stage in ("finish", "route", "token", "exact")
+                if any(not item["bitwise_equal"] for row in rows for item in row.get(f"source_{stage}", {}).values())
+            ),
+            None,
+        ),
         "source_parity_verified": probe is not None and all(r["source_matches_installed_reference"] for r in rows),
         "workspace_bytes": frozen.numel(),
     }
@@ -488,12 +517,15 @@ def run_case(backend, case, t, h, aug, repeats, probe):
     after = {"qkv": receipt(qkv), "rope": receipt(rope), "qw": receipt(weights[0]), "kw": receipt(weights[1])}
     if inputs != after:
         raise RuntimeError("immutable fixture was mutated")
+    overflow_counts = [r["token_summary"]["overflow_groups"] for r in core_result["runs"]] if aug else []
     return {
         "config": config,
         "inputs": inputs,
         "wrapper_runs": rows,
         "wrapper_first_difference": comparison.first_difference,
         "frozen_core": core_result,
+        "overflow_fixture_verified": min(overflow_counts) > 0 if case == "overflow" and aug else None,
+        "unsaturated_fixture_verified": max(overflow_counts) == 0 if case == "flat" and aug else None,
     }
 
 
@@ -537,12 +569,12 @@ def main(argv=None):
         "cases": [],
     }
     probe = None
-    if args.stages:
-        directory = args.output.parent / "sol-probe-build"
-        probe, build = build_probe(directory, directory / "source")
-        report["source_probe"] = build
     try:
-        cases = [(c, 4096, 2) for c in ("flat", "overflow", "random")]
+        if args.stages:
+            directory = args.output.parent / "sol-probe-build"
+            probe, build = build_probe(directory, directory / "source")
+            report["source_probe"] = build
+        cases = [(c, 4196 if c == "random" else 4096, 2) for c in ("flat", "overflow", "random")]
         if args.production_geometry:
             cases.extend((c, 36445, 56) for c in ("overflow", "random"))
         for case, t, h in cases:
@@ -564,7 +596,20 @@ def main(argv=None):
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     # A reproducible failure is a successful diagnostic result, but deliberately
     # a failing exit status for deterministic regression use.
-    return 1 if any(c["frozen_core"]["first_difference"] for c in report["cases"]) else 0
+    if any(
+        c["overflow_fixture_verified"] is False or c["unsaturated_fixture_verified"] is False for c in report["cases"]
+    ):
+        return 2
+    return (
+        1
+        if any(
+            c["wrapper_first_difference"]
+            or c["frozen_core"]["first_difference"]
+            or c["frozen_core"]["source_first_difference"]
+            for c in report["cases"]
+        )
+        else 0
+    )
 
 
 def receipt_file(path):
