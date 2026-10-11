@@ -258,8 +258,7 @@ class NativeExecutionTrace:
             return {"verified": False, "reason": "opaque_closure"}
         if (
             type(patch).__name__ != "SparseAttnPatch"
-            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1]
-            != "nodes_sparse_attention"
+            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1] != "nodes_sparse_attention"
         ):
             return {"verified": False, "reason": "not_core_sparse_patch"}
         try:
@@ -452,11 +451,18 @@ class NativeExecutionTrace:
                     self.qkv_calls[trace.arm] = (chunk_index, output_count)
                 projection = getattr(getattr(block, "attn", None), "out_proj", None)
                 if isinstance(projection, torch.nn.Module):
+
                     def core_output_pre(_module, args):
                         if args and torch.is_tensor(args[0]):
                             self.observe(
-                                trace, layer, layers, "sparse_attention_out_proj_input",
-                                args[0], block, options, previous,
+                                trace,
+                                layer,
+                                layers,
+                                "sparse_attention_out_proj_input",
+                                args[0],
+                                block,
+                                options,
+                                previous,
                             )
 
                     handles.append(projection.register_forward_pre_hook(core_output_pre))
@@ -571,18 +577,11 @@ class NativeExecutionTrace:
         # Pair mode observes both entry and exit to the suspect block,
         # distinguishing an upstream transition from in-block divergence.
         sampled = (
-            (
-                not self.module_detail
-                and self.pair_block < 0
-                and boundary == "output"
-                and (layers // 2 < layer < layers - 1)
-            )
-            or (
-                self.qkv_detail
-                and layer == self.pair_block
-                and boundary == "sparse_attention_out_proj_input"
-            )
-        )
+            not self.module_detail
+            and self.pair_block < 0
+            and boundary == "output"
+            and (layers // 2 < layer < layers - 1)
+        ) or (self.qkv_detail and layer == self.pair_block and boundary == "sparse_attention_out_proj_input")
         if not (full or sampled):
             return
         rows = self.arms.setdefault(trace.arm, [])
@@ -624,16 +623,18 @@ class NativeExecutionTrace:
                 spec = self.qkv_expected.get("A", {})
                 total = spec.get("rows", 0)
                 if total > 0 and spec.get("hidden_width", 0) > 0 and spec.get("qkv_width", 0) > 0:
-                    expected = [
-                        ["low", self.step, 1, self.pair_block, boundary]
-                        for boundary in ("sparse_rope_freqs", "sparse_q_norm_weight", "sparse_k_norm_weight")
-                    ] + [
-                        ["low", self.step, 1, self.pair_block, f"qkv_{kind}_{i}"]
-                        for i in range((total + QKV_CHUNK - 1) // QKV_CHUNK)
-                        for kind in ("input", "output")
-                    ] + [
-                        ["low", self.step, 1, self.pair_block, "sparse_attention_out_proj_input"]
-                    ]
+                    expected = (
+                        [
+                            ["low", self.step, 1, self.pair_block, boundary]
+                            for boundary in ("sparse_rope_freqs", "sparse_q_norm_weight", "sparse_k_norm_weight")
+                        ]
+                        + [
+                            ["low", self.step, 1, self.pair_block, f"qkv_{kind}_{i}"]
+                            for i in range((total + QKV_CHUNK - 1) // QKV_CHUNK)
+                            for kind in ("input", "output")
+                        ]
+                        + [["low", self.step, 1, self.pair_block, "sparse_attention_out_proj_input"]]
+                    )
             elif self.module_detail:
                 boundaries = (
                     ("input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output")
