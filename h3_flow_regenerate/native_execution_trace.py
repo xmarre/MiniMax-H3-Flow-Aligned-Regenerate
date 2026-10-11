@@ -615,7 +615,6 @@ class NativeExecutionTrace:
                     "input/output equality does not isolate normalization or kernel internals."
                     if self.qkv_detail
                     else "Projection detail hashes suspect block input, attention out_proj input, "
-
                     "raw output before registered post-forward LoRA, output after the LoRA, "
                     "and final block output; five full tensors remain under 2 GiB at "
                     "36,445 rows with hidden=5,376 and attention width=7,168."
