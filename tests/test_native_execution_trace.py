@@ -439,9 +439,11 @@ def test_01891_projection_detail_identifies_changed_attention_input_and_cleans_o
         observer.observe(trace, 45, 50, "output", result, module, {}, None)
     assert observer.summary()["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "out_proj_input"
     trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
-    with pytest.raises(RuntimeError, match="deliberate"):
-        with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
-            raise RuntimeError("deliberate")
+    with (
+        pytest.raises(RuntimeError, match="deliberate"),
+        observer.internal_block_hooks(trace, 45, 50, module, {}, None),
+    ):
+        raise RuntimeError("deliberate")
     assert not module.attn.out_proj._forward_hooks
     assert not module.attn.out_proj._forward_pre_hooks
 
