@@ -101,8 +101,15 @@ def _vdn_owner(attention):
 
 class NativeExecutionTrace:
     def __init__(
-        self, step, hasher, *, pair_block=-1, module_detail=False,
-        arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40
+        self,
+        step,
+        hasher,
+        *,
+        pair_block=-1,
+        module_detail=False,
+        arm_bytes=2 * 1024**3,
+        tensor_bytes=512 * 1024**2,
+        max_records=40,
     ):
         self.step = validate_step(step)
         self.pair_block = validate_pair_block(pair_block)
@@ -161,10 +168,7 @@ class NativeExecutionTrace:
         except (TypeError, ValueError):
             return {"available": False, "reason": "opaque_replacement"}
         patch = values.get("patch")
-        if (
-            type(patch).__name__ != "SparseAttnPatch"
-            or type(patch).__module__ != "comfy_extras.nodes_sparse_attention"
-        ):
+        if type(patch).__name__ != "SparseAttnPatch" or type(patch).__module__ != "comfy_extras.nodes_sparse_attention":
             return {"available": False, "reason": "not_core_sparse_patch"}
         pooled = getattr(patch, "pooled", None)
         if not isinstance(pooled, dict):
@@ -317,12 +321,14 @@ class NativeExecutionTrace:
         outputs = self.selected_outputs(layers)
         if self.module_detail:
             full = layer == self.pair_block and boundary in {
-                "input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"
+                "input",
+                "attention_out_proj",
+                "post_attention_norm2",
+                "mlp_output",
+                "output",
             }
         else:
-            full_input = boundary == "input" and (
-                layer == 0 or (self.pair_block >= 0 and layer == self.pair_block)
-            )
+            full_input = boundary == "input" and (layer == 0 or (self.pair_block >= 0 and layer == self.pair_block))
             full_output = (
                 boundary == "output"
                 and layer in outputs
@@ -332,8 +338,11 @@ class NativeExecutionTrace:
         # Default mode retains the full sentinels and sampled outputs.
         # Pair mode observes both entry and exit to the suspect block,
         # distinguishing an upstream transition from in-block divergence.
-        sampled = not self.module_detail and self.pair_block < 0 and boundary == "output" and (
-            layers // 2 < layer < layers - 1
+        sampled = (
+            not self.module_detail
+            and self.pair_block < 0
+            and boundary == "output"
+            and (layers // 2 < layer < layers - 1)
         )
         if not (full or sampled):
             return
