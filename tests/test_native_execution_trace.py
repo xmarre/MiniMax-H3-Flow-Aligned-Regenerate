@@ -503,6 +503,32 @@ def test_01891_projection_selector_fails_closed_and_geometry_stays_within_budget
     assert bf16_bytes * n_rows * out_proj_input < 512 * 1024**2
 
 
+def _setup_sparse_probe_fixture(observer, model):
+    model.attn.q_norm = torch.nn.LayerNorm(2, dtype=torch.bfloat16)
+    model.attn.k_norm = torch.nn.LayerNorm(2, dtype=torch.bfloat16)
+    model.attn.out_proj = torch.nn.Identity()
+    observer.core_sparse_arguments = lambda *_args: {
+        "verified": True,
+        "rows": 9000,
+        "heads": 1,
+        "head_dim": 2,
+        "tau": 1.3,
+        "topk_ratio": 0.5,
+        "sink_blocks": [0, 0],
+        "sink_q": [0, 0],
+        "token_aug": 0,
+        "rope_eps": 1e-6,
+        "vsa": False,
+    }
+
+
+def _emit_sparse_probe_context(observer, trace, model, n_rows, scale=1):
+    observer.observe_sparse_inputs(
+        trace, 45, 50, model, {}, None,
+        torch.ones((n_rows, 2), dtype=torch.bfloat16) * scale,
+    )
+
+
 def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
     class QKV(torch.nn.Module):
         def forward(self, value):
@@ -522,6 +548,7 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
     observer = NativeExecutionTrace(
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
+    _setup_sparse_probe_fixture(observer, module)
     observer.core_sparse_stats = lambda *_args, **_kwargs: {
         "available": True,
         "key_observed": True,
@@ -535,9 +562,11 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
             trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
             source = torch.ones((9000, 4), dtype=torch.bfloat16)
             observer.observe(trace, 45, 50, "input", source, module, {}, None)
+            _emit_sparse_probe_context(observer, trace, module, len(source))
             with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
                 for start in range(0, len(source), 4096):
                     module.attn.qkv_proj(source[start : start + 4096])
+                module.attn.out_proj(torch.ones((len(source), 2), dtype=torch.bfloat16))
             assert tuple(module.attn.qkv_proj._forward_hooks.values()) == (original_adapter,)
             assert not module.attn.qkv_proj._forward_pre_hooks
         report = observer.summary()
@@ -546,15 +575,22 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
         assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
         assert report["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "qkv_output_0"
         assert [row["key"][-1] for row in report["arms"]["A"]] == [
+            "sparse_rope_freqs",
+            "sparse_q_norm_weight",
+            "sparse_k_norm_weight",
             "qkv_input_0",
             "qkv_output_0",
             "qkv_input_1",
             "qkv_output_1",
             "qkv_input_2",
             "qkv_output_2",
+            "sparse_attention_out_proj_input",
         ]
-        assert all(row["coverage"] == "full" for row in report["arms"]["A"])
-        assert report["inspection_bytes_charged_per_arm"]["A"] == 9000 * (4 + 6) * 2
+        assert all(row["coverage"] == "full" for row in report["arms"]["A"][:-1])
+        assert report["arms"]["A"][-1]["coverage"] == "token_rows_stride_32"
+        assert report["inspection_bytes_charged_per_arm"]["A"] == (
+            9000 * (4 + 6) * 2 + 9000 * 2 * 2 + 2 * 2 * 2 + ((9000 + 31) // 32) * 2 * 2
+        )
     finally:
         handle.remove()
 
@@ -647,6 +683,7 @@ def test_01893_qkv_cold_bootstrap_two_passes_capture_only_attention_producer():
     observer = NativeExecutionTrace(
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
+    _setup_sparse_probe_fixture(observer, model)
     observer.core_sparse_stats = lambda *_args, **_kwargs: {
         "available": True,
         "key_observed": True,
@@ -658,22 +695,26 @@ def test_01893_qkv_cold_bootstrap_two_passes_capture_only_attention_producer():
         for arm in ("A", "B_target_projection", "A_replay"):
             trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
             observer.observe(trace, 45, 50, "input", source, model, {}, None)
+            _emit_sparse_probe_context(observer, trace, model, len(source))
             assert observer.qkv_expected[arm]["producer_passes_expected"] == 2
             with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
                 for bootstrap in (True, False):
                     adapter["strength"] = int(arm == "A_replay" and not bootstrap)
                     for start in range(0, len(source), 4096):
                         model.attn.qkv_proj(source[start : start + 4096])
+                model.attn.out_proj(torch.ones((len(source), 2), dtype=torch.bfloat16))
             assert tuple(model.attn.qkv_proj._forward_hooks.values()) == (existing_vdn_hook,)
             assert not model.attn.qkv_proj._forward_pre_hooks
         summary = observer.summary()
         assert summary["comparisons"]["A_replay"]["selected_boundaries_complete"]
         assert summary["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "qkv_output_0"
         assert summary["comparisons"]["B_target_projection"]["selected_boundaries_exact"]
-        assert len(summary["arms"]["A"]) == 6
+        assert len(summary["arms"]["A"]) == 10
         assert summary["chunked_qkv_observed_calls"]["A"] == {"inputs": 6, "outputs": 6}
         assert all(r["sha256"] for r in summary["arms"]["A"])
-        assert summary["inspection_bytes_charged_per_arm"]["A"] == 9000 * (4 + 6) * 2
+        assert summary["inspection_bytes_charged_per_arm"]["A"] == (
+            9000 * (4 + 6) * 2 + 9000 * 2 * 2 + 2 * 2 * 2 + ((9000 + 31) // 32) * 2 * 2
+        )
         assert summary["limits"]["qkv_capture_policy"] == "last_core_sparse_producer_pass_v1"
     finally:
         existing_handle.remove()
@@ -726,3 +767,39 @@ def test_01893_qkv_cold_single_or_three_passes_and_unknown_state_fail_closed():
     assert not report["comparisons"]["A_replay"]["selected_boundaries_complete"]
     assert report["chunked_qkv_expected"]["A"]["producer_passes_expected"] is None
     assert report["arms"].get("A", []) == []
+
+
+def test_01894_sparse_core_rope_disagreement_and_invalid_arguments_are_not_exact():
+    model = torch.nn.Module()
+    model.attn = torch.nn.Module()
+    model.attn.heads = 1
+    model.attn.head_dim = 2
+    model.attn.qkv_proj = torch.nn.Linear(4, 6, bias=False, dtype=torch.bfloat16)
+    data = torch.ones((9000, 4), dtype=torch.bfloat16)
+    for bad_arguments in (False, True):
+        observer = NativeExecutionTrace(
+            5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+        )
+        _setup_sparse_probe_fixture(observer, model)
+        if bad_arguments:
+            observer.core_sparse_arguments = lambda *_args: {"verified": False, "reason": "unknown"}
+        observer.core_sparse_stats = lambda *_args: {
+            "available": True, "key_observed": True, "present": True,
+            "statistics": [{"sha256": "k"}, {"sha256": "v"}],
+        }
+        for arm in ("A", "A_replay"):
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            observer.observe(trace, 45, 50, "input", data, model, {}, None)
+            _emit_sparse_probe_context(observer, trace, model, len(data), 2 if arm == "A_replay" else 1)
+            with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
+                for start in range(0, len(data), 4096):
+                    model.attn.qkv_proj(data[start : start + 4096])
+                model.attn.out_proj(torch.ones((len(data), 2), dtype=torch.bfloat16))
+        report = observer.summary()["comparisons"]["A_replay"]
+        assert report["alignment_complete"] is not bad_arguments
+        assert report["selected_boundaries_complete"] is not bad_arguments
+        if not bad_arguments:
+            assert report["first_observed_difference"]["key"][-1] == "sparse_rope_freqs"
+        assert not model.attn.qkv_proj._forward_hooks
+        assert not model.attn.qkv_proj._forward_pre_hooks
+        assert not model.attn.out_proj._forward_pre_hooks
