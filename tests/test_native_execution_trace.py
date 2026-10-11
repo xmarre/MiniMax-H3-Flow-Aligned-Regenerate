@@ -540,8 +540,12 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
         assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
         assert report["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "qkv_output_0"
         assert [row["key"][-1] for row in report["arms"]["A"]] == [
-            "qkv_input_0", "qkv_output_0", "qkv_input_1", "qkv_output_1",
-            "qkv_input_2", "qkv_output_2",
+            "qkv_input_0",
+            "qkv_output_0",
+            "qkv_input_1",
+            "qkv_output_1",
+            "qkv_input_2",
+            "qkv_output_2",
         ]
         assert all(row["coverage"] == "full" for row in report["arms"]["A"])
         assert report["inspection_bytes_charged_per_arm"]["A"] == 9000 * (4 + 6) * 2
@@ -557,8 +561,13 @@ def test_01892_chunked_qkv_missing_chunk_and_budget_fail_closed():
     module.attn.qkv_proj = torch.nn.Linear(4, 6, bias=False, dtype=torch.bfloat16)
     for omit_last, budget in ((True, 2 * 1024**3), (False, 100)):
         observer = NativeExecutionTrace(
-            5, _full_sha, pair_block=45, module_detail=True, projection_detail=True,
-            qkv_detail=True, arm_bytes=budget,
+            5,
+            _full_sha,
+            pair_block=45,
+            module_detail=True,
+            projection_detail=True,
+            qkv_detail=True,
+            arm_bytes=budget,
         )
         for arm in ("A", "A_replay"):
             trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
@@ -579,9 +588,10 @@ def test_01892_qkv_selector_validation_and_cleanup_exception():
     from h3_flow_regenerate.native_execution_trace import validate_qkv_detail
     from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
 
-    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]["low_native_trace_qkv_detail"][1][
-        "default"
-    ] is False
+    assert (
+        H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]["low_native_trace_qkv_detail"][1]["default"]
+        is False
+    )
     with pytest.raises(ValueError, match="qkv_detail"):
         validate_qkv_detail(1)
     with pytest.raises(ValueError, match="qkv_detail"):
