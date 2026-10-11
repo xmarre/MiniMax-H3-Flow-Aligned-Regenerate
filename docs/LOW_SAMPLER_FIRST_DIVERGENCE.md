@@ -106,7 +106,7 @@ blocks strictly between the middle and final block, it additionally hashes all
 features in every 32nd token row. Those probes are labeled
 `coverage=token_rows_stride_32` and are **not** complete block hashes.
 For a 50-block model these are blocks 26–48; four full witnesses plus 23 sampled
-witnesses consume approximately 1.85 GiB per A/B/A′ arm at 36,445 × 5,376
+witnesses consume approximately 1.72 GiB per A/B/A′ arm at 36,445 × 5,376
 bf16 hidden shape, under the existing 2 GiB limit.
 
 Hidden states include conditioning and both target AV streams; they are not clean
@@ -174,8 +174,9 @@ cannot establish a paired physical camera-scale improvement.
 After updating the PR overlay through ComfyUI Patcher, fully restart ComfyUI.
 Custom-node loading prints `[H3 Flow] diagnostic_sources=` followed by the
 `h3_flow_low_trace_sources_v1` receipt. Compare its package path and SHA256 for
-`low_sampler_trace.py`, `runtime.py`, `partitioned_scheduler.py` and
-`low_sampler_ab_audit.py` with the intended revision. Missing or differing
+`low_sampler_trace.py`, `runtime.py`, `partitioned_scheduler.py`,
+`low_sampler_ab_audit.py`, `native_execution_trace.py`,
+`partitioned_transformer.py`, and `partitioned_node.py` with the intended revision. Missing or differing
 sources require resolving the installation before spending GPU time. This
 receipt hashes source files at startup; it does not verify weights, other
 repositories or physical backend state. Keep the startup log with the run.

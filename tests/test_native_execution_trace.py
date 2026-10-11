@@ -200,9 +200,9 @@ def test_01860_late_block_refinement_finds_earliest_sampled_difference():
             if arm == "A_replay" and layer >= 37:
                 value = value.clone()
                 value[0, 0] += 0.125
-            observer.observe(trace, layer, layers, "output", value, module, {}, None)
             if layer == 0:
                 observer.observe(trace, 0, layers, "input", value, module, {}, None)
+            observer.observe(trace, layer, layers, "output", value, module, {}, None)
     result = observer.summary()
     first = result["comparisons"]["A_replay"]["first_observed_difference"]
     assert result["comparisons"]["A_replay"]["selected_boundaries_complete"]
@@ -226,9 +226,9 @@ def test_strided_probe_never_claims_full_block_coverage():
             if arm == "A_replay" and layer == 3:
                 value = value.clone()
                 value[1, 0] += 0.125  # Not among sampled token rows.
-            observer.observe(trace, layer, 5, "output", value, module, {}, None)
             if layer == 0:
                 observer.observe(trace, 0, 5, "input", value, module, {}, None)
+            observer.observe(trace, layer, 5, "output", value, module, {}, None)
     report = observer.summary()
     assert report["comparisons"]["A_replay"]["selected_boundaries_exact"]
     assert report["arms"]["A"][3]["coverage"] == "token_rows_stride_32"
