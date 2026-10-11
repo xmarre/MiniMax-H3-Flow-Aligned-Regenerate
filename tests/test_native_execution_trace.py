@@ -522,6 +522,10 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
     observer = NativeExecutionTrace(
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
+    observer.core_sparse_stats = lambda *_args, **_kwargs: {
+        "available": True, "key_observed": True, "present": True,
+        "statistics": [{"sha256": "k"}, {"sha256": "v"}],
+    }
     try:
         for arm in ("A", "B_target_projection", "A_replay"):
             if arm == "A_replay":
@@ -569,6 +573,10 @@ def test_01892_chunked_qkv_missing_chunk_and_budget_fail_closed():
             qkv_detail=True,
             arm_bytes=budget,
         )
+        observer.core_sparse_stats = lambda *_args, **_kwargs: {
+            "available": True, "key_observed": True, "present": True,
+            "statistics": [{"sha256": "k"}, {"sha256": "v"}],
+        }
         for arm in ("A", "A_replay"):
             trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
             value = torch.ones(5000, 4, dtype=torch.bfloat16)
@@ -614,3 +622,98 @@ def test_01892_qkv_selector_validation_and_cleanup_exception():
     assert not module.attn.qkv_proj._forward_pre_hooks
     assert 36445 * (5376 + 21504) * 2 == 1959283200
     assert 1959283200 < 2 * 1024**3
+
+
+def test_01893_qkv_cold_bootstrap_two_passes_capture_only_attention_producer():
+    class QKV(torch.nn.Module):
+        def forward(self, value):
+            return torch.cat((value[:, :2], value[:, :2], value[:, :2]), dim=-1)
+
+    model = torch.nn.Module()
+    model.attn = torch.nn.Module()
+    model.attn.heads = 1
+    model.attn.head_dim = 2
+    model.attn.qkv_proj = QKV()
+    adapter = {"strength": 0}
+
+    def existing_vdn_hook(_module, _args, result):
+        return result + adapter["strength"] * 0.125
+
+    existing_handle = model.attn.qkv_proj.register_forward_hook(existing_vdn_hook)
+    observer = NativeExecutionTrace(
+        5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+    )
+    observer.core_sparse_stats = lambda *_args, **_kwargs: {
+        "available": True, "key_observed": True, "present": False, "statistics": []
+    }
+    source = torch.ones((9000, 4), dtype=torch.bfloat16)
+    try:
+        for arm in ("A", "B_target_projection", "A_replay"):
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            observer.observe(trace, 45, 50, "input", source, model, {}, None)
+            assert observer.qkv_expected[arm]["producer_passes_expected"] == 2
+            with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
+                for bootstrap in (True, False):
+                    adapter["strength"] = int(arm == "A_replay" and not bootstrap)
+                    for start in range(0, len(source), 4096):
+                        model.attn.qkv_proj(source[start : start + 4096])
+            assert tuple(model.attn.qkv_proj._forward_hooks.values()) == (existing_vdn_hook,)
+            assert not model.attn.qkv_proj._forward_pre_hooks
+        summary = observer.summary()
+        assert summary["comparisons"]["A_replay"]["selected_boundaries_complete"]
+        assert summary["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "qkv_output_0"
+        assert summary["comparisons"]["B_target_projection"]["selected_boundaries_exact"]
+        assert len(summary["arms"]["A"]) == 6
+        assert summary["chunked_qkv_observed_calls"]["A"] == {"inputs": 6, "outputs": 6}
+        assert all(r["sha256"] for r in summary["arms"]["A"])
+        assert summary["inspection_bytes_charged_per_arm"]["A"] == 9000 * (4 + 6) * 2
+        assert summary["limits"]["qkv_capture_policy"] == "last_core_sparse_producer_pass_v1"
+    finally:
+        existing_handle.remove()
+
+
+def test_01893_qkv_cold_single_or_three_passes_and_unknown_state_fail_closed():
+    model = torch.nn.Module()
+    model.attn = torch.nn.Module()
+    model.attn.heads = 1
+    model.attn.head_dim = 2
+    model.attn.qkv_proj = torch.nn.Linear(4, 6, bias=False, dtype=torch.bfloat16)
+    source = torch.ones((5000, 4), dtype=torch.bfloat16)
+    for producer_passes in (1, 3):
+        observer = NativeExecutionTrace(
+            5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+        )
+        observer.core_sparse_stats = lambda *_args, **_kwargs: {
+            "available": True, "key_observed": True, "present": False, "statistics": []
+        }
+        for arm in ("A", "A_replay"):
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            observer.observe(trace, 45, 50, "input", source, model, {}, None)
+            with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
+                for _ in range(producer_passes):
+                    model.attn.qkv_proj(source[:4096])
+                    model.attn.qkv_proj(source[4096:])
+        report = observer.summary()
+        assert not report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+        assert report["chunked_qkv_observed_calls"]["A"] == {
+            "inputs": 2 * producer_passes, "outputs": 2 * producer_passes
+        }
+        assert not model.attn.qkv_proj._forward_hooks
+        assert not model.attn.qkv_proj._forward_pre_hooks
+
+    observer = NativeExecutionTrace(
+        5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+    )
+    observer.core_sparse_stats = lambda *_args, **_kwargs: {
+        "available": False, "key_observed": False
+    }
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        observer.observe(trace, 45, 50, "input", source, model, {}, None)
+        with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
+            for start in range(0, len(source), 4096):
+                model.attn.qkv_proj(source[start : start + 4096])
+    report = observer.summary()
+    assert not report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+    assert report["chunked_qkv_expected"]["A"]["producer_passes_expected"] is None
+    assert report["arms"].get("A", []) == []
