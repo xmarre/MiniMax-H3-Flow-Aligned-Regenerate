@@ -417,3 +417,90 @@ remaining interval is the sparse producer (Q/K RMSNorm,
 RoPE, routing, kernel and state), with temporal/scheduling
 effects still to control. No backend gating, cache reset,
 or speculative numerical correction is justified.
+
+
+### Run 01893: the Core sparse QKV producer executes twice on a cold cache
+
+Owner attachments: `Pasted text(20261011-112856).txt`,
+`metrics_01893_.json`, `MiniMax_H3_00068-audio.mp4`
+(992×992, 24 fps, 14.375s H.264+AAC), and
+`session-continuum_chunk-2_seed-11918865606839656618_sigma-0.87804878_1791717727225673266.rar`.
+All **seven** deployed source hashes matched prior qualified PR head
+`9961ff83faa2532f39062504183487f7b4f132d5`.
+The frozen RAR manifest SHA256 is
+`681b641daa94d8d2af54447e80da54367c78fe32338560b01924359eb1a2a7f0`;
+all **nine** operand binary SHA256 values independently match the
+manifest/metrics.
+
+The A/A′ first actual native prediction is bitwise exact,
+while final low clean-source suffix differs RMS
+`0.11442559957504272`, max `4.110334873199463`;
+`reproduction_verified=false`. At step 5, native call 1,
+the first different native video is RMS
+`0.017640699438560288`, max `1.1875`, with
+all 12 protected temporal tokens bitwise equal and 79.687% of
+generated suffix BF16 elements changed.
+
+**Original 01892 QKV observer is incomplete on the cold Core
+sparse producer.** Its expected 18 full input/output hashes
+were exceeded by **36 actual QKV events per arm** (18
+4,096-row chunks, each with pre + post hooks);
+9 bootstrap input/output pairs matched A/A′ fully.
+All 9 second-pass QKV input hashes also match A/A′.
+The second-pass QKV adapted **outputs** were unobserved
+because the original implementation exhausted the 2 GiB
+per-arm inspection budget. Each arm charged
+`2,135,443,968` bytes; every comparison correctly reported
+`alignment_complete=false`,
+`selected_boundaries_complete=false`, and no first
+QKV difference. This does not rule out varying adapted
+outputs on the actual attention pass or a primitive effect.
+
+**Verified root cause of the measurement-plan mismatch, not
+the video defect:** In
+`Comfy-Org/comfy-kitchen/comfy_kitchen/backends/cuda/__init__.py`,
+`sol_attn_chunked(qkv_chunks, ..., kmean=None, vscale=None)`
+explicitly calls `produce` twice on the same factory:
+(1) bootstrap K/V statistics using dummy scales and
+(2) quantization/attention using those statistics. If
+prior pooled statistics exist, it calls `produce` only once.
+Core's matching block45 pool key was absent before this call
+on all arms; the two passes are therefore **expected**,
+not a duplicate Flow model evaluation or leaked hook.
+The first pass only seeds statistics; the second is used by
+`sol_attn_core`.
+
+**Corrected default-off QKV witness**, same public selector:
+`low_native_trace_qkv_detail=true`. At selected block
+entry, read the actual matching Core sparse pooled key.
+On cold state, count both native producer passes but
+hash **only the second**, attention-producing pass.
+On primed state, hash the sole pass. Unknown/unverifiable
+Core pooled state, nonmatching arm pass choices,
+missing/extra pre/post module calls, wrong chunk
+shapes/dtypes/order, missing hashes or byte overruns
+all fail strict completeness. No internal value,
+kernel, pooled statistic, adapter hook, model
+execution history, sampler or attention backend is
+modified. The actual nine QKV inputs plus nine
+post-VDN-LoRA outputs cost exactly
+`1,959,283,200` bytes/arm at the owner geometry.
+Hook cleanup is preserved under exceptions.
+
+One next controlled owner rerun: refresh the updated
+single-commit PR #99 via ComfyUI Patcher, restart, validate
+all seven **new** startup source hashes; preserve the run
+01893 workflow and all original controls including
+`low_native_trace_step=5`,
+`low_native_trace_pair_block=45`,
+`low_native_trace_module_detail=true`,
+`low_native_trace_projection_detail=true`,
+`low_native_trace_qkv_detail=true`,
+`low_sampler_aba=true`,
+`spatial_stage_control=progressive_uniform_source`,
+`source_prefix_projection=native_source_carry`.
+Return full startup/runtime log, complete Flow metrics,
+RAR with manifest and nine binaries and production A MP4.
+This is a repair of the observer's measured-pass coverage,
+not evidence of a fix to A/A′ video reproducibility,
+frame shift or tone drift.
