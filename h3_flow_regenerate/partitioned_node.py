@@ -8,6 +8,7 @@ from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
+from .low_sampler_ab import LOW_SAMPLER_AB_KEY
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_attention import sol_attention_selected
@@ -56,6 +57,7 @@ from .partitioned_transformer import (
     partitioned_diffusion_wrapper,
 )
 from .runtime import OUTER_WRAPPER_KEY
+from .source_prefix_projection import SOURCE_PREFIX_PROJECTION_OPTIONS, configure_source_prefix_projection
 
 
 class H3PartitionedExactPrefixHandoff:
@@ -457,6 +459,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "through the learned upscaler, then restores the exact target-grid prefix before high "
                     "refinement. Use normal attention/VDN diagnostics and the default target-band selectors "
                     "with this mode. "
+                    "progressive_uniform_source_exact_context is an unqualified candidate that additionally "
+                    "conditions low/probe on the unresampled target-grid prefix as a native video reference; "
+                    "Core places it before the target timeline and shifts target audio/video together; "
+                    "generated video still uses one native reduced-grid trajectory. "
                     "same_grid_target_control runs continuation low/probe directly on the target grid, keeps "
                     "the same handoff split and downstream high stage, and uses an identity "
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
@@ -562,6 +568,52 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after target_band_context so serialized widget positions remain stable.
+        spec["required"]["uniform_source_detail_transport"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Experimental, off by default; used only by the progressive_uniform_source spatial-stage "
+                    "modes. Adds the last prefix frame's exact-minus-learned residual to the suffix before "
+                    "high refinement, weighted by learned change and prefix residual persistence. Prefix "
+                    "calibration does not establish suffix motion safety: detail lost by projection can move "
+                    "without the gate detecting it, causing stale detail or an overlay. Rendered quality is "
+                    "unvalidated. Keep off when testing exact visual context alone."
+                ),
+            },
+        )
+        # Append after all historical widgets; old workflows keep latent bicubic.
+        spec["required"]["source_prefix_projection"] = (
+            list(SOURCE_PREFIX_PROJECTION_OPTIONS),
+            {
+                "default": "latent_bicubic",
+                "tooltip": (
+                    "Source-prefix construction for progressive_uniform_source modes. vae_rgb_roundtrip "
+                    "decodes the carried target prefix, resizes RGB and encodes it once before low sampling. "
+                    "Connect the generation's native video_vae. Experimental continuation input; final target "
+                    "prefix remains exact. Adds one VAE decode and one encode per continuation chunk. "
+                    "native_source_carry instead uses the preceding chunk's source clean prediction, paired "
+                    "by the exact returned target-prefix hash; run the full sequence with the same patched MODEL. "
+                    "No VAE is needed for carry; missing or changed context stops before sampling."
+                ),
+            },
+        )
+        spec["required"]["low_sampler_aba"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "EXPERIMENTAL GPU A/B/A source-low sampler replay for native_source_carry. "
+                    "Run full initial+continuation with the same MODEL, trajectory capture and "
+                    "capture_boundary_witness=true. Adds two complete low/probe lifetimes and "
+                    "freezes Python/NumPy/Torch RNG. The initial A is the normal production "
+                    "low path, B changes only its source prefix, A' verifies reproducibility. "
+                    "A/B/A measurements are not a seam fix or production acceptance."
+                ),
+            },
+        )
+        spec["optional"]["video_vae"] = ("VAE",)
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -612,8 +664,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
         target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        uniform_source_detail_transport=False,
         metrics=None,
         temporal_weight=0.20,
+        source_prefix_projection="latent_bicubic",
+        video_vae=None,
+        low_sampler_aba=False,
     ):
         patched, metrics = super().patch(
             model=model,
@@ -635,6 +691,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
+        if low_sampler_aba and (
+            source_prefix_projection != "native_source_carry"
+            or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
+            or not capture_boundary_witness
+            or trajectory is None
+        ):
+            raise ValueError(
+                "low_sampler_aba requires native_source_carry, progressive_uniform_source, "
+                "capture_boundary_witness=true and a connected Flow trajectory"
+            )
+        configure_source_prefix_projection(patched, source_prefix_projection, video_vae, spatial_stage_control)
         witness_directory = ""
         if capture_boundary_witness:
             try:
@@ -658,7 +725,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             restart_required=False,
             output_mutated=False,
         )
-        return apply_partitioned_diagnostic_controls(
+        patched, metrics = apply_partitioned_diagnostic_controls(
             patched,
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
@@ -680,7 +747,17 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             target_band_tokens=target_band_tokens,
             target_band_handoff_state=target_band_handoff_state,
             target_band_context=target_band_context,
+            uniform_source_detail_transport=uniform_source_detail_transport,
         )
+        patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
+        metrics.event(
+            "partitioned_low_sampler_aba_control",
+            enabled=bool(low_sampler_aba),
+            source_projection=source_prefix_projection,
+            diagnostic_only=True,
+            default_changed=False,
+        )
+        return patched, metrics
 
 
 NODE_CLASS_MAPPINGS = {

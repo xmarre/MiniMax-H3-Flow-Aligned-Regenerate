@@ -61,6 +61,7 @@ from .partitioned_stage import (
     partitioned_mod_segments,
     partitioned_positions_for_runtime,
 )
+from .uniform_prefix_context import POLICY, add_exact_prefix_visual_context
 
 PARTITIONED_WRAPPER_KEY = "h3_flow_regenerate.partitioned_exact_prefix.v1"
 PARTITIONED_BLOCK_INDEX_KEY = "h3_flow_partitioned_block_index_v1"
@@ -1117,6 +1118,17 @@ def partitioned_diffusion_wrapper(
             refs=payload.get("refs"),
         )
     payload["layout"] = layout
+    exact_context_range = None
+    exact_context_timeline_shift = 0.0
+    exact_context = runtime.exact_prefix_visual_context
+    if exact_context is not None:
+        if band is not None or options.get("h3_flow_stage") not in ("low", "probe"):
+            raise RuntimeError("exact uniform-source visual context is restricted to low/probe without a target band")
+        original_video_origin = float(layout.position_ids[layout.segments[-1][0], 0])
+        layout, payload, exact_context_range = add_exact_prefix_visual_context(
+            native, layout, payload, owner, exact_context
+        )
+        exact_context_timeline_shift = float(layout.position_ids[layout.segments[-1][0], 0]) - original_video_origin
     video_start, video_end, _ = layout.segments[-1]
     carrier_prefix_rows = plan.prefix_t * (plan.target_rows if band is not None else plan.source_rows)
     # Bound on every path: Sol reads every closure cell of the block replacement
@@ -1159,6 +1171,11 @@ def partitioned_diffusion_wrapper(
     )
     if position_policy is not None:
         partitioned_layout.signature = (*partitioned_layout.signature, position_policy.signature)
+    if exact_context is not None:
+        partitioned_layout.signature = (
+            *partitioned_layout.signature,
+            (POLICY, exact_context.prefix_t, *exact_context.target_hw),
+        )
     if runtime.softmax_diagnostic != PARTITIONED_SOFTMAX_DIAGNOSTIC_NORMAL:
         # Sol history-v1 includes the complete partitioned layout signature in
         # numerical identity. Keep the geometry digest unchanged and add only
@@ -1254,6 +1271,26 @@ def partitioned_diffusion_wrapper(
                         )
                     )
                 metrics.increment("partitioned_transformer_calls")
+                if exact_context_range is not None:
+                    metrics.increment("partitioned_exact_visual_prefix_calls")
+                    metrics.event(
+                        "partitioned_exact_visual_prefix",
+                        policy=POLICY,
+                        stage=options.get("h3_flow_stage"),
+                        context_range=exact_context_range,
+                        target_hw=exact_context.target_hw,
+                        prefix_t=exact_context.prefix_t,
+                        exact_prefix_unresampled=True,
+                        prefix_time_colocated=False,
+                        native_reference_timeline=True,
+                        target_timeline_shift=exact_context_timeline_shift,
+                        native_visual_condition_augmentation=True,
+                        generated_video_streams=1,
+                        video_recurrence_grid=owner.target_hw,
+                        cross_grid_video_temporal_taps=False,
+                        extra_h3_nfe=0,
+                        extra_sampler_lifetimes=0,
+                    )
                 metrics.event(
                     "partitioned_exact_prefix_transformer",
                     stage=options.get("h3_flow_stage"),
