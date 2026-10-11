@@ -523,7 +523,9 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
     observer.core_sparse_stats = lambda *_args, **_kwargs: {
-        "available": True, "key_observed": True, "present": True,
+        "available": True,
+        "key_observed": True,
+        "present": True,
         "statistics": [{"sha256": "k"}, {"sha256": "v"}],
     }
     try:
@@ -574,7 +576,9 @@ def test_01892_chunked_qkv_missing_chunk_and_budget_fail_closed():
             arm_bytes=budget,
         )
         observer.core_sparse_stats = lambda *_args, **_kwargs: {
-            "available": True, "key_observed": True, "present": True,
+            "available": True,
+            "key_observed": True,
+            "present": True,
             "statistics": [{"sha256": "k"}, {"sha256": "v"}],
         }
         for arm in ("A", "A_replay"):
@@ -644,7 +648,10 @@ def test_01893_qkv_cold_bootstrap_two_passes_capture_only_attention_producer():
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
     observer.core_sparse_stats = lambda *_args, **_kwargs: {
-        "available": True, "key_observed": True, "present": False, "statistics": []
+        "available": True,
+        "key_observed": True,
+        "present": False,
+        "statistics": [],
     }
     source = torch.ones((9000, 4), dtype=torch.bfloat16)
     try:
@@ -684,7 +691,10 @@ def test_01893_qkv_cold_single_or_three_passes_and_unknown_state_fail_closed():
             5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
         )
         observer.core_sparse_stats = lambda *_args, **_kwargs: {
-            "available": True, "key_observed": True, "present": False, "statistics": []
+            "available": True,
+            "key_observed": True,
+            "present": False,
+            "statistics": [],
         }
         for arm in ("A", "A_replay"):
             trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
@@ -696,7 +706,8 @@ def test_01893_qkv_cold_single_or_three_passes_and_unknown_state_fail_closed():
         report = observer.summary()
         assert not report["comparisons"]["A_replay"]["selected_boundaries_complete"]
         assert report["chunked_qkv_observed_calls"]["A"] == {
-            "inputs": 2 * producer_passes, "outputs": 2 * producer_passes
+            "inputs": 2 * producer_passes,
+            "outputs": 2 * producer_passes,
         }
         assert not model.attn.qkv_proj._forward_hooks
         assert not model.attn.qkv_proj._forward_pre_hooks
@@ -704,9 +715,7 @@ def test_01893_qkv_cold_single_or_three_passes_and_unknown_state_fail_closed():
     observer = NativeExecutionTrace(
         5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
     )
-    observer.core_sparse_stats = lambda *_args, **_kwargs: {
-        "available": False, "key_observed": False
-    }
+    observer.core_sparse_stats = lambda *_args, **_kwargs: {"available": False, "key_observed": False}
     for arm in ("A", "A_replay"):
         trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
         observer.observe(trace, 45, 50, "input", source, model, {}, None)
