@@ -519,7 +519,9 @@ def test_01892_chunked_qkv_full_coverage_localizes_changed_adapter_output():
         return value + adapter["strength"] * 0.125
 
     handle = module.attn.qkv_proj.register_forward_hook(original_adapter)
-    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True)
+    observer = NativeExecutionTrace(
+        5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+    )
     try:
         for arm in ("A", "B_target_projection", "A_replay"):
             if arm == "A_replay":
@@ -589,7 +591,9 @@ def test_01892_qkv_selector_validation_and_cleanup_exception():
     module = torch.nn.Module()
     module.attn = torch.nn.Module()
     module.attn.qkv_proj = torch.nn.Identity()
-    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True)
+    observer = NativeExecutionTrace(
+        5, _full_sha, pair_block=45, module_detail=True, projection_detail=True, qkv_detail=True
+    )
     trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
     with (
         pytest.raises(RuntimeError, match="deliberate"),
