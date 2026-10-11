@@ -187,8 +187,7 @@ class NativeExecutionTrace:
         if (
             type(patch).__name__ != "SparseAttnPatch"
             or not source_file.endswith("/comfy_extras/nodes_sparse_attention.py")
-            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1]
-            != "nodes_sparse_attention"
+            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1] != "nodes_sparse_attention"
         ):
             return {"available": False, "reason": "not_core_sparse_patch"}
         pooled = getattr(patch, "pooled", None)
