@@ -674,11 +674,12 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 "default": False,
                 "tooltip": (
                     "Read-only full BF16 input and adapted-output hashes for every 4096-row "
-                    "Core H3 sparse producer QKV chunk in selected block. Requires module "
-                    "and projection detail; replaces their five projected-output hashes. "
-                    "At 36,445 rows and 5376/21504 BF16 widths the 18 complete captures "
-                    "cost 1,959,283,200 bytes per arm, below the existing 2 GiB limit. "
-                    "Validates exact chunk count, widths and ordering; hooks removed on exit."
+                    "Core H3 sparse attention-producing QKV chunk in selected block. "
+                    "Cold pooled state replays producer twice; counts both passes but "
+                    "captures the second. Primed state captures the only pass. "
+                    "Requires module/projection detail. Unknown state or unexpected "
+                    "pass count fails completeness. At 36,445 rows the 18 hashes cost "
+                    "1,959,283,200 bytes/arm under 2 GiB. Hooks removed on exit."
                 ),
             },
         )
