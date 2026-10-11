@@ -373,7 +373,8 @@ class NativeExecutionTrace:
                     for boundary in ("input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output")
                 ]
                 if self.module_detail
-                else [["low", self.step, 1, 0, "input"]] + [
+                else [
+                    ["low", self.step, 1, 0, "input"],
                     ["low", self.step, 1, self.pair_block - 1, "output"],
                     ["low", self.step, 1, self.pair_block, "input"],
                     ["low", self.step, 1, self.pair_block, "output"],
