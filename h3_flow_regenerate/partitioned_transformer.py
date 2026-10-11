@@ -1419,8 +1419,12 @@ def partitioned_diffusion_wrapper(
                 )
             if observer is not None:
                 with observer.internal_block_hooks(
-                    trace, layer, len(inner.blocks), inner.blocks[layer],
-                    forwarded["transformer_options"], previous,
+                    trace,
+                    layer,
+                    len(inner.blocks),
+                    inner.blocks[layer],
+                    forwarded["transformer_options"],
+                    previous,
                 ):
                     output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             else:
