@@ -11,6 +11,7 @@ try:
     from .h3_flow_regenerate.decode_context import (
         NODE_DISPLAY_NAME_MAPPINGS as DECODE_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from .h3_flow_regenerate.deployment import report_diagnostic_sources
     from .h3_flow_regenerate.local_boundary_audit import (
         NODE_CLASS_MAPPINGS as LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
     )
@@ -61,6 +62,7 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.decode_context import (
         NODE_DISPLAY_NAME_MAPPINGS as DECODE_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from h3_flow_regenerate.deployment import report_diagnostic_sources
     from h3_flow_regenerate.local_boundary_audit import (
         NODE_CLASS_MAPPINGS as LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
     )
@@ -121,5 +123,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **PARTITIONED_NODE_DISPLAY_NAME_MAPPINGS,
     **DECODE_NODE_DISPLAY_NAME_MAPPINGS,
 }
+
+report_diagnostic_sources()
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

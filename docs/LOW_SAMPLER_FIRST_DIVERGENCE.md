@@ -121,6 +121,15 @@ cannot establish a paired physical camera-scale improvement.
 
 ## Review and GPU validation
 
+After updating the PR overlay through ComfyUI Patcher, fully restart ComfyUI.
+Custom-node loading prints `[H3 Flow] diagnostic_sources=` followed by the
+`h3_flow_low_trace_sources_v1` receipt. Compare its package path and SHA256 for
+`low_sampler_trace.py`, `runtime.py`, `partitioned_scheduler.py` and
+`low_sampler_ab_audit.py` with the intended revision. Missing or differing
+sources require resolving the installation before spending GPU time. This
+receipt hashes source files at startup; it does not verify weights, other
+repositories or physical backend state. Keep the startup log with the run.
+
 Review observer ordering, restoration, bounds and exact-head Python/native
 contract tests before a GPU replay. Keep selected Sol/Spectrum/VDN controls,
 model/LoRA/reference inputs, masks, sigmas and seed fixed. Tracing adds zero
