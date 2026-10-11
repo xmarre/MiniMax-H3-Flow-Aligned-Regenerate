@@ -241,6 +241,72 @@ class NativeExecutionTrace:
             receipt["statistics"].append(row)
         return receipt
 
+    def core_sparse_arguments(self, tensor, block, options, previous):
+        """Source-backed static arguments passed into Core's chunked sparse primitive.
+
+        Does not invoke the primitive or touch the cache. No claim about
+        values *inside* compiled CUDA kernels or CUDA-visible storage.
+        """
+        if not inspect.isfunction(previous):
+            return {"verified": False, "reason": "no_function_replacement"}
+        path = previous.__code__.co_filename.replace("\\\\", "/")
+        if not path.endswith("/comfy_extras/nodes_sparse_attention.py"):
+            return {"verified": False, "reason": "not_core_sparse_source"}
+        try:
+            patch = inspect.getclosurevars(previous).nonlocals.get("patch")
+        except (TypeError, ValueError):
+            return {"verified": False, "reason": "opaque_closure"}
+        if (
+            type(patch).__name__ != "SparseAttnPatch"
+            or type(patch).__module__.replace("\\\\", "/").split("/")[-1].split(".")[-1]
+            != "nodes_sparse_attention"
+        ):
+            return {"verified": False, "reason": "not_core_sparse_patch"}
+        try:
+            if patch.vsa:
+                return {"verified": False, "reason": "vsa_padded_arguments_not_observed"}
+            sinks, sink_q = patch.sinks(options, int(tensor.shape[0]))
+            return {
+                "verified": True,
+                "rows": int(tensor.shape[0]),
+                "heads": int(block.attn.heads),
+                "head_dim": int(block.attn.head_dim),
+                "tau": float(patch.tau),
+                "topk_ratio": float(patch.topk_ratio),
+                "token_aug": int(patch.extra_tokens),
+                "sink_blocks": list(sinks),
+                "sink_q": list(sink_q),
+                "rope_eps": float(block.attn.q_norm.eps),
+                "vsa": False,
+            }
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return {"verified": False, "reason": "unavailable_core_arguments"}
+
+    def observe_sparse_inputs(self, trace, layer, layers, block, options, previous, rope_freqs):
+        """Observe exact Core H3 sparse primitive static inputs, without replay."""
+        if not (
+            self.qkv_detail
+            and layer == self.pair_block
+            and trace.arm in self.qkv_expected
+            and trace.stage == "low"
+            and trace.evaluation == self.step
+            and trace.native_call == 1
+        ):
+            return
+        spec = self.qkv_expected[trace.arm]
+        # The model's callable passed to Core contains rope_freqs. Capture
+        # the whole tensor before Core's internal packing/normalization.
+        spec["sparse_kernel_arguments"] = self.core_sparse_arguments(
+            torch.empty((spec["rows"], 0)), block, options, previous
+        )
+        for boundary, tensor in (
+            ("sparse_rope_freqs", rope_freqs),
+            ("sparse_q_norm_weight", getattr(getattr(block.attn, "q_norm", None), "weight", None)),
+            ("sparse_k_norm_weight", getattr(getattr(block.attn, "k_norm", None), "weight", None)),
+        ):
+            if torch.is_tensor(tensor):
+                self.observe(trace, layer, layers, boundary, tensor, block, options, previous)
+
     def backend(self, tensor, block, options, previous, layer=None):
         attention = getattr(block, "attn", None)
         vdn = sys.modules.get("vdn_h3.runtime")
@@ -384,6 +450,16 @@ class NativeExecutionTrace:
                     # Count even under exception: incomplete producer attempts
                     # must never be described as a complete native witness.
                     self.qkv_calls[trace.arm] = (chunk_index, output_count)
+                projection = getattr(getattr(block, "attn", None), "out_proj", None)
+                if isinstance(projection, torch.nn.Module):
+                    def core_output_pre(_module, args):
+                        if args and torch.is_tensor(args[0]):
+                            self.observe(
+                                trace, layer, layers, "sparse_attention_out_proj_input",
+                                args[0], block, options, previous,
+                            )
+
+                    handles.append(projection.register_forward_pre_hook(core_output_pre))
             elif self.projection_detail:
                 # Under H3 the projected input is 7168 wide and the
                 # three remaining BF16 hidden hashes are 5376 wide.
@@ -472,7 +548,9 @@ class NativeExecutionTrace:
         if self.module_detail:
             if self.qkv_detail:
                 full = layer == self.pair_block and (
-                    boundary.startswith("qkv_input_") or boundary.startswith("qkv_output_")
+                    boundary.startswith("qkv_input_")
+                    or boundary.startswith("qkv_output_")
+                    or boundary in {"sparse_rope_freqs", "sparse_q_norm_weight", "sparse_k_norm_weight"}
                 )
             else:
                 selected_boundaries = (
@@ -493,10 +571,17 @@ class NativeExecutionTrace:
         # Pair mode observes both entry and exit to the suspect block,
         # distinguishing an upstream transition from in-block divergence.
         sampled = (
-            not self.module_detail
-            and self.pair_block < 0
-            and boundary == "output"
-            and (layers // 2 < layer < layers - 1)
+            (
+                not self.module_detail
+                and self.pair_block < 0
+                and boundary == "output"
+                and (layers // 2 < layer < layers - 1)
+            )
+            or (
+                self.qkv_detail
+                and layer == self.pair_block
+                and boundary == "sparse_attention_out_proj_input"
+            )
         )
         if not (full or sampled):
             return
@@ -513,7 +598,7 @@ class NativeExecutionTrace:
         rows.append(row)
         try:
             row["backend"] = (
-                {"unobserved": "same_chunked_qkv_call"}
+                {"unobserved": "same_selected_sparse_block"}
                 if self.qkv_detail and boundary != "qkv_input_0"
                 else self.backend(tensor, block, options, previous, layer=layer)
             )
@@ -540,9 +625,14 @@ class NativeExecutionTrace:
                 total = spec.get("rows", 0)
                 if total > 0 and spec.get("hidden_width", 0) > 0 and spec.get("qkv_width", 0) > 0:
                     expected = [
+                        ["low", self.step, 1, self.pair_block, boundary]
+                        for boundary in ("sparse_rope_freqs", "sparse_q_norm_weight", "sparse_k_norm_weight")
+                    ] + [
                         ["low", self.step, 1, self.pair_block, f"qkv_{kind}_{i}"]
                         for i in range((total + QKV_CHUNK - 1) // QKV_CHUNK)
                         for kind in ("input", "output")
+                    ] + [
+                        ["low", self.step, 1, self.pair_block, "sparse_attention_out_proj_input"]
                     ]
             elif self.module_detail:
                 boundaries = (
@@ -576,8 +666,9 @@ class NativeExecutionTrace:
                     and self.qkv_expected.get(arm, {}).get("captured_producer_pass") == spec["captured_producer_pass"]
                     and all(
                         self.qkv_expected.get(arm, {}).get(key) == spec.get(key)
-                        for key in ("rows", "hidden_width", "qkv_width")
+                        for key in ("rows", "hidden_width", "qkv_width", "sparse_kernel_arguments")
                     )
+                    and spec.get("sparse_kernel_arguments", {}).get("verified") is True
                 )
                 if qkv_specs_match:
                     calls_expected = ((spec["rows"] + QKV_CHUNK - 1) // QKV_CHUNK) * spec["producer_passes_expected"]
@@ -598,12 +689,17 @@ class NativeExecutionTrace:
                         for width in (width_in, width_out)
                     ]
                     qkv_specs_match = (
-                        len(baseline) == len(expected_shapes)
-                        and len(other) == len(expected_shapes)
+                        len(baseline) == len(expected_shapes) + 4
+                        and len(other) == len(expected_shapes) + 4
                         and all(
                             r.get("source_shape") == shape and r.get("dtype") == "torch.bfloat16"
                             for rows in (baseline, other)
-                            for r, shape in zip(rows, expected_shapes, strict=True)
+                            for r, shape in zip(rows[3:-1], expected_shapes, strict=True)
+                        )
+                        and all(
+                            rows[-1].get("coverage") == "token_rows_stride_32"
+                            and rows[-1].get("source_shape") == [total, spec["qkv_width"] // 3]
+                            for rows in (baseline, other)
                         )
                     )
             aligned = (
@@ -674,6 +770,7 @@ class NativeExecutionTrace:
                 "internal_module_detail_selected": self.module_detail,
                 "internal_projection_detail_selected": self.projection_detail,
                 "internal_qkv_detail_selected": self.qkv_detail,
+                "sparse_static_arguments_and_sampled_attention_output": self.qkv_detail,
                 "qkv_chunk_rows": QKV_CHUNK if self.qkv_detail else None,
                 "qkv_capture_policy": "last_core_sparse_producer_pass_v1" if self.qkv_detail else None,
             },
@@ -686,8 +783,11 @@ class NativeExecutionTrace:
                     "the first bootstrap-statistics pass but validates both call counts. "
                     "On a primed cache it captures the only pass. Unknown state fails closed. "
                     "At 36445 BF16 rows the 18 witness hashes cost 1,959,283,200 bytes/arm. "
+                    "Additional full RoPE and Q/K norm-weight hashes, source-backed "
+                    "sparse parameter receipt, and a stride-32 sample of attention output "
+                    "entering out_proj bracket the primitive within the remaining byte budget. "
                     "The adapted QKV output includes existing VDN post-forward LoRA hooks; "
-                    "input/output equality does not isolate normalization or kernel internals."
+                    "parameter equality does not isolate transient kernel state."
                     if self.qkv_detail
                     else "Projection detail hashes suspect block input, attention out_proj input, "
                     "raw output before registered post-forward LoRA, output after the LoRA, "
