@@ -375,3 +375,127 @@ def test_module_detail_opt_in_validation():
     with pytest.raises(ValueError, match="low_native_trace_module_detail"):
         LowReplayTrace(native_step=5, native_module_detail=True)
     assert NativeExecutionTrace(5, _full_sha, pair_block=45).module_detail is False
+
+
+def test_01891_projection_detail_brackets_raw_and_post_forward_lora():
+    class Projection(torch.nn.Module):
+        def forward(self, value):
+            return value[:, :4] + 0.5
+
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.out_proj = Projection()
+    active_adapter = {"offset": 0.25}
+
+    def existing_lora(_module, _inputs, value):
+        return value + active_adapter["offset"]
+
+    lora_handle = module.attn.out_proj.register_forward_hook(existing_lora)
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True)
+    try:
+        for arm in ("A", "B_target_projection", "A_replay"):
+            trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+            value = torch.ones(6, 4)
+            observer.observe(trace, 45, 50, "input", value, module, {}, None)
+            if arm == "A_replay":
+                active_adapter["offset"] = 0.5  # unchanged input/raw projection, changed adapter output
+            with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+                result = module.attn.out_proj(torch.ones(6, 8))
+            observer.observe(trace, 45, 50, "output", result, module, {}, None)
+            assert tuple(module.attn.out_proj._forward_hooks.values()) == (existing_lora,)
+            assert not module.attn.out_proj._forward_pre_hooks
+        report = observer.summary()
+        assert report["internal_projection_detail"]
+        assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
+        assert report["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "out_proj_post_adapter"
+        for rows in report["arms"].values():
+            assert [r["key"][-1] for r in rows] == [
+                "input",
+                "out_proj_input",
+                "out_proj_raw",
+                "out_proj_post_adapter",
+                "output",
+            ]
+            assert all(r["coverage"] == "full" for r in rows)
+    finally:
+        lora_handle.remove()
+
+
+def test_01891_projection_detail_identifies_changed_attention_input_and_cleans_on_exception():
+    class Projection(torch.nn.Module):
+        def forward(self, value):
+            return value[:, :4]
+
+    module = torch.nn.Module()
+    module.attn = torch.nn.Module()
+    module.attn.out_proj = Projection()
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True)
+    for arm in ("A", "A_replay"):
+        trace = SimpleNamespace(arm=arm, stage="low", evaluation=5, native_call=1)
+        value = torch.ones(6, 4)
+        observer.observe(trace, 45, 50, "input", value, module, {}, None)
+        with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+            result = module.attn.out_proj(torch.ones(6, 8) + (0.125 if arm == "A_replay" else 0.0))
+        observer.observe(trace, 45, 50, "output", result, module, {}, None)
+    assert observer.summary()["comparisons"]["A_replay"]["first_observed_difference"]["key"][-1] == "out_proj_input"
+    trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
+    with pytest.raises(RuntimeError, match="deliberate"):
+        with observer.internal_block_hooks(trace, 45, 50, module, {}, None):
+            raise RuntimeError("deliberate")
+    assert not module.attn.out_proj._forward_hooks
+    assert not module.attn.out_proj._forward_pre_hooks
+
+
+def test_01891_core_filesystem_module_identity_recovers_matching_pooled_stats():
+    code = compile(
+        "def bind(patch):\\n"
+        "    def previous(args, extra):\\n"
+        "        return patch.pooled\\n"
+        "    return previous\\n",
+        "/home/toor/ComfyUI/comfy_extras/nodes_sparse_attention.py",
+        "exec",
+    )
+    ns = {}
+    exec(code, ns)
+    cls = type(
+        "SparseAttnPatch",
+        (),
+        {"__module__": "/home/toor/ComfyUI/comfy_extras/nodes_sparse_attention"},
+    )
+    patch = cls()
+    patch.pooled = {(45, 7, ("stable-uuid",)): (torch.ones(56, 128), torch.ones(56, 128))}
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, module_detail=True, projection_detail=True)
+    receipt = observer.core_sparse_stats(torch.ones(7, 4), 45, {"uuids": ("stable-uuid",)}, ns["bind"](patch))
+    assert receipt["available"] is True
+    assert receipt["present"] is True
+    assert receipt["total_cached_keys"] == 1
+    assert len(receipt["statistics"]) == 2
+    assert all(s["sha256"] for s in receipt["statistics"])
+    assert not observer.core_sparse_stats(torch.ones(8, 4), 45, {"uuids": ("stable-uuid",)}, ns["bind"](patch))[
+        "present"
+    ]
+
+
+def test_01891_projection_selector_fails_closed_and_geometry_stays_within_budget():
+    from h3_flow_regenerate.native_execution_trace import validate_projection_detail
+    from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
+
+    assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"][
+        "low_native_trace_projection_detail"
+    ][1]["default"] is False
+    with pytest.raises(ValueError, match="projection_detail"):
+        validate_projection_detail(1)
+    with pytest.raises(ValueError, match="projection_detail"):
+        node_call(low_native_trace_projection_detail=True)
+    with pytest.raises(ValueError, match="projection_detail"):
+        LowReplayTrace(native_step=5, native_pair_block=45, native_projection_detail=True)
+    with pytest.raises(ValueError, match="projection_detail"):
+        NativeExecutionTrace(5, _full_sha, pair_block=45, projection_detail=True)
+    n_rows = 36445
+    bf16_bytes = 2
+    hidden = 5376
+    out_proj_input = 7168
+    total = bf16_bytes * n_rows * (4 * hidden + out_proj_input)
+    assert total == 2089902080
+    assert total < 2 * 1024**3
+    assert bf16_bytes * n_rows * out_proj_input < 512 * 1024**2
