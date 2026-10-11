@@ -265,3 +265,77 @@ boundaries. If Core producer uses VSA-padded rows or a different closure,
 this receipt explicitly remains unobserved. A cache hash difference is
 candidate evidence, **not proof of a causal kernel/attention bug**.
 Host hashing and new hooks may alter timing; a nonreproduction is inconclusive.
+
+
+### 01891: block 45 attention output projection is first observed difference
+
+Owner run `metrics_01891_.json`, `Pasted text(20261011-092706).txt`,
+production `MiniMax_H3_00066-audio.mp4` and complete frozen RAR
+match the intended PR `5aa41dd` deployment receipt (seven source SHA256
+files). Frozen manifest SHA256
+`bc564b5d653d8beb119e2db3a1fa6039a15b234ced8820917bfc742e2b577b96`
+and all nine exported raw operands independently match metrics; the
+trailing directory entry returns a libarchive negative status after
+all ten meaningful file entries, not evidence of corrupt tensor bytes.
+The full internal native observation at logical low step 5, first
+actual call, has five aligned complete BF16 witnesses per A/B/A′
+arm, 1,959,283,200 bytes charged per arm under 2 GiB.
+A and A′ block-45 input hashes match **in full**, while their
+`attn.out_proj` outputs differ, followed by `norm2`, MLP,
+and final block mismatch. The previous block 44 full output and
+block 45 full input equality is independently established by 01881.
+The first actual native model prediction is exactly identical A/A′.
+01891 BF16 video velocity A/A′ RMS
+`0.019317625944785526` with abs max `0.8046875`;
+the 12 protected temporal prefix tokens match bitwise and 79.2801%
+of BF16 suffix cells differ. A/A′ final low clean suffix RMS
+`0.08290215581655502`, max `2.82476544380188`.
+Reproduction remains false; B is not a qualified causal quality comparison.
+
+The `attn.out_proj` PyTorch module has a native VDN
+`_PostForwardLoRA` hook. Therefore a changed post-hook output
+does not isolate which of the incoming attention features,
+output-projection computation, or adapter residual differed.
+The previous `Core sparse pool` metadata was **unobserved**
+(`not_core_sparse_patch`): its class-module equality test compared
+to `comfy_extras.nodes_sparse_attention`, while Core's actual
+replacement source appears at
+`/home/toor/ComfyUI/comfy_extras/nodes_sparse_attention.py`
+with a filesystem-style module identifier. Source path, exact
+class name and module leaf are now checked without requiring the
+single qualified dotted import spelling. This change only reads
+source/closure metadata, and never manipulates pooled cache values.
+
+For the **next single controlled diagnostic**, use the new
+append-only, default-off
+`low_native_trace_projection_detail=true` in addition to
+`low_native_trace_module_detail=true`,
+`low_native_trace_pair_block=45`, `low_native_trace_step=5`
+and `low_sampler_aba=true`; do not change other settings.
+The selected five complete BF16 hashes become (in order):
+block 45 input; `attn.out_proj` **input** before linear;
+`attn.out_proj` **raw** output through a prepended
+post-forward hook (before existing VDN `_PostForwardLoRA`);
+`attn.out_proj` **post-adapter** output through an appended
+post-forward hook; block 45 final output. All instrumentation
+hooks are read-only, removed on any exit, and preserve the
+selected actual attention backend, VDN, adapters, LoRA,
+sampling math and production output selection. The exact
+36,445×(5,376/7,168) BF16 geometry needs
+`2,089,902,080` bytes per arm (~1.947 GiB), under
+2 GiB, with the widest witness individually under 512 MiB.
+Absent, repeated or budget-exceeding captures are marked incomplete.
+
+If A/A′ first differ **at `out_proj_input`**,
+the difference was already present before this output projection;
+it cannot be assigned to LoRA or projection without further proof.
+If the input hashes agree but `out_proj_raw` differs,
+inspect projection numerical state/weights and kernels.
+If raw agrees but `out_proj_post_adapter` differs,
+the installed post-forward adapter chain is the first observed
+differing interval; it still does not conclusively establish
+a faulty adapter. If all these agree but block output differs,
+the post-attention residual/MLP region remains under suspicion.
+New Core sparse `kmean`/`vscale` before/after fingerprints
+are additional correlational evidence, **not permission to
+reset cache or disable an attention backend**.
