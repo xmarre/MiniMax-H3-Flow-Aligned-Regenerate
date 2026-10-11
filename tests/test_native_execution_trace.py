@@ -450,7 +450,7 @@ def test_01891_projection_detail_identifies_changed_attention_input_and_cleans_o
 
 def test_01891_core_filesystem_module_identity_recovers_matching_pooled_stats():
     code = compile(
-        "def bind(patch):\\n    def previous(args, extra):\\n        return patch.pooled\\n    return previous\\n",
+        "def bind(patch):\n    def previous(args, extra):\n        return patch.pooled\n    return previous\n",
         "/home/toor/ComfyUI/comfy_extras/nodes_sparse_attention.py",
         "exec",
     )
