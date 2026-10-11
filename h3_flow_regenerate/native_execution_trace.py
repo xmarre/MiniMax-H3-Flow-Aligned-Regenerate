@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import inspect
@@ -14,6 +15,7 @@ import torch
 
 OPTION = "h3_flow_low_native_trace_step_v1"
 PAIR_OPTION = "h3_flow_low_native_full_pair_block_v1"
+MODULE_OPTION = "h3_flow_low_native_module_detail_v1"
 POLICY = "h3_low_native_execution_v1"
 
 
@@ -27,6 +29,12 @@ def validate_pair_block(block):
     if type(block) is not int or not -1 <= block <= 511:
         raise ValueError("low_native_trace_pair_block must be an integer from -1 to 511")
     return block
+
+
+def validate_module_detail(detail):
+    if type(detail) is not bool:
+        raise ValueError("low_native_trace_module_detail must be boolean")
+    return detail
 
 
 def _metadata(value, depth=0, remaining=None):
@@ -93,10 +101,14 @@ def _vdn_owner(attention):
 
 class NativeExecutionTrace:
     def __init__(
-        self, step, hasher, *, pair_block=-1, arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40
+        self, step, hasher, *, pair_block=-1, module_detail=False,
+        arm_bytes=2 * 1024**3, tensor_bytes=512 * 1024**2, max_records=40
     ):
         self.step = validate_step(step)
         self.pair_block = validate_pair_block(pair_block)
+        self.module_detail = validate_module_detail(module_detail)
+        if self.module_detail and (self.step < 0 or self.pair_block < 0):
+            raise ValueError("low_native_trace_module_detail requires native trace step and pair block")
         self.hasher = hasher
         self.arm_bytes, self.tensor_bytes, self.max_records = arm_bytes, tensor_bytes, max_records
         self.arms = {}
@@ -116,7 +128,7 @@ class NativeExecutionTrace:
             raise ValueError(
                 "low_native_trace_pair_block requires a block between the middle+2 and penultimate transformer blocks"
             )
-        return sorted({self.pair_block - 1, self.pair_block, layers - 1})
+        return [self.pair_block] if self.module_detail else sorted({self.pair_block - 1, self.pair_block, layers - 1})
 
     def callable_source(self, function):
         function = getattr(function, "__func__", function)
@@ -204,23 +216,67 @@ class NativeExecutionTrace:
         }
         return receipt
 
+    @contextlib.contextmanager
+    def internal_block_hooks(self, trace, layer, layers, block, options, previous):
+        """Append read-only probes after existing adapter hooks; restore on exit."""
+        selected = (
+            self.module_detail
+            and self.pair_block == layer
+            and trace.arm in {"A", "B_target_projection", "A_replay"}
+            and trace.stage == "low"
+            and trace.evaluation == self.step
+            and trace.native_call == 1
+        )
+        if not selected:
+            yield
+            return
+        modules = (
+            ("attention_out_proj", getattr(getattr(block, "attn", None), "out_proj", None)),
+            ("post_attention_norm2", getattr(block, "norm2", None)),
+            ("mlp_output", getattr(block, "mlp", None)),
+        )
+        handles = []
+        try:
+            for boundary, module in modules:
+                if not isinstance(module, torch.nn.Module):
+                    continue
+
+                def callback(_module, _args, result, *, name=boundary):
+                    if torch.is_tensor(result):
+                        self.observe(trace, layer, layers, name, result, block, options, previous)
+
+                handles.append(module.register_forward_hook(callback))
+            yield
+        finally:
+            for handle in reversed(handles):
+                handle.remove()
+
     def observe(self, trace, layer, layers, boundary, tensor, block, options, previous):
         if self.step < 0 or trace.arm not in {"A", "B_target_projection", "A_replay"}:
             return
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
         outputs = self.selected_outputs(layers)
-        full_input = boundary == "input" and (layer == 0 or (self.pair_block >= 0 and layer == self.pair_block))
-        full_output = (
-            boundary == "output"
-            and layer in outputs
-            and (self.pair_block >= 0 or layer in {0, layers // 2, layers - 1})
-        )
-        full = full_input or full_output
+        if self.module_detail:
+            full = layer == self.pair_block and boundary in {
+                "input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"
+            }
+        else:
+            full_input = boundary == "input" and (
+                layer == 0 or (self.pair_block >= 0 and layer == self.pair_block)
+            )
+            full_output = (
+                boundary == "output"
+                and layer in outputs
+                and (self.pair_block >= 0 or layer in {0, layers // 2, layers - 1})
+            )
+            full = full_input or full_output
         # Default mode retains the full sentinels and sampled outputs.
         # Pair mode observes both entry and exit to the suspect block,
         # distinguishing an upstream transition from in-block divergence.
-        sampled = self.pair_block < 0 and boundary == "output" and layers // 2 < layer < layers - 1
+        sampled = not self.module_detail and self.pair_block < 0 and boundary == "output" and (
+            layers // 2 < layer < layers - 1
+        )
         if not (full or sampled):
             return
         rows = self.arms.setdefault(trace.arm, [])
@@ -256,6 +312,11 @@ class NativeExecutionTrace:
             [["low", self.step, 1, 0, "input"]]
             + (
                 [
+                    ["low", self.step, 1, self.pair_block, boundary]
+                    for boundary in ("input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output")
+                ]
+                if self.module_detail
+                else [
                     ["low", self.step, 1, self.pair_block - 1, "output"],
                     ["low", self.step, 1, self.pair_block, "input"],
                     ["low", self.step, 1, self.pair_block, "output"],
@@ -311,6 +372,7 @@ class NativeExecutionTrace:
             "enabled": self.step >= 0,
             "low_logical_prediction": self.step,
             "full_pair_block": self.pair_block,
+            "internal_module_detail": self.module_detail,
             "native_call": 1,
             "arms": self.arms,
             "comparisons": comparisons,
@@ -326,12 +388,17 @@ class NativeExecutionTrace:
                 "hooks_per_module": 4,
                 "intervening_output_token_row_stride": 32 if self.pair_block < 0 else None,
                 "full_pair_selected": self.pair_block >= 0,
+                "internal_module_detail_selected": self.module_detail,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
             "limitations": [
                 (
-                    "Pair mode hashes block 0 input, pair-1 output, pair input and output, "
+                    "Module detail hashes suspect block input, attention out_proj output, "
+                    "post-attention norm2 output, MLP output and suspect block output. "
+                    "Temporary post-forward hooks may perturb timing; missing module calls fail completeness."
+                    if self.module_detail
+                    else "Pair mode hashes block 0 input, pair-1 output, pair input and output, "
                     "and final output in full; other block boundaries are unobserved."
                     if self.pair_block >= 0
                     else "Block zero input and first/middle/final outputs are hashed in full; "
