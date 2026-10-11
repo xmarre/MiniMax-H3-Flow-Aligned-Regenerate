@@ -17,6 +17,8 @@ OPTION = "h3_flow_low_native_trace_step_v1"
 PAIR_OPTION = "h3_flow_low_native_full_pair_block_v1"
 MODULE_OPTION = "h3_flow_low_native_module_detail_v1"
 PROJECTION_OPTION = "h3_flow_low_native_projection_detail_v1"
+QKV_OPTION = "h3_flow_low_native_chunked_qkv_detail_v1"
+QKV_CHUNK = 4096
 POLICY = "h3_low_native_execution_v1"
 
 
@@ -41,6 +43,12 @@ def validate_module_detail(detail):
 def validate_projection_detail(detail):
     if type(detail) is not bool:
         raise ValueError("low_native_trace_projection_detail must be boolean")
+    return detail
+
+
+def validate_qkv_detail(detail):
+    if type(detail) is not bool:
+        raise ValueError("low_native_trace_qkv_detail must be boolean")
     return detail
 
 
@@ -115,6 +123,7 @@ class NativeExecutionTrace:
         pair_block=-1,
         module_detail=False,
         projection_detail=False,
+        qkv_detail=False,
         arm_bytes=2 * 1024**3,
         tensor_bytes=512 * 1024**2,
         max_records=40,
@@ -123,6 +132,9 @@ class NativeExecutionTrace:
         self.pair_block = validate_pair_block(pair_block)
         self.module_detail = validate_module_detail(module_detail)
         self.projection_detail = validate_projection_detail(projection_detail)
+        self.qkv_detail = validate_qkv_detail(qkv_detail)
+        if self.qkv_detail and not (self.projection_detail and self.module_detail):
+            raise ValueError("low_native_trace_qkv_detail requires module_detail and projection_detail")
         if self.projection_detail and not self.module_detail:
             raise ValueError("low_native_trace_projection_detail requires low_native_trace_module_detail=true")
         if self.module_detail and (self.step < 0 or self.pair_block < 0):
@@ -133,6 +145,7 @@ class NativeExecutionTrace:
         self.bytes = {}
         self.omitted = {}
         self.sources = {}
+        self.qkv_expected = {}
 
     def selected_outputs(self, layers):
         if self.pair_block < 0:
@@ -314,7 +327,33 @@ class NativeExecutionTrace:
             return
         handles = []
         try:
-            if self.projection_detail:
+            if self.qkv_detail:
+                # Core's h3_sparse_attention chunks QKV by 4096 packed rows.
+                # Full per-chunk inputs+post-adapter outputs fit under 2 GiB
+                # for 36,445 x (5,376+21,504) BF16; do not materialize QKV.
+                module = getattr(getattr(block, "attn", None), "qkv_proj", None)
+                if isinstance(module, torch.nn.Module):
+                    chunk_index = [0]
+                    waiting = [-1]
+
+                    def qkv_pre(_module, args):
+                        if args and torch.is_tensor(args[0]):
+                            index = chunk_index[0]
+                            chunk_index[0] += 1
+                            waiting[0] = index
+                            self.observe(trace, layer, layers, f"qkv_input_{index}", args[0], block, options, previous)
+
+                    def qkv_post(_module, _args, result):
+                        index = waiting[0]
+                        waiting[0] = -1
+                        if torch.is_tensor(result) and index >= 0:
+                            self.observe(trace, layer, layers, f"qkv_output_{index}", result, block, options, previous)
+
+                    handles.append(module.register_forward_pre_hook(qkv_pre))
+                    # Append AFTER existing VDN _PostForwardLoRA so that QKV
+                    # output includes the native adapter, unchanged.
+                    handles.append(module.register_forward_hook(qkv_post))
+            elif self.projection_detail:
                 # Under H3 the projected input is 7168 wide and the
                 # three remaining BF16 hidden hashes are 5376 wide.
                 # At the observed 36445 rows the total of the five
@@ -371,13 +410,25 @@ class NativeExecutionTrace:
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
         outputs = self.selected_outputs(layers)
+        if self.qkv_detail and layer == self.pair_block and boundary == "input":
+            self.qkv_expected[trace.arm] = {
+                "rows": int(tensor.shape[0]),
+                "hidden_width": int(tensor.shape[-1]),
+                "qkv_width": int(getattr(block.attn, "heads", 0) * getattr(block.attn, "head_dim", 0) * 3),
+            }
+            return
         if self.module_detail:
-            selected_boundaries = (
-                {"input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output"}
-                if self.projection_detail
-                else {"input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"}
-            )
-            full = layer == self.pair_block and boundary in selected_boundaries
+            if self.qkv_detail:
+                full = layer == self.pair_block and (
+                    boundary.startswith("qkv_input_") or boundary.startswith("qkv_output_")
+                )
+            else:
+                selected_boundaries = (
+                    {"input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output"}
+                    if self.projection_detail
+                    else {"input", "attention_out_proj", "post_attention_norm2", "mlp_output", "output"}
+                )
+                full = layer == self.pair_block and boundary in selected_boundaries
         else:
             full_input = boundary == "input" and (layer == 0 or (self.pair_block >= 0 and layer == self.pair_block))
             full_output = (
@@ -409,7 +460,11 @@ class NativeExecutionTrace:
         }
         rows.append(row)
         try:
-            row["backend"] = self.backend(tensor, block, options, previous, layer=layer)
+            row["backend"] = (
+                {"unobserved": "same_chunked_qkv_call"}
+                if self.qkv_detail and boundary != "qkv_input_0"
+                else self.backend(tensor, block, options, previous, layer=layer)
+            )
             observed = tensor if full else tensor[::32]
             size = observed.numel() * observed.element_size()
             row.update(shape=list(observed.shape), dtype=str(observed.dtype), nbytes=size)
@@ -428,7 +483,16 @@ class NativeExecutionTrace:
         layers = baseline[0]["layers"] if baseline else 0
         expected = []
         if layers > 0:
-            if self.module_detail:
+            if self.qkv_detail:
+                spec = self.qkv_expected.get("A", {})
+                total = spec.get("rows", 0)
+                if total > 0 and spec.get("hidden_width", 0) > 0 and spec.get("qkv_width", 0) > 0:
+                    expected = [
+                        ["low", self.step, 1, self.pair_block, f"qkv_{kind}_{i}"]
+                        for i in range((total + QKV_CHUNK - 1) // QKV_CHUNK)
+                        for kind in ("input", "output")
+                    ]
+            elif self.module_detail:
                 boundaries = (
                     ("input", "out_proj_input", "out_proj_raw", "out_proj_post_adapter", "output")
                     if self.projection_detail
@@ -449,7 +513,33 @@ class NativeExecutionTrace:
                     expected.append(["low", self.step, 1, layer, "output"])
         for arm in ("B_target_projection", "A_replay"):
             other = self.arms.get(arm, [])
+            qkv_specs_match = True
+            if self.qkv_detail:
+                spec = self.qkv_expected.get("A")
+                qkv_specs_match = isinstance(spec, dict) and self.qkv_expected.get(arm) == spec
+                if qkv_specs_match:
+                    width_in, width_out, total = (
+                        spec["hidden_width"],
+                        spec["qkv_width"],
+                        spec["rows"],
+                    )
+                    expected_shapes = [
+                        [min(QKV_CHUNK, total - i * QKV_CHUNK), width]
+                        for i in range((total + QKV_CHUNK - 1) // QKV_CHUNK)
+                        for width in (width_in, width_out)
+                    ]
+                    qkv_specs_match = (
+                        all(
+                            r.get("source_shape") == shape
+                            and r.get("dtype") == "torch.bfloat16"
+                            for rows in (baseline, other)
+                            for r, shape in zip(rows, expected_shapes, strict=True)
+                        )
+                        and len(baseline) == len(expected_shapes)
+                        and len(other) == len(expected_shapes)
+                    )
             aligned = (
+                qkv_specs_match
                 bool(expected)
                 and [r["key"] for r in baseline] == expected
                 and len(baseline) == len(other)
@@ -493,6 +583,8 @@ class NativeExecutionTrace:
             "full_pair_block": self.pair_block,
             "internal_module_detail": self.module_detail,
             "internal_projection_detail": self.projection_detail,
+            "internal_qkv_detail": self.qkv_detail,
+            "chunked_qkv_expected": self.qkv_expected,
             "native_call": 1,
             "arms": self.arms,
             "comparisons": comparisons,
@@ -510,6 +602,8 @@ class NativeExecutionTrace:
                 "full_pair_selected": self.pair_block >= 0,
                 "internal_module_detail_selected": self.module_detail,
                 "internal_projection_detail_selected": self.projection_detail,
+                "internal_qkv_detail_selected": self.qkv_detail,
+                "qkv_chunk_rows": QKV_CHUNK if self.qkv_detail else None,
             },
             "source_files_at_observation": self.sources,
             "physical_state_isolation_verified": False,
