@@ -836,9 +836,7 @@ def test_01894_equal_sparse_qkv_first_difference_is_sampled_attention_output():
         with observer.internal_block_hooks(trace, 45, 50, model, {}, None):
             for start in range(0, len(source), 4096):
                 model.attn.qkv_proj(source[start : start + 4096])
-            model.attn.out_proj(
-                torch.ones((len(source), 2), dtype=torch.bfloat16) * (2 if arm == "A_replay" else 1)
-            )
+            model.attn.out_proj(torch.ones((len(source), 2), dtype=torch.bfloat16) * (2 if arm == "A_replay" else 1))
     report = observer.summary()
     assert report["comparisons"]["A_replay"]["selected_boundaries_complete"]
     assert report["comparisons"]["A_replay"]["first_observed_difference"] == {
