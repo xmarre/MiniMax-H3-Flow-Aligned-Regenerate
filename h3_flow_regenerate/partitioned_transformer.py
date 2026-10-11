@@ -1417,7 +1417,14 @@ def partitioned_diffusion_wrapper(
                     forwarded["transformer_options"],
                     previous,
                 )
-            output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
+            if observer is not None:
+                with observer.internal_block_hooks(
+                    trace, layer, len(inner.blocks), inner.blocks[layer],
+                    forwarded["transformer_options"], previous,
+                ):
+                    output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
+            else:
+                output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
