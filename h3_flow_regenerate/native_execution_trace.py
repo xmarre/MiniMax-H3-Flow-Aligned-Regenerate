@@ -352,8 +352,14 @@ class NativeExecutionTrace:
                         waiting[0] = index
                         if start <= index < end and args and torch.is_tensor(args[0]):
                             self.observe(
-                                trace, layer, layers, f"qkv_input_{index - start}",
-                                args[0], block, options, previous,
+                                trace,
+                                layer,
+                                layers,
+                                f"qkv_input_{index - start}",
+                                args[0],
+                                block,
+                                options,
+                                previous,
                             )
 
                     def qkv_post(_module, _args, result):
@@ -362,8 +368,14 @@ class NativeExecutionTrace:
                         output_count[0] += 1
                         if start <= index < end and torch.is_tensor(result):
                             self.observe(
-                                trace, layer, layers, f"qkv_output_{index - start}",
-                                result, block, options, previous,
+                                trace,
+                                layer,
+                                layers,
+                                f"qkv_output_{index - start}",
+                                result,
+                                block,
+                                options,
+                                previous,
                             )
 
                     handles.append(module.register_forward_pre_hook(qkv_pre))
@@ -442,8 +454,10 @@ class NativeExecutionTrace:
                 and all("sha256" in stat for stat in pooled["statistics"])
             )
             passes = (
-                2 if available and present is False and pooled.get("statistics") == []
-                else 1 if available and present is True and valid_primed
+                2
+                if available and present is False and pooled.get("statistics") == []
+                else 1
+                if available and present is True and valid_primed
                 else None
             )
             self.qkv_expected[trace.arm] = {
@@ -559,17 +573,14 @@ class NativeExecutionTrace:
                     and spec.get("producer_passes_expected") in (1, 2)
                     and self.qkv_expected.get(arm, {}).get("producer_passes_expected")
                     == spec["producer_passes_expected"]
-                    and self.qkv_expected.get(arm, {}).get("captured_producer_pass")
-                    == spec["captured_producer_pass"]
+                    and self.qkv_expected.get(arm, {}).get("captured_producer_pass") == spec["captured_producer_pass"]
                     and all(
                         self.qkv_expected.get(arm, {}).get(key) == spec.get(key)
                         for key in ("rows", "hidden_width", "qkv_width")
                     )
                 )
                 if qkv_specs_match:
-                    calls_expected = (
-                        (spec["rows"] + QKV_CHUNK - 1) // QKV_CHUNK
-                    ) * spec["producer_passes_expected"]
+                    calls_expected = ((spec["rows"] + QKV_CHUNK - 1) // QKV_CHUNK) * spec["producer_passes_expected"]
                     qkv_specs_match = all(
                         self.qkv_calls.get(who, ([None], [None]))[i][0] == calls_expected
                         for who in ("A", arm)
@@ -643,8 +654,7 @@ class NativeExecutionTrace:
             "internal_qkv_detail": self.qkv_detail,
             "chunked_qkv_expected": self.qkv_expected,
             "chunked_qkv_observed_calls": {
-                who: {"inputs": counts[0][0], "outputs": counts[1][0]}
-                for who, counts in self.qkv_calls.items()
+                who: {"inputs": counts[0][0], "outputs": counts[1][0]} for who, counts in self.qkv_calls.items()
             },
             "native_call": 1,
             "arms": self.arms,
