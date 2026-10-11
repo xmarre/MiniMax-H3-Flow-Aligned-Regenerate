@@ -380,8 +380,13 @@ def rng_receipt():
 
 class LowReplayTrace:
     def __init__(
-        self, *, max_bytes=2 * 1024**3, max_records=512, max_tensor_bytes=128 * 1024**2,
-        native_step=-1, native_pair_block=-1
+        self,
+        *,
+        max_bytes=2 * 1024**3,
+        max_records=512,
+        max_tensor_bytes=128 * 1024**2,
+        native_step=-1,
+        native_pair_block=-1,
     ):
         from .native_execution_trace import NativeExecutionTrace, validate_pair_block, validate_step
 

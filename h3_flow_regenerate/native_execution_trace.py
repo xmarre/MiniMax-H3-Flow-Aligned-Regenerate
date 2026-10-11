@@ -114,8 +114,7 @@ class NativeExecutionTrace:
         # a sentinel or claiming coverage after a budget overrun.
         if not layers // 2 + 2 <= self.pair_block < layers - 1:
             raise ValueError(
-                "low_native_trace_pair_block requires a block between "
-                "the middle+2 and penultimate transformer blocks"
+                "low_native_trace_pair_block requires a block between the middle+2 and penultimate transformer blocks"
             )
         return sorted({self.pair_block - 1, self.pair_block, layers - 1})
 
@@ -211,11 +210,11 @@ class NativeExecutionTrace:
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
             return
         outputs = self.selected_outputs(layers)
-        full_input = boundary == "input" and (
-            layer == 0 or (self.pair_block >= 0 and layer == self.pair_block)
-        )
-        full_output = boundary == "output" and layer in outputs and (
-            self.pair_block >= 0 or layer in {0, layers // 2, layers - 1}
+        full_input = boundary == "input" and (layer == 0 or (self.pair_block >= 0 and layer == self.pair_block))
+        full_output = (
+            boundary == "output"
+            and layer in outputs
+            and (self.pair_block >= 0 or layer in {0, layers // 2, layers - 1})
         )
         full = full_input or full_output
         # Default mode retains the full sentinels and sampled outputs.
@@ -263,10 +262,7 @@ class NativeExecutionTrace:
                     ["low", self.step, 1, layers - 1, "output"],
                 ]
                 if self.pair_block >= 0
-                else [
-                    ["low", self.step, 1, layer, "output"]
-                    for layer in self.selected_outputs(layers)
-                ]
+                else [["low", self.step, 1, layer, "output"] for layer in self.selected_outputs(layers)]
             )
             if layers > 0
             else []
