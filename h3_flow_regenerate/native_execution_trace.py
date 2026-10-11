@@ -529,14 +529,13 @@ class NativeExecutionTrace:
                         for width in (width_in, width_out)
                     ]
                     qkv_specs_match = (
-                        all(
-                            r.get("source_shape") == shape
-                            and r.get("dtype") == "torch.bfloat16"
+                        len(baseline) == len(expected_shapes)
+                        and len(other) == len(expected_shapes)
+                        and all(
+                            r.get("source_shape") == shape and r.get("dtype") == "torch.bfloat16"
                             for rows in (baseline, other)
                             for r, shape in zip(rows, expected_shapes, strict=True)
                         )
-                        and len(baseline) == len(expected_shapes)
-                        and len(other) == len(expected_shapes)
                     )
             aligned = (
                 qkv_specs_match
@@ -609,7 +608,14 @@ class NativeExecutionTrace:
             "physical_state_isolation_verified": False,
             "limitations": [
                 (
-                    "Projection detail hashes suspect block input, attention out_proj input, "
+                    "Full chunked QKV detail hashes every 4096-row input and adapted output "
+                    "from Core's chunked H3 sparse producer, without materializing full QKV. "
+                    "At 36445 BF16 rows the 18 witness hashes cost 1,959,283,200 bytes/arm. "
+                    "The adapted QKV output includes existing VDN post-forward LoRA hooks; "
+                    "input/output equality does not isolate normalization or kernel internals."
+                    if self.qkv_detail
+                    else "Projection detail hashes suspect block input, attention out_proj input, "
+
                     "raw output before registered post-forward LoRA, output after the LoRA, "
                     "and final block output; five full tensors remain under 2 GiB at "
                     "36,445 rows with hidden=5,376 and attention width=7,168."
