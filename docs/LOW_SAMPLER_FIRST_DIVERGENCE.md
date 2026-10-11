@@ -339,3 +339,81 @@ the post-attention residual/MLP region remains under suspicion.
 New Core sparse `kmean`/`vscale` before/after fingerprints
 are additional correlational evidence, **not permission to
 reset cache or disable an attention backend**.
+
+
+### 01892: full attention out-projection input differs before raw output/LoRA
+
+Owner 01892 attachments: `Pasted text(20261011-103212).txt`,
+`metrics_01892_.json`, `MiniMax_H3_00067-audio.mp4`,
+and complete `session-continuum_chunk-2_seed-11918865606839656618_sigma-0.87804878_1791714391726304507.rar`.
+Full restart/startup receipt matches all seven integrated PR `73be801`
+source SHA256 values. Frozen RAR manifest SHA256 is
+`e99d9ffcc8dade046e1ae64df87454586ad00284d3dd3f147c62678a2099d3c8`;
+all nine raw `.bin` operands match metrics and manifest. The
+raw 992×992 24fps AAC+H.264 movie is 14.375 seconds.
+
+At low logical step 5, native call 1, all five *full*
+36,445-row BF16 witnesses are complete per A/B/A′ arm
+(2,089,902,080 bytes each, under 2 GiB). A/A′:
+block 45 input **equal**,
+`attn.out_proj` **input differs** (first observed mismatch),
+raw out-projection differs,
+post-VDN-LoRA out-projection differs,
+final block differs. Therefore neither the output projection
+nor its installed post-forward LoRA hook is where the first
+observed mismatch arose. Source file review confirms upstream
+ComfyUI Core H3 block-sparse producer routes through
+`h3_sparse_attention`, constructing QKV in **4,096-token chunks**
+via `attn.qkv_proj`, then `ck.sol_attn_chunked`, then
+`attn.out_proj`. The QKV projection has an existing
+`vdn_h3.apply._PostForwardLoRA` hook.
+
+Fixed Core sparse pooled-state introspection now reports the
+exact block-45 cache key absent at block entry (43 keys)
+and present after sparse producer (44 keys). A/A′ have
+**identical** post-producer full `kmean` and `vscale`
+SHA256 values, while B differs. Same post-producer
+summaries do **not** prove equal inputs, kernels or pre-producer
+states, nor that these statistics caused the mismatch.
+Native video first differing velocity A/A′ RMS
+`0.01886959747347283`, max `0.765625`; the first actual
+native prediction matches exactly. The 12 protected prefix
+temporal tokens remain bitwise identical. Final A/A′ low
+clean suffix RMS `0.07901734858751297`, max
+`3.512331962585449`; `reproduction_verified=false`.
+B cannot serve as a causal camera/tone-quality counterfactual.
+
+#### New single controlled QKV observation (strict read-only)
+
+Append-only `low_native_trace_qkv_detail=false` selector
+requires the existing module and projection selectors.
+For one frozen A/B/A′ run keep the original step 5,
+block 45, source carry, sampler, Spectrum/VDN/Sol,
+Core sparse producer and all other owner settings.
+Enable only `low_native_trace_qkv_detail=true`.
+This **replaces** the five full projection-level hashes:
+it hashes each Core producer chunk's complete QKV projection
+input (before linear) and complete output **after existing**
+VDN post-forward LoRA. At 36,445 input rows,
+width 5,376, QKV output width 21,504, BF16,
+nine 4,096-row chunks require 18 full hashes,
+`36,445×(5,376+21,504)×2 = 1,959,283,200` bytes/arm;
+each chunk stays under 512 MiB. The observer strictly validates
+exact chunk count/order, shapes, BF16 dtype, cap and
+three-arm alignment. Missing/extra chunks or backend
+path that bypasses `qkv_proj` invalidate completeness;
+hooks are removed in `finally`. The producer,
+adapter weights and cache remain untouched.
+
+If A/A′ first differ at `qkv_input_i`,
+the block input equality did not guarantee identical
+normalization/AdaLN/modulation inputs to QKV. If QKV input
+matches and `qkv_output_i` first differs, the QKV
+projection **and its installed post-forward LoRA hook**
+must be distinguished; do not assign blame without further
+evidence. If all nine full QKV input and output chunks
+match while prior 01892 attention output differs, the
+remaining interval is the sparse producer (Q/K RMSNorm,
+RoPE, routing, kernel and state), with temporal/scheduling
+effects still to control. No backend gating, cache reset,
+or speculative numerical correction is justified.
